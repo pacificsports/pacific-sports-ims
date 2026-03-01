@@ -1,0 +1,3735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Peace Textile America — Inventory Management</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#f0f2f5; --white:#fff; --border:#d0d5dd; --border-light:#e4e7ec;
+  --primary:#1a56a0; --primary-dark:#123f7a; --primary-light:#e8f0fb;
+  --green:#0e7c3a; --green-light:#e6f4ec;
+  --orange:#b54708; --orange-light:#fef3e2;
+  --red:#b42318; --red-light:#fef2f2;
+  --text:#101828; --text2:#344054; --text3:#667085; --text4:#98a2b3;
+  --header:#0f2744;
+  --ca:#1a56a0; --ca-light:#dbeafe;
+  --sc:#0e7c3a; --sc-light:#dcfce7;
+  --grid-head:#e8ecf2;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--text);font-size:13px;}
+
+/* ── LOGIN ── */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0f2744 0%,#1a56a0 100%);}
+.login-box{background:#fff;border-radius:12px;padding:40px;width:380px;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
+.login-logo{text-align:center;margin-bottom:28px;}
+.login-logo-text{font-size:24px;font-weight:700;color:var(--primary-dark);letter-spacing:1px;}
+.login-logo-sub{font-size:12px;color:var(--text3);margin-top:4px;}
+.login-field{margin-bottom:16px;}
+.login-field label{display:block;font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;}
+.login-field input{width:100%;height:40px;border:1px solid var(--border);border-radius:6px;padding:0 12px;font-size:13px;font-family:'IBM Plex Sans',sans-serif;}
+.login-field input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(26,86,160,0.1);}
+.login-btn{width:100%;height:42px;background:linear-gradient(135deg,#2563a8,#1a3c6b);border:none;border-radius:6px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;margin-top:8px;}
+.login-btn:hover{background:linear-gradient(135deg,#3070b8,#1f4a80);}
+.login-error{background:var(--red-light);color:var(--red);border:1px solid #fca5a5;border-radius:6px;padding:10px 12px;font-size:12px;margin-bottom:12px;display:none;}
+
+/* ── APP SHELL ── */
+.app{display:none;flex-direction:column;height:100vh;overflow:hidden;}
+
+/* CHROME */
+.chrome{background:var(--header);color:#c8d8ef;height:36px;display:flex;align-items:center;padding:0 16px;gap:16px;font-size:12px;flex-shrink:0;}
+.chrome-logo{color:#fff;font-weight:700;font-size:15px;letter-spacing:1px;}
+.chrome-divider{width:1px;height:16px;background:rgba(255,255,255,0.2);}
+.chrome-right{margin-left:auto;display:flex;align-items:center;gap:14px;}
+.chrome-wh-ca{color:#93c5fd;font-weight:600;}
+.chrome-wh-sc{color:#86efac;font-weight:600;}
+.logout-btn{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-family:'IBM Plex Sans',sans-serif;}
+.logout-btn:hover{background:rgba(255,255,255,0.2);}
+
+/* NAV TABS */
+.navtabs{background:#1e4d8c;display:flex;padding:0 12px;gap:2px;flex-shrink:0;}
+.ntab{height:34px;padding:0 18px;font-size:12px;color:rgba(255,255,255,0.6);cursor:pointer;display:flex;align-items:center;gap:6px;border-radius:6px 6px 0 0;border:1px solid transparent;border-bottom:none;transition:all 0.15s;white-space:nowrap;}
+.ntab:hover{color:#fff;background:rgba(255,255,255,0.1);}
+.ntab.active{background:var(--bg);color:var(--primary);font-weight:600;border-color:var(--border);}
+.ntab .badge{background:var(--red);color:#fff;font-size:9px;padding:1px 5px;border-radius:8px;font-family:'IBM Plex Mono',monospace;}
+
+/* BODY */
+.app-body{flex:1;overflow:auto;padding:16px;}
+
+/* PANELS */
+.panel{display:none;}
+.panel.active{display:block;}
+
+/* CARDS */
+.card{background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:14px;}
+.card-head{background:var(--grid-head);border-bottom:1px solid var(--border);padding:8px 14px;display:flex;align-items:center;justify-content:space-between;}
+.card-title{font-size:11px;font-weight:700;color:var(--primary-dark);text-transform:uppercase;letter-spacing:0.5px;}
+.card-info{font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;}
+
+/* KPI */
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;}
+.kpi{background:#fff;border:1px solid var(--border);border-radius:6px;padding:14px 16px;border-top:3px solid var(--primary);}
+.kpi.g{border-top-color:var(--green);}
+.kpi.o{border-top-color:var(--orange);}
+.kpi.r{border-top-color:var(--red);}
+.kpi-label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
+.kpi-val{font-size:22px;font-weight:700;color:var(--text);font-family:'IBM Plex Mono',monospace;line-height:1;}
+.kpi-sub{font-size:11px;color:var(--text3);margin-top:3px;}
+
+/* WAREHOUSE SUMMARY */
+.wh-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;}
+.wh-card{border-radius:6px;padding:14px 16px;}
+.wh-ca{background:var(--ca-light);border:1px solid #93c5fd;border-left:4px solid var(--ca);}
+.wh-sc{background:var(--sc-light);border:1px solid #86efac;border-left:4px solid var(--sc);}
+.wh-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
+.wh-ca .wh-title{color:var(--ca);}
+.wh-sc .wh-title{color:var(--sc);}
+.wh-stats{display:flex;gap:20px;}
+.wh-stat-val{font-size:20px;font-weight:700;font-family:'IBM Plex Mono',monospace;}
+.wh-stat-label{font-size:10px;color:var(--text3);}
+
+/* TABLE */
+.tbl{width:100%;border-collapse:collapse;}
+.tbl th{font-size:10px;font-weight:600;color:var(--text3);padding:7px 10px;border-bottom:2px solid var(--border);border-right:1px solid var(--border-light);text-align:left;background:var(--grid-head);white-space:nowrap;text-transform:uppercase;letter-spacing:0.3px;}
+.tbl th:last-child{border-right:none;}
+.tbl td{padding:8px 10px;border-bottom:1px solid var(--border-light);border-right:1px solid var(--border-light);font-size:12.5px;color:var(--text2);}
+.tbl td:last-child{border-right:none;}
+.tbl tr:hover td{background:#f8faff;cursor:pointer;}
+.tbl tr.sel td{background:var(--primary-light);}
+.tbl tr:last-child td{border-bottom:none;}
+.num{text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;}
+.mono{font-family:'IBM Plex Mono',monospace;font-size:11px;}
+
+/* CHIPS */
+.chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:10px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:500;}
+.c-g{background:var(--green-light);color:var(--green);border:1px solid #b3ddc2;}
+.c-b{background:var(--primary-light);color:var(--primary);border:1px solid #b3cff0;}
+.c-o{background:var(--orange-light);color:var(--orange);border:1px solid #f5c68a;}
+.c-r{background:var(--red-light);color:var(--red);border:1px solid #f5b3b0;}
+.c-gray{background:#f2f4f7;color:var(--text3);border:1px solid var(--border);}
+
+/* LOCATION BADGES */
+.loc-ca{display:inline-flex;align-items:center;background:var(--ca-light);color:var(--ca);border:1px solid #93c5fd;padding:1px 7px;border-radius:3px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:700;}
+.loc-sc{display:inline-flex;align-items:center;background:var(--sc-light);color:var(--sc);border:1px solid #86efac;padding:1px 7px;border-radius:3px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:700;}
+
+/* BUTTONS */
+.btn{height:30px;padding:0 14px;border-radius:4px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:'IBM Plex Sans',sans-serif;white-space:nowrap;border:1px solid var(--border);background:linear-gradient(180deg,#f5f7fa,#e8ecf0);color:var(--text2);}
+.btn:hover{background:linear-gradient(180deg,#fff,#edf1f5);border-color:var(--primary);color:var(--primary);}
+.btn-primary{background:linear-gradient(180deg,#2d74c4,#1a56a0);border-color:#145092;color:#fff;}
+.btn-primary:hover{background:linear-gradient(180deg,#3680d4,#1f62b0);color:#fff;}
+.btn-green{background:linear-gradient(180deg,#18a054,#0e7c3a);border-color:#0a6030;color:#fff;}
+.btn-green:hover{background:linear-gradient(180deg,#20b060,#13924a);color:#fff;}
+.btn-sm{height:24px;padding:0 10px;font-size:11px;}
+
+/* FORMS */
+.fgrid{display:grid;gap:0;padding:12px 14px;}
+.fg4{grid-template-columns:repeat(4,1fr);}
+.fg3{grid-template-columns:repeat(3,1fr);}
+.fg2{grid-template-columns:repeat(2,1fr);}
+.ff{display:flex;flex-direction:column;padding:3px 8px 3px 0;}
+.ff label{font-size:10px;color:var(--text3);font-weight:500;margin-bottom:3px;text-transform:uppercase;letter-spacing:0.3px;}
+.fi{height:28px;border:1px solid var(--border);border-radius:3px;padding:0 8px;font-size:12.5px;font-family:'IBM Plex Sans',sans-serif;color:var(--text);}
+.fi:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 2px rgba(26,86,160,0.1);}
+.fi.ro{background:#f5f7fa;color:var(--text2);}
+.fsel{height:28px;border:1px solid var(--border);border-radius:3px;padding:0 6px;font-size:12.5px;font-family:'IBM Plex Sans',sans-serif;color:var(--text);background:#fff;}
+.fsel:focus{outline:none;border-color:var(--primary);}
+
+/* ALERT */
+.alert{display:flex;align-items:center;gap:8px;padding:9px 14px;border-radius:5px;margin-bottom:12px;font-size:12px;}
+.alert-w{background:var(--orange-light);border:1px solid #f5c68a;color:var(--orange);}
+.alert-i{background:var(--primary-light);border:1px solid #b3cff0;color:var(--primary);}
+.alert-s{background:var(--green-light);border:1px solid #b3ddc2;color:var(--green);}
+
+/* ORDER ENTRY */
+.order-line-table{width:100%;border-collapse:collapse;}
+.order-line-table th{font-size:10px;font-weight:600;color:var(--text3);padding:6px 8px;border-bottom:2px solid var(--border);background:var(--grid-head);text-align:left;text-transform:uppercase;}
+.order-line-table td{padding:5px 8px;border-bottom:1px solid var(--border-light);}
+.qty-input{width:70px;height:26px;border:1px solid var(--border);border-radius:3px;text-align:right;padding:0 6px;font-size:12px;font-family:'IBM Plex Mono',monospace;}
+.qty-input:focus{outline:none;border-color:var(--primary);}
+.calc-box{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--green);}
+.calc-loose{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--orange);}
+
+/* PICK TICKET */
+@media print{
+  .app > *:not(#print-area){display:none!important;}
+  #print-area{display:block!important;}
+  body{background:#fff;}
+}
+#print-area{display:none;}
+.pt{background:#fff;max-width:750px;margin:0 auto;padding:24px;border:2px solid #000;font-family:'IBM Plex Mono',monospace;}
+.pt-header{display:flex;justify-content:space-between;border-bottom:3px solid #000;padding-bottom:12px;margin-bottom:14px;}
+.pt-co{font-size:22px;font-weight:700;letter-spacing:2px;}
+.pt-co-sub{font-size:11px;color:#555;margin-top:2px;}
+.pt-meta{text-align:right;font-size:11px;}
+.pt-meta-num{font-size:18px;font-weight:700;}
+.pt-info{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;background:#f0f0f0;padding:10px;margin-bottom:14px;border:1px solid #ccc;}
+.pt-info-item label{font-size:9px;letter-spacing:1px;color:#666;display:block;margin-bottom:2px;text-transform:uppercase;}
+.pt-info-item span{font-size:13px;font-weight:700;}
+.pt-tbl{width:100%;border-collapse:collapse;margin-bottom:14px;}
+.pt-tbl th{border:2px solid #000;padding:7px 8px;font-size:10px;text-align:center;background:#ddd;letter-spacing:0.5px;text-transform:uppercase;}
+.pt-tbl td{border:1px solid #999;padding:7px 8px;font-size:12px;text-align:center;}
+.pt-tbl td.left{text-align:left;}
+.pt-tbl tr.highlight td{background:#fffde7;font-weight:700;}
+.pt-summary{background:#000;color:#fff;padding:12px 16px;display:flex;justify-content:space-around;margin-bottom:14px;}
+.pt-sum-item{text-align:center;}
+.pt-sum-val{font-size:26px;font-weight:700;}
+.pt-sum-label{font-size:9px;letter-spacing:1px;opacity:0.7;text-transform:uppercase;}
+.pt-sigs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;border-top:1px solid #ccc;padding-top:12px;}
+.pt-sig label{font-size:9px;letter-spacing:1px;color:#666;display:block;margin-bottom:20px;text-transform:uppercase;}
+.pt-sig-line{border-bottom:1px solid #999;height:1px;}
+
+/* INVENTORY TABLE */
+.inv-filter{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:12px 14px;background:#fff;border-bottom:1px solid var(--border);}
+
+/* LOADING */
+.loading{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--text3);gap:10px;font-size:13px;}
+.spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin 0.8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* EMPTY */
+.empty{text-align:center;padding:40px;color:var(--text3);}
+
+/* DOC TABS */
+.doc-tab{padding:8px 20px;font-size:12px;font-weight:600;cursor:pointer;color:var(--text3);border:1px solid var(--border);border-bottom:none;border-radius:5px 5px 0 0;background:#f5f7fa;margin-right:3px;}
+.doc-tab.active{background:#fff;color:var(--primary);border-color:var(--primary);border-bottom:2px solid #fff;margin-bottom:-2px;}
+.doc-tab:hover{color:var(--primary);}
+.doc-view{background:#fff;border:1px solid var(--border);border-top:none;border-radius:0 6px 6px 6px;padding:24px;}
+
+/* INVOICE DOCUMENT */
+.inv-doc{max-width:800px;margin:0 auto;font-family:'IBM Plex Sans',sans-serif;font-size:12px;}
+.inv-doc-header{display:flex;justify-content:space-between;border-bottom:3px solid var(--header);padding-bottom:14px;margin-bottom:14px;}
+.inv-co{font-size:22px;font-weight:700;letter-spacing:2px;color:var(--header);}
+.inv-co-addr{font-size:11px;color:#555;margin-top:4px;line-height:1.6;}
+.inv-doc-type{font-size:28px;font-weight:700;color:var(--primary);letter-spacing:2px;text-align:right;}
+.inv-meta-row{display:flex;justify-content:space-between;font-size:11px;margin-top:4px;gap:20px;}
+.inv-meta-row span:first-child{color:#666;font-weight:500;}
+.inv-meta-row span:last-child{font-weight:700;font-family:'IBM Plex Mono',monospace;}
+.inv-addr-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;background:#f5f7fa;padding:12px;border:1px solid var(--border);margin-bottom:14px;border-radius:4px;}
+.inv-addr-label{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#888;margin-bottom:3px;font-weight:600;}
+.inv-addr-val{font-size:12px;font-weight:600;color:var(--text);line-height:1.4;}
+.inv-tbl{width:100%;border-collapse:collapse;margin-bottom:0;}
+.inv-tbl th{border:1px solid #ccc;padding:7px 10px;font-size:10px;background:var(--header);color:#fff;text-align:left;text-transform:uppercase;letter-spacing:0.5px;}
+.inv-tbl td{border:1px solid #ddd;padding:6px 10px;font-size:12px;}
+.inv-tbl tr:nth-child(even) td{background:#fafbfc;}
+.inv-tbl tfoot td{border:1px solid #ccc;padding:6px 10px;}
+
+/* PRINT */
+@media print{
+  .app>*:not(.app-body){display:none!important;}
+  .navtabs,.chrome,.statusbar{display:none!important;}
+  .app-body{padding:0!important;overflow:visible!important;}
+  .panel{display:block!important;}
+  #inv-list-view,#inv-entry-form,.doc-tab,button,.btn{display:none!important;}
+  .doc-view{display:block!important;border:none!important;padding:0!important;}
+  .inv-doc{max-width:100%!important;}
+}
+
+
+.statusbar{height:22px;background:var(--grid-head);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 14px;gap:16px;font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace;flex-shrink:0;}
+.sl{width:6px;height:6px;border-radius:50%;}
+.sl-g{background:#16a34a;} .sl-o{background:#d97706;}
+
+/* MODAL */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;}
+.modal-overlay.open{display:flex;}
+.modal{background:#fff;border-radius:8px;width:560px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
+.modal-head{background:var(--grid-head);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-radius:8px 8px 0 0;}
+.modal-title{font-size:13px;font-weight:700;color:var(--primary-dark);}
+.modal-close{background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3);line-height:1;}
+.modal-body{padding:16px;}
+.modal-foot{padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════
+     LOGIN
+══════════════════════════════════ -->
+<div class="login-wrap" id="login-page">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="login-logo-text">PEACE TEXTILE AMERICA INC</div>
+      <div class="login-logo-sub">Inventory Management System</div>
+    </div>
+    <div class="login-error" id="login-error">이메일 또는 비밀번호를 확인해주세요.</div>
+    <div class="login-field">
+      <label>Email</label>
+      <input type="email" id="login-email" placeholder="your@email.com" />
+    </div>
+    <div class="login-field">
+      <label>Password</label>
+      <input type="password" id="login-password" placeholder="••••••••" />
+    </div>
+    <button class="login-btn" onclick="doLogin()">Sign In →</button>
+    <div style="text-align:center;margin-top:16px;font-size:11px;color:var(--text3)">
+      Eastvale CA · Sumter SC · Peace Textile America Inc.
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     APP
+══════════════════════════════════ -->
+<div class="app" id="app">
+  <!-- CHROME -->
+  <div class="chrome">
+    <span class="chrome-logo">PEACE TEXTILE AMERICA IMS</span>
+    <span class="chrome-divider"></span>
+    <span id="chrome-date"></span>
+    <div class="chrome-right">
+      <span class="chrome-wh-ca">● CA: Eastvale</span>
+      <span class="chrome-divider"></span>
+      <span class="chrome-wh-sc">● SC: Sumter</span>
+      <span class="chrome-divider"></span>
+      <span id="chrome-user"></span>
+      <button class="logout-btn" onclick="doLogout()">Sign Out</button>
+    </div>
+  </div>
+
+  <!-- NAV TABS -->
+  <div class="navtabs">
+    <div class="ntab active" onclick="showPanel('dashboard',this)">📊 Dashboard</div>
+    <div class="ntab" onclick="showPanel('inventory',this)">📦 Inventory</div>
+    <div class="ntab" onclick="showPanel('orders',this)">📋 Orders <span class="badge" id="open-orders-badge">0</span></div>
+    <div class="ntab" onclick="showPanel('invoice',this)">🧾 Invoice</div>
+    <div class="ntab" onclick="showPanel('picktickets',this)">🎫 Pick Tickets</div>
+    <div class="ntab" onclick="showPanel('receiving',this)">📥 Receiving</div>
+    <div class="ntab" onclick="showPanel('styles',this)">👕 Styles</div>
+    <div class="ntab" onclick="showPanel('customers',this)">🏢 Customers</div>
+  </div>
+
+  <!-- APP BODY -->
+  <div class="app-body">
+
+    <!-- ── DASHBOARD ── -->
+    <div class="panel active" id="panel-dashboard">
+      <div id="dashboard-loading" class="loading"><div class="spinner"></div> Loading...</div>
+      <div id="dashboard-content" style="display:none">
+        <div class="kpi-row" id="kpi-row"></div>
+        <div class="wh-row">
+          <div class="wh-card wh-ca">
+            <div class="wh-title">📍 CA — Eastvale, California</div>
+            <div class="wh-stats">
+              <div><div class="wh-stat-val" id="ca-total">—</div><div class="wh-stat-label">Total Units</div></div>
+              <div><div class="wh-stat-val" style="color:var(--orange)" id="ca-low">—</div><div class="wh-stat-label">Low Stock SKUs</div></div>
+              <div><div class="wh-stat-val" id="ca-skus">—</div><div class="wh-stat-label">Active SKUs</div></div>
+            </div>
+          </div>
+          <div class="wh-card wh-sc">
+            <div class="wh-title">📍 SC — Sumter, South Carolina</div>
+            <div class="wh-stats">
+              <div><div class="wh-stat-val" id="sc-total">—</div><div class="wh-stat-label">Total Units</div></div>
+              <div><div class="wh-stat-val" style="color:var(--orange)" id="sc-low">—</div><div class="wh-stat-label">Low Stock SKUs</div></div>
+              <div><div class="wh-stat-val" id="sc-skus">—</div><div class="wh-stat-label">Active SKUs</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">Recent Orders</span><button class="btn btn-sm" onclick="showPanel('orders',null)">All Orders →</button></div>
+          <div id="recent-orders-table"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── INVENTORY ── -->
+    <div class="panel" id="panel-inventory">
+      <div class="card">
+        <div class="card-head"><span class="card-title">📦 Inventory — CA + SC Combined</span>
+          <button class="btn btn-primary btn-sm" onclick="openAddInventory()">+ Add Stock</button>
+        </div>
+        <div class="inv-filter">
+          <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STYLE #</label>
+            <input class="fi" id="inv-filter-style" placeholder="e.g. 1368" oninput="filterInventory()"/></div>
+          <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">COLOR</label>
+            <input class="fi" id="inv-filter-color" placeholder="Color..." oninput="filterInventory()"/></div>
+          <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">WAREHOUSE</label>
+            <select class="fsel" id="inv-filter-wh" onchange="filterInventory()" style="width:100%">
+              <option value="">Both CA + SC</option>
+              <option value="CA">CA — Eastvale</option>
+              <option value="SC">SC — Sumter</option>
+            </select></div>
+          <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">SIZE</label>
+            <input class="fi" id="inv-filter-size" placeholder="Size..." oninput="filterInventory()"/></div>
+          <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STATUS</label>
+            <select class="fsel" id="inv-filter-status" onchange="filterInventory()" style="width:100%">
+              <option value="">All</option>
+              <option value="low">Low Stock</option>
+              <option value="out">Out of Stock</option>
+            </select></div>
+        </div>
+        <div id="inventory-table-wrap">
+          <div class="loading"><div class="spinner"></div> Loading inventory...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ORDERS 현황 ── -->
+    <div class="panel" id="panel-orders">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+        <button class="btn" onclick="loadOrders()">🔄 Refresh</button>
+        <span style="font-size:11px;color:var(--text3)">오더 클릭 → Invoice / Pick Ticket 열기</span>
+      </div>
+
+      <!-- KPI 요약 -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;" id="orders-kpi-row">
+        <div class="kpi r"><div class="kpi-label">🔴 Back Order</div><div class="kpi-val" id="kpi-backorder">—</div><div class="kpi-sub">재고 부족</div></div>
+        <div class="kpi o"><div class="kpi-label">🟡 Open</div><div class="kpi-val" id="kpi-open">—</div><div class="kpi-sub">진행 중</div></div>
+        <div class="kpi"><div class="kpi-label">🔵 Partial</div><div class="kpi-val" id="kpi-partial">—</div><div class="kpi-sub">일부 처리</div></div>
+        <div class="kpi g"><div class="kpi-label">🟢 Shipped</div><div class="kpi-val" id="kpi-shipped">—</div><div class="kpi-sub">출하 완료</div></div>
+        <div class="kpi"><div class="kpi-label">📦 Total</div><div class="kpi-val" id="kpi-total-orders">—</div><div class="kpi-sub">전체 오더</div></div>
+      </div>
+
+      <!-- Back Order 섹션 -->
+      <div class="card" id="backorder-card" style="border-left:4px solid var(--red);">
+        <div class="card-head" style="background:#fef2f2;">
+          <span class="card-title" style="color:var(--red)">🔴 Back Orders — 재고 부족</span>
+          <span class="card-info" id="backorder-count"></span>
+        </div>
+        <div id="backorder-wrap"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+
+      <!-- 전체 오더 리스트 -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">📋 All Orders</span>
+          <div style="display:flex;gap:6px;">
+            <select class="fsel" id="orders-filter-status" onchange="filterOrders()" style="height:26px;font-size:11px;">
+              <option value="">All Status</option>
+              <option value="backordered">Back Order</option>
+              <option value="open">Open</option>
+              <option value="partial">Partial</option>
+              <option value="shipped">Shipped</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <select class="fsel" id="orders-filter-wh" onchange="filterOrders()" style="height:26px;font-size:11px;">
+              <option value="">All WH</option>
+              <option value="CA">CA</option>
+              <option value="SC">SC</option>
+            </select>
+          </div>
+        </div>
+        <div id="orders-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+
+    <!-- ── PICK TICKETS ── -->
+    <div class="panel" id="panel-picktickets">
+      <div id="pt-list-view">
+        <div class="card">
+          <div class="card-head"><span class="card-title">🎫 Pick Tickets</span></div>
+          <div id="pt-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+      </div>
+      <!-- PICK TICKET DETAIL -->
+      <div id="pt-detail-view" style="display:none">
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <button class="btn" onclick="document.getElementById('pt-detail-view').style.display='none';document.getElementById('pt-list-view').style.display='block'">← Back</button>
+          <button class="btn btn-primary" onclick="printTicket()">🖨 Print Pick Ticket</button>
+        </div>
+        <div id="print-area">
+          <div class="pt" id="pt-content">
+            <div class="pt-header">
+              <div>
+                <div class="pt-co">PEACE TEXTILE AMERICA INC</div>
+                <div class="pt-co-sub">Inventory Management · Pick Ticket</div>
+              </div>
+              <div class="pt-meta">
+                <div class="pt-meta-num" id="pt-order-num">—</div>
+                <div id="pt-printed-date"></div>
+                <div id="pt-wh-name"></div>
+              </div>
+            </div>
+            <div class="pt-info">
+              <div class="pt-info-item"><label>Customer</label><span id="pt-customer">—</span></div>
+              <div class="pt-info-item"><label>Customer PO #</label><span id="pt-po">—</span></div>
+              <div class="pt-info-item"><label>Ship Date</label><span id="pt-ship">—</span></div>
+            </div>
+            <table class="pt-tbl" id="pt-lines-tbl">
+              <thead>
+                <tr>
+                  <th style="text-align:left">Style</th>
+                  <th style="text-align:left">Color</th>
+                  <th>Size</th>
+                  <th>Location</th>
+                  <th>Order Qty<br>(Pieces)</th>
+                  <th>Pcs/Box</th>
+                  <th style="background:#c8e6c9">Full Boxes</th>
+                  <th style="background:#fff9c4">Loose Pcs</th>
+                  <th>Picked ✓</th>
+                </tr>
+              </thead>
+              <tbody id="pt-lines-body"></tbody>
+            </table>
+            <div class="pt-summary">
+              <div class="pt-sum-item"><div class="pt-sum-val" id="pt-sum-boxes">0</div><div class="pt-sum-label">Full Boxes</div></div>
+              <div class="pt-sum-item"><div class="pt-sum-val" id="pt-sum-loose">0</div><div class="pt-sum-label">Loose Pieces</div></div>
+              <div class="pt-sum-item"><div class="pt-sum-val" id="pt-sum-total">0</div><div class="pt-sum-label">Total Pieces</div></div>
+              <div class="pt-sum-item"><div class="pt-sum-val" id="pt-sum-wh">—</div><div class="pt-sum-label">Warehouse</div></div>
+            </div>
+            <div class="pt-sigs">
+              <div class="pt-sig"><label>Picked By</label><div class="pt-sig-line"></div></div>
+              <div class="pt-sig"><label>Checked By</label><div class="pt-sig-line"></div></div>
+              <div class="pt-sig"><label>Packed By</label><div class="pt-sig-line"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── INVOICE ── -->
+    <div class="panel" id="panel-invoice">
+
+      <!-- LIST VIEW -->
+      <div id="inv-list-view">
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <button class="btn btn-primary" onclick="openNewInvoice()">➕ New Invoice / PO</button>
+          <button class="btn" onclick="loadInvoices()">🔄 Refresh</button>
+        </div>
+        <div class="card">
+          <div class="card-head"><span class="card-title">🧾 Invoices</span><span class="card-info" id="invoice-count"></span></div>
+          <div id="invoice-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+      </div>
+
+      <!-- INVOICE ENTRY / DETAIL VIEW -->
+      <div id="inv-detail-view" style="display:none">
+        <!-- 상단 버튼 -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+          <button class="btn" onclick="backToInvoiceList()">← Back</button>
+          <button class="btn btn-primary" onclick="window.print()">🖨 Print</button>
+          <button class="btn btn-green" id="inv-save-btn" onclick="saveInvoice()" style="display:none">✓ Save</button>
+          <span id="inv-doc-title" style="font-size:13px;font-weight:700;color:var(--primary-dark);margin-left:4px;"></span>
+        </div>
+
+        <!-- DOC TABS -->
+        <div style="display:flex;gap:0;margin-bottom:0;">
+          <div class="doc-tab active" id="tab-invoice" onclick="switchDocTab('invoice')">🧾 Invoice</div>
+          <div class="doc-tab" id="tab-pt" onclick="switchDocTab('pt')">🎫 Pick Ticket</div>
+          <div class="doc-tab" id="tab-transfer" onclick="switchDocTab('transfer')">🔄 Transfer Order</div>
+          <div class="doc-tab" id="tab-pl" onclick="switchDocTab('pl')">📦 Packing List</div>
+        </div>
+
+        <!-- ═══ INVOICE DOC ═══ -->
+        <div id="doc-invoice" class="doc-view">
+          <!-- ENTRY FORM -->
+          <div id="inv-entry-form" style="display:none;margin-bottom:16px;">
+
+            <!-- ── PO PDF 업로드 ── -->
+            <div id="po-upload-section" style="background:linear-gradient(135deg,#e8f4fd,#f0f7ff);border:2px dashed #90caf9;border-radius:8px;padding:16px;margin-bottom:14px;display:flex;align-items:center;gap:14px;">
+              <div style="font-size:28px">📄</div>
+              <div style="flex:1">
+                <div style="font-weight:700;font-size:13px;color:var(--primary-dark);margin-bottom:2px;">PO PDF 자동 파싱</div>
+                <div style="font-size:11px;color:var(--text2)">고객 PO PDF를 업로드하면 Claude가 자동으로 거래처 정보 및 스타일/컬러/수량을 인식합니다</div>
+              </div>
+              <label style="cursor:pointer">
+                <input type="file" id="po-pdf-input" accept=".pdf" style="display:none" onchange="parsePoPdf(this)"/>
+                <span class="btn btn-primary" style="pointer-events:none;white-space:nowrap">📎 PO PDF 업로드</span>
+              </label>
+            </div>
+
+            <!-- ── PO 파싱 진행 중 ── -->
+            <div id="po-parsing-status" style="display:none;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:12px 16px;margin-bottom:14px;display:none;align-items:center;gap:10px;">
+              <div class="spinner"></div>
+              <div>
+                <div style="font-weight:600;font-size:12px;color:#e65100">Claude가 PO를 읽고 있어요...</div>
+                <div style="font-size:11px;color:var(--text2)" id="po-parsing-msg">PDF 파싱 중...</div>
+              </div>
+            </div>
+
+            <!-- ── PO 파싱 결과 확인 ── -->
+            <div id="po-preview-section" style="display:none;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;padding:14px;margin-bottom:14px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <div style="font-weight:700;font-size:13px;color:var(--green)">✅ PO 파싱 완료 — 내용을 확인하세요</div>
+                <button class="btn btn-sm" onclick="clearPoPreview()" style="font-size:11px">✕ 취소</button>
+              </div>
+              <div id="po-preview-warning" style="display:none;background:#fff3e0;border:1px solid #ffb74d;border-radius:4px;padding:8px 12px;font-size:11px;color:#e65100;margin-bottom:10px;"></div>
+              <div id="po-preview-info" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;font-size:12px;"></div>
+              <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">파싱된 라인</div>
+              <div id="po-preview-lines" style="overflow-x:auto;"></div>
+              <div style="display:flex;gap:8px;margin-top:12px;">
+                <button class="btn btn-green" onclick="applyPoPreview()" style="font-weight:700">✓ 이대로 적용</button>
+                <button class="btn" onclick="clearPoPreview()">다시 업로드</button>
+              </div>
+            </div>
+
+            <div style="background:#f0f4fa;border:1px solid var(--border);border-radius:6px;padding:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
+              <div class="ff" style="grid-column:1/-1">
+                <label>Customer <span style="font-weight:400;color:var(--text3)">(선택하면 자동완성)</span></label>
+                <select class="fsel" id="inv-cust-sel" onchange="autoFillCustomer()" style="width:100%;height:32px;">
+                  <option value="">— 직접 입력 또는 선택 —</option>
+                </select>
+              </div>
+              <div class="ff"><label>Customer Name *</label><input class="fi" id="inv-cust" placeholder="OUT OF HAND GRAPHICS" oninput="liveRenderDocs()"/></div>
+              <div class="ff"><label>Customer PO # *</label><input class="fi" id="inv-cust-po" placeholder="P42028" oninput="liveRenderDocs()"/></div>
+              <div class="ff"><label>Terms</label><input class="fi" id="inv-cust-terms" value="N30" oninput="liveRenderDocs()"/></div>
+              <div class="ff"><label>Bill To Address</label><textarea class="fi" id="inv-bill-addr" rows="3" style="height:64px;padding:6px;resize:none;" placeholder="6650 S Narragansett Ave&#10;Unit B&#10;Bedford Park IL 60638" oninput="liveRenderDocs()"></textarea></div>
+              <div class="ff"><label>Ship To <span style="color:var(--text4);font-weight:400">(비우면 Bill To와 동일)</span></label><textarea class="fi" id="inv-ship-addr" rows="3" style="height:64px;padding:6px;resize:none;" oninput="liveRenderDocs()"></textarea></div>
+              <div class="ff">
+                <label>Warehouse (F.O.B.) *</label>
+                <select class="fsel" id="inv-wh-sel" onchange="liveRenderDocs()"><option value="">Select...</option></select>
+                <label style="margin-top:8px;display:block">Ship Date</label>
+                <input class="fi" id="inv-ship-date-inp" type="date" oninput="liveRenderDocs()"/>
+              </div>
+            </div>
+
+            <!-- ── Style+Color 재고 조회 그리드 ── -->
+            <div style="background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:10px;">
+              <div style="background:var(--header);color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:700;font-size:12px;letter-spacing:0.5px;">📦 STYLE + COLOR 재고 조회</span>
+                <span style="font-size:10px;opacity:0.7">Style# 과 Color 입력 → 창고별 사이즈 재고 확인 후 수량 입력</span>
+              </div>
+              <div style="display:flex;gap:8px;align-items:flex-end;padding:10px 12px;background:#f8faff;border-bottom:1px solid var(--border);">
+                <div style="width:120px">
+                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Style #</label>
+                  <input class="fi" id="grid-style" placeholder="1368" style="font-family:'IBM Plex Mono',monospace;text-transform:uppercase;"
+                    oninput="this.value=this.value.toUpperCase()"/>
+                </div>
+                <div style="flex:1">
+                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Color</label>
+                  <input class="fi" id="grid-color" placeholder="BLACK" style="font-family:'IBM Plex Mono',monospace;text-transform:uppercase;"
+                    oninput="this.value=this.value.toUpperCase()"/>
+                </div>
+                <div style="width:80px">
+                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Unit $</label>
+                  <input type="number" class="fi" id="grid-price" placeholder="2.35" step="0.01" style="text-align:center;"/>
+                </div>
+                <button class="btn btn-primary" onclick="loadStyleColorGrid()" style="height:34px">🔍 조회</button>
+              </div>
+              <div id="style-color-grid" style="display:none;overflow-x:auto;padding:12px 14px;">
+                <!-- 동적으로 렌더됨 -->
+              </div>
+              <div id="style-color-grid-empty" style="display:none;padding:16px 14px;font-size:12px;color:var(--text3);">
+                해당 Style/Color 재고 없음
+              </div>
+            </div>
+
+            <!-- 라인 입력 -->
+            <div style="background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+              <div style="background:var(--header);color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:700;font-size:12px;letter-spacing:0.5px;">ORDER LINES — Item Code 입력</span>
+                <span style="font-size:10px;opacity:0.7">예: 2388BLACKM · 1368CHARS · 1362CHARCOL</span>
+              </div>
+              <div style="display:flex;gap:8px;align-items:flex-end;padding:10px 12px;background:#f8faff;border-bottom:1px solid var(--border);">
+                <div style="flex:1.5">
+                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Item Code</label>
+                  <input class="fi" id="quick-code" placeholder="2388BLACKM" style="font-family:'IBM Plex Mono',monospace;font-size:13px;text-transform:uppercase;"
+                    oninput="this.value=this.value.toUpperCase();previewParse()"
+                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();document.getElementById('quick-qty').focus();}"/>
+                </div>
+                <div style="width:80px">
+                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Qty (pcs)</label>
+                  <input type="number" class="fi" id="quick-qty" placeholder="90" min="0" style="text-align:center;"
+                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();document.getElementById('quick-price').focus();}"/>
+                </div>
+                <div style="width:75px">
+                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Unit $</label>
+                  <input type="number" class="fi" id="quick-price" placeholder="2.35" step="0.01" style="text-align:center;"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();addQuickLine();}"/>
+                </div>
+                <button class="btn btn-primary" onclick="addQuickLine()" style="height:34px;white-space:nowrap;padding:0 14px">+ Add</button>
+              </div>
+              <div id="parse-preview" style="display:none;font-size:11px;color:var(--primary);padding:4px 12px;background:#e8f0fb;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;"></div>
+              <details style="border-bottom:1px solid var(--border);">
+                <summary style="font-size:11px;color:var(--primary);cursor:pointer;font-weight:600;padding:8px 12px;">📋 여러 줄 한 번에 붙여넣기</summary>
+                <div style="padding:10px 12px;background:#fffde7;">
+                  <div style="font-size:10px;color:var(--text3);margin-bottom:6px;">한 줄에 하나씩: <code>ItemCode  Qty  Price</code></div>
+                  <textarea id="bulk-paste" class="fi" rows="4" style="height:80px;font-family:'IBM Plex Mono',monospace;font-size:12px;resize:vertical;"
+                    placeholder="2388BLACKXS	18	2.35&#10;2388BLACKS	18	2.35&#10;2388BLACKM	24	2.35&#10;2388BLACKL	24	2.35"></textarea>
+                  <button class="btn btn-primary" style="margin-top:6px" onclick="parseBulkPaste()">✓ Parse & Add All</button>
+                </div>
+              </details>
+              <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;">
+                  <thead>
+                    <tr style="background:var(--header);color:#fff;">
+                      <th style="padding:8px 10px;font-size:10px;text-align:left;">Item Code</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:left;">Style</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:left;">Color</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:left;">Size</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;">Qty (pcs)</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;">Unit $</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#2e7d32;">Full Boxes</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#e65100;color:#fff;">Loose Pcs (PCR)</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:left;">SC Location</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:left;">PCR Stock</th>
+                      <th style="padding:8px 10px;font-size:10px;"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="po-lines-body"></tbody>
+                  <tfoot>
+                    <tr style="background:#f0f4fa;font-weight:700;">
+                      <td colspan="4" style="padding:8px 10px;">TOTAL</td>
+                      <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--primary)" id="po-total-pcs">0</td>
+                      <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;" id="po-total-amt">$0.00</td>
+                      <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--green);font-size:16px;" id="po-total-cases">0</td>
+                      <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--orange);font-size:16px;" id="po-total-loose">0</td>
+                      <td colspan="3"></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- INVOICE 출력 문서 -->
+          <div class="inv-doc" id="invoice-print">
+            <div class="inv-doc-header">
+              <div class="inv-left"><div class="inv-co">PEACE TEXTILE AMERICA INC</div><div class="inv-co-addr" id="inv-from-addr"></div></div>
+              <div class="inv-right">
+                <div class="inv-doc-type">INVOICE</div>
+                <div class="inv-meta-row"><span>Invoice No.</span><span id="inv-number">—</span></div>
+                <div class="inv-meta-row"><span>Date</span><span id="inv-date">—</span></div>
+              </div>
+            </div>
+            <div class="inv-addr-row">
+              <div><div class="inv-addr-label">Bill To</div><div class="inv-addr-val" id="inv-bill-to">—</div></div>
+              <div><div class="inv-addr-label">Ship To</div><div class="inv-addr-val" id="inv-ship-to">—</div></div>
+              <div><div class="inv-addr-label">PO Number</div><div class="inv-addr-val" id="inv-po">—</div></div>
+              <div><div class="inv-addr-label">Terms</div><div class="inv-addr-val" id="inv-terms">—</div></div>
+              <div><div class="inv-addr-label">Ship Date</div><div class="inv-addr-val" id="inv-ship-date">—</div></div>
+              <div><div class="inv-addr-label">F.O.B.</div><div class="inv-addr-val" id="inv-fob">—</div></div>
+            </div>
+            <table class="inv-tbl">
+              <thead><tr><th>Qty (pcs)</th><th>Description</th><th>Color</th><th>Size</th><th>Unit $/pcs</th><th>Amount</th></tr></thead>
+              <tbody id="inv-lines-body"></tbody>
+              <tfoot>
+                <tr><td colspan="4" style="text-align:right;font-weight:600;padding:8px 10px;">Total Pieces:</td><td id="inv-total-pcs" style="font-family:'IBM Plex Mono',monospace;font-weight:700;padding:8px 10px;"></td><td></td></tr>
+                <tr style="background:#f8faff;"><td colspan="4" style="text-align:right;font-weight:700;font-size:14px;padding:8px 10px;">TOTAL AMOUNT:</td><td colspan="2" id="inv-total-amt-doc" style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:16px;color:var(--primary);padding:8px 10px;"></td></tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
+        <!-- ═══ PICK TICKET ═══ -->
+        <div id="doc-pt" class="doc-view" style="display:none">
+          <div class="inv-doc" id="pt-print">
+            <div class="inv-doc-header">
+              <div class="inv-left"><div class="inv-co">PEACE TEXTILE AMERICA INC</div><div class="inv-co-addr" id="pt-from-addr"></div></div>
+              <div class="inv-right">
+                <div class="inv-doc-type" style="color:var(--green)">PICK TICKET</div>
+                <div class="inv-meta-row"><span>Ref #</span><span id="pt-ref">—</span></div>
+                <div class="inv-meta-row"><span>Date</span><span id="pt-date2">—</span></div>
+              </div>
+            </div>
+            <div class="inv-addr-row">
+              <div><div class="inv-addr-label">Sold To</div><div class="inv-addr-val" id="pt-sold-to">—</div></div>
+              <div><div class="inv-addr-label">Ship To</div><div class="inv-addr-val" id="pt-ship-to2">—</div></div>
+              <div><div class="inv-addr-label">Customer PO</div><div class="inv-addr-val" id="pt-po2">—</div></div>
+              <div><div class="inv-addr-label">Via</div><div class="inv-addr-val" id="pt-via">—</div></div>
+              <div><div class="inv-addr-label">F.O.B.</div><div class="inv-addr-val" id="pt-fob2">—</div></div>
+              <div><div class="inv-addr-label">Warehouse</div><div class="inv-addr-val" id="pt-wh2">—</div></div>
+            </div>
+            <div style="background:#e8f5e9;border:2px solid #4caf50;border-radius:4px;padding:8px 12px;margin-bottom:8px;">
+              <div style="font-size:10px;font-weight:700;color:#2e7d32;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">📦 SC WAREHOUSE — Full Boxes</div>
+              <table class="inv-tbl">
+                <thead><tr><th>Description</th><th>Color</th><th>Size</th><th style="text-align:center;background:#1b5e20">Full Boxes</th><th>SC Location</th><th style="text-align:center">Picked ✓</th></tr></thead>
+                <tbody id="pt-wh-body"></tbody>
+              </table>
+            </div>
+            <div style="background:#fff8e1;border:2px solid #f9a825;border-radius:4px;padding:8px 12px;margin-bottom:8px;">
+              <div style="font-size:10px;font-weight:700;color:#e65100;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">✂️ SC-PCR (Pcs Room) — Loose Pieces</div>
+              <table class="inv-tbl">
+                <thead><tr><th>Description</th><th>Color</th><th>Size</th><th style="text-align:center;background:#e65100;color:#fff">Loose Pcs</th><th>PCR Stock</th><th style="text-align:center">Status</th><th style="text-align:center">Picked ✓</th></tr></thead>
+                <tbody id="pt-pcr-body"></tbody>
+              </table>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0;">
+              <div style="background:#e8f5e9;border:1px solid #4caf50;border-radius:4px;padding:10px;text-align:center;">
+                <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#2e7d32" id="pt-sum-boxes2">0</div>
+                <div style="font-size:10px;color:#555;text-transform:uppercase">Full Boxes</div>
+              </div>
+              <div style="background:#fff8e1;border:1px solid #f9a825;border-radius:4px;padding:10px;text-align:center;">
+                <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#e65100" id="pt-sum-loose2">0</div>
+                <div style="font-size:10px;color:#555;text-transform:uppercase">Loose Pcs (PCR)</div>
+              </div>
+              <div style="background:#e3f2fd;border:1px solid #1565c0;border-radius:4px;padding:10px;text-align:center;">
+                <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#1565c0" id="pt-sum-total2">0</div>
+                <div style="font-size:10px;color:#555;text-transform:uppercase">Total Pieces</div>
+              </div>
+              <div style="background:#fce4ec;border:1px solid #c62828;border-radius:4px;padding:10px;text-align:center;">
+                <div style="font-size:16px;font-weight:700;color:#c62828" id="pt-transfer-alert">—</div>
+                <div style="font-size:10px;color:#555;text-transform:uppercase">Transfer Needed</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;margin-top:16px;border-top:2px solid #000;padding-top:12px;">
+              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Piece pulled by</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Order complete by</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Date</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Verified by</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ TRANSFER ORDER ═══ -->
+        <div id="doc-transfer" class="doc-view" style="display:none">
+          <div id="transfer-none" style="text-align:center;padding:40px;color:var(--text3);">
+            <div style="font-size:40px;margin-bottom:12px">✅</div>
+            <div style="font-size:16px;font-weight:600">SC-PCR 재고 충분</div>
+            <div style="font-size:13px;margin-top:6px">Transfer Order가 필요 없습니다</div>
+          </div>
+          <div id="transfer-doc" style="display:none">
+            <div class="inv-doc" id="transfer-print">
+              <div class="inv-doc-header">
+                <div class="inv-left"><div class="inv-co">PEACE TEXTILE AMERICA INC</div><div style="font-size:11px;color:#555;margin-top:4px">SC Warehouse → SC Pcs Room (Transfer)</div></div>
+                <div class="inv-right">
+                  <div class="inv-doc-type" style="color:#e65100;">TRANSFER ORDER</div>
+                  <div class="inv-meta-row"><span>Ref #</span><span id="tf-ref">—</span></div>
+                  <div class="inv-meta-row"><span>Date</span><span id="tf-date">—</span></div>
+                </div>
+              </div>
+              <div style="background:#fff3e0;border:2px solid #ff6d00;border-radius:6px;padding:12px;margin-bottom:14px;">
+                <div style="font-size:12px;font-weight:700;color:#bf360c;margin-bottom:4px;">⚠️ SC-PCR (Pcs Room) 재고 부족 — SC Warehouse에서 이동 필요</div>
+                <div style="font-size:11px;color:#555;">아래 항목을 SC Warehouse Location에서 꺼내서 Pcs Room으로 이동해 주세요.</div>
+              </div>
+              <table class="inv-tbl">
+                <thead>
+                  <tr>
+                    <th>Description</th><th>Color</th><th>Size</th>
+                    <th style="text-align:center;background:#1565c0">SC Location</th>
+                    <th style="text-align:center">박스 열기</th>
+                    <th style="text-align:center;background:#e65100;color:#fff">PCR로 이동 (pcs)</th>
+                    <th style="text-align:center">Done ✓</th>
+                  </tr>
+                </thead>
+                <tbody id="transfer-body"></tbody>
+              </table>
+              <div style="margin-top:16px;border-top:2px solid #000;padding-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
+                <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">SC Warehouse (이동한 사람)</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+                <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">PCR 수령 확인</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+                <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Date / Time</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ PACKING LIST ═══ -->
+        <div id="doc-pl" class="doc-view" style="display:none">
+          <div class="inv-doc" id="pl-print">
+            <div class="inv-doc-header">
+              <div class="inv-left"><div class="inv-co">PEACE TEXTILE AMERICA INC</div><div class="inv-co-addr" id="pl-from-addr"></div></div>
+              <div class="inv-right">
+                <div class="inv-doc-type" style="color:var(--orange)">PACKING LIST</div>
+                <div class="inv-meta-row"><span>Ref #</span><span id="pl-ref">—</span></div>
+                <div class="inv-meta-row"><span>Date</span><span id="pl-date">—</span></div>
+              </div>
+            </div>
+            <div class="inv-addr-row">
+              <div><div class="inv-addr-label">Sold To</div><div class="inv-addr-val" id="pl-sold-to">—</div></div>
+              <div><div class="inv-addr-label">Ship To</div><div class="inv-addr-val" id="pl-ship-to">—</div></div>
+              <div><div class="inv-addr-label">Customer PO</div><div class="inv-addr-val" id="pl-po">—</div></div>
+              <div><div class="inv-addr-label">Via</div><div class="inv-addr-val" id="pl-via">—</div></div>
+              <div><div class="inv-addr-label">F.O.B.</div><div class="inv-addr-val" id="pl-fob">—</div></div>
+              <div></div>
+            </div>
+            <table class="inv-tbl">
+              <thead><tr><th>Description</th><th>Color</th><th>Size</th><th style="text-align:center">Qty (pcs)</th><th style="text-align:center;background:#2e7d32;color:#fff">Qty (carton)</th><th style="text-align:center;background:#f9a825;color:#000">Partial Box #</th></tr></thead>
+              <tbody id="pl-lines-body"></tbody>
+              <tfoot id="pl-footer"></tfoot>
+            </table>
+            <div style="margin-top:16px;border-top:2px solid #000;padding-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
+              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Pick up by (Print Name)</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Company</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Date</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- end inv-detail-view -->
+    </div><!-- end panel-invoice -->
+
+    <!-- ── RECEIVING ── -->
+    <div class="panel" id="panel-receiving">
+      <div class="card">
+        <div class="card-head"><span class="card-title">📥 Receive Inventory</span></div>
+        <div class="fgrid fg4">
+          <div class="ff"><label>Warehouse</label>
+            <select class="fsel" id="recv-wh"><option value="">Select...</option></select></div>
+          <div class="ff"><label>Style #</label>
+            <select class="fsel" id="recv-style" onchange="updateRecvPpb()"><option value="">Select...</option></select></div>
+          <div class="ff"><label>Color</label><input class="fi" id="recv-color" placeholder="e.g. White"/></div>
+          <div class="ff"><label>Size</label>
+            <select class="fsel" id="recv-size">
+              <option>XS</option><option>S</option><option>M</option><option>L</option>
+              <option>XL</option><option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>
+              <option>2T</option><option>3T</option><option>4T</option><option>5T</option>
+              <option>Youth XS</option><option>Youth S</option><option>Youth M</option><option>Youth L</option><option>Youth XL</option>
+            </select></div>
+        </div>
+        <div class="fgrid fg4">
+          <div class="ff"><label>Location (Bin)</label><input class="fi" id="recv-location" placeholder="e.g. A-01-03"/></div>
+          <div class="ff"><label>Pcs / Box</label><input class="fi ro" id="recv-ppb" readonly value="—"/></div>
+          <div class="ff"><label># of Boxes</label><input class="fi" id="recv-boxes" type="number" min="0" value="0" oninput="calcRecv()"/></div>
+          <div class="ff"><label>+ Loose Pieces</label><input class="fi" id="recv-loose-in" type="number" min="0" value="0" oninput="calcRecv()"/></div>
+        </div>
+        <div style="padding:0 14px 12px;display:flex;align-items:center;gap:20px;">
+          <div style="font-size:13px;color:var(--text2)">Total Pieces: <strong id="recv-total" style="font-family:'IBM Plex Mono',monospace;font-size:16px;color:var(--green)">0</strong></div>
+          <button class="btn btn-green" onclick="postReceiving()">✓ Post Receipt — Add to Stock</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="card-title">Recent Receipts</span></div>
+        <div id="recv-history"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+
+    <!-- ── STYLES ── -->
+    <div class="panel" id="panel-styles">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+        <button class="btn btn-primary" onclick="openAddStyle()">+ Add Style</button>
+        <span style="font-size:11px;color:var(--text3);margin-left:4px;">스타일 클릭 → 수정/삭제</span>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">👕 Styles & Box Configuration</span>
+          <span class="card-info" id="styles-count"></span>
+        </div>
+        <div id="styles-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+
+    <!-- ── CUSTOMERS ── -->
+    <div class="panel" id="panel-customers">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+        <button class="btn btn-primary" onclick="openAddCustomer()">+ Add Customer</button>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">🏢 Customers</span>
+          <span class="card-info" id="customers-count"></span>
+        </div>
+        <div id="customers-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+
+  </div><!-- end app-body -->
+
+  <div class="statusbar">
+    <div style="display:flex;align-items:center;gap:4px;"><div class="sl sl-g"></div>Connected to Supabase</div>
+    <div>|</div>
+    <div style="color:var(--ca)">CA: Eastvale</div>
+    <div>|</div>
+    <div style="color:var(--sc)">SC: Sumter</div>
+    <div style="margin-left:auto" id="sb-user"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     BACK ORDER DETAIL MODAL
+══════════════════════════════════ -->
+<div class="modal-overlay" id="modal-backorder">
+  <div class="modal" style="width:780px;max-width:96vw;">
+    <div class="modal-head" style="background:#fef2f2;border-bottom:1px solid #fca5a5;">
+      <span class="modal-title" style="color:var(--red)" id="bo-modal-title">🔴 Back Order</span>
+      <button class="modal-close" onclick="closeModal('modal-backorder')">×</button>
+    </div>
+    <div class="modal-body" style="padding:16px;">
+      <div id="bo-order-info" style="background:#f8faff;border:1px solid var(--border);border-radius:5px;padding:10px 14px;margin-bottom:14px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:12px;"></div>
+      <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Back Ordered Lines — 현재 재고 확인</div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="background:var(--header);color:#fff;">
+              <th style="padding:7px 10px;text-align:left;">Style</th>
+              <th style="padding:7px 10px;text-align:left;">Color</th>
+              <th style="padding:7px 10px;">Size</th>
+              <th style="padding:7px 10px;">Ordered</th>
+              <th style="padding:7px 10px;background:#b71c1c;">Back Qty</th>
+              <th style="padding:7px 10px;background:#1b5e20;">현재 재고</th>
+              <th style="padding:7px 10px;background:#e65100;">PCR 재고</th>
+              <th style="padding:7px 10px;background:#0d47a1;">채울 수량</th>
+              <th style="padding:7px 10px;">Status</th>
+            </tr>
+          </thead>
+          <tbody id="bo-lines-body"></tbody>
+        </table>
+      </div>
+      <div id="bo-fulfill-section" style="display:none;margin-top:14px;padding:12px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:5px;">
+        <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px;">✅ 채울 수량 확인 후 Invoice / Pick Ticket 생성</div>
+        <div style="font-size:11px;color:var(--text2);" id="bo-fulfill-summary"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('modal-backorder')">닫기</button>
+      <button class="btn btn-green" id="bo-fulfill-btn" onclick="fulfillBackOrder()" style="display:none">✓ 재고 차감 & Invoice 생성</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     CUSTOMER MODAL
+══════════════════════════════════ -->
+<div class="modal-overlay" id="modal-customer">
+  <div class="modal" style="width:620px;max-width:95vw;">
+    <div class="modal-head">
+      <span class="modal-title" id="cust-modal-title">+ Add Customer</span>
+      <button class="modal-close" onclick="closeModal('modal-customer')">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="cust-edit-id"/>
+      <div class="fgrid fg2" style="padding:0">
+        <div class="ff" style="grid-column:1/-1">
+          <label>Company Name *</label>
+          <input class="fi" id="cust-company" placeholder="OUT OF HAND GRAPHICS"/>
+        </div>
+        <div class="ff"><label>Contact Name</label><input class="fi" id="cust-contact" placeholder="John Smith"/></div>
+        <div class="ff"><label>Phone</label><input class="fi" id="cust-phone" placeholder="(312) 555-0000"/></div>
+        <div class="ff" style="grid-column:1/-1"><label>Email</label><input class="fi" id="cust-email" placeholder="orders@customer.com"/></div>
+        <div class="ff">
+          <label>Bill To Address</label>
+          <textarea class="fi" id="cust-bill-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="6650 S Narragansett Ave&#10;Unit B&#10;Bedford Park IL 60638"></textarea>
+        </div>
+        <div class="ff">
+          <label>Ship To Address <span style="color:var(--text4);font-weight:400">(다를 경우)</span></label>
+          <textarea class="fi" id="cust-ship-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="비우면 Bill To와 동일"></textarea>
+        </div>
+        <div class="ff"><label>Payment Terms</label><input class="fi" id="cust-terms" value="N30" placeholder="N30"/></div>
+        <div class="ff"><label>Notes</label><input class="fi" id="cust-notes" placeholder="특이사항..."/></div>
+      </div>
+    </div>
+    <div class="modal-foot" style="justify-content:space-between;">
+      <button class="btn" id="cust-delete-btn" style="color:var(--red);display:none" onclick="deleteCustomer()">🗑 Delete</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="closeModal('modal-customer')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCustomer()">✓ Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════
+     NEW ORDER MODAL
+══════════════════════════════════ -->
+<div class="modal-overlay" id="modal-new-order">
+  <div class="modal" style="width:700px;max-width:95vw;">
+    <div class="modal-head">
+      <span class="modal-title">➕ New Order</span>
+      <button class="modal-close" onclick="closeModal('modal-new-order')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="fgrid fg2" style="padding:0 0 12px">
+        <div class="ff"><label>Customer Name</label><input class="fi" id="no-customer" placeholder="Customer name..."/></div>
+        <div class="ff"><label>Customer PO #</label><input class="fi" id="no-po" placeholder="PO number..."/></div>
+        <div class="ff"><label>Warehouse</label>
+          <select class="fsel" id="no-wh"><option value="">Select warehouse...</option></select></div>
+        <div class="ff"><label>Ship Date</label><input class="fi" type="date" id="no-shipdate"/></div>
+      </div>
+      <div style="font-size:11px;font-weight:700;color:var(--primary-dark);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Order Lines — Enter Pieces</div>
+      <table class="order-line-table">
+        <thead>
+          <tr>
+            <th>Style</th><th>Color</th><th>Size</th>
+            <th>Pcs/Box</th>
+            <th>Order Qty (Pieces)</th>
+            <th style="background:#c8e6c9">= Boxes</th>
+            <th style="background:#fff9c4">+ Loose</th>
+            <th>Location</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="order-lines-body"></tbody>
+      </table>
+      <button class="btn btn-sm" style="margin-top:8px" onclick="addOrderLine()">+ Add Line</button>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('modal-new-order')">Cancel</button>
+      <button class="btn btn-green" onclick="submitOrder()">✓ Save & Generate Pick Ticket</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD INVENTORY MODAL -->
+<div class="modal-overlay" id="modal-add-inv">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-title">+ Add / Update Stock</span>
+      <button class="modal-close" onclick="closeModal('modal-add-inv')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="fgrid fg2" style="padding:0">
+        <div class="ff"><label>Warehouse</label><select class="fsel" id="ai-wh"><option value="">Select...</option></select></div>
+        <div class="ff"><label>Style</label><select class="fsel" id="ai-style"><option value="">Select...</option></select></div>
+        <div class="ff"><label>Color</label><input class="fi" id="ai-color" placeholder="Color name..."/></div>
+        <div class="ff"><label>Size</label>
+          <select class="fsel" id="ai-size">
+            <option>XS</option><option>S</option><option>M</option><option>L</option>
+            <option>XL</option><option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>
+            <option>2T</option><option>3T</option><option>4T</option><option>5T</option>
+          </select></div>
+        <div class="ff"><label>Location (Bin)</label><input class="fi" id="ai-loc" placeholder="A-01-03"/></div>
+        <div class="ff"><label>Qty on Hand</label><input class="fi" id="ai-qty" type="number" min="0" value="0"/></div>
+        <div class="ff"><label>Reorder Point</label><input class="fi" id="ai-reorder" type="number" min="0" value="500"/></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('modal-add-inv')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveInventory()">✓ Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- UNIT COST MODAL -->
+<div class="modal-overlay" id="modal-unit-cost">
+  <div class="modal" style="width:620px;max-width:95vw;max-height:90vh;overflow-y:auto;">
+    <div class="modal-head" style="background:#1b5e20;position:sticky;top:0;z-index:10;">
+      <span class="modal-title">💲 Unit Cost — <span id="cost-style-label"></span></span>
+      <button class="modal-close" onclick="closeModal('modal-unit-cost')">×</button>
+    </div>
+    <div class="modal-body" style="padding:16px;">
+      <input type="hidden" id="cost-style-id"/>
+
+      <div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:11px;color:#1b5e20;">
+        🔒 <strong>SENSITIVE</strong> — Unit Cost는 Owner / Accounting만 볼 수 있습니다. 해당 스타일의 사이즈 그룹만 입력하세요.
+      </div>
+
+      <!-- ⚡ 빠른 채우기 -->
+      <div style="padding:10px;background:#f5f5f5;border-radius:6px;margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;margin-bottom:8px;color:#333;">⚡ 빠른 채우기</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input class="fi" id="cost-fill-val" type="number" step="0.0001" placeholder="금액 입력..." style="width:110px;"/>
+          <button class="btn btn-sm" onclick="fillCosts('adult')">Adult</button>
+          <button class="btn btn-sm" onclick="fillCosts('big')">3XL+</button>
+          <button class="btn btn-sm" onclick="fillCosts('kids')">Kids</button>
+          <button class="btn btn-sm" onclick="fillCosts('youth')">Youth</button>
+          <button class="btn btn-sm" onclick="fillCosts('juvy')">Juvy</button>
+          <button class="btn btn-sm" onclick="fillCosts('toddler')">Toddler</button>
+          <button class="btn btn-sm" style="background:#333;color:#fff;" onclick="fillCosts('all')">전체</button>
+        </div>
+      </div>
+
+      <!-- 👕 Adult XS-5XL -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#1b5e20;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #a5d6a7;">👕 Adult — XS ~ 5XL</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;">
+          <div class="ff"><label>XS</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-xs" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>S</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-s" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>M</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-m" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>L</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-l" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>XL</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-xl" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>2XL</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-2xl" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>3XL</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-3xl" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>4XL</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-4xl" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>5XL</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-5xl" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+        </div>
+      </div>
+
+      <!-- 👧 Kids 2T-5T + XS-XL -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#6a1b9a;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #ce93d8;">👧 Kids — 2T~5T + XS~XL</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;">
+          <div class="ff"><label>2T</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_2t" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>3T</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_3t" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>4T</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_4t" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>5T</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_5t" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>XS</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_xs" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>S</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_s" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>M</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_m" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>L</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_l" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>XL</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-kids_xl" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+        </div>
+      </div>
+
+      <!-- 🧒 Youth XS-XL -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#1565c0;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #90caf9;">🧒 Youth — XS ~ XL</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;">
+          <div class="ff"><label>XS</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-youth_xs" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>S</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-youth_s" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>M</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-youth_m" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>L</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-youth_l" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>XL</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-youth_xl" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+        </div>
+      </div>
+
+      <!-- 👦 Juvy S-L -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#e65100;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #ffcc80;">👦 Juvy — S ~ L</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+          <div class="ff"><label>S</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-juvy_s" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>M</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-juvy_m" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>L</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-juvy_l" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+        </div>
+      </div>
+
+      <!-- 👶 Toddler 2T-4T -->
+      <div>
+        <div style="font-size:11px;font-weight:700;color:#558b2f;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:2px solid #aed581;">👶 Toddler — 2T ~ 4T</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+          <div class="ff"><label>2T</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-tod_2t" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>3T</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-tod_3t" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+          <div class="ff"><label>4T</label><div style="display:flex;align-items:center;gap:2px;"><span style="color:#666;font-size:12px;">$</span><input class="fi" id="cost-tod_4t" type="number" step="0.0001" min="0" placeholder="0.0000" style="padding:4px 6px;font-size:12px;"/></div></div>
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-foot" style="position:sticky;bottom:0;background:#fff;border-top:1px solid #eee;">
+      <button class="btn" onclick="closeModal('modal-unit-cost')">Cancel</button>
+      <button class="btn btn-green" onclick="saveCost()">✓ Save Cost</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD/EDIT STYLE MODAL -->
+<div class="modal-overlay" id="modal-add-style">
+  <div class="modal" style="width:520px;">
+    <div class="modal-head">
+      <span class="modal-title" id="style-modal-title">+ Add New Style</span>
+      <button class="modal-close" onclick="closeModal('modal-add-style')">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="as-id"/>
+      <div class="fgrid fg2" style="padding:0 0 4px">
+        <div class="ff"><label>Style Number *</label><input class="fi" id="as-num" placeholder="e.g. 1368"/></div>
+        <div class="ff"><label>Description</label><input class="fi" id="as-desc" placeholder="e.g. Adult S/S Tee"/></div>
+        <div class="ff"><label>Category</label>
+          <select class="fsel" id="as-cat">
+            <option>Adult S/S</option><option>Adult L/S</option>
+            <option>Hoodie</option><option>Tank Top</option>
+            <option>Youth</option><option>Toddler</option>
+            <option>Juvy</option><option>Junior</option><option>Other</option>
+          </select></div>
+        <div class="ff"><label>Size Range</label><input class="fi" id="as-range" placeholder="e.g. XS-2XL"/></div>
+      </div>
+
+      <div style="background:var(--primary-light);border:1px solid #b3cff0;border-radius:5px;padding:12px;margin-top:4px;">
+        <div style="font-size:11px;font-weight:700;color:var(--primary-dark);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">📦 Pcs per Box — 사이즈별 설정</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="ff" style="background:#fff;border-radius:4px;padding:8px;">
+            <label>XS ~ 2XL</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input class="fi" id="as-ppb-small" type="number" value="72" min="1" style="width:80px;font-size:16px;font-weight:700;font-family:'IBM Plex Mono',monospace;"/>
+              <span style="font-size:11px;color:var(--text3)">pcs/box</span>
+            </div>
+          </div>
+          <div class="ff" style="background:#fff;border-radius:4px;padding:8px;">
+            <label>3XL ~ 5XL</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input class="fi" id="as-ppb-large" type="number" value="48" min="1" style="width:80px;font-size:16px;font-weight:700;font-family:'IBM Plex Mono',monospace;"/>
+              <span style="font-size:11px;color:var(--text3)">pcs/box</span>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:10px;color:var(--text3);margin-top:6px;">※ 3XL-5XL이 XS-2XL과 같으면 동일하게 입력하세요</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-sm" id="as-delete-btn" style="color:var(--red);margin-right:auto;display:none;" onclick="deleteStyle()">🗑 Delete</button>
+      <button class="btn" onclick="closeModal('modal-add-style')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveStyle()">✓ Save Style</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════
+// SUPABASE INIT
+// ══════════════════════════════════
+const SUPABASE_URL = 'https://ypjnhhtfwyrwcjakjcgc.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_EB5rqma1wMHm6hF5tN398g_DMbAtAQA';
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let currentUser = null;
+let warehouses = [];
+let styles = [];
+let customers = [];
+let allInventory = [];
+let orderLineCount = 0;
+
+// ── DATE
+const now = new Date();
+const ds = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][now.getMonth()] +
+  ' ' + now.getDate() + ', ' + now.getFullYear() + '  ' +
+  String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+document.getElementById('chrome-date').textContent = ds;
+
+// ══════════════════════════════════
+// AUTH
+// ══════════════════════════════════
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const pw = document.getElementById('login-password').value;
+  if (!email || !pw) { showLoginError('Please enter email and password.'); return; }
+
+  const { data, error } = await db.auth.signInWithPassword({ email, password: pw });
+  if (error) { showLoginError('Invalid email or password. Please try again.'); return; }
+
+  currentUser = data.user;
+  startApp();
+}
+
+async function doLogout() {
+  await db.auth.signOut();
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-page').style.display = 'flex';
+  document.getElementById('login-password').value = '';
+}
+
+function showLoginError(msg) {
+  const el = document.getElementById('login-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+// Check existing session
+db.auth.getSession().then(({ data: { session } }) => {
+  if (session) { currentUser = session.user; startApp(); }
+});
+
+// Enter key login
+document.getElementById('login-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+
+async function startApp() {
+  document.getElementById('login-page').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('chrome-user').textContent = currentUser.email;
+  document.getElementById('sb-user').textContent = currentUser.email;
+
+  await loadMasterData();
+  loadDashboard();
+}
+
+// ══════════════════════════════════
+// MASTER DATA
+// ══════════════════════════════════
+async function loadMasterData() {
+  const [wh, st, cust] = await Promise.all([
+    db.from('warehouses').select('*').order('code'),
+    db.from('styles').select('*').order('style_number'),
+    db.from('customers').select('*').order('name')
+  ]);
+  warehouses = wh.data || [];
+  styles = st.data || [];
+  customers = cust.data || [];
+
+  // Customer 드롭다운 업데이트
+  updateCustomerSelects();
+
+  // Populate warehouse selects
+  ['recv-wh','no-wh','ai-wh'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = '<option value="">Select warehouse...</option>';
+    warehouses.forEach(w => {
+      el.innerHTML += `<option value="${w.id}">${w.code} — ${w.name}</option>`;
+    });
+  });
+
+  // Populate style selects
+  ['recv-style','ai-style'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = '<option value="">Select style...</option>';
+    styles.forEach(s => {
+      el.innerHTML += `<option value="${s.id}" data-ppb="${s.pcs_per_box}">${s.style_number} — ${s.description} (${s.size_range})</option>`;
+    });
+  });
+}
+
+// ══════════════════════════════════
+// PANEL SWITCHING
+// ══════════════════════════════════
+function showPanel(name, el) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.ntab').forEach(t => t.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  if (el) el.classList.add('active');
+
+  if (name === 'dashboard') loadDashboard();
+  if (name === 'inventory') loadInventory();
+  if (name === 'orders') loadOrders();
+  if (name === 'invoice') loadInvoices();
+  if (name === 'picktickets') loadPickTickets();
+  if (name === 'styles') loadStyles();
+  if (name === 'customers') loadCustomers();
+  if (name === 'receiving') loadReceivingHistory();
+}
+
+// ══════════════════════════════════
+// ══════════════════════════════════
+// INVOICE / PICK TICKET / PACKING LIST / TRANSFER
+// ══════════════════════════════════
+let poLines = [];       // 현재 입력 중인 라인들
+let currentInvoiceData = null;
+let pcrInventory = {};  // { "styleNum|COLOR|SIZE": { qty, location } }
+let scInventory = {};   // { "styleNum|COLOR|SIZE": { qty, location } }
+
+// ── pcs/box 계산 (엑셀 로직 그대로)
+function calcPpb(desc, size) {
+  const d = (desc || '').toLowerCase();
+  const s = (size || '').toUpperCase();
+  const isLarge = ['3XL','4XL','5XL','XXXL'].includes(s);
+  if (d.includes('toddler')) return 144;
+  if (d.includes('juvy') || d.includes('juvenile')) return 144;
+  if (d.includes('youth') && d.includes('ls')) return isLarge ? 48 : 60;
+  if (d.includes('youth')) return 72;
+  if (d.includes('ls') || d.includes('long')) return isLarge ? 48 : 60;
+  return isLarge ? 48 : 72;
+}
+
+// ── 창고 주소
+function getWhAddr(whCode) {
+  const addrs = {
+    CA: '14129 The Merge St Unit B\nEastvale CA 92880',
+    SC: '1605 South Guignard Parkway\nSumter SC 29150',
+    'SC-PCR': '1605 South Guignard Parkway — Pcs Room\nSumter SC 29150'
+  };
+  return addrs[whCode] || '';
+}
+
+// ── SC + SC-PCR 재고 로드 (Invoice 탭 열 때 한 번만)
+async function loadScInventory() {
+  pcrInventory = {};
+  scInventory = {};
+  const { data } = await db.from('inventory')
+    .select('*, warehouses(code), styles(style_number,description)')
+    .in('warehouses.code', ['SC','SC-PCR']);
+  (data || []).forEach(row => {
+    if (!row.warehouses) return;
+    const key = `${row.styles?.style_number||''}|${(row.color||'').toUpperCase()}|${(row.size||'').toUpperCase()}`;
+    const entry = { qty: row.qty_on_hand || 0, location: row.location || '—', id: row.id };
+    if (row.warehouses.code === 'SC-PCR') pcrInventory[key] = entry;
+    else if (row.warehouses.code === 'SC') scInventory[key] = entry;
+  });
+}
+
+async function loadInvoices() {
+  await loadScInventory();
+  document.getElementById('invoice-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { data } = await db.from('orders')
+    .select('*, warehouses(code,name)')
+    .order('created_at', { ascending: false });
+  const orders = data || [];
+  document.getElementById('invoice-count').textContent = `${orders.length} invoices`;
+  if (orders.length === 0) {
+    document.getElementById('invoice-table-wrap').innerHTML = '<div class="empty">No invoices yet. Create your first invoice!</div>';
+    return;
+  }
+  const rows = orders.map(o => `
+    <tr onclick="openInvoice('${o.id}')" style="cursor:pointer">
+      <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
+      <td>${o.customer_name}</td>
+      <td class="mono">${o.customer_po || '—'}</td>
+      <td>${o.warehouses?.code === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>'}</td>
+      <td>${o.ship_date || '—'}</td>
+      <td>${statusChip(o.status)}</td>
+      <td><button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openInvoice('${o.id}')">🧾 Open</button></td>
+    </tr>`).join('');
+  document.getElementById('invoice-table-wrap').innerHTML = `
+    <table class="tbl">
+      <thead><tr><th>Invoice #</th><th>Customer</th><th>PO #</th><th>WH</th><th>Ship Date</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function openNewInvoice() {
+  poLines = [];
+  currentInvoiceData = null;
+  document.getElementById('inv-list-view').style.display = 'none';
+  document.getElementById('inv-detail-view').style.display = 'block';
+  document.getElementById('inv-entry-form').style.display = 'block';
+  document.getElementById('inv-save-btn').style.display = 'inline-flex';
+  document.getElementById('inv-doc-title').textContent = 'New Invoice';
+
+  // 창고 드롭다운 — SC only (SC-PCR 제외)
+  const whSel = document.getElementById('inv-wh-sel');
+  whSel.innerHTML = '<option value="">Select warehouse...</option>';
+  warehouses.filter(w => !w.code.includes('PCR')).forEach(w =>
+    whSel.innerHTML += `<option value="${w.id}" data-code="${w.code}" data-name="${w.name}">${w.code} — ${w.name}</option>`
+  );
+
+  ['inv-cust','inv-cust-po','inv-bill-addr','inv-ship-addr'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  document.getElementById('inv-cust-terms').value = 'N30';
+  document.getElementById('po-lines-body').innerHTML = '';
+  document.getElementById('quick-code').value = '';
+  document.getElementById('quick-qty').value = '';
+  document.getElementById('quick-price').value = '';
+  document.getElementById('parse-preview').style.display = 'none';
+  liveRenderDocs();
+  switchDocTab('invoice');
+}
+
+async function openInvoice(orderId) {
+  document.getElementById('inv-list-view').style.display = 'none';
+  document.getElementById('inv-detail-view').style.display = 'block';
+  document.getElementById('inv-entry-form').style.display = 'none';
+  document.getElementById('inv-save-btn').style.display = 'none';
+
+  const [{ data: order }, { data: lines }] = await Promise.all([
+    db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single(),
+    db.from('order_lines').select('*, styles(style_number,description,category)').eq('order_id', orderId)
+  ]);
+
+  // order_lines → poLines 형식으로 변환
+  poLines = (lines || []).map(l => ({
+    styleNum: l.styles?.style_number || '',
+    description: l.styles?.description || '',
+    color: l.color,
+    size: l.size,
+    qty: l.qty_pieces,
+    price: l.unit_price || 0,
+    ppb: l.pcs_per_box || calcPpb(l.styles?.description || '', l.size),
+    cases: l.qty_boxes || Math.floor(l.qty_pieces / (l.pcs_per_box || 72)),
+    loose: l.qty_loose || l.qty_pieces % (l.pcs_per_box || 72),
+    location: l.location || ''
+  }));
+
+  currentInvoiceData = { order };
+  document.getElementById('inv-doc-title').textContent = order.order_number + ' — ' + order.customer_name;
+  renderAllDocs();
+  switchDocTab('invoice');
+}
+
+function backToInvoiceList() {
+  document.getElementById('inv-list-view').style.display = 'block';
+  document.getElementById('inv-detail-view').style.display = 'none';
+  loadInvoices();
+}
+
+function switchDocTab(tab) {
+  ['invoice','pt','transfer','pl'].forEach(t => {
+    const doc = document.getElementById(`doc-${t}`);
+    const tab_el = document.getElementById(`tab-${t}`);
+    if (doc) doc.style.display = t === tab ? 'block' : 'none';
+    if (tab_el) tab_el.classList.toggle('active', t === tab);
+  });
+}
+
+// ── Item Code 파싱: "2388BLACKM" → { styleNum, color, size }
+function parseItemCode(code) {
+  if (!code) return null;
+  code = code.toUpperCase().trim();
+  // 사이즈 패턴 (긴 것부터)
+  const sizePatterns = ['YOUTH XS','YOUTH S','YOUTH M','YOUTH L','YOUTH XL',
+    '5XL','4XL','3XL','2XL','XXL','XXXL','XL','XS','2T','3T','4T','5T','S','M','L'];
+  let size = '';
+  let rest = code;
+  for (const sp of sizePatterns) {
+    if (code.endsWith(sp)) {
+      size = sp;
+      rest = code.slice(0, code.length - sp.length);
+      break;
+    }
+  }
+  // 스타일번호 (앞부분 숫자)
+  const numMatch = rest.match(/^(\d+)/);
+  if (!numMatch) return null;
+  const styleNum = numMatch[1];
+  const color = rest.slice(styleNum.length);
+  if (!color) return null;
+  return { styleNum, color, size };
+}
+
+// ── 스타일 번호로 description 찾기
+function getStyleDesc(styleNum) {
+  const s = styles.find(x => x.style_number === styleNum);
+  return s ? { desc: s.description || '', ppbBase: s.pcs_per_box || 72, ppbLarge: s.pcs_per_box_large || 48 } : null;
+}
+
+// ── PCR 재고 조회
+function getPcrStock(styleNum, color, size) {
+  const key = `${styleNum}|${color.toUpperCase()}|${size.toUpperCase()}`;
+  return pcrInventory[key] || null;
+}
+
+// ── SC 재고 조회 (location 포함)
+function getScStock(styleNum, color, size) {
+  const key = `${styleNum}|${color.toUpperCase()}|${size.toUpperCase()}`;
+  return scInventory[key] || null;
+}
+
+// ══════════════════════════════════
+// ══════════════════════════════════
+// STYLE+COLOR GRID
+// ══════════════════════════════════
+const SIZES_ADULT   = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+const SIZES_YOUTH   = ['Youth XS','Youth S','Youth M','Youth L','Youth XL'];
+const SIZES_KIDS    = ['2T','3T','4T','5T','XS','S','M','L','XL'];
+const SIZES_TODDLER = ['2T','3T','4T'];
+const SIZES_JUVY    = ['S','M','L'];
+
+// 창고 표시 설정
+const WH_CONFIG = {
+  'SC':     { label: 'SC Warehouse', color: '#1b5e20', bg: '#f1f8e9', inputBg: '#f9fbe7', badge: '#2e7d32' },
+  'CA':     { label: 'CA Eastvale',  color: '#0d47a1', bg: '#e8f0fe', inputBg: '#e3f2fd', badge: '#1565c0' },
+  'SC-PCR': { label: 'SC-PCR',       color: '#bf360c', bg: '#fbe9e7', inputBg: '#fff3e0', badge: '#e64a19' },
+};
+const WH_ORDER = ['SC','CA','SC-PCR'];
+
+let gridCurrentSizes = [];  // 현재 그리드에 표시된 사이즈 목록
+
+async function loadStyleColorGrid() {
+  const styleNum = (document.getElementById('grid-style')?.value || '').trim().toUpperCase();
+  const color    = (document.getElementById('grid-color')?.value || '').trim().toUpperCase();
+  const grid     = document.getElementById('style-color-grid');
+  const empty    = document.getElementById('style-color-grid-empty');
+
+  if (!styleNum || !color) { alert('Style # 과 Color를 입력하세요.'); return; }
+
+  grid.style.display = 'none';
+  empty.style.display = 'none';
+  grid.innerHTML = '<div class="loading"><div class="spinner"></div> 조회 중...</div>';
+  grid.style.display = 'block';
+
+  // DB 조회 — CA, SC, SC-PCR 모두 (location 포함)
+  const { data } = await db.from('inventory')
+    .select('id, qty_on_hand, location, size, color, style_number, warehouses(code), styles(style_number,description,category)')
+    .eq('style_number', styleNum)
+    .ilike('color', `%${color}%`)
+    .gt('qty_on_hand', 0)
+    .order('location');
+
+  const rows = data || [];
+  if (rows.length === 0) {
+    grid.style.display = 'none';
+    empty.style.display = 'block';
+    empty.innerHTML = `<span style="color:var(--text3)">⚠️ Style <b>${styleNum}</b> / Color <b>${color}</b> — 재고 없음</span>`;
+    return;
+  }
+
+  // 사이즈 목록 결정
+  const styleInfo = rows.find(r => r.styles)?.styles;
+  const cat = (styleInfo?.category || '').toLowerCase();
+  let sizes = SIZES_ADULT;
+  if (cat.includes('youth')) sizes = SIZES_YOUTH;
+  else if (cat.includes('kids')) sizes = SIZES_KIDS;
+  else if (cat.includes('toddler')) sizes = SIZES_TODDLER;
+  else if (cat.includes('juvy')) sizes = SIZES_JUVY;
+  gridCurrentSizes = sizes;
+
+  // 창고별 재고 맵 { WH: { SIZE_UPPER: { qty, bins:[{loc,qty}] } } }
+  const whMap = {};
+  rows.forEach(r => {
+    const wh = r.warehouses?.code;
+    if (!wh) return;
+    if (!whMap[wh]) whMap[wh] = {};
+    const sz = (r.size || '').toUpperCase();
+    if (!whMap[wh][sz]) whMap[wh][sz] = { qty: 0, bins: [] };
+    whMap[wh][sz].qty += (r.qty_on_hand || 0);
+    if (r.location) whMap[wh][sz].bins.push({ loc: r.location, qty: r.qty_on_hand });
+  });
+
+  // 총합 맵
+  const totalMap = {};
+  sizes.forEach(sz => {
+    totalMap[sz] = WH_ORDER.reduce((sum, wh) => sum + (whMap[wh]?.[sz.toUpperCase()]?.qty || 0), 0);
+  });
+
+  const presentWh = WH_ORDER.filter(w => whMap[w]);
+  const desc = styleInfo?.description || '';
+
+  // ── 테이블 렌더
+  const thStyle = `padding:7px 8px;text-align:center;border:1px solid var(--border);min-width:58px;font-size:10px;font-weight:700;`;
+  const tdStyle = (bg) => `padding:6px 8px;text-align:center;border:1px solid var(--border-light);background:${bg};`;
+
+  let html = `
+    <div style="margin-bottom:10px;display:flex;align-items:baseline;gap:10px;">
+      <span style="font-size:13px;font-weight:700;color:var(--primary-dark);">Style #${styleNum} — ${color}</span>
+      <span style="font-size:11px;color:var(--text3);">${desc}</span>
+    </div>
+    <div style="overflow-x:auto;">
+    <table style="border-collapse:collapse;font-size:12px;font-family:'IBM Plex Mono',monospace;width:100%;">
+      <thead>
+        <tr style="background:var(--header);color:#fff;">
+          <th style="padding:7px 12px;text-align:left;border:1px solid rgba(255,255,255,0.2);white-space:nowrap;font-size:11px;min-width:120px;"></th>
+          ${sizes.map(sz => `<th style="${thStyle}color:#fff;border-color:rgba(255,255,255,0.2);">${sz}</th>`).join('')}
+          <th style="padding:7px 8px;border:1px solid rgba(255,255,255,0.2);font-size:10px;color:#fff;min-width:60px;">Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- 총 재고 행 -->
+        <tr style="background:#e8f0fb;">
+          <td style="padding:7px 12px;border:1px solid var(--border);font-weight:700;color:var(--primary-dark);font-size:11px;">📊 Total Stock</td>
+          ${sizes.map(sz => {
+            const qty = totalMap[sz] || 0;
+            return `<td style="${tdStyle('#e8f0fb')}font-weight:700;color:${qty>0?'var(--green)':'var(--text4)'};">${qty>0?qty.toLocaleString():'—'}</td>`;
+          }).join('')}
+          <td style="${tdStyle('#dce8fb')}font-weight:700;color:var(--primary);">
+            ${Object.values(totalMap).reduce((a,b)=>a+b,0).toLocaleString()}
+          </td>
+        </tr>
+        <!-- bin 범례 행 -->
+        <tr style="background:#f0f4fa;">
+          <td style="padding:4px 12px;border:1px solid var(--border);font-size:9px;color:var(--text3);font-style:italic;">📍 Bin Location</td>
+          ${sizes.map(sz => {
+            const allBins = WH_ORDER.flatMap(wh => (whMap[wh]?.[sz.toUpperCase()]?.bins || []));
+            const binText = allBins.length > 0 ? [...new Set(allBins.map(b=>b.loc))].join(', ') : '—';
+            return `<td style="${tdStyle('#f0f4fa')}font-size:9px;color:var(--text3);">${binText}</td>`;
+          }).join('')}
+          <td style="${tdStyle('#f0f4fa')}"></td>
+        </tr>`;
+
+  // 창고별: 재고 행 + 오더 입력 행
+  presentWh.forEach(wh => {
+    const cfg = WH_CONFIG[wh] || { label: wh, color: '#333', bg: '#fafafa', inputBg: '#fff', badge: '#666' };
+    const whData = whMap[wh] || {};
+    const whTotal = sizes.reduce((sum, sz) => sum + (whData[sz.toUpperCase()] || 0), 0);
+
+    // 재고 행
+    html += `
+        <tr style="background:${cfg.bg};">
+          <td style="padding:7px 12px;border:1px solid var(--border);white-space:nowrap;">
+            <span style="display:inline-block;background:${cfg.badge};color:#fff;padding:2px 7px;border-radius:3px;font-size:10px;font-weight:700;">${cfg.label}</span>
+            <span style="font-size:10px;color:var(--text3);margin-left:4px;">재고</span>
+          </td>
+          ${sizes.map(sz => {
+            const d = whData[sz.toUpperCase()];
+            const qty = d?.qty || 0;
+            const bins = d?.bins || [];
+            const binStr = bins.length > 0 ? [...new Set(bins.map(b=>b.loc))].join(',') : '';
+            return `<td style="${tdStyle(cfg.bg)}color:${qty>0?cfg.color:'var(--text4)'};position:relative;">
+              <div style="font-weight:700;">${qty>0?qty.toLocaleString():'—'}</div>
+              ${binStr ? `<div style="font-size:9px;color:${cfg.color};opacity:0.7;margin-top:1px;">📍${binStr}</div>` : ''}
+            </td>`;
+          }).join('')}
+          <td style="${tdStyle(cfg.bg)}font-weight:700;color:${cfg.color};">${whTotal>0?whTotal.toLocaleString():'—'}</td>
+        </tr>`;
+
+    // 오더 입력 행
+    html += `
+        <tr style="background:${cfg.inputBg};border-bottom:2px solid ${cfg.badge}20;">
+          <td style="padding:5px 12px;border:1px solid var(--border);white-space:nowrap;font-size:10px;color:${cfg.color};font-weight:600;">
+            ✏️ ${cfg.label} 오더
+          </td>
+          ${sizes.map(sz => {
+            const stock = whData[sz.toUpperCase()] || 0;
+            return `<td style="padding:3px 3px;text-align:center;border:1px solid var(--border-light);">
+              <input type="number" min="0" placeholder="—"
+                id="grid-qty-${wh.replace('-','_')}-${sz.replace(/\s+/g,'_')}"
+                data-wh="${wh}" data-size="${sz}"
+                style="width:52px;height:26px;border:1px solid ${stock>0?cfg.badge+'60':'#ddd'};border-radius:3px;text-align:center;font-size:12px;font-family:'IBM Plex Mono',monospace;background:${stock>0?'#fff':'#f0f0f0'};color:${cfg.color};"
+                ${stock===0?'disabled':''} />
+            </td>`;
+          }).join('')}
+          <td style="padding:3px;border:1px solid var(--border-light);background:${cfg.inputBg};"></td>
+        </tr>`;
+  });
+
+  // 구분선 + 추가 버튼
+  html += `
+      </tbody>
+    </table>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-green" onclick="addGridLinesToOrder('${styleNum}','${color}')">✓ 오더에 추가</button>
+      <button class="btn" onclick="clearGridInputs()">↺ 초기화</button>
+      <span style="font-size:11px;color:var(--text3);">창고별 수량 입력 후 <b>오더에 추가</b> 클릭</span>
+    </div>`;
+
+  grid.innerHTML = html;
+}
+
+function clearGridInputs() {
+  document.querySelectorAll('[id^="grid-qty-"]').forEach(inp => inp.value = '');
+}
+
+function addGridLinesToOrder(styleNum, color) {
+  const price = parseFloat(document.getElementById('grid-price')?.value) || 0;
+  const styleInfo = getStyleDesc(styleNum);
+  const desc = styleInfo?.desc || '';
+  const inputs = document.querySelectorAll('[id^="grid-qty-"]');
+  let added = 0;
+
+  inputs.forEach(inp => {
+    const qty = parseInt(inp.value) || 0;
+    if (qty <= 0) return;
+    const wh   = inp.dataset.wh;
+    const size = inp.dataset.size;
+    const ppb  = calcPpb(desc, size);
+    const cases = Math.floor(qty / ppb);
+    const loose = qty % ppb;
+    const scStock  = getScStock(styleNum, color, size);
+    const pcrStock = getPcrStock(styleNum, color, size);
+    const code = styleNum + color.replace(/\s+/g,'').substring(0,6).toUpperCase() + size.replace(/\s+/g,'').toUpperCase();
+    poLines.push({
+      code, styleNum, color, size, wh,
+      description: desc, qty, price, ppb, cases, loose,
+      location: wh === 'SC' ? (scStock?.location || '') : wh === 'SC-PCR' ? (pcrStock?.location || '') : '',
+      pcrQty: pcrStock?.qty ?? null,
+      pcrLocation: pcrStock?.location || '—'
+    });
+    added++;
+  });
+
+  if (added === 0) { alert('수량을 하나 이상 입력하세요.'); return; }
+  renderEntryTable();
+  liveRenderDocs();
+
+  // 그리드 초기화
+  document.getElementById('style-color-grid').style.display = 'none';
+  document.getElementById('style-color-grid-empty').style.display = 'none';
+  document.getElementById('grid-style').value = '';
+  document.getElementById('grid-color').value = '';
+  document.getElementById('grid-price').value = '';
+  alert(`✅ ${added}개 라인 추가됨`);
+}
+
+// ── 입력 바 미리보기
+function previewParse() {
+  const code = document.getElementById('quick-code')?.value || '';
+  const prev = document.getElementById('parse-preview');
+  if (!code) { prev.style.display = 'none'; return; }
+  const parsed = parseItemCode(code);
+  if (!parsed) { prev.style.display = 'block'; prev.textContent = '⚠️ 파싱 불가 — 형식 확인 필요'; return; }
+  const styleInfo = getStyleDesc(parsed.styleNum);
+  const ppb = styleInfo ? calcPpb(styleInfo.desc, parsed.size) : 72;
+  const pcr = getPcrStock(parsed.styleNum, parsed.color, parsed.size);
+  prev.style.display = 'block';
+  prev.innerHTML = `✓ Style: <b>#${parsed.styleNum}</b>  Color: <b>${parsed.color}</b>  Size: <b>${parsed.size}</b>  pcs/box: <b>${ppb}</b>  PCR stock: <b>${pcr ? pcr.qty + ' pcs @ ' + pcr.location : '—'}</b>`;
+}
+
+// ── 라인 추가
+function addQuickLine() {
+  const code = document.getElementById('quick-code')?.value || '';
+  const qty = parseInt(document.getElementById('quick-qty')?.value) || 0;
+  const price = parseFloat(document.getElementById('quick-price')?.value) || 0;
+  const parsed = parseItemCode(code);
+  if (!parsed) { alert('Item Code를 확인해 주세요.\n예: 2388BLACKM, 1368CHARS, 1368CHARCOL2XL'); return; }
+  if (qty <= 0) { alert('수량을 입력해 주세요.'); return; }
+  const styleInfo = getStyleDesc(parsed.styleNum);
+  const desc = styleInfo?.desc || '';
+  const ppb = calcPpb(desc, parsed.size);
+  const cases = Math.floor(qty / ppb);
+  const loose = qty % ppb;
+  // SC Location 자동 조회
+  const scStock = getScStock(parsed.styleNum, parsed.color, parsed.size);
+  const pcrStock = getPcrStock(parsed.styleNum, parsed.color, parsed.size);
+  const line = {
+    code, styleNum: parsed.styleNum, color: parsed.color, size: parsed.size,
+    description: desc, qty, price, ppb, cases, loose,
+    location: scStock?.location || '',
+    pcrQty: pcrStock?.qty ?? null,
+    pcrLocation: pcrStock?.location || '—'
+  };
+  poLines.push(line);
+  renderEntryTable();
+  liveRenderDocs();
+  // 입력창 초기화
+  document.getElementById('quick-code').value = '';
+  document.getElementById('quick-qty').value = '';
+  document.getElementById('quick-price').value = '';
+  document.getElementById('parse-preview').style.display = 'none';
+  document.getElementById('quick-code').focus();
+}
+
+// ── 여러 줄 붙여넣기
+function parseBulkPaste() {
+  const text = document.getElementById('bulk-paste')?.value || '';
+  const rows = text.trim().split('\n');
+  let added = 0;
+  rows.forEach(row => {
+    const parts = row.trim().split(/[\t ]+/);
+    if (parts.length < 2) return;
+    const code = parts[0].toUpperCase();
+    const qty = parseInt(parts[1]) || 0;
+    const price = parseFloat(parts[2]) || 0;
+    if (!qty) return;
+    const parsed = parseItemCode(code);
+    if (!parsed) return;
+    const styleInfo = getStyleDesc(parsed.styleNum);
+    const desc = styleInfo?.desc || '';
+    const ppb = calcPpb(desc, parsed.size);
+    const scStock = getScStock(parsed.styleNum, parsed.color, parsed.size);
+    const pcrStock = getPcrStock(parsed.styleNum, parsed.color, parsed.size);
+    poLines.push({
+      code, styleNum: parsed.styleNum, color: parsed.color, size: parsed.size,
+      description: desc, qty, price, ppb,
+      cases: Math.floor(qty / ppb), loose: qty % ppb,
+      location: scStock?.location || '',
+      pcrQty: pcrStock?.qty ?? null,
+      pcrLocation: pcrStock?.location || '—'
+    });
+    added++;
+  });
+  document.getElementById('bulk-paste').value = '';
+  renderEntryTable();
+  liveRenderDocs();
+  if (added > 0) alert(`✅ ${added}개 라인 추가됨`);
+}
+
+// ── 엔트리 테이블 렌더
+function renderEntryTable() {
+  let totalPcs = 0, totalAmt = 0, totalCases = 0, totalLoose = 0;
+  const rows = poLines.map((l, idx) => {
+    totalPcs += l.qty;
+    totalAmt += l.qty * l.price;
+    totalCases += l.cases;
+    totalLoose += l.loose;
+    const pcrOk = l.pcrQty !== null && l.pcrQty >= l.loose;
+    const pcrBadge = l.loose === 0 ? '<span style="color:#888">—</span>'
+      : l.pcrQty === null ? '<span style="color:#999">미확인</span>'
+      : pcrOk ? `<span style="color:#2e7d32;font-weight:700">${l.pcrQty} pcs ✓</span>`
+      : `<span style="color:#c62828;font-weight:700">⚠️ ${l.pcrQty} pcs 부족</span>`;
+    return `<tr>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.code}</td>
+      <td style="font-weight:700">#${l.styleNum}</td>
+      <td>${l.color}</td>
+      <td>${l.size}</td>
+      <td style="text-align:center;font-weight:700">${l.qty}</td>
+      <td style="text-align:center">$${l.price.toFixed(2)}</td>
+      <td style="text-align:center;font-size:18px;font-weight:700;background:#e8f5e9;color:#2e7d32">${l.cases}</td>
+      <td style="text-align:center;font-size:18px;font-weight:700;background:${l.loose>0?'#fff3e0':'#f5f5f5'};color:${l.loose>0?'#e65100':'#888'}">${l.loose}</td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;">
+        <input class="fi" value="${l.location}" style="width:80px;height:24px;padding:2px 6px;font-size:11px;" 
+          oninput="poLines[${idx}].location=this.value;liveRenderDocs()"/>
+      </td>
+      <td style="font-size:11px">${pcrBadge}</td>
+      <td><button class="btn btn-sm" style="color:var(--red);padding:2px 6px" onclick="poLines.splice(${idx},1);renderEntryTable();liveRenderDocs()">✕</button></td>
+    </tr>`;
+  }).join('');
+  document.getElementById('po-lines-body').innerHTML = rows || '<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--text3)">아직 라인이 없습니다. Item Code를 입력해 주세요.</td></tr>';
+  document.getElementById('po-total-pcs').textContent = totalPcs.toLocaleString();
+  document.getElementById('po-total-amt').textContent = '$' + totalAmt.toFixed(2);
+  document.getElementById('po-total-cases').textContent = totalCases;
+  document.getElementById('po-total-loose').textContent = totalLoose;
+}
+
+// ── 실시간 문서 렌더 (입력하면서 Invoice/PT/PL 실시간 업데이트)
+function liveRenderDocs() {
+  const cust = document.getElementById('inv-cust')?.value || '';
+  const po = document.getElementById('inv-cust-po')?.value || '';
+  const terms = document.getElementById('inv-cust-terms')?.value || 'N30';
+  const billAddr = document.getElementById('inv-bill-addr')?.value || '';
+  const shipAddr = document.getElementById('inv-ship-addr')?.value || billAddr;
+  const whOpt = document.getElementById('inv-wh-sel')?.selectedOptions[0];
+  const whCode = whOpt?.dataset?.code || '';
+  const whName = whOpt?.dataset?.name || '';
+  const shipDate = document.getElementById('inv-ship-date-inp')?.value || '';
+  const fob = whCode ? `${whCode} — ${whName}` : '—';
+  const orderNum = 'NEW';
+
+  currentInvoiceData = {
+    order: {
+      order_number: orderNum,
+      customer_name: cust || '(Customer)',
+      customer_po: po,
+      terms, ship_date: shipDate, fob,
+      from_addr: getWhAddr(whCode),
+      bill_addr: billAddr,
+      ship_addr: shipAddr || billAddr,
+      wh_code: whCode
+    }
+  };
+  renderAllDocs();
+}
+
+// ── 전체 문서 렌더 (Invoice + Pick Ticket + Transfer + Packing List)
+function renderAllDocs() {
+  if (!currentInvoiceData) return;
+  const { order } = currentInvoiceData;
+  const lines = poLines;
+  const addrHtml = a => (a || '').replace(/\n/g, '<br>');
+  const dateStr = new Date().toLocaleDateString();
+  const fromAddr = order.from_addr || getWhAddr(order.wh_code || order.warehouses?.code || '');
+  const billAddr = order.bill_addr || '';
+  const shipAddr = order.ship_addr || billAddr;
+  const fob = order.fob || order.warehouses?.name || '—';
+  const wh = order.wh_code || order.warehouses?.code || 'SC';
+
+  // ═══ INVOICE ═══
+  document.getElementById('inv-from-addr').innerHTML = addrHtml(fromAddr);
+  document.getElementById('inv-number').textContent = order.order_number;
+  document.getElementById('inv-date').textContent = dateStr;
+  document.getElementById('inv-bill-to').innerHTML = `<strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}`;
+  document.getElementById('inv-ship-to').innerHTML = addrHtml(shipAddr) || order.customer_name;
+  document.getElementById('inv-po').textContent = order.customer_po || '—';
+  document.getElementById('inv-terms').textContent = order.terms || 'N30';
+  document.getElementById('inv-ship-date').textContent = order.ship_date || '—';
+  document.getElementById('inv-fob').textContent = fob;
+
+  let totalPcs = 0, totalAmt = 0;
+  document.getElementById('inv-lines-body').innerHTML = lines.length === 0
+    ? '<tr><td colspan="6" style="text-align:center;padding:16px;color:var(--text3)">라인을 입력하세요</td></tr>'
+    : lines.map(l => {
+        const amt = l.qty * l.price;
+        totalPcs += l.qty; totalAmt += amt;
+        return `<tr>
+          <td style="text-align:center;font-weight:700">${l.qty.toLocaleString()}</td>
+          <td>#${l.styleNum} ${l.description}</td>
+          <td>${l.color}</td><td>${l.size}</td>
+          <td style="text-align:right">$${l.price.toFixed(2)}</td>
+          <td style="text-align:right;font-weight:700">$${amt.toFixed(2)}</td>
+        </tr>`;
+      }).join('');
+  document.getElementById('inv-total-pcs').textContent = totalPcs.toLocaleString();
+  document.getElementById('inv-total-amt-doc').textContent = '$' + totalAmt.toFixed(2);
+
+  // ═══ PICK TICKET ═══
+  document.getElementById('pt-from-addr').innerHTML = addrHtml(fromAddr);
+  document.getElementById('pt-ref').textContent = order.order_number;
+  document.getElementById('pt-date2').textContent = dateStr;
+  document.getElementById('pt-sold-to').innerHTML = `<strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}`;
+  document.getElementById('pt-ship-to2').innerHTML = addrHtml(shipAddr);
+  document.getElementById('pt-po2').textContent = order.customer_po || '—';
+  document.getElementById('pt-via').textContent = '—';
+  document.getElementById('pt-fob2').textContent = fob;
+  document.getElementById('pt-wh2').textContent = wh;
+
+  let totalCases = 0, totalLoose = 0, needTransfer = 0;
+  const whRows = [], pcrRows = [], transferRows = [];
+
+  lines.forEach(l => {
+    const ppb = l.ppb || calcPpb(l.description, l.size);
+    const cases = l.cases ?? Math.floor(l.qty / ppb);
+    const loose = l.loose ?? l.qty % ppb;
+    totalCases += cases;
+    totalLoose += loose;
+
+    const scLoc = l.location || getScStock(l.styleNum, l.color, l.size)?.location || '—';
+
+    // SC Warehouse 섹션 — full boxes
+    if (cases > 0) {
+      whRows.push(`<tr>
+        <td>#${l.styleNum} ${l.description}</td>
+        <td>${l.color}</td><td>${l.size}</td>
+        <td style="text-align:center;font-size:20px;font-weight:700;background:#e8f5e9;color:#1b5e20">${cases}</td>
+        <td style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px">${scLoc}</td>
+        <td style="text-align:center">☐</td>
+      </tr>`);
+    }
+
+    // PCR 섹션 — loose pcs
+    if (loose > 0) {
+      const pcrStock = l.pcrQty ?? getPcrStock(l.styleNum, l.color, l.size)?.qty;
+      const pcrSufficient = pcrStock !== null && pcrStock !== undefined && pcrStock >= loose;
+      const statusHtml = pcrStock === null || pcrStock === undefined
+        ? '<span style="color:#999">재고 미확인</span>'
+        : pcrSufficient
+        ? `<span style="color:#2e7d32;font-weight:700">✅ ${pcrStock} pcs</span>`
+        : `<span style="color:#c62828;font-weight:700">⚠️ 부족 (${pcrStock||0} pcs)</span>`;
+
+      pcrRows.push(`<tr style="${!pcrSufficient ? 'background:#fff3e0' : ''}">
+        <td>#${l.styleNum} ${l.description}</td>
+        <td>${l.color}</td><td>${l.size}</td>
+        <td style="text-align:center;font-size:20px;font-weight:700;background:#fff8e1;color:#e65100">${loose}</td>
+        <td>${pcrStock !== null && pcrStock !== undefined ? pcrStock + ' pcs' : '—'}</td>
+        <td>${statusHtml}</td>
+        <td style="text-align:center">☐</td>
+      </tr>`);
+
+      // Transfer 필요?
+      if (!pcrSufficient) {
+        needTransfer++;
+        const shortfall = loose - (pcrStock || 0);
+        // SC에서 가져올 location
+        const scInv = getScStock(l.styleNum, l.color, l.size);
+        const fromLoc = scInv?.location || scLoc;
+        transferRows.push(`<tr style="background:#fff3e0">
+          <td>#${l.styleNum} ${l.description}</td>
+          <td>${l.color}</td><td>${l.size}</td>
+          <td style="text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:14px;background:#e3f2fd;color:#1565c0">${fromLoc}</td>
+          <td style="text-align:center;font-size:12px">박스 열기</td>
+          <td style="text-align:center;font-size:20px;font-weight:700;background:#fbe9e7;color:#e65100">${shortfall}</td>
+          <td style="text-align:center">☐</td>
+        </tr>`);
+      }
+    }
+  });
+
+  document.getElementById('pt-wh-body').innerHTML = whRows.length
+    ? whRows.join('')
+    : '<tr><td colspan="6" style="text-align:center;padding:10px;color:#888">Full box 없음</td></tr>';
+  document.getElementById('pt-pcr-body').innerHTML = pcrRows.length
+    ? pcrRows.join('')
+    : '<tr><td colspan="7" style="text-align:center;padding:10px;color:#888">Loose pcs 없음 — 모두 full box</td></tr>';
+
+  document.getElementById('pt-sum-boxes2').textContent = totalCases;
+  document.getElementById('pt-sum-loose2').textContent = totalLoose;
+  document.getElementById('pt-sum-total2').textContent = totalPcs;
+  document.getElementById('pt-transfer-alert').innerHTML = needTransfer > 0
+    ? `⚠️ ${needTransfer}건`
+    : '✅ 없음';
+
+  // ═══ TRANSFER ORDER ═══
+  document.getElementById('tf-ref').textContent = order.order_number;
+  document.getElementById('tf-date').textContent = dateStr;
+  if (transferRows.length === 0) {
+    document.getElementById('transfer-none').style.display = 'block';
+    document.getElementById('transfer-doc').style.display = 'none';
+  } else {
+    document.getElementById('transfer-none').style.display = 'none';
+    document.getElementById('transfer-doc').style.display = 'block';
+    document.getElementById('transfer-body').innerHTML = transferRows.join('');
+  }
+
+  // ═══ PACKING LIST ═══
+  document.getElementById('pl-from-addr').innerHTML = addrHtml(fromAddr);
+  document.getElementById('pl-ref').textContent = order.order_number;
+  document.getElementById('pl-date').textContent = dateStr;
+  document.getElementById('pl-sold-to').innerHTML = `<strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}`;
+  document.getElementById('pl-ship-to').innerHTML = addrHtml(shipAddr);
+  document.getElementById('pl-po').textContent = order.customer_po || '—';
+  document.getElementById('pl-via').textContent = '—';
+  document.getElementById('pl-fob').textContent = fob;
+
+  let plPartial = 0;
+  document.getElementById('pl-lines-body').innerHTML = lines.map(l => {
+    const ppb = l.ppb || calcPpb(l.description, l.size);
+    const cases = l.cases ?? Math.floor(l.qty / ppb);
+    const loose = l.loose ?? l.qty % ppb;
+    if (loose > 0) plPartial++;
+    return `<tr>
+      <td>#${l.styleNum} ${l.description}</td>
+      <td>${l.color}</td><td>${l.size}</td>
+      <td style="text-align:center;font-weight:700">${l.qty.toLocaleString()}</td>
+      <td style="text-align:center;font-weight:700;background:#e8f5e9">${cases}</td>
+      <td style="text-align:center;${loose>0?'background:#fff9c4;font-weight:700':''}">${loose > 0 ? plPartial : ''}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="text-align:center;padding:16px;color:var(--text3)">라인 없음</td></tr>';
+
+  document.getElementById('pl-footer').innerHTML = `
+    <tr style="background:#f5f5f5;font-weight:700;">
+      <td colspan="3" style="padding:8px 10px;">Total</td>
+      <td style="text-align:center;padding:8px 10px;">${totalPcs.toLocaleString()}</td>
+      <td style="text-align:center;padding:8px 10px;background:#e8f5e9">${totalCases}</td>
+      <td style="text-align:center;padding:8px 10px;background:#fff9c4">${plPartial}</td>
+    </tr>
+    <tr><td colspan="6" style="padding:6px 10px;font-size:11px;color:var(--text3)">
+      Factory Sealed Boxes: ${totalCases} &nbsp;|&nbsp; Partial Boxes: ${plPartial} &nbsp;|&nbsp; Total: ${totalCases + plPartial}
+    </td></tr>`;
+}
+
+async function saveInvoice() {
+  const cust    = document.getElementById('inv-cust')?.value.trim();
+  const po      = document.getElementById('inv-cust-po')?.value.trim();
+  const whId    = document.getElementById('inv-wh-sel')?.value;
+  const shipDate = document.getElementById('inv-ship-date-inp')?.value;
+  const custSelId = document.getElementById('inv-cust-sel')?.value || null;
+
+  if (!cust || !whId) { alert('Customer name과 Warehouse는 필수입니다.'); return; }
+  if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
+
+  const whCode = warehouses.find(w => w.id === whId)?.code || '';
+
+  // ── 1. 라인별 재고 확인 (해당 창고 + SKU)
+  const lineChecks = await Promise.all(poLines.map(async l => {
+    const sku = (l.styleNum + l.color.replace(/\s+/g,'').substring(0,6) + l.size.replace(/\s+/g,'')).toLowerCase();
+    const { data: invRows } = await db.from('inventory')
+      .select('id, qty_on_hand, location, warehouse_id')
+      .eq('style_number', l.styleNum)
+      .ilike('color', l.color)
+      .ilike('size', l.size)
+      .eq('warehouse_id', whId)
+      .order('qty_on_hand', { ascending: false });
+    const totalStock = (invRows || []).reduce((s, r) => s + (r.qty_on_hand || 0), 0);
+    const canFill    = Math.min(l.qty, totalStock);
+    const backQty    = l.qty - canFill;
+    return { ...l, invRows: invRows || [], totalStock, canFill, backQty, sku };
+  }));
+
+  const hasBackorder = lineChecks.some(l => l.backQty > 0);
+  const orderStatus  = hasBackorder
+    ? (lineChecks.every(l => l.canFill === 0) ? 'backordered' : 'partial')
+    : 'open';
+
+  const totalPcs = poLines.reduce((s, l) => s + l.qty, 0);
+  const totalAmt = poLines.reduce((s, l) => s + l.qty * (l.price || 0), 0);
+
+  // ── 2. Order 저장
+  // Invoice 번호 자동생성 — INV-2026-0001 형식
+  const year = new Date().getFullYear();
+  const { data: lastOrders } = await db.from('orders')
+    .select('order_number')
+    .like('order_number', `INV-${year}-%`)
+    .order('order_number', { ascending: false })
+    .limit(1);
+  let seq = 1;
+  if (lastOrders && lastOrders.length > 0) {
+    const lastNum = lastOrders[0].order_number;
+    const parts = lastNum.split('-');
+    seq = (parseInt(parts[parts.length - 1]) || 0) + 1;
+  }
+  const orderNum = `INV-${year}-${String(seq).padStart(4, '0')}`;
+  const { data: order, error } = await db.from('orders').insert({
+    order_number: orderNum,
+    customer_name: cust,
+    customer_po: po,
+    customer_id: custSelId || null,
+    warehouse_id: whId,
+    ship_date: shipDate || null,
+    status: orderStatus,
+    total_pcs: totalPcs,
+    total_amount: totalAmt,
+    bill_address: document.getElementById('inv-bill-addr')?.value || '',
+    ship_address: document.getElementById('inv-ship-addr')?.value || '',
+    terms: document.getElementById('inv-cust-terms')?.value || 'N30',
+    created_by: currentUser.email
+  }).select().single();
+  if (error) { alert('Error saving order: ' + error.message); return; }
+
+  // ── 3. Order Lines 저장 + 재고 차감
+  for (const l of lineChecks) {
+    const s = styles.find(x => x.style_number === l.styleNum);
+    await db.from('order_lines').insert({
+      order_id: order.id,
+      style_id: s?.id || null,
+      warehouse_id: whId,
+      color: l.color, size: l.size,
+      qty_pieces: l.qty,
+      qty_filled: l.canFill,
+      qty_backordered: l.backQty,
+      is_backordered: l.backQty > 0,
+      pcs_per_box: l.ppb,
+      qty_boxes: Math.floor(l.canFill / l.ppb),
+      qty_loose: l.canFill % l.ppb,
+      location: l.invRows[0]?.location || l.location || null,
+      unit_price: l.price || 0
+    });
+
+    // 재고 차감 — 가장 많은 location 순서로 차감
+    let remaining = l.canFill;
+    for (const inv of l.invRows) {
+      if (remaining <= 0) break;
+      const deduct = Math.min(remaining, inv.qty_on_hand);
+      await db.from('inventory').update({
+        qty_on_hand: inv.qty_on_hand - deduct
+      }).eq('id', inv.id);
+      remaining -= deduct;
+    }
+  }
+
+  // ── 4. Pick Ticket 생성 (채울 수량 있을 때만)
+  const fillableLines = lineChecks.filter(l => l.canFill > 0);
+  if (fillableLines.length > 0) {
+    await db.from('pick_tickets').insert({
+      order_id: order.id,
+      ticket_number: 'PT-' + orderNum,
+      warehouse_id: whId,
+      status: 'pending'
+    });
+  }
+
+  // ── 5. Transfer Order (SC→PCR Loose Pcs 부족 시)
+  const scPcrWh = warehouses.find(w => w.code === 'SC-PCR');
+  const scWh    = warehouses.find(w => w.code === 'SC');
+  if (scPcrWh && scWh && whCode === 'SC') {
+    const transfers = lineChecks
+      .filter(l => l.canFill > 0 && l.canFill % l.ppb > 0 && (l.pcrQty === null || l.pcrQty < l.canFill % l.ppb))
+      .map((l, i) => ({
+        transfer_number: `TF-${orderNum}-${i+1}`,
+        from_warehouse_id: scWh.id,
+        to_warehouse_id: scPcrWh.id,
+        style_id: styles.find(x => x.style_number === l.styleNum)?.id || null,
+        color: l.color, size: l.size,
+        qty_pieces: (l.canFill % l.ppb) - (l.pcrQty || 0),
+        from_location: l.invRows[0]?.location || '',
+        reason: 'pick_shortage',
+        order_id: order.id,
+        status: 'pending',
+        created_by: currentUser.email
+      }));
+    if (transfers.length > 0) await db.from('transfers').insert(transfers);
+  }
+
+  // ── 결과 알림
+  if (hasBackorder) {
+    const boCount = lineChecks.filter(l => l.backQty > 0).length;
+    const boQty   = lineChecks.reduce((s, l) => s + l.backQty, 0);
+    alert(`⚠️ Invoice ${orderNum} 저장됨\n\n재고 부족 — ${boCount}개 라인, ${boQty.toLocaleString()} pcs Back Order\n채울 수 있는 수량은 재고 차감 완료`);
+  } else {
+    alert(`✅ Invoice ${orderNum} 저장 완료!\n${totalPcs.toLocaleString()} pcs 재고 차감됨`);
+  }
+
+  document.getElementById('inv-entry-form').style.display = 'none';
+  document.getElementById('inv-save-btn').style.display = 'none';
+  openInvoice(order.id);
+}
+
+// ══════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════
+async function loadDashboard() {
+  document.getElementById('dashboard-loading').style.display = 'flex';
+  document.getElementById('dashboard-content').style.display = 'none';
+
+  const [invData, ordData] = await Promise.all([
+    db.from('inventory').select('*, warehouses(code,name)'),
+    db.from('orders').select('*, warehouses(code)').order('created_at', {ascending:false}).limit(5)
+  ]);
+
+  const inv = invData.data || [];
+  const ords = ordData.data || [];
+
+  // KPIs
+  const totalUnits = inv.reduce((a,i) => a + (i.qty_on_hand||0), 0);
+  const lowStock = inv.filter(i => i.qty_on_hand <= i.reorder_point && i.qty_on_hand > 0).length;
+  const outOfStock = inv.filter(i => i.qty_on_hand === 0).length;
+  const openOrders = ords.filter(o => o.status === 'open' || o.status === 'processing').length;
+
+  document.getElementById('kpi-row').innerHTML = `
+    <div class="kpi g"><div class="kpi-label">Total Units on Hand</div><div class="kpi-val">${totalUnits.toLocaleString()}</div><div class="kpi-sub">CA + SC combined</div></div>
+    <div class="kpi"><div class="kpi-label">Active SKUs</div><div class="kpi-val">${inv.length}</div><div class="kpi-sub">Across both warehouses</div></div>
+    <div class="kpi o"><div class="kpi-label">Low Stock SKUs</div><div class="kpi-val">${lowStock}</div><div class="kpi-sub">Below reorder point</div></div>
+    <div class="kpi r"><div class="kpi-label">Open Orders</div><div class="kpi-val">${openOrders}</div><div class="kpi-sub">Pending fulfillment</div></div>
+  `;
+
+  // Warehouse breakdown
+  const caInv = inv.filter(i => i.warehouses?.code === 'CA');
+  const scInv = inv.filter(i => i.warehouses?.code === 'SC');
+  document.getElementById('ca-total').textContent = caInv.reduce((a,i)=>a+(i.qty_on_hand||0),0).toLocaleString();
+  document.getElementById('ca-low').textContent = caInv.filter(i=>i.qty_on_hand<=i.reorder_point&&i.qty_on_hand>0).length;
+  document.getElementById('ca-skus').textContent = caInv.length;
+  document.getElementById('sc-total').textContent = scInv.reduce((a,i)=>a+(i.qty_on_hand||0),0).toLocaleString();
+  document.getElementById('sc-low').textContent = scInv.filter(i=>i.qty_on_hand<=i.reorder_point&&i.qty_on_hand>0).length;
+  document.getElementById('sc-skus').textContent = scInv.length;
+
+  // Recent orders
+  const ordHtml = ords.length === 0 ? '<div class="empty">No orders yet</div>' : `
+    <table class="tbl">
+      <thead><tr><th>Order #</th><th>Customer</th><th>PO #</th><th>Warehouse</th><th>Ship Date</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${ords.map(o => `
+        <tr>
+          <td class="mono">${o.order_number}</td>
+          <td>${o.customer_name}</td>
+          <td class="mono">${o.customer_po||'—'}</td>
+          <td>${o.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</td>
+          <td>${o.ship_date||'—'}</td>
+          <td>${statusChip(o.status)}</td>
+          <td><button class="btn btn-sm" onclick="viewPickTicket('${o.id}','${o.order_number}')">🎫 Pick Ticket</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  document.getElementById('recent-orders-table').innerHTML = ordHtml;
+
+  // Badge
+  document.getElementById('open-orders-badge').textContent = openOrders;
+
+  document.getElementById('dashboard-loading').style.display = 'none';
+  document.getElementById('dashboard-content').style.display = 'block';
+}
+
+// ══════════════════════════════════
+// INVENTORY
+// ══════════════════════════════════
+async function loadInventory() {
+  document.getElementById('inventory-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
+  const { data } = await db.from('inventory')
+    .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box)')
+    .order('created_at', {ascending:false});
+  allInventory = data || [];
+  renderInventoryTable(allInventory);
+}
+
+function filterInventory() {
+  const style = document.getElementById('inv-filter-style').value.toLowerCase();
+  const color = document.getElementById('inv-filter-color').value.toLowerCase();
+  const wh = document.getElementById('inv-filter-wh').value;
+  const size = document.getElementById('inv-filter-size').value.toLowerCase();
+  const status = document.getElementById('inv-filter-status').value;
+
+  let filtered = allInventory.filter(i => {
+    if (style && !i.styles?.style_number?.toLowerCase().includes(style)) return false;
+    if (color && !i.color?.toLowerCase().includes(color)) return false;
+    if (wh && i.warehouses?.code !== wh) return false;
+    if (size && !i.size?.toLowerCase().includes(size)) return false;
+    if (status === 'low' && !(i.qty_on_hand <= i.reorder_point && i.qty_on_hand > 0)) return false;
+    if (status === 'out' && i.qty_on_hand !== 0) return false;
+    return true;
+  });
+  renderInventoryTable(filtered);
+}
+
+function renderInventoryTable(data) {
+  if (data.length === 0) {
+    document.getElementById('inventory-table-wrap').innerHTML = '<div class="empty">No inventory found. Add stock using the button above.</div>';
+    return;
+  }
+  const rows = data.map(i => {
+    const avail = (i.qty_on_hand||0) - (i.qty_committed||0);
+    const isLow = i.qty_on_hand <= i.reorder_point && i.qty_on_hand > 0;
+    const isOut = i.qty_on_hand === 0;
+    const statusChipHtml = isOut ? '<span class="chip c-r">Out</span>' : isLow ? '<span class="chip c-o">Low</span>' : '<span class="chip c-g">OK</span>';
+
+    // SKU suffix 배지
+    const sku = (i.sku || '').toLowerCase();
+    const isSS  = sku.endsWith('+ss');
+    const isBad = sku.endsWith('+bad');
+    const suffixBadge = isSS
+      ? ' <span style="font-size:10px;background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;border-radius:3px;padding:1px 5px;font-weight:600;">Side Seam</span>'
+      : isBad
+      ? ' <span style="font-size:10px;background:#fce4ec;color:#b71c1c;border:1px solid #ef9a9a;border-radius:3px;padding:1px 5px;font-weight:600;">BAD</span>'
+      : '';
+    const desc = (i.styles?.description || '—') + suffixBadge;
+
+    return `<tr>
+      <td>${i.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':i.warehouses?.code==='SC-PCR'?'<span class="loc-sc" style="background:var(--orange)">PCR</span>':'<span class="loc-sc">SC</span>'}</td>
+      <td class="mono">${i.styles?.style_number||'—'}</td>
+      <td>${desc}</td>
+      <td>${i.color}</td>
+      <td>${i.size}</td>
+      <td class="num">${(i.qty_on_hand||0).toLocaleString()}</td>
+      <td class="num" style="color:var(--orange)">${(i.qty_committed||0).toLocaleString()}</td>
+      <td class="num" style="color:${avail<0?'var(--red)':'var(--green)'}">${avail.toLocaleString()}</td>
+      <td class="mono">${i.location||'—'}</td>
+      <td>${statusChipHtml}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('inventory-table-wrap').innerHTML = `
+    <table class="tbl">
+      <thead><tr>
+        <th>WH</th><th>Style #</th><th>Description</th><th>Color</th><th>Size</th>
+        <th class="num">On Hand</th><th class="num">Committed</th><th class="num">Available</th>
+        <th>Location</th><th>Status</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ══════════════════════════════════
+// ORDERS 현황 대시보드
+// ══════════════════════════════════
+let allOrders = [];
+
+async function loadOrders() {
+  document.getElementById('orders-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  document.getElementById('backorder-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  const { data } = await db.from('orders')
+    .select('*, warehouses(code,name)')
+    .order('created_at', { ascending: false });
+  allOrders = data || [];
+
+  // KPI
+  const counts = { backordered:0, partial:0, open:0, shipped:0, cancelled:0 };
+  allOrders.forEach(o => { if (counts[o.status] !== undefined) counts[o.status]++; });
+  document.getElementById('kpi-backorder').textContent   = counts.backordered;
+  document.getElementById('kpi-open').textContent        = counts.open + counts.partial;
+  document.getElementById('kpi-partial').textContent     = counts.partial;
+  document.getElementById('kpi-shipped').textContent     = counts.shipped;
+  document.getElementById('kpi-total-orders').textContent = allOrders.length;
+
+  // Badge 업데이트
+  const badgeCount = counts.backordered + counts.open + counts.partial;
+  document.getElementById('open-orders-badge').textContent = badgeCount || '';
+
+  // Back Order 섹션
+  const backOrders = allOrders.filter(o => o.status === 'backordered' || o.status === 'partial');
+  if (backOrders.length === 0) {
+    document.getElementById('backorder-wrap').innerHTML = '<div class="empty" style="color:var(--green)">✅ Back Order 없음</div>';
+    document.getElementById('backorder-card').style.borderLeftColor = 'var(--green)';
+    document.getElementById('backorder-count').textContent = '';
+  } else {
+    document.getElementById('backorder-count').textContent = `${backOrders.length}건`;
+    document.getElementById('backorder-wrap').innerHTML = `
+      <table class="tbl">
+        <thead><tr>
+          <th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>
+          <th>Ship Date</th><th>Status</th><th>Action</th>
+        </tr></thead>
+        <tbody>${backOrders.map(o => `
+          <tr style="background:#fff8f8;cursor:pointer" onclick="openBackOrderDetail('${o.id}')">
+            <td class="mono" style="font-weight:700;color:var(--red)">${o.order_number}</td>
+            <td>${o.customer_name}</td>
+            <td class="mono">${o.customer_po||'—'}</td>
+            <td>${o.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</td>
+            <td>${o.ship_date||'—'}</td>
+            <td>${statusChip(o.status)}</td>
+            <td>
+              <button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="event.stopPropagation();openBackOrderDetail('${o.id}')">
+                🔴 Back Order 처리
+              </button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  // 전체 오더 테이블
+  renderOrdersTable();
+}
+
+function filterOrders() { renderOrdersTable(); }
+
+function renderOrdersTable() {
+  const statusFilter = document.getElementById('orders-filter-status')?.value || '';
+  const whFilter     = document.getElementById('orders-filter-wh')?.value || '';
+  let filtered = allOrders;
+  if (statusFilter) filtered = filtered.filter(o => o.status === statusFilter);
+  if (whFilter)     filtered = filtered.filter(o => o.warehouses?.code === whFilter);
+
+  if (filtered.length === 0) {
+    document.getElementById('orders-table-wrap').innerHTML = '<div class="empty">해당 오더 없음</div>';
+    return;
+  }
+  document.getElementById('orders-table-wrap').innerHTML = `
+    <table class="tbl">
+      <thead><tr>
+        <th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>
+        <th>Ship Date</th><th>Total Pcs</th><th>Status</th><th>Action</th>
+      </tr></thead>
+      <tbody>${filtered.map(o => `
+        <tr onclick="openInvoiceFromOrders('${o.id}')" style="cursor:pointer;${o.status==='backordered'?'background:#fff8f8':o.status==='partial'?'background:#fffde7':''}">
+          <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
+          <td>${o.customer_name}</td>
+          <td class="mono">${o.customer_po||'—'}</td>
+          <td>${o.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</td>
+          <td>${o.ship_date||'—'}</td>
+          <td class="num">${(o.total_pcs||0).toLocaleString()}</td>
+          <td>${statusChip(o.status)}</td>
+          <td>
+            ${o.status==='backordered'||o.status==='partial'
+              ? `<button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="event.stopPropagation();openBackOrderDetail('${o.id}')">🔴 Back Order</button>`
+              : `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openInvoiceFromOrders('${o.id}')">🧾 Invoice</button>`
+            }
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+function openInvoiceFromOrders(orderId) {
+  showPanel('invoice', document.querySelector('.ntab[onclick*="invoice"]'));
+  setTimeout(() => openInvoice(orderId), 100);
+}
+
+// ── Back Order 상세 모달
+let currentBoOrderId = null;
+let boLineData = [];
+
+async function openBackOrderDetail(orderId) {
+  currentBoOrderId = orderId;
+  boLineData = [];
+  const order = allOrders.find(o => o.id === orderId);
+  if (!order) return;
+
+  document.getElementById('bo-modal-title').textContent = `🔴 Back Order — ${order.order_number}`;
+  document.getElementById('bo-fulfill-btn').style.display = 'none';
+  document.getElementById('bo-fulfill-section').style.display = 'none';
+  document.getElementById('bo-lines-body').innerHTML = '<tr><td colspan="9" style="text-align:center;padding:16px"><div class="spinner"></div></td></tr>';
+
+  // 오더 정보
+  document.getElementById('bo-order-info').innerHTML = `
+    <div><div style="font-size:10px;color:var(--text3);text-transform:uppercase">Customer</div><div style="font-weight:600">${order.customer_name}</div></div>
+    <div><div style="font-size:10px;color:var(--text3);text-transform:uppercase">PO #</div><div style="font-weight:600">${order.customer_po||'—'}</div></div>
+    <div><div style="font-size:10px;color:var(--text3);text-transform:uppercase">Ship Date</div><div style="font-weight:600">${order.ship_date||'—'}</div></div>
+    <div><div style="font-size:10px;color:var(--text3);text-transform:uppercase">Status</div>${statusChip(order.status)}</div>`;
+
+  openModal('modal-backorder');
+
+  // Back Order 라인 조회
+  const { data: lines } = await db.from('order_lines')
+    .select('*, styles(style_number,description)')
+    .eq('order_id', orderId)
+    .eq('is_backordered', true);
+
+  if (!lines || lines.length === 0) {
+    document.getElementById('bo-lines-body').innerHTML = '<tr><td colspan="9" style="text-align:center;padding:16px;color:var(--green)">✅ Back Order 라인 없음</td></tr>';
+    return;
+  }
+
+  // 현재 재고 실시간 조회
+  boLineData = await Promise.all(lines.map(async l => {
+    const { data: invRows } = await db.from('inventory')
+      .select('id, qty_on_hand, location')
+      .eq('style_number', l.styles?.style_number || '')
+      .ilike('color', l.color)
+      .ilike('size', l.size)
+      .eq('warehouse_id', order.warehouse_id)
+      .order('qty_on_hand', { ascending: false });
+    const currentStock = (invRows || []).reduce((s, r) => s + (r.qty_on_hand || 0), 0);
+    const canFillNow   = Math.min(l.qty_backordered, currentStock);
+    return { ...l, invRows: invRows || [], currentStock, canFillNow };
+  }));
+
+  const anyFillable = boLineData.some(l => l.canFillNow > 0);
+
+  document.getElementById('bo-lines-body').innerHTML = boLineData.map((l, idx) => {
+    const statusColor = l.canFillNow >= l.qty_backordered ? 'var(--green)' : l.canFillNow > 0 ? 'var(--orange)' : 'var(--red)';
+    const statusText  = l.canFillNow >= l.qty_backordered ? '✅ 충족' : l.canFillNow > 0 ? '⚠️ 일부' : '🔴 부족';
+    return `<tr style="${l.canFillNow > 0 ? 'background:#f1f8f1' : 'background:#fff8f8'}">
+      <td style="padding:7px 10px;font-weight:600">#${l.styles?.style_number||'?'}</td>
+      <td style="padding:7px 10px">${l.color}</td>
+      <td style="padding:7px 10px;text-align:center">${l.size}</td>
+      <td style="padding:7px 10px;text-align:center;font-family:'IBM Plex Mono',monospace">${l.qty_pieces.toLocaleString()}</td>
+      <td style="padding:7px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red)">${l.qty_backordered.toLocaleString()}</td>
+      <td style="padding:7px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--green);font-weight:700">${l.currentStock.toLocaleString()}</td>
+      <td style="padding:7px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--orange)">${l.pcrQty||'—'}</td>
+      <td style="padding:7px 10px;text-align:center">
+        <input type="number" min="0" max="${l.canFillNow}"
+          id="bo-fill-${idx}" value="${l.canFillNow}"
+          style="width:60px;height:26px;border:1px solid var(--border);border-radius:3px;text-align:center;font-family:'IBM Plex Mono',monospace;background:${l.canFillNow>0?'#fff':'#f5f5f5'};"
+          ${l.canFillNow===0?'disabled':''}
+          oninput="updateBoFulfillSummary()"/>
+      </td>
+      <td style="padding:7px 10px;text-align:center;font-weight:700;color:${statusColor}">${statusText}</td>
+    </tr>`;
+  }).join('');
+
+  if (anyFillable) {
+    document.getElementById('bo-fulfill-btn').style.display = 'inline-flex';
+    document.getElementById('bo-fulfill-section').style.display = 'block';
+    updateBoFulfillSummary();
+  }
+}
+
+function updateBoFulfillSummary() {
+  let totalFill = 0;
+  boLineData.forEach((l, idx) => {
+    totalFill += parseInt(document.getElementById(`bo-fill-${idx}`)?.value || 0);
+  });
+  document.getElementById('bo-fulfill-summary').innerHTML =
+    `총 <b>${totalFill.toLocaleString()} pcs</b> 채울 수 있음 → 재고 차감 후 Invoice / Pick Ticket / Packing List 생성`;
+}
+
+async function fulfillBackOrder() {
+  if (!currentBoOrderId) return;
+  const order = allOrders.find(o => o.id === currentBoOrderId);
+  if (!order) return;
+
+  let totalFilled = 0;
+  let allFulfilled = true;
+
+  for (const [idx, l] of boLineData.entries()) {
+    const fillQty = parseInt(document.getElementById(`bo-fill-${idx}`)?.value || 0);
+    if (fillQty <= 0) { if (l.qty_backordered > 0) allFulfilled = false; continue; }
+
+    // 재고 차감
+    let remaining = fillQty;
+    for (const inv of l.invRows) {
+      if (remaining <= 0) break;
+      const deduct = Math.min(remaining, inv.qty_on_hand);
+      await db.from('inventory').update({ qty_on_hand: inv.qty_on_hand - deduct }).eq('id', inv.id);
+      remaining -= deduct;
+    }
+
+    // order_line 업데이트
+    const newBackQty = l.qty_backordered - fillQty;
+    await db.from('order_lines').update({
+      qty_filled: (l.qty_filled || 0) + fillQty,
+      qty_backordered: newBackQty,
+      is_backordered: newBackQty > 0,
+      qty_boxes: Math.floor(fillQty / (l.pcs_per_box || 72)),
+      qty_loose: fillQty % (l.pcs_per_box || 72)
+    }).eq('id', l.id);
+
+    if (newBackQty > 0) allFulfilled = false;
+    totalFilled += fillQty;
+  }
+
+  // 오더 status 업데이트
+  const newStatus = allFulfilled ? 'open' : 'partial';
+  await db.from('orders').update({ status: newStatus }).eq('id', currentBoOrderId);
+
+  // Pick Ticket 생성
+  const ptNum = 'PT-' + order.order_number + '-BO';
+  await db.from('pick_tickets').insert({
+    order_id: currentBoOrderId,
+    ticket_number: ptNum,
+    warehouse_id: order.warehouse_id,
+    status: 'pending'
+  });
+
+  closeModal('modal-backorder');
+  alert(`✅ ${totalFilled.toLocaleString()} pcs 재고 차감 완료\nPick Ticket 생성됨: ${ptNum}`);
+  loadOrders();
+
+  // Invoice 탭으로 이동해서 오더 열기
+  showPanel('invoice', document.querySelector('.ntab[onclick*="invoice"]'));
+  setTimeout(() => openInvoice(currentBoOrderId), 200);
+}
+
+// NEW ORDER
+function openNewOrder() {
+  document.getElementById('order-lines-body').innerHTML = '';
+  orderLineCount = 0;
+  // populate warehouse
+  const whSel = document.getElementById('no-wh');
+  whSel.innerHTML = '<option value="">Select warehouse...</option>';
+  warehouses.forEach(w => whSel.innerHTML += `<option value="${w.id}">${w.code} — ${w.name}</option>`);
+  addOrderLine();
+  openModal('modal-new-order');
+}
+
+function addOrderLine() {
+  orderLineCount++;
+  const id = orderLineCount;
+  const styleOpts = styles.map(s => `<option value="${s.id}" data-ppb="${s.pcs_per_box}">${s.style_number} — ${s.description} (${s.size_range})</option>`).join('');
+  const sizes = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL','2T','3T','4T','5T','Youth XS','Youth S','Youth M','Youth L','Youth XL'];
+  const sizeOpts = sizes.map(s=>`<option>${s}</option>`).join('');
+
+  const tr = document.createElement('tr');
+  tr.id = `ol-${id}`;
+  tr.innerHTML = `
+    <td><select class="fsel" id="ol${id}-style" onchange="updateOrderLine(${id})" style="width:160px">
+      <option value="">Select...</option>${styleOpts}</select></td>
+    <td><input class="fi" id="ol${id}-color" placeholder="Color" style="width:90px"/></td>
+    <td><select class="fsel" id="ol${id}-size" style="width:80px">${sizeOpts}</select></td>
+    <td class="num"><span id="ol${id}-ppb" style="font-family:'IBM Plex Mono',monospace">—</span></td>
+    <td><input type="number" class="qty-input" id="ol${id}-qty" value="0" min="0" oninput="updateOrderLine(${id})"/></td>
+    <td><span class="calc-box" id="ol${id}-boxes">0</span></td>
+    <td><span class="calc-loose" id="ol${id}-loose">0</span></td>
+    <td><input class="fi" id="ol${id}-loc" placeholder="Bin..." style="width:80px"/></td>
+    <td><button class="btn btn-sm" style="color:var(--red)" onclick="document.getElementById('ol-${id}').remove()">✕</button></td>
+  `;
+  document.getElementById('order-lines-body').appendChild(tr);
+}
+
+function updateOrderLine(id) {
+  const styleEl = document.getElementById(`ol${id}-style`);
+  const ppb = parseInt(styleEl.selectedOptions[0]?.dataset?.ppb) || 0;
+  const qty = parseInt(document.getElementById(`ol${id}-qty`).value) || 0;
+  document.getElementById(`ol${id}-ppb`).textContent = ppb || '—';
+  if (ppb > 0) {
+    document.getElementById(`ol${id}-boxes`).textContent = Math.floor(qty/ppb);
+    document.getElementById(`ol${id}-loose`).textContent = qty%ppb;
+  }
+}
+
+async function submitOrder() {
+  const customer = document.getElementById('no-customer').value.trim();
+  const po = document.getElementById('no-po').value.trim();
+  const whId = document.getElementById('no-wh').value;
+  const shipDate = document.getElementById('no-shipdate').value;
+
+  if (!customer || !whId) { alert('Please fill in Customer Name and Warehouse.'); return; }
+
+  // Generate order number
+  const orderNum = 'SO-' + Date.now().toString().slice(-6);
+
+  const { data: order, error } = await db.from('orders').insert({
+    order_number: orderNum,
+    customer_name: customer,
+    customer_po: po,
+    warehouse_id: whId,
+    ship_date: shipDate || null,
+    status: 'open',
+    created_by: currentUser.email
+  }).select().single();
+
+  if (error) { alert('Error creating order: ' + error.message); return; }
+
+  // Insert order lines
+  const lines = [];
+  for (let i = 1; i <= orderLineCount; i++) {
+    const el = document.getElementById(`ol-${i}`);
+    if (!el) continue;
+    const styleId = document.getElementById(`ol${i}-style`)?.value;
+    const color = document.getElementById(`ol${i}-color`)?.value.trim();
+    const size = document.getElementById(`ol${i}-size`)?.value;
+    const qty = parseInt(document.getElementById(`ol${i}-qty`)?.value) || 0;
+    const ppb = parseInt(document.getElementById(`ol${i}-ppb`)?.textContent) || 1;
+    const loc = document.getElementById(`ol${i}-loc`)?.value.trim();
+    if (!styleId || !color || qty === 0) continue;
+    lines.push({ order_id: order.id, style_id: styleId, color, size, qty_pieces: qty, pcs_per_box: ppb, location: loc||null });
+  }
+
+  if (lines.length > 0) {
+    await db.from('order_lines').insert(lines);
+  }
+
+  // Create pick ticket
+  await db.from('pick_tickets').insert({
+    order_id: order.id,
+    ticket_number: 'PT-' + orderNum,
+    warehouse_id: whId,
+    status: 'pending'
+  });
+
+  closeModal('modal-new-order');
+  alert(`✅ Order ${orderNum} created! Pick Ticket generated.`);
+  loadOrders();
+}
+
+// ══════════════════════════════════
+// PICK TICKETS
+// ══════════════════════════════════
+async function loadPickTickets() {
+  document.getElementById('pt-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { data } = await db.from('pick_tickets')
+    .select('*, orders(order_number,customer_name,customer_po,ship_date), warehouses(code,name)')
+    .order('created_at', {ascending:false});
+  const tickets = data || [];
+
+  if (tickets.length === 0) {
+    document.getElementById('pt-table-wrap').innerHTML = '<div class="empty">No pick tickets yet. Create an order first.</div>';
+    return;
+  }
+
+  const rows = tickets.map(t => `
+    <tr>
+      <td class="mono">${t.ticket_number}</td>
+      <td class="mono">${t.orders?.order_number||'—'}</td>
+      <td>${t.orders?.customer_name||'—'}</td>
+      <td>${t.orders?.customer_po||'—'}</td>
+      <td>${t.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</td>
+      <td>${t.orders?.ship_date||'—'}</td>
+      <td>${ptStatusChip(t.status)}</td>
+      <td><button class="btn btn-sm btn-primary" onclick="viewPickTicket('${t.orders?.id||''}','${t.orders?.order_number||''}')">🎫 View / Print</button></td>
+    </tr>`).join('');
+
+  document.getElementById('pt-table-wrap').innerHTML = `
+    <table class="tbl">
+      <thead><tr><th>Ticket #</th><th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th><th>Ship Date</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function viewPickTicket(orderId, orderNum) {
+  showPanel('picktickets', document.querySelector('.ntab:nth-child(4)'));
+  document.getElementById('pt-list-view').style.display = 'none';
+  document.getElementById('pt-detail-view').style.display = 'block';
+
+  const { data: order } = await db.from('orders')
+    .select('*, warehouses(code,name)')
+    .eq('id', orderId).single();
+
+  const { data: lines } = await db.from('order_lines')
+    .select('*, styles(style_number,description)')
+    .eq('order_id', orderId);
+
+  document.getElementById('pt-order-num').textContent = orderNum;
+  document.getElementById('pt-customer').textContent = order?.customer_name || '—';
+  document.getElementById('pt-po').textContent = order?.customer_po || '—';
+  document.getElementById('pt-ship').textContent = order?.ship_date || '—';
+  document.getElementById('pt-wh-name').textContent = 'Warehouse: ' + (order?.warehouses?.code || '') + ' — ' + (order?.warehouses?.name || '');
+  document.getElementById('pt-printed-date').textContent = 'Printed: ' + ds;
+  document.getElementById('pt-sum-wh').textContent = order?.warehouses?.code || '—';
+
+  let totalBoxes = 0, totalLoose = 0, totalPcs = 0;
+  const linesHtml = (lines||[]).map(l => {
+    const boxes = l.qty_boxes || 0;
+    const loose = l.qty_loose || 0;
+    totalBoxes += boxes;
+    totalLoose += loose;
+    totalPcs += l.qty_pieces;
+    return `<tr class="${loose>0?'highlight':''}">
+      <td class="left">${l.styles?.style_number||'—'}</td>
+      <td class="left">${l.color}</td>
+      <td>${l.size}</td>
+      <td style="font-weight:700">${l.location||'—'}</td>
+      <td style="font-weight:700;font-size:14px">${l.qty_pieces.toLocaleString()}</td>
+      <td>${l.pcs_per_box}</td>
+      <td style="background:#c8e6c9;font-weight:700;font-size:16px">${boxes}</td>
+      <td style="background:${loose>0?'#fff9c4':'#f9f9f9'};font-weight:700;font-size:16px">${loose}</td>
+      <td style="font-size:20px">□</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('pt-lines-body').innerHTML = linesHtml || '<tr><td colspan="9" style="text-align:center;color:var(--text3)">No lines on this order</td></tr>';
+  document.getElementById('pt-sum-boxes').textContent = totalBoxes.toLocaleString();
+  document.getElementById('pt-sum-loose').textContent = totalLoose.toLocaleString();
+  document.getElementById('pt-sum-total').textContent = totalPcs.toLocaleString();
+}
+
+function printTicket() {
+  document.getElementById('print-area').style.display = 'block';
+  window.print();
+  setTimeout(() => document.getElementById('print-area').style.display = 'block', 500);
+}
+
+// ══════════════════════════════════
+// RECEIVING
+// ══════════════════════════════════
+function updateRecvPpb() {
+  const sel = document.getElementById('recv-style');
+  const ppb = sel.selectedOptions[0]?.dataset?.ppb;
+  document.getElementById('recv-ppb').value = ppb || '—';
+  calcRecv();
+}
+
+function calcRecv() {
+  const ppb = parseInt(document.getElementById('recv-ppb').value) || 0;
+  const boxes = parseInt(document.getElementById('recv-boxes').value) || 0;
+  const loose = parseInt(document.getElementById('recv-loose-in').value) || 0;
+  const total = (boxes * ppb) + loose;
+  document.getElementById('recv-total').textContent = total.toLocaleString();
+}
+
+async function postReceiving() {
+  const whId = document.getElementById('recv-wh').value;
+  const styleId = document.getElementById('recv-style').value;
+  const color = document.getElementById('recv-color').value.trim();
+  const size = document.getElementById('recv-size').value;
+  const location = document.getElementById('recv-location').value.trim();
+  const ppb = parseInt(document.getElementById('recv-ppb').value) || 0;
+  const boxes = parseInt(document.getElementById('recv-boxes').value) || 0;
+  const loose = parseInt(document.getElementById('recv-loose-in').value) || 0;
+  const totalQty = (boxes * ppb) + loose;
+
+  if (!whId || !styleId || !color || totalQty === 0) {
+    alert('Please fill in all fields and enter a quantity.');
+    return;
+  }
+
+  // Upsert inventory
+  const { data: existing } = await db.from('inventory')
+    .select('id, qty_on_hand')
+    .eq('warehouse_id', whId).eq('style_id', styleId).eq('color', color).eq('size', size)
+    .maybeSingle();
+
+  if (existing) {
+    await db.from('inventory').update({
+      qty_on_hand: (existing.qty_on_hand || 0) + totalQty,
+      location: location || undefined,
+      updated_at: new Date().toISOString()
+    }).eq('id', existing.id);
+  } else {
+    await db.from('inventory').insert({
+      warehouse_id: whId, style_id: styleId, color, size,
+      location, qty_on_hand: totalQty, qty_committed: 0
+    });
+  }
+
+  alert(`✅ Posted! ${totalQty.toLocaleString()} pieces added to inventory.`);
+  document.getElementById('recv-boxes').value = '0';
+  document.getElementById('recv-loose-in').value = '0';
+  document.getElementById('recv-total').textContent = '0';
+  loadReceivingHistory();
+}
+
+async function loadReceivingHistory() {
+  // Simple display - show recent inventory updates
+  const { data } = await db.from('inventory')
+    .select('*, warehouses(code), styles(style_number)')
+    .order('updated_at', {ascending:false}).limit(10);
+
+  const rows = (data||[]).map(i => `
+    <tr>
+      <td>${i.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</td>
+      <td class="mono">${i.styles?.style_number||'—'}</td>
+      <td>${i.color}</td><td>${i.size}</td>
+      <td class="num">${(i.qty_on_hand||0).toLocaleString()}</td>
+      <td class="mono">${i.location||'—'}</td>
+      <td>${new Date(i.updated_at).toLocaleDateString()}</td>
+    </tr>`).join('');
+
+  document.getElementById('recv-history').innerHTML = `
+    <table class="tbl">
+      <thead><tr><th>WH</th><th>Style</th><th>Color</th><th>Size</th><th class="num">Qty</th><th>Location</th><th>Last Updated</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="7" style="text-align:center;color:var(--text3)">No records yet</td></tr>'}</tbody>
+    </table>`;
+}
+
+// ══════════════════════════════════
+// STYLES
+// ══════════════════════════════════
+async function loadStyles() {
+  document.getElementById('styles-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { data } = await db.from('styles').select('*').order('style_number');
+  const list = data || [];
+  document.getElementById('styles-count').textContent = `${list.length} styles`;
+
+  if (list.length === 0) {
+    document.getElementById('styles-table-wrap').innerHTML = '<div class="empty">No styles yet. Add your first style!</div>';
+    return;
+  }
+
+  const rows = list.map(s => {
+    const ppbSmall = s.pcs_per_box || 72;
+    const ppbLarge = s.pcs_per_box_large || ppbSmall;
+    const ppbDisplay = ppbSmall === ppbLarge
+      ? `<span class="chip c-b">${ppbSmall}</span>`
+      : `<span class="chip c-b">${ppbSmall}</span> <span style="font-size:10px;color:var(--text3)">/ 3XL+</span> <span class="chip c-o">${ppbLarge}</span>`;
+
+    // cost 입력 여부 확인
+    const hasCost = s.cost_xs || s.cost_s || s.cost_m || s.cost_l || s.cost_xl ||
+                    s.cost_kids_2t || s.cost_kids_xs || s.cost_kids_s ||
+                    s.cost_youth_xs || s.cost_youth_s ||
+                    s.cost_juvy_s || s.cost_juvy_m ||
+                    s.cost_tod_2t || s.cost_tod_3t;
+    const costBadge = hasCost
+      ? `<span style="color:#2e7d32;font-size:10px;font-weight:700;">✓ Cost Set</span>`
+      : `<span style="color:#c62828;font-size:10px;font-weight:700;">⚠ No Cost</span>`;
+
+    return `<tr style="cursor:pointer;" onclick="openEditStyle('${s.id}')">
+      <td class="mono" style="font-weight:700;color:var(--primary)">${s.style_number}</td>
+      <td>${s.description||'—'}</td>
+      <td>${s.category||'—'}</td>
+      <td style="text-align:center">${ppbDisplay}</td>
+      <td style="text-align:center">${costBadge}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-sm" onclick="event.stopPropagation();openEditStyle('${s.id}')">✏ Edit</button>
+        <button class="btn btn-sm" style="background:#1b5e20;color:#fff;margin-left:4px;" onclick="event.stopPropagation();openCostModal('${s.id}')">💲 Cost</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('styles-table-wrap').innerHTML = `
+    <table class="tbl">
+      <thead><tr>
+        <th>Style #</th><th>Description</th><th>Category</th>
+        <th style="text-align:center">Pcs/Box</th>
+        <th style="text-align:center">Unit Cost</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function openAddStyle() {
+  document.getElementById('as-id').value = '';
+  document.getElementById('as-num').value = '';
+  document.getElementById('as-desc').value = '';
+  document.getElementById('as-cat').value = 'Adult S/S';
+  document.getElementById('as-range').value = 'XS-2XL';
+  document.getElementById('as-ppb-small').value = '72';
+  document.getElementById('as-ppb-large').value = '48';
+  document.getElementById('style-modal-title').textContent = '+ Add New Style';
+  document.getElementById('as-delete-btn').style.display = 'none';
+  document.getElementById('as-num').removeAttribute('readonly');
+  openModal('modal-add-style');
+}
+
+async function openEditStyle(id) {
+  const { data: s } = await db.from('styles').select('*').eq('id', id).single();
+  if (!s) return;
+  document.getElementById('as-id').value = s.id;
+  document.getElementById('as-num').value = s.style_number;
+  document.getElementById('as-num').setAttribute('readonly', true);
+  document.getElementById('as-desc').value = s.description || '';
+  // 카테고리 설정
+  const catSel = document.getElementById('as-cat');
+  [...catSel.options].forEach(o => { if (o.value === s.category) catSel.value = s.category; });
+  document.getElementById('as-range').value = s.size_range || '';
+  document.getElementById('as-ppb-small').value = s.pcs_per_box || 72;
+  document.getElementById('as-ppb-large').value = s.pcs_per_box_large || s.pcs_per_box || 48;
+  document.getElementById('style-modal-title').textContent = `✏ Edit Style — ${s.style_number}`;
+  document.getElementById('as-delete-btn').style.display = 'inline-flex';
+  openModal('modal-add-style');
+}
+
+async function saveStyle() {
+  const id = document.getElementById('as-id').value;
+  const num = document.getElementById('as-num').value.trim();
+  const desc = document.getElementById('as-desc').value.trim();
+  const cat = document.getElementById('as-cat').value;
+  const range = document.getElementById('as-range').value.trim();
+  const ppbSmall = parseInt(document.getElementById('as-ppb-small').value) || 72;
+  const ppbLarge = parseInt(document.getElementById('as-ppb-large').value) || 48;
+  if (!num) { alert('Style number is required.'); return; }
+
+  const payload = {
+    brand: 'Peace Textile America Inc',
+    style_number: num,
+    description: desc,
+    category: cat,
+    size_range: range,
+    pcs_per_box: ppbSmall,
+    pcs_per_box_large: ppbLarge
+  };
+
+  let error;
+  if (id) {
+    ({ error } = await db.from('styles').update(payload).eq('id', id));
+  } else {
+    ({ error } = await db.from('styles').insert(payload));
+  }
+
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-add-style');
+  await loadMasterData();
+  loadStyles();
+}
+
+async function deleteStyle() {
+  const id = document.getElementById('as-id').value;
+  const num = document.getElementById('as-num').value;
+  if (!confirm(`Delete style ${num}? This cannot be undone.`)) return;
+  const { error } = await db.from('styles').delete().eq('id', id);
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-add-style');
+  await loadMasterData();
+  loadStyles();
+}
+
+// ══════════════════════════════════
+// UNIT COST MODAL
+// ══════════════════════════════════
+const COST_FIELDS = {
+  adult:   ['xs','s','m','l','xl','2xl','3xl','4xl','5xl'],
+  big:     ['3xl','4xl','5xl'],
+  kids:    ['kids_2t','kids_3t','kids_4t','kids_5t','kids_xs','kids_s','kids_m','kids_l','kids_xl'],
+  youth:   ['youth_xs','youth_s','youth_m','youth_l','youth_xl'],
+  juvy:    ['juvy_s','juvy_m','juvy_l'],
+  toddler: ['tod_2t','tod_3t','tod_4t'],
+};
+const ALL_COST_FIELDS = [...COST_FIELDS.adult, ...COST_FIELDS.kids, ...COST_FIELDS.youth, ...COST_FIELDS.juvy, ...COST_FIELDS.toddler];
+
+async function openCostModal(id) {
+  const { data: s } = await db.from('styles').select('*').eq('id', id).single();
+  if (!s) return;
+  document.getElementById('cost-style-id').value = s.id;
+  document.getElementById('cost-style-label').textContent = `${s.style_number} — ${s.description || ''}`;
+
+  ALL_COST_FIELDS.forEach(sz => {
+    const el = document.getElementById(`cost-${sz}`);
+    if (el) el.value = s[`cost_${sz}`] ?? '';
+  });
+  openModal('modal-unit-cost');
+}
+
+async function saveCost() {
+  const id = document.getElementById('cost-style-id').value;
+  const payload = {};
+  ALL_COST_FIELDS.forEach(sz => {
+    const el = document.getElementById(`cost-${sz}`);
+    const val = el ? parseFloat(el.value) : NaN;
+    payload[`cost_${sz}`] = (!el || el.value === '' || isNaN(val)) ? null : val;
+  });
+
+  const { error } = await db.from('styles').update(payload).eq('id', id);
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-unit-cost');
+  loadStyles();
+  showToast('✓ Unit Cost 저장 완료!');
+}
+
+function fillCosts(group) {
+  const val = document.getElementById('cost-fill-val').value;
+  if (!val) { alert('금액을 먼저 입력하세요.'); return; }
+  const fields = group === 'all' ? ALL_COST_FIELDS : (COST_FIELDS[group] || []);
+  fields.forEach(sz => {
+    const el = document.getElementById(`cost-${sz}`);
+    if (el) el.value = val;
+  });
+}
+
+function showToast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'toast';
+    t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1b5e20;color:#fff;padding:10px 18px;border-radius:8px;font-weight:700;font-size:13px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:opacity 0.3s;';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.style.opacity = '1';
+  clearTimeout(t._to);
+  t._to = setTimeout(() => { t.style.opacity = '0'; }, 2500);
+}
+
+// ══════════════════════════════════
+// ADD INVENTORY MODAL
+// ══════════════════════════════════
+function openAddInventory() {
+  const whSel = document.getElementById('ai-wh');
+  whSel.innerHTML = '<option value="">Select...</option>';
+  warehouses.forEach(w => whSel.innerHTML += `<option value="${w.id}">${w.code} — ${w.name}</option>`);
+  const stSel = document.getElementById('ai-style');
+  stSel.innerHTML = '<option value="">Select...</option>';
+  styles.forEach(s => stSel.innerHTML += `<option value="${s.id}">${s.style_number} — ${s.description}</option>`);
+  openModal('modal-add-inv');
+}
+
+async function saveInventory() {
+  const whId = document.getElementById('ai-wh').value;
+  const styleId = document.getElementById('ai-style').value;
+  const color = document.getElementById('ai-color').value.trim();
+  const size = document.getElementById('ai-size').value;
+  const loc = document.getElementById('ai-loc').value.trim();
+  const qty = parseInt(document.getElementById('ai-qty').value) || 0;
+  const reorder = parseInt(document.getElementById('ai-reorder').value) || 500;
+  if (!whId || !styleId || !color) { alert('Please fill all required fields.'); return; }
+
+  const { error } = await db.from('inventory').upsert({
+    warehouse_id: whId, style_id: styleId, color, size,
+    location: loc, qty_on_hand: qty, reorder_point: reorder
+  }, { onConflict: 'warehouse_id,style_id,color,size' });
+
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-add-inv');
+  loadInventory();
+  alert('✅ Inventory saved!');
+}
+
+// ══════════════════════════════════
+// ══════════════════════════════════
+// ══════════════════════════════════
+// ══════════════════════════════════
+// PO PDF AUTO-PARSE (PDF.js — 무료)
+// ══════════════════════════════════
+let parsedPoData = null;
+
+// PDF.js 라이브러리 동적 로드
+function loadPdfJs() {
+  return new Promise((res, rej) => {
+    if (window.pdfjsLib) { res(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      res();
+    };
+    s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
+async function parsePoPdf(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  document.getElementById('po-upload-section').style.display = 'none';
+  const statusEl = document.getElementById('po-parsing-status');
+  statusEl.style.display = 'flex';
+  document.getElementById('po-parsing-msg').textContent = 'PDF 읽는 중...';
+
+  try {
+    // PDF → base64
+    const base64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(',')[1]);
+      r.onerror = () => rej(new Error('파일 읽기 실패'));
+      r.readAsDataURL(file);
+    });
+
+    document.getElementById('po-parsing-msg').textContent = 'Claude가 PO 분석 중...';
+
+    // Supabase Edge Function 호출
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-po`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_KEY}`
+      },
+      body: JSON.stringify({ pdf_base64: base64 })
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'API 오류');
+
+    // Claude 응답에서 JSON 추출
+    const text = (data.content || []).map(c => c.text || '').join('');
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('JSON 파싱 실패');
+    parsedPoData = JSON.parse(jsonMatch[0]);
+    parsedPoData.lines = parsedPoData.lines || [];
+
+    statusEl.style.display = 'none';
+    showPoPreview(parsedPoData);
+
+  } catch (err) {
+    statusEl.style.display = 'none';
+    document.getElementById('po-upload-section').style.display = 'flex';
+    alert('파싱 실패: ' + err.message);
+    input.value = '';
+  }
+}
+
+function parsePoText(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const result = {
+    customer_name: '', po_number: '', terms: '',
+    ship_to_address: '', bill_to_address: '', due_date: null,
+    lines: []
+  };
+
+  const SIZE_NORM = {
+    'XXL':'2XL','XXXL':'3XL','XXXXL':'4XL','XXXXXL':'5XL',
+    'XS':'XS','S':'S','M':'M','L':'L','XL':'XL',
+    '2XL':'2XL','3XL':'3XL','4XL':'4XL','5XL':'5XL',
+    'YXS':'Youth XS','YS':'Youth S','YM':'Youth M','YL':'Youth L','YXL':'Youth XL'
+  };
+
+  // ── PO Number
+  const poMatch = text.match(/PO\s*(?:Number|No\.?|#)\s*[:\s]+([A-Z0-9\-]+)/i);
+  if (poMatch) result.po_number = poMatch[1].trim();
+
+  // ── Terms (Net 60, Net30, N30, COD 등)
+  const termsMatch = text.match(/Terms?\s*[:\s]+(Net\s*\d+|N\s*\d+|COD|Prepaid)/i);
+  if (termsMatch) {
+    result.terms = termsMatch[1].replace(/\s+/g,'');
+    // Net60 → N60 정규화
+    result.terms = result.terms.replace(/^Net(\d+)$/i, 'N$1');
+  }
+
+  // ── 날짜들 수집
+  const allDates = [...text.matchAll(/(\d{1,2}\/\d{1,2}\/(?:20)?\d{2})/g)].map(m => m[1]);
+  const formatDate = d => {
+    if (!d) return null;
+    const p = d.split('/');
+    const y = p[2].length === 2 ? '20'+p[2] : p[2];
+    return `${y}-${p[0].padStart(2,'0')}-${p[1].padStart(2,'0')}`;
+  };
+  // Issue date = 첫번째, Due date = 두번째 (반복되는 것)
+  if (allDates.length > 0) result.issue_date = formatDate(allDates[0]);
+  const laterDates = allDates.slice(1);
+  if (laterDates.length > 0) result.due_date = formatDate(laterDates[0]);
+
+  // ── Customer Name & Address
+  // pdf.js가 같은 y좌표 텍스트를 한 줄로 합칠 수 있음
+  // "T-Shirt Tycoon, Inc Peace Textile America" 같은 경우 처리
+  // Ship To: 다음에 나오는 회사명 추출
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    // "Ship To: T-Shirt Tycoon" 또는 "Ship To: T-Shirt Tycoon, Inc Vendor: Peace..."
+    if (/ship\s*to\s*[:\s]/i.test(l)) {
+      // 같은 줄에 이름이 있는 경우
+      const inlineName = l.replace(/ship\s*to\s*[:\s]*/i,'').replace(/\s*(vendor|peace textile|contact).*$/i,'').trim();
+      if (inlineName.length > 2) {
+        result.customer_name = inlineName;
+        // 주소는 다음 줄들에서
+        const addrParts = [inlineName];
+        for (let j = i+1; j < Math.min(i+6, lines.length); j++) {
+          const nl = lines[j];
+          if (/vendor|contact|terms|ship\s*via|^line\b|peace textile|^fax/i.test(nl)) break;
+          if (nl.length > 2) addrParts.push(nl);
+        }
+        result.ship_to_address = addrParts.join('\n');
+        result.bill_to_address = addrParts.join('\n');
+      } else {
+        // 다음 줄에 이름
+        for (let j = i+1; j < Math.min(i+6, lines.length); j++) {
+          const nl = lines[j];
+          if (/vendor|contact|terms|ship\s*via|^line\b|peace textile/i.test(nl)) break;
+          if (nl.length > 2 && !result.customer_name) result.customer_name = nl;
+        }
+      }
+      break;
+    }
+    // "T-Shirt Tycoon, Inc Peace Textile America" 패턴 (한 줄에 합쳐진 경우)
+    if (/T-Shirt Tycoon|Tycoon/i.test(l)) {
+      result.customer_name = l.replace(/\s*(Peace Textile|Vendor|Contact).*$/i,'').trim();
+      break;
+    }
+  }
+
+  // customer_name 여전히 없으면 Order Information 다음 줄
+  if (!result.customer_name) {
+    const orderInfoIdx = lines.findIndex(l => /order\s*information/i.test(l));
+    if (orderInfoIdx >= 0 && lines[orderInfoIdx+1]) {
+      result.customer_name = lines[orderInfoIdx+1].replace(/\s*(Peace Textile|Vendor).*$/i,'').trim();
+    }
+  }
+
+  // ── 주문 라인 파싱 전략:
+  // 이 PDF는 pdf.js가 같은 줄 텍스트를 공백으로 합칩니다
+  // 가능한 패턴들:
+  // A) "1 1368 $2.89 236 Light Blue Heather 3/5/26 $682.04" (한 줄)
+  // B) "1 1368 $2.89 236" + 다음줄 "Light Blue Heather 3/5/26 $682.04"
+  // C) 컬럼이 분리된 경우 여러 패턴 시도
+
+  // 전략 1: 스타일 번호 + 가격 + 수량 + 컬러 한 줄 패턴
+  // "라인번호 스타일 $가격 수량 컬러명..."
+  const linePatterns = [
+    // "1 1368 $2.89 236 Light Blue Heather 3/5/26 $682.04"
+    /^(\d+)\s+(\d{3,5})\s+\$([\d.]+)\s+(\d+)\s+([A-Za-z][A-Za-z\s]+?)\s+\d{1,2}\/\d/,
+    // "1 1368 $2.89 236 Light Blue Heather" (날짜 없는 경우)
+    /^(\d+)\s+(\d{3,5})\s+\$([\d.]+)\s+(\d+)\s+([A-Za-z][A-Za-z\s]{3,})/,
+    // 가격 없이 "1 1368 236 Light Blue Heather"
+    /^(\d+)\s+(\d{3,5})\s+(\d+)\s+([A-Za-z][A-Za-z\s]{3,})/,
+  ];
+
+  // 전략 2: 텍스트 전체에서 패턴 매칭 (줄 경계 무시)
+  // 스타일번호(\d{3,5})가 나오고, 수량, 컬러, 사이즈 패턴
+  const globalLineRx = /\b(\d+)\s+(\d{3,5})\s+\$([\d.]+)\s+(\d+)\s+((?:[A-Z][a-z]+\s*)+)/g;
+
+  let parsedLines = [];
+
+  // 시도 1: 줄별 파싱
+  for (let i = 0; i < lines.length; i++) {
+    let matched = false;
+    for (const pat of linePatterns) {
+      const m = lines[i].match(pat);
+      if (!m) continue;
+
+      const lineNo   = parseInt(m[1]);
+      const styleNum = m[2];
+      const unitPrice = m[3] ? parseFloat(m[3]) : 0;
+      const totalQty  = parseInt(m[3+(!m[3]?.includes?.('.')?0:0)] || m[4]);
+      let color = (m[5] || m[4] || '').trim().replace(/\s*purchased.*$/i,'').replace(/\s+$/,'');
+
+      // 사이즈 찾기 — 현재 줄 또는 다음 3줄
+      let sizeStr = lines[i];
+      for (let j = i; j <= Math.min(i+4, lines.length-1); j++) {
+        if (/[A-Z0-9]+-\d+/.test(lines[j])) { sizeStr += ' ' + lines[j]; }
+      }
+
+      const sizeMatches = [...sizeStr.matchAll(/\b((?:2|3|4|5)?XL|XXL|XXXL|[XSML]{1,3})\s*-\s*(\d+)/gi)];
+
+      if (sizeMatches.length > 0) {
+        sizeMatches.forEach(sm => {
+          const rawSize = sm[1].toUpperCase();
+          const size = SIZE_NORM[rawSize] || rawSize;
+          const qty = parseInt(sm[2]);
+          if (qty > 0) parsedLines.push({ style_number: styleNum, color, size, qty, unit_price: unitPrice, lineNo });
+        });
+      } else {
+        // 사이즈 없으면 전체 수량
+        const qty = parseInt(m[4]) || parseInt(m[3]) || 0;
+        if (qty > 0) parsedLines.push({ style_number: styleNum, color, size: '?', qty, unit_price: unitPrice, lineNo });
+      }
+      matched = true;
+      break;
+    }
+  }
+
+  // 시도 2: 줄 파싱 실패하면 전체 텍스트에서 글로벌 패턴
+  if (parsedLines.length === 0) {
+    const flatText = lines.join(' ');
+    let gm;
+    globalLineRx.lastIndex = 0;
+    while ((gm = globalLineRx.exec(flatText)) !== null) {
+      const styleNum = gm[2];
+      const unitPrice = parseFloat(gm[3]);
+      const totalQty = parseInt(gm[4]);
+      let color = gm[5].trim().replace(/\s*purchased.*$/i,'').trim();
+
+      // 이 매치 이후 텍스트에서 사이즈 찾기
+      const afterMatch = flatText.slice(gm.index, gm.index + 200);
+      const szMatches = [...afterMatch.matchAll(/\b((?:2|3|4|5)?XL|XXL|XXXL|[XSML]{1,3})\s*-\s*(\d+)/gi)];
+
+      if (szMatches.length > 0) {
+        szMatches.forEach(sm => {
+          const size = SIZE_NORM[sm[1].toUpperCase()] || sm[1].toUpperCase();
+          const qty = parseInt(sm[2]);
+          if (qty > 0) parsedLines.push({ style_number: styleNum, color, size, qty, unit_price: unitPrice });
+        });
+      } else {
+        if (totalQty > 0) parsedLines.push({ style_number: styleNum, color, size: '?', qty: totalQty, unit_price: unitPrice });
+      }
+    }
+  }
+
+  // 중복 제거 (같은 style+size+qty)
+  const seen = new Set();
+  result.lines = parsedLines.filter(l => {
+    const key = `${l.style_number}-${l.color}-${l.size}-${l.qty}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return result;
+}
+
+function showPoPreview(data) {
+  document.getElementById('po-preview-section').style.display = 'block';
+
+  const warnEl = document.getElementById('po-preview-warning');
+  if (warnEl) warnEl.style.display = data._warning ? 'block' : 'none';
+  if (warnEl && data._warning) warnEl.textContent = '⚠️ ' + data._warning;
+
+  // 헤더 정보 — 인라인 편집 가능
+  document.getElementById('po-preview-info').innerHTML = `
+    <div style="background:#fff;border-radius:4px;padding:8px 10px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px">Customer</div>
+      <input id="po-edit-customer" class="fi" value="${data.customer_name||''}" style="width:100%;height:26px;font-size:12px;font-weight:700;"/>
+    </div>
+    <div style="background:#fff;border-radius:4px;padding:8px 10px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px">PO #</div>
+      <input id="po-edit-po" class="fi" value="${data.po_number||''}" style="width:100%;height:26px;font-size:12px;font-family:'IBM Plex Mono',monospace;font-weight:700;"/>
+    </div>
+    <div style="background:#fff;border-radius:4px;padding:8px 10px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px">Terms</div>
+      <input id="po-edit-terms" class="fi" value="${data.terms||''}" placeholder="N30, Net60..." style="width:100%;height:26px;font-size:12px;font-weight:700;"/>
+    </div>
+    <div style="background:#fff;border-radius:4px;padding:8px 10px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px">Due Date</div>
+      <input id="po-edit-date" class="fi" type="date" value="${data.due_date||''}" style="width:100%;height:26px;font-size:12px;font-weight:700;"/>
+    </div>`;
+
+  // 라인 테이블 — 각 셀 인라인 편집
+  renderPoLines();
+}
+
+function renderPoLines() {
+  const lines = parsedPoData?.lines || [];
+  const totalQty = lines.reduce((s,l) => s + (parseInt(l.qty)||0), 0);
+  const inp = (val, field, idx, type='text', extra='') =>
+    `<input class="fi" value="${String(val||'').replace(/"/g,'&quot;')}" type="${type}"
+      style="width:100%;height:24px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:center;padding:2px 4px;${extra}"
+      oninput="parsedPoData.lines[${idx}]['${field}']=this.${type==='number'?'valueAsNumber':'value'};updatePoTotal()"/>`;
+
+  document.getElementById('po-preview-lines').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:4px;overflow:hidden;">
+      <thead>
+        <tr style="background:var(--header);color:#fff;">
+          <th style="padding:6px 8px;width:32px;">#</th>
+          <th style="padding:6px 8px;text-align:left;min-width:80px;">Style</th>
+          <th style="padding:6px 8px;text-align:left;min-width:120px;">Color</th>
+          <th style="padding:6px 8px;min-width:70px;">Size</th>
+          <th style="padding:6px 8px;min-width:70px;">Qty</th>
+          <th style="padding:6px 8px;min-width:70px;">Unit $</th>
+          <th style="padding:6px 8px;width:32px;"></th>
+        </tr>
+      </thead>
+      <tbody id="po-lines-tbody">
+        ${lines.map((l,i) => `
+          <tr style="background:${i%2===0?'#fff':'#f9f9f9'}">
+            <td style="padding:4px 8px;color:var(--text3);text-align:center;font-size:11px;">${i+1}</td>
+            <td style="padding:4px 6px;">${inp(l.style_number,'style_number',i,'text','font-weight:700;')}</td>
+            <td style="padding:4px 6px;">${inp(l.color,'color',i,'text','text-align:left;')}</td>
+            <td style="padding:4px 6px;">${inp(l.size,'size',i)}</td>
+            <td style="padding:4px 6px;">${inp(l.qty,'qty',i,'number','font-weight:700;')}</td>
+            <td style="padding:4px 6px;">${inp(l.unit_price,'unit_price',i,'number')}</td>
+            <td style="padding:4px 6px;text-align:center;">
+              <button onclick="removePoLine(${i})" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="background:#f0f0f0;">
+          <td colspan="7" style="padding:5px 8px;">
+            <button onclick="addPoLine()" style="background:none;border:1px dashed var(--border);color:var(--primary);cursor:pointer;font-size:11px;padding:3px 10px;border-radius:3px;width:100%;">+ 라인 추가</button>
+          </td>
+        </tr>
+        <tr style="background:var(--primary-dark);color:#fff;font-weight:700;">
+          <td colspan="4" style="padding:6px 10px;">Total</td>
+          <td id="po-total-qty" style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace">${totalQty.toLocaleString()}</td>
+          <td colspan="2"></td>
+        </tr>
+      </tfoot>
+    </table>`;
+}
+
+function updatePoTotal() {
+  const total = (parsedPoData?.lines||[]).reduce((s,l)=>s+(parseInt(l.qty)||0),0);
+  const el = document.getElementById('po-total-qty');
+  if (el) el.textContent = total.toLocaleString();
+}
+
+function removePoLine(idx) {
+  parsedPoData.lines.splice(idx, 1);
+  renderPoLines();
+}
+
+function addPoLine() {
+  if (!parsedPoData) return;
+  parsedPoData.lines.push({ style_number:'', color:'', size:'', qty:0, unit_price:0 });
+  renderPoLines();
+  // 새 행의 첫 input에 포커스
+  const inputs = document.querySelectorAll('#po-lines-tbody tr:last-child input');
+  if (inputs[0]) inputs[0].focus();
+}
+
+
+function clearPoPreview() {
+  parsedPoData = null;
+  document.getElementById('po-preview-section').style.display = 'none';
+  document.getElementById('po-upload-section').style.display = 'flex';
+  document.getElementById('po-pdf-input').value = '';
+}
+
+function applyPoPreview() {
+  if (!parsedPoData) return;
+  const d = parsedPoData;
+
+  // 헤더 편집값 반영 (사용자가 수정했을 수 있음)
+  d.customer_name = document.getElementById('po-edit-customer')?.value || d.customer_name;
+  d.po_number     = document.getElementById('po-edit-po')?.value || d.po_number;
+  d.terms         = document.getElementById('po-edit-terms')?.value || d.terms;
+  d.due_date      = document.getElementById('po-edit-date')?.value || d.due_date;
+
+  // 거래처 정보 채우기
+  document.getElementById('inv-cust').value = d.customer_name || '';
+  document.getElementById('inv-cust-po').value = d.po_number || '';
+  document.getElementById('inv-cust-terms').value = d.terms || 'N30';
+  document.getElementById('inv-bill-addr').value = d.bill_to_address || d.ship_to_address || '';
+  document.getElementById('inv-ship-addr').value = d.ship_to_address || '';
+  if (d.due_date) document.getElementById('inv-ship-date-inp').value = d.due_date;
+
+  // customers DB에서 매칭 시도
+  const matchedCust = customers.find(c =>
+    (c.name||'').toLowerCase().includes((d.customer_name||'').toLowerCase().substring(0,6)) ||
+    (d.customer_name||'').toLowerCase().includes((c.name||'').toLowerCase().substring(0,6))
+  );
+  if (matchedCust) {
+    document.getElementById('inv-cust-sel').value = matchedCust.id;
+  }
+
+  // 라인 채우기 — poLines에 추가
+  const newLines = (d.lines||[]).map(l => {
+    const styleObj = styles.find(s =>
+      String(s.style_number) === String(l.style_number)
+    );
+    const ppb = styleObj ? calcPpb(styleObj.description || '', l.size) : 72;
+    const qty = l.qty || 0;
+    return {
+      code: (l.style_number + l.color.replace(/\s+/g,'').substring(0,6) + l.size).toLowerCase(),
+      styleNum: String(l.style_number),
+      color: l.color,
+      size: l.size,
+      wh: '',
+      description: styleObj?.description || '',
+      qty,
+      price: l.unit_price || 0,
+      ppb,
+      cases: Math.floor(qty / ppb),
+      loose: qty % ppb,
+      location: '',
+      pcrQty: null,
+      pcrLocation: '—'
+    };
+  });
+
+  poLines = [...poLines, ...newLines];
+  renderEntryTable();
+  liveRenderDocs();
+
+  // 프리뷰 숨기기
+  document.getElementById('po-preview-section').style.display = 'none';
+  document.getElementById('po-upload-section').style.display = 'flex';
+  document.getElementById('po-pdf-input').value = '';
+  parsedPoData = null;
+
+  // 스크롤을 라인 테이블로
+  document.getElementById('inv-lines-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// CUSTOMERS
+// ══════════════════════════════════
+function updateCustomerSelects() {
+  const sel = document.getElementById('inv-cust-sel');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— 직접 입력 또는 선택 —</option>';
+  customers.forEach(c => {
+    sel.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+  });
+  sel.value = cur;
+}
+
+function autoFillCustomer() {
+  const sel = document.getElementById('inv-cust-sel');
+  const custId = sel.value;
+  if (!custId) return;
+  const c = customers.find(x => x.id === custId);
+  if (!c) return;
+  const nameEl = document.getElementById('inv-cust');
+  const billEl = document.getElementById('inv-bill-addr');
+  const shipEl = document.getElementById('inv-ship-addr');
+  const termsEl = document.getElementById('inv-cust-terms');
+  if (nameEl) nameEl.value = c.name;
+  if (billEl) billEl.value = c.bill_address || '';
+  if (shipEl) shipEl.value = c.ship_address || '';
+  if (termsEl) termsEl.value = c.terms || 'N30';
+  liveRenderDocs();
+}
+
+async function loadCustomers() {
+  document.getElementById('customers-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { data } = await db.from('customers').select('*').order('name');
+  customers = data || [];
+  updateCustomerSelects();
+  document.getElementById('customers-count').textContent = `${customers.length} customers`;
+
+  if (customers.length === 0) {
+    document.getElementById('customers-table-wrap').innerHTML = '<div class="empty">거래처 없음. Add Customer로 추가하세요.</div>';
+    return;
+  }
+
+  const rows = customers.map(c => `
+    <tr onclick="openEditCustomer('${c.id}')" style="cursor:pointer">
+      <td style="font-weight:600">${c.name}</td>
+      <td>${c.contact_name || '—'}</td>
+      <td>${c.phone || '—'}</td>
+      <td>${c.email || '—'}</td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;">${c.terms || '—'}</td>
+      <td style="max-width:200px;white-space:pre-wrap;font-size:11px;">${(c.bill_address || '').replace(/\n/g,', ')}</td>
+      <td style="font-size:11px;color:var(--text3);">${c.notes || ''}</td>
+    </tr>`).join('');
+
+  document.getElementById('customers-table-wrap').innerHTML = `
+    <table class="tbl">
+      <thead><tr>
+        <th>Company</th><th>Contact</th><th>Phone</th><th>Email</th>
+        <th>Terms</th><th>Bill To</th><th>Notes</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function openAddCustomer() {
+  document.getElementById('cust-edit-id').value = '';
+  document.getElementById('cust-modal-title').textContent = '+ Add Customer';
+  document.getElementById('cust-delete-btn').style.display = 'none';
+  ['cust-company','cust-contact','cust-phone','cust-email','cust-bill-addr','cust-ship-addr','cust-notes'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  document.getElementById('cust-terms').value = 'N30';
+  openModal('modal-customer');
+}
+
+function openEditCustomer(id) {
+  const c = customers.find(x => x.id === id);
+  if (!c) return;
+  document.getElementById('cust-edit-id').value = c.id;
+  document.getElementById('cust-modal-title').textContent = '✏️ Edit Customer';
+  document.getElementById('cust-delete-btn').style.display = 'inline-flex';
+  document.getElementById('cust-company').value = c.name || '';
+  document.getElementById('cust-contact').value = c.contact_name || '';
+  document.getElementById('cust-phone').value = c.phone || '';
+  document.getElementById('cust-email').value = c.email || '';
+  document.getElementById('cust-bill-addr').value = c.bill_address || '';
+  document.getElementById('cust-ship-addr').value = c.ship_address || '';
+  document.getElementById('cust-terms').value = c.terms || 'N30';
+  document.getElementById('cust-notes').value = c.notes || '';
+  openModal('modal-customer');
+}
+
+async function saveCustomer() {
+  const id = document.getElementById('cust-edit-id').value;
+  const payload = {
+    name:    document.getElementById('cust-company').value.trim(),
+    contact_name:    document.getElementById('cust-contact').value.trim(),
+    phone:           document.getElementById('cust-phone').value.trim(),
+    email:           document.getElementById('cust-email').value.trim(),
+    bill_address: document.getElementById('cust-bill-addr').value.trim(),
+    ship_address: document.getElementById('cust-ship-addr').value.trim(),
+    terms:   document.getElementById('cust-terms').value.trim(),
+    notes:           document.getElementById('cust-notes').value.trim(),
+    updated_at:      new Date().toISOString()
+  };
+  if (!payload.name) { alert('Company Name은 필수입니다.'); return; }
+
+  let error;
+  if (id) {
+    ({ error } = await db.from('customers').update(payload).eq('id', id));
+  } else {
+    ({ error } = await db.from('customers').insert(payload));
+  }
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-customer');
+  await loadMasterData();
+  loadCustomers();
+}
+
+async function deleteCustomer() {
+  const id = document.getElementById('cust-edit-id').value;
+  if (!id) return;
+  const c = customers.find(x => x.id === id);
+  if (!confirm(`"${c?.name}" 삭제할까요?`)) return;
+  const { error } = await db.from('customers').delete().eq('id', id);
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-customer');
+  await loadMasterData();
+  loadCustomers();
+}
+
+// HELPERS
+// ══════════════════════════════════
+function statusChip(s) {
+  const map = {
+    open:'c-b', processing:'c-b',
+    backordered:'c-r', partial:'c-o',
+    shipped:'c-g', cancelled:'c-gray'
+  };
+  const label = {
+    backordered:'🔴 back order', partial:'⚠️ partial',
+    open:'open', shipped:'shipped', cancelled:'cancelled'
+  };
+  return `<span class="chip ${map[s]||'c-gray'}">${label[s]||s}</span>`;
+}
+function ptStatusChip(s) {
+  const map = {pending:'c-o',picked:'c-b',packed:'c-b',shipped:'c-g'};
+  return `<span class="chip ${map[s]||'c-gray'}">${s}</span>`;
+}
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+</script>
+</body>
+</html>
