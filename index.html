@@ -1039,7 +1039,41 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     </div>
   </div>
 </div>
-
+<!-- EDIT INVENTORY MODAL -->
+<div class="modal-overlay" id="modal-edit-inv">
+  <div class="modal" style="width:580px;">
+    <div class="modal-head">
+      <span class="modal-title">✏️ Edit Inventory</span>
+      <button class="modal-close" onclick="closeModal('modal-edit-inv')">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="ei-id"/>
+      <div class="fgrid fg2" style="padding:0">
+        <div class="ff"><label>Warehouse</label><input class="fi ro" id="ei-wh" readonly/></div>
+        <div class="ff"><label>Style #</label><input class="fi ro" id="ei-style" readonly/></div>
+        <div class="ff"><label>Color</label><input class="fi" id="ei-color"/></div>
+        <div class="ff"><label>Size</label>
+          <select class="fsel" id="ei-size">
+            <option>XS</option><option>S</option><option>M</option><option>L</option>
+            <option>XL</option><option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>
+            <option>2T</option><option>3T</option><option>4T</option><option>5T</option>
+            <option>Youth XS</option><option>Youth S</option><option>Youth M</option><option>Youth L</option><option>Youth XL</option>
+          </select></div>
+        <div class="ff"><label>Location</label><input class="fi" id="ei-loc"/></div>
+        <div class="ff"><label>Qty on Hand</label><input class="fi" id="ei-qty" type="number" min="0"/></div>
+        <div class="ff"><label>SKU</label><input class="fi" id="ei-sku"/></div>
+        <div class="ff"><label>Reorder Point</label><input class="fi" id="ei-reorder" type="number" min="0"/></div>
+      </div>
+    </div>
+    <div class="modal-foot" style="justify-content:space-between;">
+      <button class="btn" style="color:var(--red)" onclick="deleteInventoryItem()">🗑 Delete</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="closeModal('modal-edit-inv')">Cancel</button>
+        <button class="btn btn-primary" onclick="updateInventoryItem()">✓ Save Changes</button>
+      </div>
+    </div>
+  </div>
+</div>
 <!-- ADD INVENTORY MODAL -->
 <div class="modal-overlay" id="modal-add-inv">
   <div class="modal">
@@ -2345,7 +2379,19 @@ function filterInventory() {
   renderInventoryTable(filtered);
 }
 
+function sizeOrder(s) {
+  const order = {'XXS':0,'XS':1,'S':2,'M':3,'L':4,'XL':5,'2XL':6,'3XL':7,'4XL':8,'5XL':9,'2T':10,'3T':11,'4T':12,'5T':13,'6M':14,'12M':15,'18M':16,'3M':17};
+  return order[(s||'').toUpperCase()] ?? 99;
+}
+
 function renderInventoryTable(data) {
+  data.sort((a,b) => {
+    const sn = (a.styles?.style_number||'').localeCompare(b.styles?.style_number||'');
+    if (sn !== 0) return sn;
+    const cl = (a.color||'').localeCompare(b.color||'');
+    if (cl !== 0) return cl;
+    return sizeOrder(a.size) - sizeOrder(b.size);
+  });
   if (data.length === 0) {
     document.getElementById('inventory-table-wrap').innerHTML = '<div class="empty">No inventory found. Add stock using the button above.</div>';
     return;
@@ -2367,7 +2413,7 @@ function renderInventoryTable(data) {
       : '';
     const desc = (i.styles?.description || '—') + suffixBadge;
 
-    return `<tr>
+return `<tr onclick="editInventoryItem('${i.id}')" style="cursor:pointer">
       <td>${i.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':i.warehouses?.code==='SC-PCR'?'<span class="loc-sc" style="background:var(--orange)">PCR</span>':'<span class="loc-sc">SC</span>'}</td>
       <td class="mono">${i.styles?.style_number||'—'}</td>
       <td>${desc}</td>
@@ -3118,6 +3164,53 @@ function showToast(msg) {
 // ══════════════════════════════════
 // ADD INVENTORY MODAL
 // ══════════════════════════════════
+  async function editInventoryItem(id) {
+  const item = allInventory.find(i => i.id === id);
+  if (!item) return;
+  document.getElementById('ei-id').value = item.id;
+  document.getElementById('ei-wh').value = (item.warehouses?.code || '') + ' — ' + (item.warehouses?.name || '');
+  document.getElementById('ei-style').value = item.styles?.style_number || item.style_number || '';
+  document.getElementById('ei-color').value = item.color || '';
+  document.getElementById('ei-size').value = item.size || '';
+  document.getElementById('ei-loc').value = item.location || '';
+  document.getElementById('ei-qty').value = item.qty_on_hand || 0;
+  document.getElementById('ei-sku').value = item.sku || '';
+  document.getElementById('ei-reorder').value = item.reorder_point || 0;
+  openModal('modal-edit-inv');
+}
+
+async function updateInventoryItem() {
+  const id = document.getElementById('ei-id').value;
+  if (!id) return;
+  const payload = {
+    color: document.getElementById('ei-color').value.trim(),
+    size: document.getElementById('ei-size').value,
+    location: document.getElementById('ei-loc').value.trim(),
+    qty_on_hand: parseInt(document.getElementById('ei-qty').value) || 0,
+    sku: document.getElementById('ei-sku').value.trim(),
+    reorder_point: parseInt(document.getElementById('ei-reorder').value) || 0,
+    updated_at: new Date().toISOString()
+  };
+  const { error } = await db.from('inventory').update(payload).eq('id', id);
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-edit-inv');
+  loadInventory();
+  showToast('✓ Inventory updated!');
+}
+
+async function deleteInventoryItem() {
+  const id = document.getElementById('ei-id').value;
+  if (!id) return;
+  const style = document.getElementById('ei-style').value;
+  const color = document.getElementById('ei-color').value;
+  const size = document.getElementById('ei-size').value;
+  if (!confirm(`Delete ${style} / ${color} / ${size}?\nThis cannot be undone.`)) return;
+  const { error } = await db.from('inventory').delete().eq('id', id);
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-edit-inv');
+  loadInventory();
+  showToast('✓ Item deleted');
+}
 function openAddInventory() {
   const whSel = document.getElementById('ai-wh');
   whSel.innerHTML = '<option value="">Select...</option>';
