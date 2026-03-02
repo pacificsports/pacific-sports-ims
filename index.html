@@ -663,8 +663,12 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                       <th style="padding:8px 10px;font-size:10px;text-align:center;">Unit $</th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;background:#2e7d32;">Full Boxes</th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;background:#e65100;color:#fff;">Loose Pcs (PCR)</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:left;">SC Location</th>
+<th style="padding:8px 10px;font-size:10px;text-align:left;">SC Location</th>
                       <th style="padding:8px 10px;font-size:10px;text-align:left;">PCR Stock</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;color:#4caf50;">SC</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;color:#1976d2;">CA</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;color:#e65100;">SC-PCR</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;color:#6a1b9a;">CA-PCR</th>
                       <th style="padding:8px 10px;font-size:10px;"></th>
                     </tr>
                   </thead>
@@ -676,7 +680,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                       <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;" id="po-total-amt">$0.00</td>
                       <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--green);font-size:16px;" id="po-total-cases">0</td>
                       <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--orange);font-size:16px;" id="po-total-loose">0</td>
-                      <td colspan="3"></td>
+       <td colspan="7"></td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1448,29 +1452,41 @@ function calcPpb(desc, size) {
   return isLarge ? 48 : 72;
 }
 
-// ── 창고 주소
-function getWhAddr(whCode) {
-  const addrs = {
-    CA: '14129 The Merge St Unit B\nEastvale CA 92880',
-    SC: '1605 South Guignard Parkway\nSumter SC 29150',
-    'SC-PCR': '1605 South Guignard Parkway — Pcs Room\nSumter SC 29150'
-  };
-  return addrs[whCode] || '';
-}
-
-// ── SC + SC-PCR 재고 로드 (Invoice 탭 열 때 한 번만)
+// ── 전체 창고 재고 로드 (Invoice 탭 열 때)
+let caInventory = {}, caPcrInventory = {};
 async function loadScInventory() {
   pcrInventory = {};
   scInventory = {};
-  const { data } = await db.from('inventory')
-    .select('*, warehouses(code), styles(style_number,description)')
-    .in('warehouses.code', ['SC','SC-PCR']);
-  (data || []).forEach(row => {
+  caInventory = {};
+  caPcrInventory = {};
+  let allInv = [], from = 0;
+  while (true) {
+    const { data } = await db.from('inventory')
+      .select('qty_on_hand, color, size, location, warehouses(code), styles(style_number,description)')
+      .range(from, from + 999);
+    if (!data || data.length === 0) break;
+    allInv = allInv.concat(data);
+    if (data.length < 1000) break;
+    from += 1000;
+  }
+  allInv.forEach(row => {
     if (!row.warehouses) return;
     const key = `${row.styles?.style_number||''}|${(row.color||'').toUpperCase()}|${(row.size||'').toUpperCase()}`;
-    const entry = { qty: row.qty_on_hand || 0, location: row.location || '—', id: row.id };
-    if (row.warehouses.code === 'SC-PCR') pcrInventory[key] = entry;
-    else if (row.warehouses.code === 'SC') scInventory[key] = entry;
+    const entry = { qty: row.qty_on_hand || 0, location: row.location || '—' };
+    const wh = row.warehouses.code;
+    if (wh === 'SC') {
+      if (!scInventory[key]) scInventory[key] = entry;
+      else scInventory[key].qty += entry.qty;
+    } else if (wh === 'SC-PCR') {
+      if (!pcrInventory[key]) pcrInventory[key] = entry;
+      else pcrInventory[key].qty += entry.qty;
+    } else if (wh === 'CA') {
+      if (!caInventory[key]) caInventory[key] = entry;
+      else caInventory[key].qty += entry.qty;
+    } else if (wh === 'CA-PCR') {
+      if (!caPcrInventory[key]) caPcrInventory[key] = entry;
+      else caPcrInventory[key].qty += entry.qty;
+    }
   });
 }
 
@@ -1962,7 +1978,11 @@ function renderEntryTable() {
         <input class="fi" value="${l.location}" style="width:80px;height:24px;padding:2px 6px;font-size:11px;" 
           oninput="poLines[${idx}].location=this.value;liveRenderDocs()"/>
       </td>
-      <td style="font-size:11px">${pcrBadge}</td>
+<td style="font-size:11px">${pcrBadge}</td>
+      <td style="text-align:center;font-size:11px;color:var(--sc);">${(scInventory[`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`]?.qty||0).toLocaleString()}</td>
+      <td style="text-align:center;font-size:11px;color:var(--ca);">${(caInventory[`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`]?.qty||0).toLocaleString()}</td>
+      <td style="text-align:center;font-size:11px;color:#e65100;">${(pcrInventory[`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`]?.qty||0).toLocaleString()}</td>
+      <td style="text-align:center;font-size:11px;color:#6a1b9a;">${(caPcrInventory[`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`]?.qty||0).toLocaleString()}</td>
       <td><button class="btn btn-sm" style="color:var(--red);padding:2px 6px" onclick="poLines.splice(${idx},1);renderEntryTable();liveRenderDocs()">✕</button></td>
     </tr>`;
   }).join('');
