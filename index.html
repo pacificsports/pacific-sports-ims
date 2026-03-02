@@ -3082,8 +3082,32 @@ async function loadReceivingHistory() {
 // ══════════════════════════════════
 async function loadStyles() {
   document.getElementById('styles-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  const { data } = await db.from('styles').select('*').order('style_number');
+const { data } = await db.from('styles').select('*').order('style_number');
   const list = data || [];
+
+  // 재고 합산 데이터 가져오기
+  let invAll = [];
+  let iFrom = 0;
+  while (true) {
+    const { data: iData } = await db.from('inventory')
+      .select('style_id, qty_on_hand, warehouses(code)')
+      .range(iFrom, iFrom + 999);
+    if (!iData || iData.length === 0) break;
+    invAll = invAll.concat(iData);
+    if (iData.length < 1000) break;
+    iFrom += 1000;
+  }
+  const styleStock = {};
+  invAll.forEach(i => {
+    if (!i.style_id) return;
+    if (!styleStock[i.style_id]) styleStock[i.style_id] = { sc: 0, ca: 0, pcr: 0, total: 0 };
+    const qty = i.qty_on_hand || 0;
+    const wh = i.warehouses?.code || '';
+    if (wh === 'SC') styleStock[i.style_id].sc += qty;
+    else if (wh === 'CA') styleStock[i.style_id].ca += qty;
+    else if (wh === 'SC-PCR') styleStock[i.style_id].pcr += qty;
+    styleStock[i.style_id].total += qty;
+  });
   document.getElementById('styles-count').textContent = `${list.length} styles`;
 
   if (list.length === 0) {
@@ -3112,7 +3136,10 @@ async function loadStyles() {
       <td class="mono" style="font-weight:700;color:var(--primary)">${s.style_number}</td>
       <td>${s.description||'—'}</td>
       <td>${s.category||'—'}</td>
-      <td style="text-align:center">${ppbDisplay}</td>
+     <td style="text-align:center">${ppbDisplay}</td>
+      <td class="num" style="color:var(--sc);font-size:12px;">${(styleStock[s.id]?.sc||0).toLocaleString()}</td>
+      <td class="num" style="color:var(--ca);font-size:12px;">${(styleStock[s.id]?.ca||0).toLocaleString()}</td>
+      <td class="num" style="font-weight:700;font-size:13px;">${(styleStock[s.id]?.total||0).toLocaleString()}</td>
       <td style="text-align:center">${costBadge}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-sm" onclick="event.stopPropagation();openEditStyle('${s.id}')">✏ Edit</button>
@@ -3125,7 +3152,10 @@ async function loadStyles() {
     <table class="tbl">
       <thead><tr>
         <th>Style #</th><th>Description</th><th>Category</th>
-        <th style="text-align:center">Pcs/Box</th>
+      <th style="text-align:center">Pcs/Box</th>
+        <th class="num" style="color:var(--sc)">SC</th>
+        <th class="num" style="color:var(--ca)">CA</th>
+        <th class="num">Total</th>
         <th style="text-align:center">Unit Cost</th>
         <th></th>
       </tr></thead>
