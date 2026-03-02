@@ -1062,6 +1062,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <div class="fgrid fg2" style="padding:0">
         <div class="ff"><label>Style #</label><input class="fi ro" id="be-style" readonly/></div>
         <div class="ff"><label>Records</label><input class="fi ro" id="be-count" readonly/></div>
+        <div class="ff" style="grid-column:1/-1"><label>Description (수정 가능)</label><input class="fi" id="be-desc" style="font-weight:700;"/></div>
         <div class="ff"><label>Color (수정 가능)</label><input class="fi" id="be-color" style="font-weight:700;"/></div>
         <div class="ff"><label>Size (수정 가능)</label>
           <select class="fsel" id="be-size">
@@ -3279,7 +3280,8 @@ function showToast(msg) {
   document.getElementById('be-old-style').value = styleNum;
   document.getElementById('be-old-color').value = color;
   document.getElementById('be-old-size').value = size;
-  document.getElementById('be-style').value = styleNum;
+ document.getElementById('be-style').value = styleNum;
+  document.getElementById('be-desc').value = matches[0]?.styles?.description || matches[0]?.description || '';
   document.getElementById('be-color').value = color;
   document.getElementById('be-size').value = size;
   document.getElementById('be-count').value = matches.length + ' records';
@@ -3303,9 +3305,17 @@ async function saveBulkEdit() {
   );
 
   if (matches.length === 0) { alert('No matching records found.'); return; }
-  if (!confirm(`${matches.length}개 레코드를 변경합니다.\n\nColor: ${oldColor} → ${newColor}\nSize: ${oldSize} → ${newSize}\n\n계속할까요?`)) return;
+const newDesc = document.getElementById('be-desc').value.trim();
+  if (!confirm(`${matches.length}개 레코드를 변경합니다.\n\nDescription: ${newDesc}\nColor: ${oldColor} → ${newColor}\nSize: ${oldSize} → ${newSize}\n\n계속할까요?`)) return;
 
   const ids = matches.map(i => i.id);
+  const styleId = matches[0]?.style_id;
+
+  // Description은 styles 테이블에 저장됨
+  if (styleId && newDesc) {
+    await db.from('styles').update({ description: newDesc }).eq('id', styleId);
+  }
+
   const { error } = await db.from('inventory')
     .update({ color: newColor, size: newSize, updated_at: new Date().toISOString() })
     .in('id', ids);
