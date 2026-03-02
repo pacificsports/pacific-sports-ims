@@ -340,13 +340,18 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div class="card-head"><span class="card-title">📦 Inventory — CA + SC Combined</span>
           <button class="btn btn-primary btn-sm" onclick="openAddInventory()">+ Add Stock</button>
         </div>
-        <div class="inv-filter">
+        <div class="inv-filter" style="grid-template-columns:repeat(6,1fr);">
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STYLE #</label>
             <input class="fi" id="inv-filter-style" placeholder="e.g. 1368" oninput="filterInventory()"/></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">COLOR</label>
             <input class="fi" id="inv-filter-color" placeholder="Color..." oninput="filterInventory()"/></div>
-          <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">WAREHOUSE</label>
-            <select class="fsel" id="inv-filter-wh" onchange="filterInventory()" style="width:100%">
+        <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">UNIT</label>
+            <select class="fsel" id="inv-unit-toggle" onchange="filterInventory()" style="width:100%">
+              <option value="pcs">Pieces (pcs)</option>
+              <option value="box">Boxes (case)</option>
+            </select></div>
+          <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STATUS</label>
+            <select class="fsel" id="inv-filter-status" onchange="filterInventory()" style="width:100%">
               <option value="">All (CA + SC + PCR)</option>
               <option value="CA">CA — Eastvale</option>
               <option value="SC">SC — Sumter</option>
@@ -2410,13 +2415,14 @@ function renderInventoryTable(data) {
       };
     }
     const g = grouped[key];
-    const qty = i.qty_on_hand || 0;
+  const qty = i.qty_on_hand || 0;
     const wh = i.warehouses?.code || '';
     if (wh === 'SC') g.sc += qty;
     else if (wh === 'CA') g.ca += qty;
     else if (wh === 'SC-PCR') g.pcr += qty;
     g.total += qty;
     g.committed += (i.qty_committed || 0);
+    if (!g.ppb) g.ppb = i.styles?.pcs_per_box || i.pcs_per_box || 72;
     if (i.sku && i.sku.includes('+ss')) g.sku = i.sku;
     g.details.push({ wh, loc: i.location || '—', qty, id: i.id, committed: i.qty_committed || 0 });
   });
@@ -2446,11 +2452,14 @@ function renderInventoryTable(data) {
       <div style="font-size:12px;"><span class="loc-sc">SC</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumSC.toLocaleString()}</strong></div>
       <div style="font-size:12px;"><span class="loc-ca">CA</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumCA.toLocaleString()}</strong></div>
       <div style="font-size:12px;"><span class="loc-sc" style="background:var(--orange)">PCR</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumPCR.toLocaleString()}</strong></div>
-      <div style="font-size:13px;font-weight:700;color:var(--primary);border-left:2px solid var(--border);padding-left:12px;">TOTAL: <span style="font-family:'IBM Plex Mono',monospace;font-size:15px;">${sumTotal.toLocaleString()}</span> pcs</div>
+<div style="font-size:13px;font-weight:700;color:var(--primary);border-left:2px solid var(--border);padding-left:12px;">TOTAL: <span style="font-family:'IBM Plex Mono',monospace;font-size:15px;">${isBox ? toUnit(sumTotal,72).toLocaleString() : sumTotal.toLocaleString()}</span> ${unitLabel}</div>
     </div>`;
   }
 
   // 테이블
+  const isBox = (document.getElementById('inv-unit-toggle')?.value || 'pcs') === 'box';
+  const toUnit = (qty, ppb) => isBox ? Math.floor(qty / (ppb || 72)) : qty;
+  const unitLabel = isBox ? 'boxes' : 'pcs';
   const isSS = sku => (sku||'').includes('+ss');
   const html = rows.map((r, idx) => {
     const avail = r.total - r.committed;
@@ -2471,11 +2480,11 @@ function renderInventoryTable(data) {
       <td>${r.desc}${ssBadge}</td>
       <td>${r.color}</td>
       <td>${r.size}</td>
-      <td class="num" style="color:var(--sc)">${r.sc > 0 ? r.sc.toLocaleString() : '—'}</td>
-      <td class="num" style="color:var(--ca)">${r.ca > 0 ? r.ca.toLocaleString() : '—'}</td>
-      <td class="num" style="color:var(--orange)">${r.pcr > 0 ? r.pcr.toLocaleString() : '—'}</td>
-      <td class="num" style="font-weight:700;font-size:13px;">${r.total.toLocaleString()}</td>
-      <td class="num" style="color:${avail<0?'var(--red)':'var(--green)'}">${avail.toLocaleString()}</td>
+    <td class="num" style="color:var(--sc)">${r.sc > 0 ? toUnit(r.sc,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="color:var(--ca)">${r.ca > 0 ? toUnit(r.ca,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="color:var(--orange)">${r.pcr > 0 ? toUnit(r.pcr,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="font-weight:700;font-size:13px;">${toUnit(r.total,r.ppb).toLocaleString()}</td>
+      <td class="num" style="color:${avail<0?'var(--red)':'var(--green)'}">${toUnit(avail,r.ppb).toLocaleString()}</td>
       <td>${r.total===0?'<span class="chip c-r">Out</span>':avail<=0?'<span class="chip c-o">Low</span>':'<span class="chip c-g">OK</span>'}</td>
     </tr>
     ${r.details.map(d => `<tr class="detail-${idx}" style="display:none;background:#f8f9fb;cursor:pointer;" onclick="event.stopPropagation();editInventoryItem('${d.id}')">
