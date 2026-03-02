@@ -1045,6 +1045,38 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     </div>
   </div>
 </div>
+<!-- BULK EDIT MODAL -->
+<div class="modal-overlay" id="modal-bulk-edit">
+  <div class="modal" style="width:520px;">
+    <div class="modal-head" style="background:#e3f2fd;">
+      <span class="modal-title" id="bulk-edit-title">✏️ Bulk Edit</span>
+      <button class="modal-close" onclick="closeModal('modal-bulk-edit')">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="background:#fff3e0;border:1px solid #ffb74d;border-radius:5px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#e65100;">
+        ⚠️ 이 변경은 해당 스타일+컬러+사이즈의 <strong>모든 로케이션</strong>에 적용됩니다.
+      </div>
+      <input type="hidden" id="be-old-style"/>
+      <input type="hidden" id="be-old-color"/>
+      <input type="hidden" id="be-old-size"/>
+      <div class="fgrid fg2" style="padding:0">
+        <div class="ff"><label>Style #</label><input class="fi ro" id="be-style" readonly/></div>
+        <div class="ff"><label>Records</label><input class="fi ro" id="be-count" readonly/></div>
+        <div class="ff"><label>Color (수정 가능)</label><input class="fi" id="be-color" style="font-weight:700;"/></div>
+        <div class="ff"><label>Size (수정 가능)</label>
+          <select class="fsel" id="be-size">
+            <option>XS</option><option>S</option><option>M</option><option>L</option>
+            <option>XL</option><option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>
+            <option>2T</option><option>3T</option><option>4T</option><option>5T</option>
+          </select></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('modal-bulk-edit')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveBulkEdit()">✓ Update All Records</button>
+    </div>
+  </div>
+</div>  
 <!-- EDIT INVENTORY MODAL -->
 <div class="modal-overlay" id="modal-edit-inv">
   <div class="modal" style="width:580px;">
@@ -2475,7 +2507,7 @@ function renderInventoryTable(data) {
       </tr>`
     ).join('');
 
-    return `<tr style="cursor:pointer;font-weight:500;" onclick="document.querySelectorAll('.detail-${idx}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')">
+return `<tr style="cursor:pointer;font-weight:500;" onclick="document.querySelectorAll('.detail-${idx}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')" ondblclick="event.stopPropagation();bulkEditGroup('${r.styleNum}','${r.color.replace(/'/g,"\\'")}','${r.size}')">
       <td class="mono" style="font-weight:700;color:var(--primary)">${r.styleNum}</td>
       <td>${r.desc}${ssBadge}</td>
       <td>${r.color}</td>
@@ -3238,6 +3270,51 @@ function showToast(msg) {
 // ══════════════════════════════════
 // ADD INVENTORY MODAL
 // ══════════════════════════════════
+  function bulkEditGroup(styleNum, color, size) {
+  const matches = allInventory.filter(i =>
+    (i.styles?.style_number || i.style_number || '') === styleNum &&
+    (i.color || '').toUpperCase() === color.toUpperCase() &&
+    (i.size || '').toUpperCase() === size.toUpperCase()
+  );
+  document.getElementById('be-old-style').value = styleNum;
+  document.getElementById('be-old-color').value = color;
+  document.getElementById('be-old-size').value = size;
+  document.getElementById('be-style').value = styleNum;
+  document.getElementById('be-color').value = color;
+  document.getElementById('be-size').value = size;
+  document.getElementById('be-count').value = matches.length + ' records';
+  document.getElementById('bulk-edit-title').textContent = '✏️ Bulk Edit — ' + styleNum + ' / ' + color + ' / ' + size;
+  openModal('modal-bulk-edit');
+}
+
+async function saveBulkEdit() {
+  const oldStyle = document.getElementById('be-old-style').value;
+  const oldColor = document.getElementById('be-old-color').value;
+  const oldSize = document.getElementById('be-old-size').value;
+  const newColor = document.getElementById('be-color').value.trim();
+  const newSize = document.getElementById('be-size').value;
+
+  if (!newColor) { alert('Color is required.'); return; }
+
+  const matches = allInventory.filter(i =>
+    (i.styles?.style_number || i.style_number || '') === oldStyle &&
+    (i.color || '').toUpperCase() === oldColor.toUpperCase() &&
+    (i.size || '').toUpperCase() === oldSize.toUpperCase()
+  );
+
+  if (matches.length === 0) { alert('No matching records found.'); return; }
+  if (!confirm(`${matches.length}개 레코드를 변경합니다.\n\nColor: ${oldColor} → ${newColor}\nSize: ${oldSize} → ${newSize}\n\n계속할까요?`)) return;
+
+  const ids = matches.map(i => i.id);
+  const { error } = await db.from('inventory')
+    .update({ color: newColor, size: newSize, updated_at: new Date().toISOString() })
+    .in('id', ids);
+
+  if (error) { alert('Error: ' + error.message); return; }
+  closeModal('modal-bulk-edit');
+  loadInventory();
+  showToast('✓ ' + ids.length + ' records updated!');
+}
   async function editInventoryItem(id) {
   const item = allInventory.find(i => i.id === id);
   if (!item) return;
