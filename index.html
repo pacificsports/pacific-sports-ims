@@ -2322,12 +2322,19 @@ async function loadDashboard() {
   document.getElementById('dashboard-loading').style.display = 'flex';
   document.getElementById('dashboard-content').style.display = 'none';
 
-  const [invData, ordData] = await Promise.all([
-    db.from('inventory').select('*, warehouses(code,name)'),
-    db.from('orders').select('*, warehouses(code)').order('created_at', {ascending:false}).limit(5)
-  ]);
-
-  const inv = invData.data || [];
+let inv = [];
+    let dFrom = 0;
+    const dBatch = 1000;
+    while (true) {
+      const { data, error } = await db.from('inventory')
+        .select('qty_on_hand, qty_committed, reorder_point, warehouses(code,name)')
+        .range(dFrom, dFrom + dBatch - 1);
+      if (error || !data || data.length === 0) break;
+      inv = inv.concat(data);
+      if (data.length < dBatch) break;
+      dFrom += dBatch;
+    }
+    const ordData = await db.from('orders').select('*, warehouses(code)').order('created_at', {ascending:false}).limit(5);
   const ords = ordData.data || [];
 
   // KPIs
