@@ -3435,7 +3435,12 @@ const newDesc = document.getElementById('be-desc').value.trim();
     .update({ color: newColor, size: newSize, updated_at: new Date().toISOString() })
     .in('id', ids);
 
-  if (error) { alert('Error: ' + error.message); return; }
+if (error) { alert('Error: ' + error.message); return; }
+  const user = db.auth.user()?.email || 'unknown';
+  for (const mid of ids) {
+    if (oldColor !== newColor) await db.from('inventory_log').insert({inventory_id:mid, action:'bulk_update', field_changed:'color', old_value:oldColor, new_value:newColor, changed_by:user});
+    if (oldSize !== newSize) await db.from('inventory_log').insert({inventory_id:mid, action:'bulk_update', field_changed:'size', old_value:oldSize, new_value:newSize, changed_by:user});
+  }
   closeModal('modal-bulk-edit');
   loadInventory();
   showToast('✓ ' + ids.length + ' records updated!');
@@ -3467,8 +3472,19 @@ async function updateInventoryItem() {
     reorder_point: parseInt(document.getElementById('ei-reorder').value) || 0,
     updated_at: new Date().toISOString()
   };
+const old = allInventory.find(i => i.id === id);
   const { error } = await db.from('inventory').update(payload).eq('id', id);
   if (error) { alert('Error: ' + error.message); return; }
+  const user = db.auth.user()?.email || 'unknown';
+  const changes = [];
+  if (old?.color !== payload.color) changes.push({field:'color', old:old?.color, new:payload.color});
+  if (old?.size !== payload.size) changes.push({field:'size', old:old?.size, new:payload.size});
+  if (old?.location !== payload.location) changes.push({field:'location', old:old?.location, new:payload.location});
+  if (old?.qty_on_hand !== payload.qty_on_hand) changes.push({field:'qty_on_hand', old:String(old?.qty_on_hand), new:String(payload.qty_on_hand)});
+  if (old?.sku !== payload.sku) changes.push({field:'sku', old:old?.sku, new:payload.sku});
+  for (const c of changes) {
+    await db.from('inventory_log').insert({inventory_id:id, action:'update', field_changed:c.field, old_value:c.old, new_value:c.new, changed_by:user});
+  }
   closeModal('modal-edit-inv');
   loadInventory();
   showToast('✓ Inventory updated!');
@@ -3481,6 +3497,8 @@ async function deleteInventoryItem() {
   const color = document.getElementById('ei-color').value;
   const size = document.getElementById('ei-size').value;
   if (!confirm(`Delete ${style} / ${color} / ${size}?\nThis cannot be undone.`)) return;
+  const user = db.auth.user()?.email || 'unknown';
+  await db.from('inventory_log').insert({inventory_id:id, action:'delete', field_changed:'all', old_value:style+'/'+color+'/'+size, new_value:null, changed_by:user});
   const { error } = await db.from('inventory').delete().eq('id', id);
   if (error) { alert('Error: ' + error.message); return; }
   closeModal('modal-edit-inv');
