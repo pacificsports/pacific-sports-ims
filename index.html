@@ -2078,22 +2078,82 @@ const lines = [...poLines].sort((a, b) => {
     if (a.color !== b.color) return a.color.localeCompare(b.color);
     return sizeOrder(a.size) - sizeOrder(b.size);
   });
-  let totalPcs = 0, totalAmt = 0;
-  document.getElementById('inv-lines-body').innerHTML = lines.length === 0
-    ? '<tr><td colspan="6" style="text-align:center;padding:16px;color:var(--text3)">라인을 입력하세요</td></tr>'
-    : lines.map(l => {
-        const amt = l.qty * l.price;
-        totalPcs += l.qty; totalAmt += amt;
-        return `<tr>
-          <td style="text-align:center;font-weight:700">${l.qty.toLocaleString()}</td>
-          <td>#${l.styleNum} ${l.description}</td>
-          <td>${l.color}</td><td>${l.size}</td>
-          <td style="text-align:right">$${l.price.toFixed(2)}</td>
-          <td style="text-align:right;font-weight:700">$${amt.toFixed(2)}</td>
-        </tr>`;
-      }).join('');
-  document.getElementById('inv-total-pcs').textContent = totalPcs.toLocaleString();
-  document.getElementById('inv-total-amt-doc').textContent = '$' + totalAmt.toFixed(2);
+// SC/CA 라인 분리
+  const scLines = lines.filter(l => (l.wh||'SC') === 'SC');
+  const caLines = lines.filter(l => l.wh === 'CA');
+  
+  function buildInvRows(arr) {
+    let pcs = 0, amt = 0;
+    const rows = arr.map(l => {
+      const a = l.qty * l.price;
+      pcs += l.qty; amt += a;
+      return `<tr>
+        <td style="text-align:center;font-weight:700">${l.qty.toLocaleString()}</td>
+        <td>#${l.styleNum} ${l.description}</td>
+        <td>${l.color}</td><td>${l.size}</td>
+        <td style="text-align:right">$${l.price.toFixed(2)}</td>
+        <td style="text-align:right;font-weight:700">$${a.toFixed(2)}</td>
+      </tr>`;
+    }).join('');
+    return { rows, pcs, amt };
+  }
+
+  if (caLines.length === 0) {
+    // SC만 — 기존처럼 하나의 Invoice
+    const r = buildInvRows(scLines);
+    document.getElementById('inv-lines-body').innerHTML = r.rows || '<tr><td colspan="6" style="text-align:center;padding:16px;color:var(--text3)">라인을 입력하세요</td></tr>';
+    document.getElementById('inv-total-pcs').textContent = r.pcs.toLocaleString();
+    document.getElementById('inv-total-amt-doc').textContent = '$' + r.amt.toFixed(2);
+    document.getElementById('inv-fob').textContent = 'SC — Sumter, South Carolina';
+    document.getElementById('inv-ca-section') && (document.getElementById('inv-ca-section').style.display = 'none');
+  } else if (scLines.length === 0) {
+    // CA만
+    const r = buildInvRows(caLines);
+    document.getElementById('inv-lines-body').innerHTML = r.rows;
+    document.getElementById('inv-total-pcs').textContent = r.pcs.toLocaleString();
+    document.getElementById('inv-total-amt-doc').textContent = '$' + r.amt.toFixed(2);
+    document.getElementById('inv-fob').textContent = 'CA — Eastvale, California';
+    document.getElementById('inv-ca-section') && (document.getElementById('inv-ca-section').style.display = 'none');
+  } else {
+    // 양쪽 — SC Invoice + CA Invoice
+    const sc = buildInvRows(scLines);
+    const ca = buildInvRows(caLines);
+    document.getElementById('inv-lines-body').innerHTML = sc.rows;
+    document.getElementById('inv-total-pcs').textContent = sc.pcs.toLocaleString();
+    document.getElementById('inv-total-amt-doc').textContent = '$' + sc.amt.toFixed(2);
+    document.getElementById('inv-fob').textContent = 'SC — Sumter, South Carolina';
+    // CA Invoice 섹션
+    let caSection = document.getElementById('inv-ca-section');
+    if (!caSection) {
+      caSection = document.createElement('div');
+      caSection.id = 'inv-ca-section';
+      document.getElementById('invoice-print').after(caSection);
+    }
+    caSection.style.display = 'block';
+    caSection.innerHTML = `
+      <div class="inv-doc" style="margin-top:24px;border-top:3px solid var(--ca);">
+        <div class="inv-doc-header">
+          <div class="inv-left"><div class="inv-co">PEACE TEXTILE AMERICA INC</div><div class="inv-co-addr">1605 South Guignard Parkway<br>Sumter SC 29150</div></div>
+          <div class="inv-right">
+            <div class="inv-doc-type" style="color:var(--ca)">INVOICE (CA)</div>
+            <div class="inv-meta-row"><span>Invoice No.</span><span>${order.order_number}-CA</span></div>
+            <div class="inv-meta-row"><span>Date</span><span>${dateStr}</span></div>
+          </div>
+        </div>
+        <div class="inv-addr-row">
+          <div><div class="inv-addr-label">Bill To</div><div class="inv-addr-val"><strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}</div></div>
+          <div><div class="inv-addr-label">Ship To</div><div class="inv-addr-val">${addrHtml(shipAddr)}</div></div>
+          <div><div class="inv-addr-label">PO Number</div><div class="inv-addr-val">${order.customer_po||'—'}</div></div>
+          <div><div class="inv-addr-label">Terms</div><div class="inv-addr-val">${order.terms||'N30'}</div></div>
+          <div><div class="inv-addr-label">Ship Date</div><div class="inv-addr-val">${order.ship_date||'—'}</div></div>
+          <div><div class="inv-addr-label">F.O.B.</div><div class="inv-addr-val">CA — Eastvale, California</div></div>
+        </div>
+        <table class="inv-tbl">
+          <thead><tr><th>Qty (pcs)</th><th>Description</th><th>Color</th><th>Size</th><th>Unit $/pcs</th><th>Amount</th></tr></thead>
+          <tbody>${ca.rows}</tbody>
+          <tfoot>
+            <tr><td colspan="4" style="text-align:right;font-weight:600;padding:8px 10px;">Total Pieces:</td><td style="font-family:'IBM Plex Mono',monospace;font-weight:700;padding:8px 10px;">${ca.pcs.toLocaleString()}</td><td></td></tr>
+            <tr style="background:#f8faff;"><td colspan="4" style="text-align:right;font-weight
 
   // ═══ PICK TICKET ═══
   document.getElementById('pt-from-addr').innerHTML = addrHtml(fromAddr);
