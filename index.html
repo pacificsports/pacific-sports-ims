@@ -2386,56 +2386,120 @@ function sizeOrder(s) {
 }
 
 function renderInventoryTable(data) {
-  data.sort((a,b) => {
-    const sn = (a.styles?.style_number||'').localeCompare(b.styles?.style_number||'');
+  if (data.length === 0) {
+    document.getElementById('inventory-table-wrap').innerHTML = '<div class="empty">No inventory found. Add stock using the button above.</div>';
+    const sumEl = document.getElementById('inv-summary');
+    if (sumEl) sumEl.style.display = 'none';
+    return;
+  }
+
+  // 합산: style+color+size 기준
+  const grouped = {};
+  data.forEach(i => {
+    const key = `${i.styles?.style_number||i.style_number||''}|${(i.color||'').toUpperCase()}|${(i.size||'').toUpperCase()}`;
+    if (!grouped[key]) {
+      grouped[key] = {
+        styleNum: i.styles?.style_number || i.style_number || '',
+        desc: i.styles?.description || '',
+        color: i.color || '',
+        size: i.size || '',
+        sku: i.sku || '',
+        sc: 0, ca: 0, pcr: 0, total: 0,
+        committed: 0,
+        details: []
+      };
+    }
+    const g = grouped[key];
+    const qty = i.qty_on_hand || 0;
+    const wh = i.warehouses?.code || '';
+    if (wh === 'SC') g.sc += qty;
+    else if (wh === 'CA') g.ca += qty;
+    else if (wh === 'SC-PCR') g.pcr += qty;
+    g.total += qty;
+    g.committed += (i.qty_committed || 0);
+    if (i.sku && i.sku.includes('+ss')) g.sku = i.sku;
+    g.details.push({ wh, loc: i.location || '—', qty, id: i.id, committed: i.qty_committed || 0 });
+  });
+
+  // 정렬
+  const rows = Object.values(grouped);
+  rows.sort((a,b) => {
+    const sn = a.styleNum.localeCompare(b.styleNum);
     if (sn !== 0) return sn;
-    const cl = (a.color||'').localeCompare(b.color||'');
+    const cl = a.color.localeCompare(b.color);
     if (cl !== 0) return cl;
     return sizeOrder(a.size) - sizeOrder(b.size);
   });
-  if (data.length === 0) {
-    document.getElementById('inventory-table-wrap').innerHTML = '<div class="empty">No inventory found. Add stock using the button above.</div>';
-    return;
+
+  // 합계
+  const sumSC = rows.reduce((s,r) => s + r.sc, 0);
+  const sumCA = rows.reduce((s,r) => s + r.ca, 0);
+  const sumPCR = rows.reduce((s,r) => s + r.pcr, 0);
+  const sumTotal = sumSC + sumCA + sumPCR;
+  const sumComm = rows.reduce((s,r) => s + r.committed, 0);
+
+  const sumEl = document.getElementById('inv-summary');
+  if (sumEl) {
+    sumEl.style.display = 'block';
+    sumEl.innerHTML = `<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
+      <div style="font-size:12px;color:var(--text2);">Rows: <strong style="font-family:'IBM Plex Mono',monospace;color:var(--primary);">${rows.length.toLocaleString()}</strong></div>
+      <div style="font-size:12px;"><span class="loc-sc">SC</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumSC.toLocaleString()}</strong></div>
+      <div style="font-size:12px;"><span class="loc-ca">CA</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumCA.toLocaleString()}</strong></div>
+      <div style="font-size:12px;"><span class="loc-sc" style="background:var(--orange)">PCR</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumPCR.toLocaleString()}</strong></div>
+      <div style="font-size:13px;font-weight:700;color:var(--primary);border-left:2px solid var(--border);padding-left:12px;">TOTAL: <span style="font-family:'IBM Plex Mono',monospace;font-size:15px;">${sumTotal.toLocaleString()}</span> pcs</div>
+    </div>`;
   }
-  const rows = data.map(i => {
-    const avail = (i.qty_on_hand||0) - (i.qty_committed||0);
-    const isLow = i.qty_on_hand <= i.reorder_point && i.qty_on_hand > 0;
-    const isOut = i.qty_on_hand === 0;
-    const statusChipHtml = isOut ? '<span class="chip c-r">Out</span>' : isLow ? '<span class="chip c-o">Low</span>' : '<span class="chip c-g">OK</span>';
 
-    // SKU suffix 배지
-    const sku = (i.sku || '').toLowerCase();
-    const isSS  = sku.endsWith('+ss');
-    const isBad = sku.endsWith('+bad');
-    const suffixBadge = isSS
-      ? ' <span style="font-size:10px;background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;border-radius:3px;padding:1px 5px;font-weight:600;">Side Seam</span>'
-      : isBad
-      ? ' <span style="font-size:10px;background:#fce4ec;color:#b71c1c;border:1px solid #ef9a9a;border-radius:3px;padding:1px 5px;font-weight:600;">BAD</span>'
-      : '';
-    const desc = (i.styles?.description || '—') + suffixBadge;
+  // 테이블
+  const isSS = sku => (sku||'').includes('+ss');
+  const html = rows.map((r, idx) => {
+    const avail = r.total - r.committed;
+    const ssBadge = isSS(r.sku) ? ' <span style="font-size:10px;background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;border-radius:3px;padding:1px 5px;font-weight:600;">SS</span>' : '';
+    const detailRows = r.details.map(d =>
+      `<tr style="background:#f8f9fb;" onclick="editInventoryItem('${d.id}')">
+        <td></td><td></td><td></td><td></td><td></td>
+        <td style="font-size:11px;color:var(--text3);padding-left:24px;">↳ ${d.wh==='CA'?'<span class="loc-ca">CA</span>':d.wh==='SC-PCR'?'<span class="loc-sc" style="background:var(--orange)">PCR</span>':'<span class="loc-sc">SC</span>'} <span style="font-family:\'IBM Plex Mono\',monospace;">${d.loc}</span></td>
+        <td class="num" style="font-size:11px;color:var(--text3)">${d.qty.toLocaleString()}</td>
+        <td class="num" style="font-size:11px;color:var(--text3)">${d.committed}</td>
+        <td class="num" style="font-size:11px;color:var(--text3)">${(d.qty - d.committed).toLocaleString()}</td>
+        <td></td>
+      </tr>`
+    ).join('');
 
-return `<tr onclick="editInventoryItem('${i.id}')" style="cursor:pointer">
-      <td>${i.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':i.warehouses?.code==='SC-PCR'?'<span class="loc-sc" style="background:var(--orange)">PCR</span>':'<span class="loc-sc">SC</span>'}</td>
-      <td class="mono">${i.styles?.style_number||'—'}</td>
-      <td>${desc}</td>
-      <td>${i.color}</td>
-      <td>${i.size}</td>
-      <td class="num">${(i.qty_on_hand||0).toLocaleString()}</td>
-      <td class="num" style="color:var(--orange)">${(i.qty_committed||0).toLocaleString()}</td>
+    return `<tr style="cursor:pointer;font-weight:500;" onclick="document.querySelectorAll('.detail-${idx}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')">
+      <td class="mono" style="font-weight:700;color:var(--primary)">${r.styleNum}</td>
+      <td>${r.desc}${ssBadge}</td>
+      <td>${r.color}</td>
+      <td>${r.size}</td>
+      <td class="num" style="color:var(--sc)">${r.sc > 0 ? r.sc.toLocaleString() : '—'}</td>
+      <td class="num" style="color:var(--ca)">${r.ca > 0 ? r.ca.toLocaleString() : '—'}</td>
+      <td class="num" style="color:var(--orange)">${r.pcr > 0 ? r.pcr.toLocaleString() : '—'}</td>
+      <td class="num" style="font-weight:700;font-size:13px;">${r.total.toLocaleString()}</td>
       <td class="num" style="color:${avail<0?'var(--red)':'var(--green)'}">${avail.toLocaleString()}</td>
-      <td class="mono">${i.location||'—'}</td>
-      <td>${statusChipHtml}</td>
-    </tr>`;
+      <td>${r.total===0?'<span class="chip c-r">Out</span>':avail<=0?'<span class="chip c-o">Low</span>':'<span class="chip c-g">OK</span>'}</td>
+    </tr>
+    ${r.details.map(d => `<tr class="detail-${idx}" style="display:none;background:#f8f9fb;cursor:pointer;" onclick="event.stopPropagation();editInventoryItem('${d.id}')">
+      <td></td><td></td><td></td><td></td>
+      <td colspan="2" style="font-size:11px;color:var(--text3);padding-left:24px;">↳ ${d.wh==='CA'?'<span class="loc-ca">CA</span>':d.wh==='SC-PCR'?'<span class="loc-sc" style="background:var(--orange)">PCR</span>':'<span class="loc-sc">SC</span>'} <span style="font-family:'IBM Plex Mono',monospace;">${d.loc}</span></td>
+      <td class="num" style="font-size:11px;color:var(--text3)">${d.qty.toLocaleString()}</td>
+      <td></td>
+      <td class="num" style="font-size:11px;color:var(--text3)">${(d.qty - d.committed).toLocaleString()}</td>
+      <td></td>
+    </tr>`).join('')}`;
   }).join('');
 
   document.getElementById('inventory-table-wrap').innerHTML = `
     <table class="tbl">
       <thead><tr>
-        <th>WH</th><th>Style #</th><th>Description</th><th>Color</th><th>Size</th>
-        <th class="num">On Hand</th><th class="num">Committed</th><th class="num">Available</th>
-        <th>Location</th><th>Status</th>
+        <th>Style #</th><th>Description</th><th>Color</th><th>Size</th>
+        <th class="num" style="color:var(--sc)">SC</th>
+        <th class="num" style="color:var(--ca)">CA</th>
+        <th class="num" style="color:var(--orange)">PCR</th>
+        <th class="num">Total</th>
+        <th class="num">Available</th>
+        <th>Status</th>
       </tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody>${html}</tbody>
     </table>`;
 }
 
