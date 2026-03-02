@@ -579,7 +579,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <div class="ff"><label>Ship To <span style="color:var(--text4);font-weight:400">(비우면 Bill To와 동일)</span></label><textarea class="fi" id="inv-ship-addr" rows="3" style="height:64px;padding:6px;resize:none;" oninput="liveRenderDocs()"></textarea></div>
               <div class="ff">
                 <label>Warehouse (F.O.B.) *</label>
-                <select class="fsel" id="inv-wh-sel" onchange="liveRenderDocs()"><option value="">Select...</option></select>
+               <select class="fsel" id="inv-wh-sel" onchange="renderEntryTable();liveRenderDocs()"><option value="">Select...</option></select>
                 <label style="margin-top:8px;display:block">Ship Date</label>
                 <input class="fi" id="inv-ship-date-inp" type="date" oninput="liveRenderDocs()"/>
               </div>
@@ -668,7 +668,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                       <th style="padding:8px 10px;font-size:10px;text-align:center;color:#4caf50;">SC</th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;color:#1976d2;">CA</th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;color:#e65100;">SC-PCR</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;color:#6a1b9a;">CA-PCR</th>
+<th style="padding:8px 10px;font-size:10px;text-align:center;color:#6a1b9a;">CA-PCR</th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;">Ship</th>
                       <th style="padding:8px 10px;font-size:10px;"></th>
                     </tr>
                   </thead>
@@ -680,7 +681,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                       <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;" id="po-total-amt">$0.00</td>
                       <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--green);font-size:16px;" id="po-total-cases">0</td>
                       <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--orange);font-size:16px;" id="po-total-loose">0</td>
-       <td colspan="7"></td>
+  <td colspan="8"></td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1979,10 +1980,24 @@ function renderEntryTable() {
           oninput="poLines[${idx}].location=this.value;liveRenderDocs()"/>
       </td>
 <td style="font-size:11px">${pcrBadge}</td>
-      <td style="text-align:center;font-size:11px;color:var(--sc);">${(scInventory[`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`]?.qty||0).toLocaleString()}</td>
-      <td style="text-align:center;font-size:11px;color:var(--ca);">${(caInventory[`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`]?.qty||0).toLocaleString()}</td>
+<td style="text-align:center;font-size:11px;color:var(--sc);">${(function(){
+        const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+        const sq=scInventory[k]?.qty||0; const ppb=l.ppb||72; const needBoxes=l.cases;
+        return needBoxes>0&&sq<needBoxes*ppb?'<span style="color:red;font-weight:700">'+sq.toLocaleString()+' ⚠️</span>':sq.toLocaleString();
+      })()}</td>
+      <td style="text-align:center;font-size:11px;color:var(--ca);">${(function(){
+        const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+        const cq=caInventory[k]?.qty||0;
+        return cq.toLocaleString();
+      })()}</td>
       <td style="text-align:center;font-size:11px;color:#e65100;">${(pcrInventory[`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`]?.qty||0).toLocaleString()}</td>
       <td style="text-align:center;font-size:11px;color:#6a1b9a;">${(caPcrInventory[`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`]?.qty||0).toLocaleString()}</td>
+      <td style="text-align:center;font-size:11px;">
+        <select class="fsel" style="width:60px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;renderEntryTable();liveRenderDocs()">
+          <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
+          <option value="CA" ${l.wh==='CA'?'selected':''}>CA</option>
+        </select>
+      </td>
       <td><button class="btn btn-sm" style="color:var(--red);padding:2px 6px" onclick="poLines.splice(${idx},1);renderEntryTable();liveRenderDocs()">✕</button></td>
     </tr>`;
   }).join('');
