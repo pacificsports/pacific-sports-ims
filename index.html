@@ -1001,7 +1001,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <label>Ship To Address <span style="color:var(--text4);font-weight:400">(다를 경우)</span></label>
           <textarea class="fi" id="cust-ship-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="비우면 Bill To와 동일"></textarea>
         </div>
-<div class="ff"><label>Payment Terms</label><input class="fi" id="cust-terms" value="N30" placeholder="N30"/></div>
+<div class="ff"><label>Payment Terms</label><input class="fi" id="cust-terms" value="N30" placeholder="N30"/></div>         <div class="ff"><label>Credit Limit ($)</label><input class="fi" id="cust-credit-limit" type="number" min="0" step="100" value="0" placeholder="0 = 무제한"/></div>
         <div class="ff"><label>Aliases (별칭, 쉼표 구분)</label><input class="fi" id="cust-aliases" placeholder="Concept 360, LRC LLC..."/></div>         <div class="ff"><label>우선 배송 창고</label>
           <select class="fsel" id="cust-pref-wh" style="width:100%">
             <option value="SC">SC 우선 (Sumter, SC)</option>
@@ -2311,6 +2311,22 @@ async function saveInvoice() {
 
   if (!cust || !whId) { alert('Customer name과 Warehouse는 필수입니다.'); return; }
   if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
+  // ── Credit Limit 체크
+  if (custSelId) {
+    const custObj = customers.find(c => c.id === custSelId);
+    if (custObj && custObj.credit_limit > 0) {
+      const { data: openOrders } = await db.from('orders')
+        .select('total_amount')
+        .eq('customer_id', custSelId)
+        .not('status', 'in', '("cancelled","paid")');
+      const outstanding = (openOrders || []).reduce((s, o) => s + (o.total_amount || 0), 0);
+      const newTotal = poLines.reduce((s, l) => s + l.qty * (l.price || 0), 0);
+      if (outstanding + newTotal > custObj.credit_limit) {
+        const ok = confirm('⚠️ Credit Limit 초과!\n\n한도: $' + custObj.credit_limit.toLocaleString() + '\n미결제 잔액: $' + outstanding.toLocaleString() + '\n이번 주문: $' + newTotal.toLocaleString() + '\n합계: $' + (outstanding + newTotal).toLocaleString() + '\n\n그래도 저장하시겠습니까?');
+        if (!ok) return;
+      }
+    }
+  }
 
   const whCode = warehouses.find(w => w.id === whId)?.code || '';
 
@@ -4256,6 +4272,7 @@ function openEditCustomer(id) {
   document.getElementById('cust-terms').value = c.terms || 'N30';
   document.getElementById('cust-notes').value = c.notes || '';
   document.getElementById('cust-aliases').value = c.aliases || '';
+  document.getElementById('cust-credit-limit').value = c.credit_limit || 0;
   document.getElementById('cust-pref-wh').value = c.preferred_warehouse || 'SC';
   openModal('modal-customer');
 }
@@ -4271,7 +4288,7 @@ async function saveCustomer() {
     ship_address: document.getElementById('cust-ship-addr').value.trim(),
     terms:   document.getElementById('cust-terms').value.trim(),
     notes:           document.getElementById('cust-notes').value.trim(),
-    aliases: document.getElementById('cust-aliases').value.trim(),     preferred_warehouse: document.getElementById('cust-pref-wh').value || 'SC',
+    aliases: document.getElementById('cust-aliases').value.trim(),     credit_limit: parseFloat(document.getElementById('cust-credit-limit').value) || 0,     preferred_warehouse: document.getElementById('cust-pref-wh').value || 'SC',
     updated_at:      new Date().toISOString()
   };
   if (!payload.name) { alert('Company Name은 필수입니다.'); return; }
