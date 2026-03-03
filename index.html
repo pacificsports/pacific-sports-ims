@@ -1002,7 +1002,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <textarea class="fi" id="cust-ship-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="비우면 Bill To와 동일"></textarea>
         </div>
 <div class="ff"><label>Payment Terms</label><input class="fi" id="cust-terms" value="N30" placeholder="N30"/></div>
-        <div class="ff"><label>우선 배송 창고</label>
+        <div class="ff"><label>Aliases (별칭, 쉼표 구분)</label><input class="fi" id="cust-aliases" placeholder="Concept 360, LRC LLC..."/></div>         <div class="ff"><label>우선 배송 창고</label>
           <select class="fsel" id="cust-pref-wh" style="width:100%">
             <option value="SC">SC 우선 (Sumter, SC)</option>
             <option value="CA">CA 우선 (Eastvale, CA)</option>
@@ -4084,12 +4084,19 @@ function applyPoPreview() {
   if (d.due_date) document.getElementById('inv-ship-date-inp').value = d.due_date;
 
   // customers DB에서 매칭 시도
-  const matchedCust = customers.find(c =>
-    (c.name||'').toLowerCase().includes((d.customer_name||'').toLowerCase().substring(0,6)) ||
-    (d.customer_name||'').toLowerCase().includes((c.name||'').toLowerCase().substring(0,6))
-  );
+const custName = (d.customer_name||'').toLowerCase();
+  const matchedCust = customers.find(c => {
+    const cName = (c.name||'').toLowerCase();
+    if (cName.includes(custName.substring(0,6)) || custName.includes(cName.substring(0,6))) return true;
+    const aliasList = (c.aliases||'').split(',').map(a => a.trim().toLowerCase()).filter(Boolean);
+    return aliasList.some(a => custName.includes(a.substring(0,6)) || a.includes(custName.substring(0,6)));
+  });
   if (matchedCust) {
     document.getElementById('inv-cust-sel').value = matchedCust.id;
+    window._custPrefWh = matchedCust.preferred_warehouse || 'SC';
+    if (matchedCust.terms) document.getElementById('inv-cust-terms').value = matchedCust.terms;
+    if (matchedCust.bill_to) document.getElementById('inv-bill-addr').value = matchedCust.bill_to;
+    if (matchedCust.ship_to) document.getElementById('inv-ship-addr').value = matchedCust.ship_to;
   }
 
   // 라인 채우기 — 새 PO이면 기존 라인 초기화
@@ -4248,6 +4255,7 @@ function openEditCustomer(id) {
   document.getElementById('cust-ship-addr').value = c.ship_address || '';
   document.getElementById('cust-terms').value = c.terms || 'N30';
   document.getElementById('cust-notes').value = c.notes || '';
+  document.getElementById('cust-aliases').value = c.aliases || '';
   document.getElementById('cust-pref-wh').value = c.preferred_warehouse || 'SC';
   openModal('modal-customer');
 }
@@ -4263,7 +4271,7 @@ async function saveCustomer() {
     ship_address: document.getElementById('cust-ship-addr').value.trim(),
     terms:   document.getElementById('cust-terms').value.trim(),
     notes:           document.getElementById('cust-notes').value.trim(),
-    preferred_warehouse: document.getElementById('cust-pref-wh').value || 'SC',
+    aliases: document.getElementById('cust-aliases').value.trim(),     preferred_warehouse: document.getElementById('cust-pref-wh').value || 'SC',
     updated_at:      new Date().toISOString()
   };
   if (!payload.name) { alert('Company Name은 필수입니다.'); return; }
