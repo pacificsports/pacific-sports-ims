@@ -1001,7 +1001,12 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <label>Ship To Address <span style="color:var(--text4);font-weight:400">(다를 경우)</span></label>
           <textarea class="fi" id="cust-ship-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="비우면 Bill To와 동일"></textarea>
         </div>
-        <div class="ff"><label>Payment Terms</label><input class="fi" id="cust-terms" value="N30" placeholder="N30"/></div>
+<div class="ff"><label>Payment Terms</label><input class="fi" id="cust-terms" value="N30" placeholder="N30"/></div>
+        <div class="ff"><label>우선 배송 창고</label>
+          <select class="fsel" id="cust-pref-wh" style="width:100%">
+            <option value="SC">SC 우선 (Sumter, SC)</option>
+            <option value="CA">CA 우선 (Eastvale, CA)</option>
+          </select></div>
         <div class="ff"><label>Notes</label><input class="fi" id="cust-notes" placeholder="특이사항..."/></div>
       </div>
     </div>
@@ -4084,7 +4089,7 @@ const qty = l.qty || 0;
     const invKey = `${l.style_number}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
     const scQty = scInventory[invKey]?.qty || 0;
     const caQty = caInventory[invKey]?.qty || 0;
-    const autoWh = scQty >= qty ? 'SC' : caQty >= qty ? 'CA' : scQty > 0 ? 'SC' : caQty > 0 ? 'CA' : 'SC';
+    const pref = window._custPrefWh || 'SC';     const alt = pref === 'SC' ? 'CA' : 'SC';     const prefQty = pref === 'SC' ? scQty : caQty;     const altQty = pref === 'SC' ? caQty : scQty;     const autoWh = prefQty >= qty ? pref : altQty >= qty ? alt : prefQty > 0 ? pref : altQty > 0 ? alt : pref;
     return {
       code: (l.style_number + l.color.replace(/\s+/g,'').substring(0,6) + l.size).toLowerCase(),
       styleNum: String(l.style_number),
@@ -4144,6 +4149,8 @@ function autoFillCustomer() {
   if (billEl) billEl.value = c.bill_address || '';
   if (shipEl) shipEl.value = c.ship_address || '';
   if (termsEl) termsEl.value = c.terms || 'N30';
+  // 우선 창고 저장
+  window._custPrefWh = c.preferred_warehouse || 'SC';
   liveRenderDocs();
 }
 
@@ -4206,6 +4213,7 @@ function openEditCustomer(id) {
   document.getElementById('cust-ship-addr').value = c.ship_address || '';
   document.getElementById('cust-terms').value = c.terms || 'N30';
   document.getElementById('cust-notes').value = c.notes || '';
+  document.getElementById('cust-pref-wh').value = c.preferred_warehouse || 'SC';
   openModal('modal-customer');
 }
 
@@ -4220,6 +4228,7 @@ async function saveCustomer() {
     ship_address: document.getElementById('cust-ship-addr').value.trim(),
     terms:   document.getElementById('cust-terms').value.trim(),
     notes:           document.getElementById('cust-notes').value.trim(),
+    preferred_warehouse: document.getElementById('cust-pref-wh').value || 'SC',
     updated_at:      new Date().toISOString()
   };
   if (!payload.name) { alert('Company Name은 필수입니다.'); return; }
