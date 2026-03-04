@@ -1180,7 +1180,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div><span style="color:var(--text3)">SKU</span><br><strong id="alloc-sku" style="font-family:'IBM Plex Mono',monospace"></strong></div>
         <div><span style="color:var(--text3)">필요 수량</span><br><strong id="alloc-need" style="font-family:'IBM Plex Mono',monospace;color:var(--primary)"></strong></div>
         <div><span style="color:var(--text3)">배분 합계</span><br><strong id="alloc-sum" style="font-family:'IBM Plex Mono',monospace;color:var(--green)">0</strong></div>
-        <div id="alloc-remain-wrap"><span style="color:var(--text3)">남은 수량</span><br><strong id="alloc-remain" style="font-family:'IBM Plex Mono',monospace;color:var(--red)">0</strong></div>
+        <div id="alloc-remain-wrap">
+          <span style="color:var(--text3)">남은 수량</span><br>
+          <strong id="alloc-remain" style="font-family:'IBM Plex Mono',monospace;color:var(--red)">0</strong>
+          <div id="alloc-remain-hint" style="font-size:10px;color:var(--text3);margin-top:2px;"></div>
+        </div>
       </div>
 
       <!-- Bin 목록 -->
@@ -4994,8 +4998,9 @@ function openAllocModal(event, lineIdx, whGroup) {
               <span style="font-size:10px;color:var(--text3);">/ ${b.qty}</span>
             </div>
             <div style="font-size:10px;color:var(--text3);text-align:right;" id="alloc-box-pcs-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}">
-              = ${Math.floor(prevVal/ppb)}박스 + ${prevVal%ppb} loose
+              = ${Math.floor(prevVal/ppb)}박스${prevVal%ppb > 0 ? ' + '+prevVal%ppb+' loose' : ''}
             </div>
+            <div style="font-size:10px;text-align:right;margin-top:1px;" id="alloc-bin-hint-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}"></div>
           </div>
         </div>
         ${loosePcs > 0 ? `
@@ -5358,6 +5363,52 @@ function updateAllocSum() {
   document.getElementById('alloc-remain').textContent = (remain > 0 ? remain.toLocaleString() : '0') + ' pcs';
   document.getElementById('alloc-remain').style.color = remain > 0 ? 'var(--red)' : 'var(--green)';
   document.getElementById('alloc-sum').style.color = remain <= 0 ? 'var(--green)' : 'var(--orange)';
+
+  // ── 남은 수량 힌트 (박스 + loose)
+  const hintEl = document.getElementById('alloc-remain-hint');
+  if (hintEl) {
+    const firstBoxInp = document.querySelector('#alloc-bins-wrap input[data-type="box"]');
+    const ppb = firstBoxInp ? (parseInt(firstBoxInp.dataset.ppb)||72) : 72;
+    if (remain > 0) {
+      const remBoxes = Math.floor(remain / ppb);
+      const remLoose = remain % ppb;
+      let hint = '';
+      if (remBoxes > 0 && remLoose > 0) hint = `→ ${remBoxes}박스 + ${remLoose} loose 더 필요`;
+      else if (remBoxes > 0) hint = `→ ${remBoxes}박스 더 필요`;
+      else hint = `→ loose ${remLoose} pcs 더 필요`;
+      hintEl.textContent = hint;
+      hintEl.style.color = 'var(--red)';
+    } else if (remain < 0) {
+      hintEl.textContent = `⚠️ ${Math.abs(remain)} pcs 초과 배분`;
+      hintEl.style.color = 'var(--orange)';
+    } else {
+      hintEl.textContent = '✅ 딱 맞음';
+      hintEl.style.color = 'var(--green)';
+    }
+  }
+
+  // ── 각 bin 입력창 옆 힌트 (이 bin에서 더 채울 수 있는 수량)
+  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
+    const binId = inp.dataset.bin?.replace(/[^a-zA-Z0-9]/g,'_');
+    const hintBinEl = document.getElementById(`alloc-bin-hint-${binId}`);
+    if (!hintBinEl) return;
+    const ppb2 = parseInt(inp.dataset.ppb)||72;
+    const maxQty = parseInt(inp.dataset.maxqty)||0;
+    const curVal = parseInt(inp.value)||0;
+    const canFillMore = Math.min(maxQty - curVal, Math.max(0, remain));
+    if (remain > 0 && canFillMore > 0) {
+      const fillBoxes = Math.floor(canFillMore / ppb2);
+      const fillLoose = canFillMore % ppb2;
+      let txt = '여기서 ';
+      if (fillBoxes > 0 && fillLoose > 0) txt += `${fillBoxes}박스 + ${fillLoose} loose 더 가능`;
+      else if (fillBoxes > 0) txt += `최대 ${fillBoxes}박스 더 가능`;
+      else txt += `${fillLoose} loose 더 가능`;
+      hintBinEl.textContent = txt;
+      hintBinEl.style.color = '#1a56a0';
+    } else {
+      hintBinEl.textContent = '';
+    }
+  });
 }
 
 function applyAlloc() {
