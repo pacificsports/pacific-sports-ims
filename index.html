@@ -2865,7 +2865,7 @@ async function loadOrders() {
   }
 
   // Credit Hold 섹션
-  const creditHoldOrders = allOrders.filter(o => o.status === 'credit_hold');
+  const creditHoldOrders = allOrders.filter(o => o.status === 'credit_hold' || o.status === 'rejected');
   const chSection = document.getElementById('credit-hold-section');
   if (creditHoldOrders.length === 0) {
     chSection.style.display = 'none';
@@ -2929,7 +2929,13 @@ function renderOrdersTable() {
           <td>${statusChip(o.status)}</td>
           <td>
             ${o.status==='credit_hold'
-              ? `<button class="btn btn-sm" style="background:#e65100;color:#fff" onclick="event.stopPropagation();sendCreditHoldEmail('${o.id}','${o.order_number}','${(o.customer_name||'').replace(/'/g,'&#39;')}','${o.customer_po||''}',${o.total_amount||0})">📧 Approve 요청</button>`
+              ? `${o.status==='rejected'
+                ? `<div style="display:flex;gap:4px;">
+                    <button class="btn btn-sm" style="background:#e65100;color:#fff" onclick="event.stopPropagation();sendCreditHoldEmail('${o.id}','${o.order_number}','${(o.customer_name||'').replace(/'/g,'&#39;')}','${o.customer_po||''}',${o.total_amount||0})">📧 Re-submit</button>
+                    <button class="btn btn-sm" style="background:#c62828;color:#fff" onclick="event.stopPropagation();cancelOrder('${o.id}')">🗑 Cancel</button>
+                  </div>`
+                : `<button class="btn btn-sm" style="background:#e65100;color:#fff" onclick="event.stopPropagation();sendCreditHoldEmail('${o.id}','${o.order_number}','${(o.customer_name||'').replace(/'/g,'&#39;')}','${o.customer_po||''}',${o.total_amount||0})">📧 Approve 요청</button>`
+              }
               : o.status==='backordered'||o.status==='partial'
               ? `<button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="event.stopPropagation();openBackOrderDetail('${o.id}')">🔴 Back Order</button>`
               : `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openInvoiceFromOrders('${o.id}')">🧾 Invoice</button>`
@@ -4384,18 +4390,25 @@ function statusChip(s) {
     open:'c-b', processing:'c-b',
     backordered:'c-r', partial:'c-o',
     shipped:'c-g', cancelled:'c-gray',
-    credit_hold:'c-r', paid:'c-g'
+   credit_hold:'c-r', paid:'c-g', rejected:'c-r'
   };
   const label = {
     backordered:'🔴 back order', partial:'⚠️ partial',
     open:'open', shipped:'shipped', cancelled:'cancelled',
-    credit_hold:'🚫 credit hold', paid:'✅ paid'
+    credit_hold:'🚫 credit hold', paid:'✅ paid', rejected:'❌ rejected'
   };
   return `<span class="chip ${map[s]||'c-gray'}">${label[s]||s}</span>`;
 }
 function ptStatusChip(s) {
   const map = {pending:'c-o',picked:'c-b',packed:'c-b',shipped:'c-g'};
   return `<span class="chip ${map[s]||'c-gray'}">${s}</span>`;
+}
+async function cancelOrder(orderId) {
+  if (!confirm('Are you sure you want to cancel this order?')) return;
+  const { error } = await db.from('orders').update({ status: 'cancelled' }).eq('id', orderId);
+  if (error) { alert('Error: ' + error.message); return; }
+  alert('Order cancelled.');
+  loadOrders();
 }
 async function sendCreditHoldEmail(orderId, orderNum, custName, custPo, totalAmt) {
   const custSelId = allOrders.find(o => o.id === orderId)?.customer_id;
