@@ -724,10 +724,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                       <th style="padding:8px 10px;font-size:10px;text-align:center;background:#2e7d32;">Full Boxes</th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;background:#e65100;color:#fff;">Loose Pcs (PCR)</th>
 <th style="padding:8px 10px;font-size:10px;text-align:left;">PCR</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1b5e2022;color:#0e7c3a;">🟢 SC<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#a8421222;color:#a84212;">🟠 SC-PCR<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1547a022;color:#1a56a0;">🔵 CA<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#5b21b622;color:#5b21b6;">🟣 CA-PCR<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1b5e2033;color:#0e7c3a;">🟢 SC / SC-PCR<br><span style="font-weight:400;font-size:9px;">재고 · Bin 배분</span></th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1547a033;color:#1a56a0;">🔵 CA / CA-PCR<br><span style="font-weight:400;font-size:9px;">재고 · Bin 배분</span></th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;">Ship</th>
                       <th style="padding:8px 10px;font-size:10px;"></th>
                     </tr>
@@ -1163,6 +1161,37 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
   <div class="lp-fifo-bar">📅 <strong>입고일 순 정렬</strong> — 오래된 재고(FIFO)부터 먼저 출고</div>
   <div class="lp-opts" id="lp-opts"></div>
   <div class="lp-dfooter"><input class="lp-manual" id="lp-manual-inp" placeholder="직접 입력..."\/><button class="lp-manual-ok" onclick="applyLpManual()">✓</button></div>
+</div>
+
+
+<!-- ══════════════════════════════════
+     BIN 배분 모달 (SC/CA 통합)
+══════════════════════════════════ -->
+<div class="modal-overlay" id="modal-alloc">
+  <div class="modal" style="width:520px;max-width:96vw;">
+    <div class="modal-head" id="alloc-modal-head">
+      <span class="modal-title" id="alloc-modal-title">📍 Bin 배분</span>
+      <button class="modal-close" onclick="closeModal('modal-alloc')">×</button>
+    </div>
+    <div class="modal-body" style="padding:16px;">
+
+      <!-- SKU + 필요수량 -->
+      <div style="background:#f8faff;border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;gap:20px;font-size:12px;">
+        <div><span style="color:var(--text3)">SKU</span><br><strong id="alloc-sku" style="font-family:'IBM Plex Mono',monospace"></strong></div>
+        <div><span style="color:var(--text3)">필요 수량</span><br><strong id="alloc-need" style="font-family:'IBM Plex Mono',monospace;color:var(--primary)"></strong></div>
+        <div><span style="color:var(--text3)">배분 합계</span><br><strong id="alloc-sum" style="font-family:'IBM Plex Mono',monospace;color:var(--green)">0</strong></div>
+        <div id="alloc-remain-wrap"><span style="color:var(--text3)">남은 수량</span><br><strong id="alloc-remain" style="font-family:'IBM Plex Mono',monospace;color:var(--red)">0</strong></div>
+      </div>
+
+      <!-- Bin 목록 -->
+      <div id="alloc-bins-wrap"></div>
+
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('modal-alloc')">취소</button>
+      <button class="btn btn-green" onclick="applyAlloc()">✓ 적용</button>
+    </div>
+  </div>
 </div>
 
 <!-- BULK EDIT MODAL -->
@@ -2142,55 +2171,39 @@ function renderEntryTable() {
       <td style="text-align:center;font-size:18px;font-weight:700;background:#e8f5e9;color:#2e7d32">${l.cases}</td>
       <td style="text-align:center;font-size:18px;font-weight:700;background:${l.loose>0?'#fff3e0':'#f5f5f5'};color:${l.loose>0?'#e65100':'#888'}">${l.loose}</td>
       <td style="font-size:11px">${pcrBadge}</td>
-      <td style="padding:4px 6px;">
+      <td style="padding:4px 8px;">
         ${(function(){
           const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
-          const sq=scInventory[k]?.qty||0; const ppb=l.ppb||72; const needBoxes=l.cases;
-          const warn=needBoxes>0&&sq<needBoxes*ppb;
-          const locVal=l.bins?.sc||l.location||'';
-          return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sq.toLocaleString()}${warn?' ⚠️':''}</span>
-            <button class="loc-pick-btn wh-sc${locVal?' filled':''}" onclick="openLpDropdown(event,${idx},'sc','SC')" title="SC Location 선택">
-              <span>📍</span><span class="loc-pick-text">${locVal||'Select...'}</span>
-            </button>
-          </div>`;
-        })()}
-      </td>
-      <td style="padding:4px 6px;">
-        ${(function(){
-          const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+          const sq=scInventory[k]?.qty||0;
           const pq=pcrInventory[k]?.qty||0;
-          const locVal=l.bins?.scpcr||'';
+          const ppb=l.ppb||72; const warn=l.cases>0&&sq<l.cases*ppb;
+          const alloc=l.allocSC||null;
+          const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
           return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#a84212;">${pq.toLocaleString()}</span>
-            <button class="loc-pick-btn wh-scpcr${locVal?' filled':''}" onclick="openLpDropdown(event,${idx},'scpcr','SC-PCR')" title="SC-PCR Location 선택">
-              <span>📍</span><span class="loc-pick-text">${locVal||'Select...'}</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sq.toLocaleString()}${warn?' ⚠️':''}</span>
+              ${pq>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#a84212;">+${pq.toLocaleString()} PCR</span>`:''}
+            </div>
+            <button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="openAllocModal(event,${idx},'SC')" title="SC / SC-PCR Bin 배분">
+              <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
             </button>
           </div>`;
         })()}
       </td>
-      <td style="padding:4px 6px;">
+      <td style="padding:4px 8px;">
         ${(function(){
           const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
           const cq=caInventory[k]?.qty||0;
-          const locVal=l.bins?.ca||'';
-          return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cq.toLocaleString()}</span>
-            <button class="loc-pick-btn wh-ca${locVal?' filled':''}" onclick="openLpDropdown(event,${idx},'ca','CA')" title="CA Location 선택">
-              <span>📍</span><span class="loc-pick-text">${locVal||'Select...'}</span>
-            </button>
-          </div>`;
-        })()}
-      </td>
-      <td style="padding:4px 6px;">
-        ${(function(){
-          const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
           const cpq=caPcrInventory[k]?.qty||0;
-          const locVal=l.bins?.capcr||'';
+          const alloc=l.allocCA||null;
+          const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
           return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#5b21b6;">${cpq.toLocaleString()}</span>
-            <button class="loc-pick-btn wh-capcr${locVal?' filled':''}" onclick="openLpDropdown(event,${idx},'capcr','CA-PCR')" title="CA-PCR Location 선택">
-              <span>📍</span><span class="loc-pick-text">${locVal||'Select...'}</span>
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cq.toLocaleString()}</span>
+              ${cpq>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#5b21b6;">+${cpq.toLocaleString()} PCR</span>`:''}
+            </div>
+            <button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="openAllocModal(event,${idx},'CA')" title="CA / CA-PCR Bin 배분">
+              <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
             </button>
           </div>`;
         })()}
@@ -4899,6 +4912,151 @@ function closeLpDropdown() {
 }
 
 window.addEventListener('scroll', closeLpDropdown, true);
+
+
+// ══════════════════════════════════
+// BIN 배분 모달
+// ══════════════════════════════════
+let _allocState = null; // { lineIdx, whGroup }
+
+function openAllocModal(event, lineIdx, whGroup) {
+  event.stopPropagation();
+  const l = poLines[lineIdx];
+  if (!l) return;
+  _allocState = { lineIdx, whGroup };
+
+  const k = `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+  const isSC = whGroup === 'SC';
+
+  // 헤더 색상
+  const head = document.getElementById('alloc-modal-head');
+  head.style.background = isSC ? '#064e22' : '#0f2744';
+  head.style.color = '#fff';
+  document.getElementById('alloc-modal-title').textContent =
+    `📍 Bin 배분 — ${isSC ? '🟢 SC + SC-PCR' : '🔵 CA + CA-PCR'}`;
+
+  // SKU + 필요 수량
+  document.getElementById('alloc-sku').textContent =
+    `#${l.styleNum} · ${l.color} · ${l.size}`;
+  const needQty = l.qty || 0;
+  document.getElementById('alloc-need').textContent = needQty.toLocaleString() + ' pcs';
+
+  // Bin 목록 구성 (SC + SC-PCR 또는 CA + CA-PCR)
+  const mainWh  = whGroup;           // 'SC' or 'CA'
+  const pcrWh   = whGroup + '-PCR';  // 'SC-PCR' or 'CA-PCR'
+  const mainBins = (window.binInventory?.[mainWh]?.[k]) || [];
+  const pcrBins  = (window.binInventory?.[pcrWh]?.[k]) || [];
+
+  // 기존 배분값 (있으면 불러오기)
+  const prevAlloc = (isSC ? l.allocSC : l.allocCA) || {};
+
+  let html = '';
+
+  // ── Main WH bins
+  if (mainBins.length > 0) {
+    html += `<div style="font-size:11px;font-weight:700;color:${isSC?'var(--sc)':'var(--primary)'};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">
+      ${isSC?'🟢 SC — Sumter Warehouse':'🔵 CA — Eastvale Warehouse'}
+    </div>`;
+    mainBins.forEach((b, i) => {
+      const age = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
+      const ageCls = age===null?'':age>=90?'color:#b42318':age>=30?'color:#b54708':'color:#0e7c3a';
+      const ageTxt = age===null?'':age===0?'오늘 입고':`${age}일`;
+      const prev = prevAlloc[b.bin] || 0;
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border-light);border-radius:6px;margin-bottom:6px;background:#fff;">
+        <div style="flex:1;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;">${b.bin}</div>
+          <div style="font-size:10px;color:var(--text3);display:flex;gap:8px;margin-top:2px;">
+            <span>재고 <b>${b.qty.toLocaleString()}</b> pcs</span>
+            ${age!==null?`<span style="${ageCls}">입고 ${ageTxt}</span>`:''}
+            ${i===0?'<span style="background:#e8f5e9;color:#0e7c3a;padding:1px 5px;border-radius:3px;font-weight:700;">FIFO</span>':''}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input type="number" min="0" max="${b.qty}" value="${prev}"
+            id="alloc-inp-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}"
+            data-bin="${b.bin}" data-max="${b.qty}"
+            style="width:72px;height:32px;border:1px solid var(--border);border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;"
+            oninput="updateAllocSum()"/>
+          <span style="font-size:10px;color:var(--text3);">/ ${b.qty}</span>
+        </div>
+      </div>`;
+    });
+  }
+
+  // ── PCR bins
+  if (pcrBins.length > 0) {
+    html += `<div style="font-size:11px;font-weight:700;color:${isSC?'#a84212':'#5b21b6'};text-transform:uppercase;letter-spacing:.5px;margin:10px 0 6px;">
+      ${isSC?'🟠 SC-PCR — Pcs Room':'🟣 CA-PCR — Pcs Room'}
+    </div>`;
+    pcrBins.forEach(b => {
+      const age = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
+      const ageCls = age===null?'':age>=90?'color:#b42318':age>=30?'color:#b54708':'color:#0e7c3a';
+      const ageTxt = age===null?'':age===0?'오늘 입고':`${age}일`;
+      const pcrKey = pcrWh + '|' + b.bin;
+      const prev = prevAlloc[pcrKey] || 0;
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid ${isSC?'#fdba74':'#c4b5fd'};border-radius:6px;margin-bottom:6px;background:${isSC?'#fff7ed':'#f5f3ff'};">
+        <div style="flex:1;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;">${b.bin} <span style="font-size:10px;font-weight:400;color:${isSC?'#a84212':'#5b21b6'};">(PCR)</span></div>
+          <div style="font-size:10px;color:var(--text3);display:flex;gap:8px;margin-top:2px;">
+            <span>재고 <b>${b.qty.toLocaleString()}</b> pcs</span>
+            ${age!==null?`<span style="${ageCls}">입고 ${ageTxt}</span>`:''}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input type="number" min="0" max="${b.qty}" value="${prev}"
+            id="alloc-inp-${pcrKey.replace(/[^a-zA-Z0-9]/g,'_')}"
+            data-bin="${pcrKey}" data-max="${b.qty}"
+            style="width:72px;height:32px;border:1px solid ${isSC?'#fdba74':'#c4b5fd'};border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;"
+            oninput="updateAllocSum()"/>
+          <span style="font-size:10px;color:var(--text3);">/ ${b.qty}</span>
+        </div>
+      </div>`;
+    });
+  }
+
+  if (mainBins.length === 0 && pcrBins.length === 0) {
+    html = `<div style="text-align:center;padding:24px;color:var(--text3);font-size:12px;">해당 창고에 재고 없음</div>`;
+  }
+
+  document.getElementById('alloc-bins-wrap').innerHTML = html;
+  document.getElementById('alloc-need').textContent = needQty.toLocaleString() + ' pcs';
+  updateAllocSum();
+  openModal('modal-alloc');
+}
+
+function updateAllocSum() {
+  const inputs = document.querySelectorAll('#alloc-bins-wrap input[type=number]');
+  let sum = 0;
+  inputs.forEach(inp => { sum += parseInt(inp.value)||0; });
+  document.getElementById('alloc-sum').textContent = sum.toLocaleString() + ' pcs';
+  const need = parseInt(document.getElementById('alloc-need').textContent.replace(/[^0-9]/g,''))||0;
+  const remain = need - sum;
+  document.getElementById('alloc-remain').textContent = (remain > 0 ? remain.toLocaleString() : '0') + ' pcs';
+  document.getElementById('alloc-remain').style.color = remain > 0 ? 'var(--red)' : 'var(--green)';
+  document.getElementById('alloc-sum').style.color = remain <= 0 ? 'var(--green)' : 'var(--orange)';
+}
+
+function applyAlloc() {
+  if (!_allocState) return;
+  const { lineIdx, whGroup } = _allocState;
+  const inputs = document.querySelectorAll('#alloc-bins-wrap input[type=number]');
+  const alloc = {};
+  inputs.forEach(inp => {
+    const qty = parseInt(inp.value)||0;
+    if (qty > 0) alloc[inp.dataset.bin] = qty;
+  });
+  if (whGroup === 'SC') {
+    poLines[lineIdx].allocSC = alloc;
+    // legacy location 호환 (첫번째 SC bin)
+    const firstSCBin = Object.keys(alloc).find(k => !k.includes('SC-PCR|'));
+    if (firstSCBin) poLines[lineIdx].location = firstSCBin;
+  } else {
+    poLines[lineIdx].allocCA = alloc;
+  }
+  closeModal('modal-alloc');
+  renderEntryTable();
+  liveRenderDocs();
+}
 
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
