@@ -2188,9 +2188,14 @@ function renderEntryTable() {
               <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sq.toLocaleString()}${warn?' ⚠️':''}</span>
               ${pq>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#a84212;">+${pq.toLocaleString()} PCR</span>`:''}
             </div>
-            <button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="openAllocModal(event,${idx},'SC')" title="SC / SC-PCR Bin 배분">
-              <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
-            </button>
+            ${(l.wh||'SC')==='CA'
+              ? `<button class="loc-pick-btn" disabled title="CA 출고 선택됨" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
+                  <span>🔒</span><span class="loc-pick-text" style="max-width:100px;color:#aaa;">CA 전용</span>
+                </button>`
+              : `<button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="openAllocModal(event,${idx},'SC')" title="SC / SC-PCR Bin 배분">
+                  <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
+                </button>`
+            }
           </div>`;
         })()}
       </td>
@@ -2206,16 +2211,22 @@ function renderEntryTable() {
               <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cq.toLocaleString()}</span>
               ${cpq>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#5b21b6;">+${cpq.toLocaleString()} PCR</span>`:''}
             </div>
-            <button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="openAllocModal(event,${idx},'CA')" title="CA / CA-PCR Bin 배분">
-              <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
-            </button>
+            ${(l.wh||'SC')==='SC'
+              ? `<button class="loc-pick-btn" disabled title="SC 출고 선택됨" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
+                  <span>🔒</span><span class="loc-pick-text" style="max-width:100px;color:#aaa;">SC 전용</span>
+                </button>`
+              : `<button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="openAllocModal(event,${idx},'CA')" title="CA / CA-PCR Bin 배분">
+                  <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
+                </button>`
+            }
           </div>`;
         })()}
       </td>
       <td style="text-align:center;font-size:11px;">
-        <select class="fsel" style="width:60px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;renderEntryTable();liveRenderDocs()">
+        <select class="fsel" style="width:72px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;renderEntryTable();liveRenderDocs()">
           <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
           <option value="CA" ${l.wh==='CA'?'selected':''}>CA</option>
+          <option value="SC&CA" ${l.wh==='SC&CA'?'selected':''}>SC &amp; CA</option>
         </select>
       </td>
       <td><button class="btn btn-sm" style="color:var(--red);padding:2px 6px" onclick="poLines.splice(${idx},1);renderEntryTable();liveRenderDocs()">✕</button></td>
@@ -2290,8 +2301,8 @@ const lines = [...poLines].sort((a, b) => {
     return sizeOrder(a.size) - sizeOrder(b.size);
   });
 // SC/CA 라인 분리
-  const scLines = lines.filter(l => (l.wh||'SC') === 'SC');
-  const caLines = lines.filter(l => l.wh === 'CA');
+  const scLines = lines.filter(l => (l.wh||'SC') === 'SC' || l.wh === 'SC&CA');
+  const caLines = lines.filter(l => l.wh === 'CA' || l.wh === 'SC&CA');
   
   function buildInvRows(arr) {
     let pcs = 0, amt = 0;
