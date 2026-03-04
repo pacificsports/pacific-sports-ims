@@ -5434,21 +5434,25 @@ async function execPcrTransfer(whGroup, ppb) {
   // SC bin 차감
   await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - qty }).eq('id', scRow.id);
 
-  // PCR에 추가 — 같은 창고/color/size에서 qty 합산 (location 무관하게 첫번째 row에 합산)
+  // PCR에 추가 — 모든 PCR row 합산 후 하나로 통합
   const styleObj = styles.find(s => s.style_number === l.styleNum);
   const { data: pcrRows } = await db.from('inventory')
     .select('id, qty_on_hand, location')
     .eq('warehouse_id', pcrWhObj.id)
     .ilike('color', l.color)
-    .ilike('size', l.size)
-    .order('qty_on_hand', { ascending: false });
+    .ilike('size', l.size);
 
   if (pcrRows && pcrRows.length > 0) {
-    // 기존 PCR 재고에 합산 (가장 많은 row에)
-    const topRow = pcrRows[0];
-    await db.from('inventory').update({ qty_on_hand: topRow.qty_on_hand + qty }).eq('id', topRow.id);
+    // 전체 PCR qty 합산 + 이번 이동분 추가
+    const totalPcrQty = pcrRows.reduce((s, r) => s + (r.qty_on_hand||0), 0) + qty;
+    // 첫번째 row에 전체 합산, 나머지 row 삭제 (중복 제거)
+    const mainRow = pcrRows[0];
+    await db.from('inventory').update({ qty_on_hand: totalPcrQty }).eq('id', mainRow.id);
+    for (let i = 1; i < pcrRows.length; i++) {
+      await db.from('inventory').delete().eq('id', pcrRows[i].id);
+    }
   } else {
-    // PCR 재고 없으면 신규 생성 (location = PCR-ROOM)
+    // PCR 재고 없으면 신규 생성
     await db.from('inventory').insert({
       warehouse_id: pcrWhObj.id,
       style_id: styleObj?.id || null,
