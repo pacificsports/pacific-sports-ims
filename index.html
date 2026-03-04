@@ -5045,10 +5045,10 @@ function openAllocModal(event, lineIdx, whGroup) {
               id="alloc-inp-${pcrKey.replace(/[^a-zA-Z0-9]/g,'_')}"
               data-bin="${pcrKey}" data-max="${b.qty}" data-type="pcs"
               style="width:72px;height:30px;border:1px solid ${pcrBorder};border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;"
-              oninput="updateAllocSum()"/>
+              oninput="checkPcrInput(this)"/>
             <span style="font-size:10px;color:var(--text3);">/ ${b.qty}</span>
           </div>
-        </div>
+        <div id="pcr-inp-warn-${pcrKey.replace(/[^a-zA-Z0-9]/g,'_')}" style="font-size:10px;margin-top:4px;display:none;padding:5px 8px;border-radius:4px;background:#fff3e0;color:#a84212;"></div>
       </div>`;
     });
   }
@@ -5283,6 +5283,39 @@ function refreshPcrTransferSection() {
 
 // PCR 이동 지정
 let _pcrTransfers = []; // [{ fromBin, whGroup, qty }]
+
+// PCR pcs 입력 검증 — 재고 초과 시 클램프 + 경고
+function checkPcrInput(inp) {
+  const max = parseInt(inp.dataset.max)||0;
+  const val = parseInt(inp.value)||0;
+  const warnId = 'pcr-inp-warn-' + inp.id.replace('alloc-inp-','');
+  const warnEl = document.getElementById(warnId);
+
+  if (val > max) {
+    // 자동으로 max로 클램프
+    inp.value = max;
+    inp.style.borderColor = '#fdba74';
+    // 부족분 계산
+    const short = val - max;
+    if (warnEl) {
+      warnEl.style.display = 'block';
+      warnEl.innerHTML = `⚠️ 재고 ${max}pcs 초과 입력 → ${max}pcs로 조정됨<br>
+        <b>${short}pcs 더 필요</b> — 아래 SC→PCR Transfer 섹션에서 추가 이동 후 다시 입력하세요`;
+      // SC→PCR Transfer 섹션 하이라이트
+      const transferSection = document.querySelector('[id="pcr-transfer-wrap"]')?.closest('div[style*="border"]');
+      if (transferSection) {
+        transferSection.style.outline = '2px solid #a84212';
+        transferSection.style.outlineOffset = '2px';
+        setTimeout(() => { transferSection.style.outline = ''; transferSection.style.outlineOffset = ''; }, 3000);
+      }
+    }
+  } else {
+    inp.style.borderColor = '';
+    if (warnEl) warnEl.style.display = 'none';
+  }
+  updateAllocSum();
+  refreshPcrTransferSection();
+}
 
 let _pcrSelectedBin = null;
 
