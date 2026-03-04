@@ -2312,6 +2312,8 @@ async function saveInvoice() {
   if (!cust || !whId) { alert('Customer name과 Warehouse는 필수입니다.'); return; }
   if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
   // ── Credit Limit 체크
+  var _creditHold = false;
+  var _creditInfo = {};
   if (custSelId) {
     const custObj = customers.find(c => c.id === custSelId);
     if (custObj && custObj.credit_limit > 0) {
@@ -2322,8 +2324,9 @@ async function saveInvoice() {
       const outstanding = (openOrders || []).reduce((s, o) => s + (o.total_amount || 0), 0);
       const newTotal = poLines.reduce((s, l) => s + l.qty * (l.price || 0), 0);
       if (outstanding + newTotal > custObj.credit_limit) {
-        const ok = confirm('⚠️ Credit Limit 초과!\n\n한도: $' + custObj.credit_limit.toLocaleString() + '\n미결제 잔액: $' + outstanding.toLocaleString() + '\n이번 주문: $' + newTotal.toLocaleString() + '\n합계: $' + (outstanding + newTotal).toLocaleString() + '\n\n그래도 저장하시겠습니까?');
-        if (!ok) return;
+        _creditHold = true;
+        _creditInfo = { outstanding, newTotal, credit_limit: custObj.credit_limit };
+        alert('⚠️ Credit Limit 초과!\n\n한도: $' + custObj.credit_limit.toLocaleString() + '\n미결제 잔액: $' + outstanding.toLocaleString() + '\n이번 주문: $' + newTotal.toLocaleString() + '\n\n주문이 Credit Hold 상태로 저장됩니다.');
       }
     }
   }
@@ -2376,7 +2379,7 @@ async function saveInvoice() {
     customer_id: custSelId || null,
     warehouse_id: whId,
     ship_date: shipDate || null,
-    status: orderStatus,
+    status: _creditHold ? 'credit_hold' : orderStatus,
     total_pcs: totalPcs,
     total_amount: totalAmt,
     bill_address: document.getElementById('inv-bill-addr')?.value || '',
@@ -2384,8 +2387,25 @@ async function saveInvoice() {
     terms: document.getElementById('inv-cust-terms')?.value || 'N30',
     created_by: currentUser.email
   }).select().single();
-  if (error) { alert('Error saving order: ' + error.message); return; }
-
+if (error) { alert('Error saving order: ' + error.message); return; }
+  // ── Credit Hold 이메일 발송
+  if (_creditHold) {
+    try {
+      await fetch('https://credit-hold-email.hjbae.workers.dev/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_id: order.id,
+          order_number: order.order_number,
+          customer_name: cust,
+          customer_po: po,
+          total_amount: totalAmt,
+          outstanding: _creditInfo.outstanding,
+          credit_limit: _creditInfo.credit_limit
+        })
+      });
+    } catch(e) { console.warn('Credit hold email error:', e); }
+  }
   // ── 3. Order Lines 저장 + 재고 차감
   for (const l of lineChecks) {
     const s = styles.find(x => x.style_number === l.styleNum);
