@@ -5032,8 +5032,9 @@ function openAllocModal(event, lineIdx, whGroup) {
   const pcrBorder = isSC ? '#fdba74' : '#c4b5fd';
   const pcrLabel  = isSC ? '🟠 SC-PCR — Pcs Room (Loose Pcs)' : '🟣 CA-PCR — Pcs Room (Loose Pcs)';
 
+  // PCR 섹션 항상 표시 (재고 없으면 0pcs로)
+  html += `<div style="font-size:11px;font-weight:700;color:${pcrColor};text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px;">${pcrLabel}</div>`;
   if (pcrBins.length > 0) {
-    html += `<div style="font-size:11px;font-weight:700;color:${pcrColor};text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px;">${pcrLabel}</div>`;
     pcrBins.forEach(b => {
       const pcrKey = pcrWh + '|' + b.bin;
       const age    = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
@@ -5062,6 +5063,20 @@ function openAllocModal(event, lineIdx, whGroup) {
         <div id="pcr-inp-warn-${pcrKey.replace(/[^a-zA-Z0-9]/g,'_')}" style="font-size:10px;margin-top:4px;display:none;padding:5px 8px;border-radius:4px;background:#fff3e0;color:#a84212;"></div>
       </div>`;
     });
+  } else {
+    // PCR 재고 없음 → 0pcs disabled row 표시
+    html += `<div style="padding:10px 12px;border:1px dashed ${pcrBorder};border-radius:8px;margin-bottom:8px;background:${pcrBg};display:flex;align-items:center;gap:10px;">
+      <div style="flex:1;">
+        <div style="font-size:12px;color:#aaa;font-style:italic;">재고 없음</div>
+        <div style="font-size:10px;color:#aaa;margin-top:2px;">SC → PCR Transfer 후 입력 가능</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <label style="font-size:10px;color:var(--text3);">pcs:</label>
+        <input type="number" value="0" disabled
+          style="width:72px;height:30px;border:1px solid #ddd;border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;background:#f5f5f5;color:#bbb;cursor:not-allowed;"/>
+        <span style="font-size:10px;color:#aaa;">/ 0</span>
+      </div>
+    </div>`;
   }
 
   // ── PCR 부족 시 → SC bin에서 이동 지정 UI
@@ -5143,9 +5158,11 @@ function openAllocModal(event, lineIdx, whGroup) {
     }
   }
 
-  // ── PCR → SC 역방향 Transfer (실수 수정용)
-  if (pcrBins.length > 0) {
-    const pcrBackOpts = pcrBins.map(b => {
+  // ── PCR → SC 역방향 Transfer (PCR 재고 있으면 항상 표시)
+  if (totalPcr > 0) {
+    // pcrBins 없으면 totalPcr 기반으로 가상 bin 생성
+    const effectivePcrBins = pcrBins.length > 0 ? pcrBins : [{ bin: 'PCR-ROOM', qty: totalPcr, received_date: null }];
+    const pcrBackOpts = effectivePcrBins.map(b => {
       const maxBoxes = Math.floor(b.qty / (l.ppb||72));
       const loose = b.qty % (l.ppb||72);
       const age = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
@@ -5439,6 +5456,24 @@ async function execPcrBackTransfer(whGroup, ppb) {
 
   _pcrBackSelectedBin = null;
   showToast(`↩️ ${bin}(PCR) → ${dest}(SC): ${boxes}박스 (${qty} pcs) 되돌리기 완료`);
+
+  // 현재 입력값 poLines에 저장
+  const liveAllocB = {};
+  const livePcrAllocB = {};
+  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
+    const v = parseInt(inp.value)||0;
+    if (v > 0) liveAllocB[inp.dataset.bin] = v;
+  });
+  document.querySelectorAll('#alloc-bins-wrap input[data-type="pcs"]').forEach(inp => {
+    const v = parseInt(inp.value)||0;
+    if (v > 0) livePcrAllocB[inp.dataset.bin] = v;
+  });
+  if (whGroup === 'SC') {
+    poLines[_allocState.lineIdx].allocSC = { ...liveAllocB, ...livePcrAllocB };
+  } else {
+    poLines[_allocState.lineIdx].allocCA = { ...liveAllocB, ...livePcrAllocB };
+  }
+
   await loadScInventory();
   openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
 }
@@ -5509,30 +5544,22 @@ async function execPcrTransfer(whGroup, ppb) {
 
   showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty} pcs) 이동 완료`);
 
-  // ── 현재 입력값 저장
-  const savedInputs = {};
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"], #alloc-bins-wrap input[data-type="pcs"]').forEach(inp => {
-    savedInputs[inp.id] = inp.value;
+  // ── SC bin 입력값만 poLines에 저장 (PCR은 0으로 리셋 → 새 재고로 다시 입력)
+  const liveAlloc = {};
+  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
+    const v = parseInt(inp.value)||0;
+    if (v > 0) liveAlloc[inp.dataset.bin] = v;
   });
 
-  // binInventory 갱신
-  await loadScInventory();
+  if (whGroup === 'SC') {
+    poLines[_allocState.lineIdx].allocSC = { ...liveAlloc }; // PCR alloc 제외 (0 리셋)
+  } else {
+    poLines[_allocState.lineIdx].allocCA = { ...liveAlloc };
+  }
 
-  // ── 모달 재렌더 후 입력값 복원
+  // binInventory 갱신 후 모달 재오픈
+  await loadScInventory();
   openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
-  // 한 프레임 후 복원 (렌더링 완료 대기)
-  setTimeout(() => {
-    Object.entries(savedInputs).forEach(([id, val]) => {
-      const el = document.getElementById(id);
-      if (el) {
-        el.value = val;
-        // box 타입이면 박스 표시도 업데이트
-        if (el.dataset.type === 'box') syncAllocBox(el);
-      }
-    });
-    updateAllocSum();
-    refreshPcrTransferSection();
-  }, 50);
 }
 
 function renderPcrTransfers() {
