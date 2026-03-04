@@ -5132,6 +5132,61 @@ function openAllocModal(event, lineIdx, whGroup) {
     }
   }
 
+  // ── PCR → SC 역방향 Transfer (실수 수정용)
+  if (pcrBins.length > 0) {
+    const pcrBackOpts = pcrBins.map(b => {
+      const maxBoxes = Math.floor(b.qty / (l.ppb||72));
+      const loose = b.qty % (l.ppb||72);
+      const age = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
+      const ageTxt = age===null?'날짜미기입':age===0?'오늘':age+'일전';
+      return `<div class="pcr-back-bin-opt" data-bin="${b.bin}" data-qty="${b.qty}"
+        onclick="selectPcrBackBin(this, ${l.ppb||72})"
+        style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #f0e6d3;display:flex;align-items:center;gap:10px;background:#fff;transition:background 0.1s;"
+        onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background='#fff'">
+        <div style="flex:1;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;">${b.bin} <span style="font-size:10px;font-weight:400;color:${pcrColor};">(PCR)</span></div>
+          <div style="font-size:10px;color:#888;margin-top:2px;">${ageTxt} 입고</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;color:${mainColor};">${b.qty.toLocaleString()} pcs</div>
+          <div style="font-size:10px;color:#888;">${maxBoxes>0?maxBoxes+'박스':''}${loose>0?' + '+loose+' loose':''}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    // SC bin 목적지 옵션
+    const scDestOpts = mainBins.map(b =>
+      `<option value="${b.bin}">${b.bin} (현재 ${b.qty}pcs)</option>`
+    ).join('');
+
+    html += `<div style="margin-top:8px;border:1px solid #86efac;border-radius:8px;overflow:hidden;">
+      <div style="padding:8px 12px;background:#064e22;display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:11px;font-weight:700;color:#fff;">↩️ PCR → SC 되돌리기 (실수 수정)</span>
+      </div>
+      <div style="background:#fff;border-bottom:1px solid #86efac;">
+        ${pcrBackOpts}
+      </div>
+      <div style="padding:10px 12px;background:#f0fdf4;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div id="pcr-back-selected-label" style="flex:1;font-size:12px;color:#888;font-style:italic;">← PCR Bin 선택</div>
+        <div style="display:flex;align-items:center;gap:5px;">
+          <input type="number" id="pcr-back-boxes" min="1" value="1"
+            style="width:46px;height:30px;border:1px solid #86efac;border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;"
+            oninput="updatePcrBackLabel(${l.ppb||72})"/>
+          <span style="font-size:11px;color:var(--text3);">박스</span>
+          <span id="pcr-back-pcs-label" style="font-size:10px;color:#0e7c3a;font-weight:700;white-space:nowrap;">(${l.ppb||72} pcs)</span>
+        </div>
+        <select id="pcr-back-dest"
+          style="height:30px;border:1px solid #86efac;border-radius:4px;padding:0 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;background:#fff;">
+          ${scDestOpts}
+        </select>
+        <button id="pcr-back-btn" onclick="execPcrBackTransfer('${isSC?'SC':'CA'}', ${l.ppb||72})" disabled
+          style="height:30px;padding:0 14px;border-radius:4px;border:none;background:#ccc;color:#fff;font-size:11px;font-weight:700;cursor:not-allowed;white-space:nowrap;">
+          ↩️ 되돌리기
+        </button>
+      </div>
+    </div>`;
+  }
+
   // ── 재고 부족 경고 (전체)
   if (shortage > 0) {
     html += `<div style="margin-top:10px;padding:10px 12px;border:1px solid #fca5a5;border-radius:8px;background:#fff8f8;font-size:11px;color:var(--red);">
@@ -5259,6 +5314,91 @@ function updatePcrTransferLabel(ppb) {
   if (el) el.textContent = `(${(boxes*ppb).toLocaleString()} pcs)`;
 }
 
+let _pcrBackSelectedBin = null;
+
+function selectPcrBackBin(el, ppb) {
+  document.querySelectorAll('.pcr-back-bin-opt').forEach(o => o.style.background = '#fff');
+  el.style.background = '#f0fdf4';
+  _pcrBackSelectedBin = el.dataset.bin;
+  const maxQty = parseInt(el.dataset.qty)||0;
+  const maxBoxes = Math.floor(maxQty / ppb);
+  const label = document.getElementById('pcr-back-selected-label');
+  if (label) label.innerHTML = `<b style="font-family:'IBM Plex Mono',monospace;">${_pcrBackSelectedBin}</b> 선택됨 · 최대 ${maxBoxes}박스`;
+  const boxInp = document.getElementById('pcr-back-boxes');
+  if (boxInp) { boxInp.max = maxBoxes; boxInp.value = Math.min(parseInt(boxInp.value)||1, maxBoxes); }
+  const btn = document.getElementById('pcr-back-btn');
+  if (btn) { btn.disabled = false; btn.style.background = '#0e7c3a'; btn.style.cursor = 'pointer'; }
+  updatePcrBackLabel(ppb);
+}
+
+function updatePcrBackLabel(ppb) {
+  const boxes = parseInt(document.getElementById('pcr-back-boxes')?.value)||1;
+  const el = document.getElementById('pcr-back-pcs-label');
+  if (el) el.textContent = `(${(boxes*ppb).toLocaleString()} pcs)`;
+}
+
+async function execPcrBackTransfer(whGroup, ppb) {
+  const bin  = _pcrBackSelectedBin;
+  const boxes = parseInt(document.getElementById('pcr-back-boxes')?.value)||1;
+  const dest  = document.getElementById('pcr-back-dest')?.value;
+  if (!bin) { alert('PCR Bin을 선택해주세요.'); return; }
+  if (!dest) { alert('되돌릴 SC Bin을 선택해주세요.'); return; }
+  const qty = boxes * ppb;
+  const pcrWh = whGroup + '-PCR';
+
+  if (!_allocState) return;
+  const l = poLines[_allocState.lineIdx];
+  if (!l) return;
+
+  const btn = document.getElementById('pcr-back-btn');
+  if (btn) { btn.textContent = '처리 중...'; btn.disabled = true; }
+
+  const scWhObj  = warehouses.find(w => w.code === whGroup);
+  const pcrWhObj = warehouses.find(w => w.code === pcrWh);
+  if (!scWhObj || !pcrWhObj) { alert('창고 정보를 찾을 수 없습니다.'); return; }
+
+  // PCR bin 차감
+  const { data: pcrRow } = await db.from('inventory')
+    .select('id, qty_on_hand')
+    .eq('warehouse_id', pcrWhObj.id)
+    .eq('location', bin)
+    .ilike('color', l.color)
+    .ilike('size', l.size)
+    .maybeSingle();
+
+  if (!pcrRow) { alert('PCR 재고를 찾을 수 없습니다.'); return; }
+  if (pcrRow.qty_on_hand < qty) { alert(`PCR 재고 부족! 현재 ${pcrRow.qty_on_hand} pcs`); return; }
+  await db.from('inventory').update({ qty_on_hand: pcrRow.qty_on_hand - qty }).eq('id', pcrRow.id);
+
+  // SC bin에 추가
+  const { data: scRow } = await db.from('inventory')
+    .select('id, qty_on_hand')
+    .eq('warehouse_id', scWhObj.id)
+    .eq('location', dest)
+    .ilike('color', l.color)
+    .ilike('size', l.size)
+    .maybeSingle();
+
+  if (scRow) {
+    await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand + qty }).eq('id', scRow.id);
+  } else {
+    const styleObj = styles.find(s => s.style_number === l.styleNum);
+    await db.from('inventory').insert({
+      warehouse_id: scWhObj.id,
+      style_id: styleObj?.id || null,
+      color: l.color, size: l.size,
+      location: dest,
+      qty_on_hand: qty, qty_committed: 0,
+      received_date: new Date().toISOString().slice(0,10)
+    });
+  }
+
+  _pcrBackSelectedBin = null;
+  showToast(`↩️ ${bin}(PCR) → ${dest}(SC): ${boxes}박스 (${qty} pcs) 되돌리기 완료`);
+  await loadScInventory();
+  openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
+}
+
 async function execPcrTransfer(whGroup, ppb) {
   const bin   = _pcrSelectedBin;
   const boxes = parseInt(document.getElementById('pcr-transfer-boxes')?.value)||1;
@@ -5321,9 +5461,30 @@ async function execPcrTransfer(whGroup, ppb) {
 
   showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty} pcs) 이동 완료`);
 
-  // binInventory 갱신 후 모달 새로고침
+  // ── 현재 입력값 저장
+  const savedInputs = {};
+  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"], #alloc-bins-wrap input[data-type="pcs"]').forEach(inp => {
+    savedInputs[inp.id] = inp.value;
+  });
+
+  // binInventory 갱신
   await loadScInventory();
+
+  // ── 모달 재렌더 후 입력값 복원
   openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
+  // 한 프레임 후 복원 (렌더링 완료 대기)
+  setTimeout(() => {
+    Object.entries(savedInputs).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.value = val;
+        // box 타입이면 박스 표시도 업데이트
+        if (el.dataset.type === 'box') syncAllocBox(el);
+      }
+    });
+    updateAllocSum();
+    refreshPcrTransferSection();
+  }, 50);
 }
 
 function renderPcrTransfers() {
