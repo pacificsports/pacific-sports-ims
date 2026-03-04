@@ -4985,16 +4985,16 @@ function openAllocModal(event, lineIdx, whGroup) {
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
             <div style="display:flex;align-items:center;gap:6px;">
-              <label style="font-size:10px;color:var(--text3);white-space:nowrap;">박스 수:</label>
-              <input type="number" min="0" max="${maxBoxes}" value="${prevBoxes}"
+              <label style="font-size:10px;color:var(--text3);white-space:nowrap;">pcs:</label>
+              <input type="number" min="0" max="${b.qty}" value="${prevVal}"
                 id="alloc-box-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}"
                 data-bin="${b.bin}" data-ppb="${ppb}" data-maxbox="${maxBoxes}" data-maxqty="${b.qty}" data-type="box"
-                style="width:58px;height:30px;border:1px solid ${mainBorder};border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;"
+                style="width:72px;height:30px;border:1px solid ${mainBorder};border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;"
                 oninput="syncAllocBox(this)"/>
-              <span style="font-size:10px;color:var(--text3);">/ ${maxBoxes}</span>
+              <span style="font-size:10px;color:var(--text3);">/ ${b.qty}</span>
             </div>
             <div style="font-size:10px;color:var(--text3);text-align:right;" id="alloc-box-pcs-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}">
-              = ${(prevBoxes*ppb).toLocaleString()} pcs
+              = ${Math.floor(prevVal/ppb)}박스 + ${prevVal%ppb} loose
             </div>
           </div>
         </div>
@@ -5069,14 +5069,15 @@ function openAllocModal(event, lineIdx, whGroup) {
   openModal('modal-alloc');
 }
 
-// 박스 수 입력 시 pcs 자동 계산
+// pcs 입력 시 박스수 자동 계산
 function syncAllocBox(inp) {
-  const boxes = parseInt(inp.value)||0;
-  const ppb   = parseInt(inp.dataset.ppb)||72;
-  const pcs   = boxes * ppb;
+  const pcs  = parseInt(inp.value)||0;
+  const ppb  = parseInt(inp.dataset.ppb)||72;
+  const boxes = Math.floor(pcs / ppb);
+  const loose = pcs % ppb;
   const binId = inp.dataset.bin.replace(/[^a-zA-Z0-9]/g,'_');
   const pcsEl = document.getElementById(`alloc-box-pcs-${binId}`);
-  if (pcsEl) pcsEl.textContent = `= ${pcs.toLocaleString()} pcs`;
+  if (pcsEl) pcsEl.textContent = `= ${boxes}박스${loose > 0 ? ` + ${loose} loose` : ''}`;
   updateAllocSum();
 }
 
@@ -5113,9 +5114,9 @@ function renderPcrTransfers() {
 
 function updateAllocSum() {
   let sum = 0;
-  // 박스 입력
+  // SC/CA bin pcs 직접 입력
   document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
-    sum += (parseInt(inp.value)||0) * (parseInt(inp.dataset.ppb)||72);
+    sum += parseInt(inp.value)||0;
   });
   // pcs 입력 (PCR)
   document.querySelectorAll('#alloc-bins-wrap input[data-type="pcs"]').forEach(inp => {
@@ -5134,9 +5135,9 @@ function applyAlloc() {
   const { lineIdx, whGroup } = _allocState;
   const alloc = {};
 
-  // 박스 → pcs
+  // SC/CA bin pcs
   document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
-    const qty = (parseInt(inp.value)||0) * (parseInt(inp.dataset.ppb)||72);
+    const qty = parseInt(inp.value)||0;
     if (qty > 0) alloc[inp.dataset.bin] = qty;
   });
   // PCR pcs
