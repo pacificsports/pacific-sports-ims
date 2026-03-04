@@ -595,7 +595,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 <div style="font-size:11px;color:var(--text2)">고객 PO PDF를 업로드하면 Claude가 자동으로 거래처 정보 및 스타일/컬러/수량을 인식합니다</div>
               </div>
               <label style="cursor:pointer">
-                <input type="file" id="po-pdf-input" accept=".pdf" style="display:none" onchange="parsePoPdf(this)"/>
+                <input type="file" id="po-pdf-input" accept=".pdf" style="display:none" onclick="poLines=[];renderEntryTable();liveRenderDocs()" onchange="parsePoPdf(this)"/>
                 <span class="btn btn-primary" style="pointer-events:none;white-space:nowrap">📎 PO PDF 업로드</span>
               </label>
             </div>
@@ -725,8 +725,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                       <th style="padding:8px 10px;font-size:10px;text-align:center;background:#e65100;color:#fff;">Loose Pcs (PCR)</th>
 <th style="padding:8px 10px;font-size:10px;text-align:left;">PCR</th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1b5e2022;color:#0e7c3a;">🟢 SC<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1547a022;color:#1a56a0;">🔵 CA<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;background:#a8421222;color:#a84212;">🟠 SC-PCR<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
+                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1547a022;color:#1a56a0;">🔵 CA<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;background:#5b21b622;color:#5b21b6;">🟣 CA-PCR<br><span style="font-weight:400;font-size:9px;">재고 / Location</span></th>
                       <th style="padding:8px 10px;font-size:10px;text-align:center;">Ship</th>
                       <th style="padding:8px 10px;font-size:10px;"></th>
@@ -2159,11 +2159,11 @@ function renderEntryTable() {
       <td style="padding:4px 6px;">
         ${(function(){
           const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
-          const cq=caInventory[k]?.qty||0;
-          const locVal=l.bins?.ca||'';
+          const pq=pcrInventory[k]?.qty||0;
+          const locVal=l.bins?.scpcr||'';
           return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cq.toLocaleString()}</span>
-            <button class="loc-pick-btn wh-ca${locVal?' filled':''}" onclick="openLpDropdown(event,${idx},'ca','CA')" title="CA Location 선택">
+            <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#a84212;">${pq.toLocaleString()}</span>
+            <button class="loc-pick-btn wh-scpcr${locVal?' filled':''}" onclick="openLpDropdown(event,${idx},'scpcr','SC-PCR')" title="SC-PCR Location 선택">
               <span>📍</span><span class="loc-pick-text">${locVal||'Select...'}</span>
             </button>
           </div>`;
@@ -2172,11 +2172,11 @@ function renderEntryTable() {
       <td style="padding:4px 6px;">
         ${(function(){
           const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
-          const pq=pcrInventory[k]?.qty||0;
-          const locVal=l.bins?.scpcr||'';
+          const cq=caInventory[k]?.qty||0;
+          const locVal=l.bins?.ca||'';
           return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#a84212;">${pq.toLocaleString()}</span>
-            <button class="loc-pick-btn wh-scpcr${locVal?' filled':''}" onclick="openLpDropdown(event,${idx},'scpcr','SC-PCR')" title="SC-PCR Location 선택">
+            <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cq.toLocaleString()}</span>
+            <button class="loc-pick-btn wh-ca${locVal?' filled':''}" onclick="openLpDropdown(event,${idx},'ca','CA')" title="CA Location 선택">
               <span>📍</span><span class="loc-pick-text">${locVal||'Select...'}</span>
             </button>
           </div>`;
@@ -4139,6 +4139,10 @@ function loadPdfJs() {
 async function parsePoPdf(input) {
   const file = input.files[0];
   if (!file) return;
+
+  // 새 PO 업로드 시 기존 라인 자동 초기화
+  poLines = [];
+  renderEntryTable();
 
   document.getElementById('po-upload-section').style.display = 'none';
   const statusEl = document.getElementById('po-parsing-status');
