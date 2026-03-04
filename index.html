@@ -384,14 +384,19 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
 
       <!-- KPI 요약 -->
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;" id="orders-kpi-row">
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px;" id="orders-kpi-row">
         <div class="kpi r"><div class="kpi-label">🔴 Back Order</div><div class="kpi-val" id="kpi-backorder">—</div><div class="kpi-sub">재고 부족</div></div>
+        <div class="kpi" style="border-left:4px solid #e65100;"><div class="kpi-label">🚫 Credit Hold</div><div class="kpi-val" id="kpi-credit-hold">—</div><div class="kpi-sub">승인 대기</div></div>
         <div class="kpi o"><div class="kpi-label">🟡 Open</div><div class="kpi-val" id="kpi-open">—</div><div class="kpi-sub">진행 중</div></div>
         <div class="kpi"><div class="kpi-label">🔵 Partial</div><div class="kpi-val" id="kpi-partial">—</div><div class="kpi-sub">일부 처리</div></div>
         <div class="kpi g"><div class="kpi-label">🟢 Shipped</div><div class="kpi-val" id="kpi-shipped">—</div><div class="kpi-sub">출하 완료</div></div>
         <div class="kpi"><div class="kpi-label">📦 Total</div><div class="kpi-val" id="kpi-total-orders">—</div><div class="kpi-sub">전체 오더</div></div>
       </div>
-
+      <!-- Credit Hold 섹션 -->
+      <div id="credit-hold-section" style="display:none;background:#fff3e0;border:2px solid #e65100;border-radius:8px;padding:14px;margin-bottom:14px;">
+        <div style="font-weight:700;color:#e65100;margin-bottom:10px;">🚫 CREDIT HOLD — 승인 대기</div>
+        <div id="credit-hold-wrap"></div>
+      </div>
       <!-- Back Order 섹션 -->
       <div class="card" id="backorder-card" style="border-left:4px solid var(--red);">
         <div class="card-head" style="background:#fef2f2;">
@@ -409,6 +414,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <select class="fsel" id="orders-filter-status" onchange="filterOrders()" style="height:26px;font-size:11px;">
               <option value="">All Status</option>
               <option value="backordered">Back Order</option>
+              <option value="credit_hold">Credit Hold</option>
               <option value="open">Open</option>
               <option value="partial">Partial</option>
               <option value="shipped">Shipped</option>
@@ -1521,7 +1527,7 @@ async function loadInvoices() {
   }
   const rows = orders.map(o => `
     <tr onclick="openInvoice('${o.id}')" style="cursor:pointer">
-      <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
+      <td class="mono" style="font-weight:700;color:${o.status==='credit_hold'?'#e65100':'var(--primary)'}">${o.order_number}</td>
       <td>${o.customer_name}</td>
       <td class="mono">${o.customer_po || '—'}</td>
       <td>${o.warehouses?.code === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>'}</td>
@@ -2813,13 +2819,14 @@ async function loadOrders() {
   allOrders = data || [];
 
   // KPI
-  const counts = { backordered:0, partial:0, open:0, shipped:0, cancelled:0 };
+ const counts = { backordered:0, partial:0, open:0, shipped:0, cancelled:0, credit_hold:0 };
   allOrders.forEach(o => { if (counts[o.status] !== undefined) counts[o.status]++; });
   document.getElementById('kpi-backorder').textContent   = counts.backordered;
   document.getElementById('kpi-open').textContent        = counts.open + counts.partial;
   document.getElementById('kpi-partial').textContent     = counts.partial;
   document.getElementById('kpi-shipped').textContent     = counts.shipped;
   document.getElementById('kpi-total-orders').textContent = allOrders.length;
+  document.getElementById('kpi-credit-hold').textContent = counts.credit_hold;
 
   // Badge 업데이트
   const badgeCount = counts.backordered + counts.open + counts.partial;
@@ -2857,6 +2864,37 @@ async function loadOrders() {
       </table>`;
   }
 
+  // Credit Hold 섹션
+  const creditHoldOrders = allOrders.filter(o => o.status === 'credit_hold');
+  const chSection = document.getElementById('credit-hold-section');
+  if (creditHoldOrders.length === 0) {
+    chSection.style.display = 'none';
+  } else {
+    chSection.style.display = 'block';
+    document.getElementById('credit-hold-wrap').innerHTML = `
+      <table class="tbl">
+        <thead><tr>
+          <th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>
+          <th>Total Pcs</th><th>Amount</th><th>Status</th><th>Action</th>
+        </tr></thead>
+        <tbody>${creditHoldOrders.map(o => `
+          <tr style="background:#fff3e0;">
+            <td class="mono" style="font-weight:700;color:#e65100">${o.order_number}</td>
+            <td style="font-weight:600">${o.customer_name}</td>
+            <td class="mono">${o.customer_po||'—'}</td>
+            <td>${o.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</td>
+            <td style="text-align:center;font-weight:700">${(o.total_pcs||0).toLocaleString()}</td>
+            <td style="font-weight:700">$${(o.total_amount||0).toLocaleString()}</td>
+            <td>${statusChip(o.status)}</td>
+            <td>
+              <button class="btn btn-sm" style="background:#e65100;color:#fff" onclick="event.stopPropagation();sendCreditHoldEmail('${o.id}','${o.order_number}','${(o.customer_name||'').replace(/'/g,'&#39;')}','${o.customer_po||''}',${o.total_amount||0})">
+                📧 Approve 요청
+              </button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+  }
   // 전체 오더 테이블
   renderOrdersTable();
 }
@@ -2890,7 +2928,9 @@ function renderOrdersTable() {
           <td class="num">${(o.total_pcs||0).toLocaleString()}</td>
           <td>${statusChip(o.status)}</td>
           <td>
-            ${o.status==='backordered'||o.status==='partial'
+            ${o.status==='credit_hold'
+              ? `<button class="btn btn-sm" style="background:#e65100;color:#fff" onclick="event.stopPropagation();sendCreditHoldEmail('${o.id}','${o.order_number}','${(o.customer_name||'').replace(/'/g,'&#39;')}','${o.customer_po||''}',${o.total_amount||0})">📧 Approve 요청</button>`
+              : o.status==='backordered'||o.status==='partial'
               ? `<button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="event.stopPropagation();openBackOrderDetail('${o.id}')">🔴 Back Order</button>`
               : `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openInvoiceFromOrders('${o.id}')">🧾 Invoice</button>`
             }
@@ -4343,17 +4383,39 @@ function statusChip(s) {
   const map = {
     open:'c-b', processing:'c-b',
     backordered:'c-r', partial:'c-o',
-    shipped:'c-g', cancelled:'c-gray'
+    shipped:'c-g', cancelled:'c-gray',
+    credit_hold:'c-r', paid:'c-g'
   };
   const label = {
     backordered:'🔴 back order', partial:'⚠️ partial',
-    open:'open', shipped:'shipped', cancelled:'cancelled'
+    open:'open', shipped:'shipped', cancelled:'cancelled',
+    credit_hold:'🚫 credit hold', paid:'✅ paid'
   };
   return `<span class="chip ${map[s]||'c-gray'}">${label[s]||s}</span>`;
 }
 function ptStatusChip(s) {
   const map = {pending:'c-o',picked:'c-b',packed:'c-b',shipped:'c-g'};
   return `<span class="chip ${map[s]||'c-gray'}">${s}</span>`;
+}
+async function sendCreditHoldEmail(orderId, orderNum, custName, custPo, totalAmt) {
+  const custSelId = allOrders.find(o => o.id === orderId)?.customer_id;
+  var outstanding = 0, creditLimit = 0;
+  if (custSelId) {
+    const custObj = customers.find(c => c.id === custSelId);
+    creditLimit = custObj?.credit_limit || 0;
+    const { data: openOrders } = await db.from('orders').select('total_amount').eq('customer_id', custSelId).not('status', 'in', '("cancelled","paid")');
+    outstanding = (openOrders || []).reduce((s, o) => s + (o.total_amount || 0), 0);
+  }
+  try {
+    const res = await fetch('https://credit-hold-email.hjbae.workers.dev/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_id: orderId, order_number: orderNum, customer_name: custName, customer_po: custPo, total_amount: totalAmt, outstanding: outstanding, credit_limit: creditLimit })
+    });
+    const data = await res.json();
+    if (data.success) { alert('✅ Credit Hold 승인 요청 이메일이 발송되었습니다.'); }
+    else { alert('❌ 이메일 발송 실패: ' + (data.error || 'Unknown error')); }
+  } catch(e) { alert('❌ 이메일 발송 실패: ' + e.message); }
 }
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
