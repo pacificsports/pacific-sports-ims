@@ -5057,13 +5057,18 @@ function openAllocModal(event, lineIdx, whGroup) {
       `<option value="${b.bin}">${b.bin} (재고 ${b.qty}pcs / ${Math.floor(b.qty/(l.ppb||72))}박스)</option>`
     ).join('');
 
-    // SC bin별 현재 배분된 수량 계산 (위에서 지정한 양 제외)
-    const currentAlloc = (isSC ? l.allocSC : l.allocCA) || {};
+    // SC bin별 현재 배분된 수량 — 입력창 실시간값 우선, 없으면 저장값
+    const savedAlloc = (isSC ? l.allocSC : l.allocCA) || {};
+    const liveAlloc = {};
+    mainBins.forEach(b => {
+      const inputEl = document.getElementById(`alloc-box-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}`);
+      liveAlloc[b.bin] = inputEl ? (parseInt(inputEl.value)||0) : (savedAlloc[b.bin]||0);
+    });
 
     // 커스텀 드롭다운 옵션 데이터 (배분 후 남은 수량 기준)
     const pcrBinData = mainBins
       .map(b => {
-        const allocated = currentAlloc[b.bin] || 0;
+        const allocated = liveAlloc[b.bin] || 0;
         const remaining = b.qty - allocated;
         const remainBoxes = Math.floor(remaining / (l.ppb||72));
         return { ...b, allocated, remaining, remainBoxes };
@@ -5101,7 +5106,7 @@ function openAllocModal(event, lineIdx, whGroup) {
         <div style="padding:8px 12px;background:${pcrColor};display:flex;align-items:center;justify-content:space-between;">
           <span style="font-size:11px;font-weight:700;color:#fff;">✂️ SC → PCR 이동 (배분 후 남은 수량 기준)</span>
         </div>
-        <div style="background:#fff;border-bottom:1px solid ${pcrBorder};">
+        <div id="pcr-transfer-wrap" style="background:#fff;border-bottom:1px solid ${pcrBorder};">
           ${binItemsHtml}
         </div>
         <div style="padding:10px 12px;background:${pcrBg};display:flex;align-items:center;gap:8px;">
@@ -5137,7 +5142,7 @@ function openAllocModal(event, lineIdx, whGroup) {
   openModal('modal-alloc');
 }
 
-// pcs 입력 시 박스수 자동 계산
+// pcs 입력 시 박스수 자동 계산 + PCR transfer 섹션 실시간 업데이트
 function syncAllocBox(inp) {
   const pcs  = parseInt(inp.value)||0;
   const ppb  = parseInt(inp.dataset.ppb)||72;
@@ -5147,6 +5152,73 @@ function syncAllocBox(inp) {
   const pcsEl = document.getElementById(`alloc-box-pcs-${binId}`);
   if (pcsEl) pcsEl.textContent = `= ${boxes}박스${loose > 0 ? ` + ${loose} loose` : ''}`;
   updateAllocSum();
+  refreshPcrTransferSection();
+}
+
+// PCR transfer 섹션 — 현재 입력값 기준으로 남은 수량 실시간 업데이트
+function refreshPcrTransferSection() {
+  if (!_allocState) return;
+  const l = poLines[_allocState.lineIdx];
+  if (!l) return;
+  const isSC = _allocState.whGroup === 'SC';
+  const ppb = l.ppb || 72;
+  const pcrColor = isSC ? '#a84212' : '#5b21b6';
+  const pcrBorder = isSC ? '#fdba74' : '#c4b5fd';
+  const pcrBg = isSC ? '#fff7ed' : '#f5f3ff';
+  const k = `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+  const mainWh = _allocState.whGroup;
+  const mainBins = (window.binInventory?.[mainWh]?.[k]) || [];
+
+  // 현재 입력창 실시간 값 읽기
+  const liveAlloc = {};
+  mainBins.forEach(b => {
+    const inputEl = document.getElementById(`alloc-box-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}`);
+    liveAlloc[b.bin] = inputEl ? (parseInt(inputEl.value)||0) : 0;
+  });
+
+  const pcrBinData = mainBins
+    .map(b => {
+      const allocated = liveAlloc[b.bin] || 0;
+      const remaining = b.qty - allocated;
+      const remainBoxes = Math.floor(remaining / ppb);
+      return { ...b, allocated, remaining, remainBoxes };
+    })
+    .filter(b => b.remainBoxes > 0);
+
+  const transferWrap = document.getElementById('pcr-transfer-wrap');
+  if (!transferWrap) return;
+
+  if (pcrBinData.length === 0) {
+    transferWrap.innerHTML = `<div style="padding:10px 12px;font-size:11px;color:${pcrColor};">배분 후 남은 박스 없음 — Transfer 불필요</div>`;
+    return;
+  }
+
+  const binItemsHtml = pcrBinData.map((b, i) => {
+    const age = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
+    const ageCls = age===null?'#888':age>=90?'#b42318':age>=30?'#b54708':'#0e7c3a';
+    const ageTxt = age===null?'날짜미기입':age===0?'오늘 입고':`${age}일전 입고`;
+    return `<div class="pcr-bin-opt" data-bin="${b.bin}" data-remain="${b.remaining}" data-boxes="${b.remainBoxes}"
+      onclick="selectPcrBin(this, ${ppb})"
+      style="padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0e6d3;display:flex;align-items:center;gap:10px;background:#fff;transition:background 0.1s;"
+      onmouseover="this.style.background='#fff3e0'" onmouseout="this.style.background='#fff'">
+      <div style="flex:1;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;">${b.bin}</span>
+          ${i===0?'<span style="background:#0e7c3a;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;">FIFO</span>':''}
+        </div>
+        <div style="font-size:10px;margin-top:2px;display:flex;gap:8px;">
+          ${b.allocated>0?`<span style="color:#e65100;">배분 ${b.allocated}pcs 제외</span>`:''}
+          <span style="color:${ageCls};">${ageTxt}</span>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;color:${pcrColor};">${b.remaining.toLocaleString()} pcs</div>
+        <div style="font-size:10px;color:#888;">${b.remainBoxes}박스 남음</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  transferWrap.innerHTML = binItemsHtml;
 }
 
 // PCR 이동 지정
@@ -5217,24 +5289,26 @@ async function execPcrTransfer(whGroup, ppb) {
   // SC bin 차감
   await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - qty }).eq('id', scRow.id);
 
-  // PCR에 추가 (같은 color/size/location 있으면 합산, 없으면 신규)
+  // PCR에 추가 — 같은 창고/color/size에서 qty 합산 (location 무관하게 첫번째 row에 합산)
   const styleObj = styles.find(s => s.style_number === l.styleNum);
-  const { data: pcrRow } = await db.from('inventory')
-    .select('id, qty_on_hand')
+  const { data: pcrRows } = await db.from('inventory')
+    .select('id, qty_on_hand, location')
     .eq('warehouse_id', pcrWhObj.id)
-    .eq('location', bin)
     .ilike('color', l.color)
     .ilike('size', l.size)
-    .maybeSingle();
+    .order('qty_on_hand', { ascending: false });
 
-  if (pcrRow) {
-    await db.from('inventory').update({ qty_on_hand: pcrRow.qty_on_hand + qty }).eq('id', pcrRow.id);
+  if (pcrRows && pcrRows.length > 0) {
+    // 기존 PCR 재고에 합산 (가장 많은 row에)
+    const topRow = pcrRows[0];
+    await db.from('inventory').update({ qty_on_hand: topRow.qty_on_hand + qty }).eq('id', topRow.id);
   } else {
+    // PCR 재고 없으면 신규 생성 (location = PCR-ROOM)
     await db.from('inventory').insert({
       warehouse_id: pcrWhObj.id,
       style_id: styleObj?.id || null,
       color: l.color, size: l.size,
-      location: bin,
+      location: 'PCR-ROOM',
       qty_on_hand: qty, qty_committed: 0,
       received_date: new Date().toISOString().slice(0,10)
     });
