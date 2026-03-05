@@ -1801,6 +1801,11 @@ async function loadScInventory() {
       if (!caInventory[key]) caInventory[key] = entry; else caInventory[key].qty += qty;
     } else if (wh === 'CA-PCR') {
       if (!caPcrInventory[key]) caPcrInventory[key] = entry; else caPcrInventory[key].qty += qty;
+      const colorSizeKey = `|${(row.color||'').toUpperCase()}|${(row.size||'').toUpperCase()}`;
+      if (colorSizeKey !== key) {
+        if (!caPcrInventory[colorSizeKey]) caPcrInventory[colorSizeKey] = {qty, location: loc||'—'};
+        else caPcrInventory[colorSizeKey].qty += qty;
+      }
     }
 
     // bin별 상세 (Location picker용)
@@ -1808,6 +1813,15 @@ async function loadScInventory() {
       if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
       const existing = window.binInventory[wh][key].find(b => b.bin === loc);
       if (existing) { existing.qty += qty; }
+      // PCR 계열은 color|size fallback key도 저장
+      if (wh === 'SC-PCR' || wh === 'CA-PCR') {
+        const csKey = `|${(row.color||'').toUpperCase()}|${(row.size||'').toUpperCase()}`;
+        if (csKey !== key) {
+          if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
+          const ex2 = window.binInventory[wh][csKey].find(b => b.bin === loc);
+          if (ex2) { ex2.qty += qty; }
+        }
+      }
       else { window.binInventory[wh][key].push({ bin: loc, qty, received_date: rcvDate }); }
     }
   });
@@ -5116,7 +5130,11 @@ function openAllocModal(event, lineIdx, whGroup) {
   const mainWh  = whGroup;
   const pcrWh   = whGroup + '-PCR';
   const mainBins = (window.binInventory?.[mainWh]?.[k]) || [];
-  const pcrBins  = (window.binInventory?.[pcrWh]?.[k]) || [];
+  // PCR bins: style key 먼저, 없으면 color|size fallback key
+  const csKey = `|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+  const pcrBins = (window.binInventory?.[pcrWh]?.[k])
+    || (window.binInventory?.[pcrWh]?.[csKey])
+    || [];
   const prevAlloc = (isSC ? l.allocSC : l.allocCA) || {};
 
   // 총 재고
@@ -5133,8 +5151,12 @@ function openAllocModal(event, lineIdx, whGroup) {
   const mainBorder= isSC ? '#86efac'   : '#93c5fd';
   const mainLabel = isSC ? '🟢 SC — Sumter Warehouse' : '🔵 CA — Eastvale Warehouse';
 
+  // 항상 메인 창고 섹션 표시
+  html += `<div style="font-size:11px;font-weight:700;color:${mainColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">${mainLabel}</div>`;
+  if (mainBins.length === 0) {
+    html += `<div style="padding:12px;border:1px dashed ${mainBorder};border-radius:8px;margin-bottom:8px;background:${mainBg};opacity:0.6;font-size:12px;color:var(--text3);text-align:center;">재고 없음</div>`;
+  }
   if (mainBins.length > 0) {
-    html += `<div style="font-size:11px;font-weight:700;color:${mainColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">${mainLabel}</div>`;
     mainBins.forEach((b, i) => {
       const age    = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
       const ageCls = age===null?'':age>=90?'color:#b42318':age>=30?'color:#b54708':'color:#0e7c3a';
@@ -5243,11 +5265,12 @@ function openAllocModal(event, lineIdx, whGroup) {
   const loosePcsNeeded = l.loose || (needQty % (l.ppb || 72));
   const pcrShortage = Math.max(0, loosePcsNeeded - totalPcr);
 
-  if (true) { // 항상 표시 (재고 충분해도 UI 일관성 유지)
+  // SC→PCR 이동 섹션 — 항상 표시
+  {
   const _sectionDisabled = pcrShortage <= 0;
-    const mainBinOpts = mainBins.map(b =>
-      `<option value="${b.bin}">${b.bin} (재고 ${b.qty}pcs / ${Math.floor(b.qty/(l.ppb||72))}박스)</option>`
-    ).join('');
+    const mainBinOpts = mainBins.length > 0
+      ? mainBins.map(b => `<option value="${b.bin}">${b.bin} (재고 ${b.qty}pcs / ${Math.floor(b.qty/(l.ppb||72))}박스)</option>`).join('')
+      : '<option value="">SC 재고 없음</option>';
 
     // SC bin별 현재 배분된 수량 — 입력창 실시간값 우선, 없으면 저장값
     const savedAlloc = (isSC ? l.allocSC : l.allocCA) || {};
@@ -5694,6 +5717,7 @@ async function execPcrTransfer(whGroup, ppb) {
     .ilike('color', l.color)
     .ilike('size', l.size)
     .maybeSingle();
+  console.log('🔍 SC bin 조회:', bin, l.color, l.size, '→', scRow);
 
   console.log('SC row:', scRow);
   if (!scRow) { alert('해당 Bin 재고를 찾을 수 없습니다.'); return; }
@@ -5708,30 +5732,33 @@ async function execPcrTransfer(whGroup, ppb) {
 
   // color/size 소문자 비교로 매칭
   const pcrRows = (allPcrRows||[]).filter(r =>
-    r.color.toLowerCase() === l.color.toLowerCase() &&
-    r.size.toLowerCase() === l.size.toLowerCase()
+    (r.color||'').toUpperCase() === (l.color||'').toUpperCase() &&
+    (r.size||'').toUpperCase() === (l.size||'').toUpperCase()
   );
+  console.log('🔍 PCR rows 매칭:', pcrRows.length, '개 / 전체:', allPcrRows?.length, '개');
 
   if (pcrRows.length > 0) {
     // 전체 합산 + 이번 이동분 → 첫번째 row에 저장, 나머지 삭제
     const totalQty = pcrRows.reduce((s,r) => s + (r.qty_on_hand||0), 0) + qty;
     const { error: pcrUpdErr } = await db.from('inventory').update({ qty_on_hand: totalQty }).eq('id', pcrRows[0].id);
-    console.log('PCR update 결과:', pcrUpdErr || 'OK', 'totalQty:', totalQty, 'row id:', pcrRows[0].id);
+    if (pcrUpdErr) { alert('PCR 업데이트 오류: ' + pcrUpdErr.message); return; }
+    console.log('✅ PCR update OK:', totalQty, 'pcs, id:', pcrRows[0].id);
     for (let i = 1; i < pcrRows.length; i++) {
       await db.from('inventory').delete().eq('id', pcrRows[i].id);
     }
   } else {
     // PCR row 없으면 신규 생성
     const { data: scStyleRow } = await db.from('inventory').select('style_id').eq('id', scRow.id).maybeSingle();
-    await db.from('inventory').insert({
+    const { error: pcrInsErr } = await db.from('inventory').insert({
       warehouse_id: pcrWhObj.id,
       style_id: scStyleRow?.style_id || null,
-      color: l.color, size: l.size,
-      location: 'PCR-ROOM',
+      color: l.color.toUpperCase(),
+      size: l.size.toUpperCase(),
+      location: 'PCR',
       qty_on_hand: qty, qty_committed: 0,
       received_date: new Date().toISOString().slice(0,10)
     });
-    console.log(`PCR insert: 신규 ${qty}pcs`);
+    console.log('PCR insert 결과:', pcrInsErr || 'OK', qty, 'pcs');
   }
 
   showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty} pcs) 이동 완료`);
