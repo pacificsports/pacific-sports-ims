@@ -289,6 +289,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 /* MODAL */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;}
 .modal-overlay.open{display:flex;}
+.modal-box{background:#fff;border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,0.35);overflow:hidden;}
 .modal{background:#fff;border-radius:8px;width:560px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
 .modal-head{background:var(--grid-head);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-radius:8px 8px 0 0;}
 .modal-title{font-size:13px;font-weight:700;color:var(--primary-dark);}
@@ -1050,13 +1051,14 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div style="overflow-x:auto;">
             <table style="width:100%;border-collapse:collapse;font-size:12px;" id="transit-edit-table">
               <thead>
-                <tr style="background:#e8f0fe;position:sticky;top:0;">
+                <tr style="background:#e8f0fe;position:sticky;top:0;z-index:1;">
                   <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Style #</th>
                   <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Color</th>
                   <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Size</th>
                   <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">DZ</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Boxes</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Pcs</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">박스수</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;background:#fff9c4;">pcs/box</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Pcs 합계</th>
                   <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">삭제</th>
                 </tr>
               </thead>
@@ -1098,6 +1100,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;background:#fff9c4;">실제 DZ</th>
                   <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;background:#fff9c4;">실제 Pcs</th>
                   <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;background:#e3f2fd;">Location (Bin)</th>
+                  <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;background:#fff9c4;">pcs/box</th>
                   <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;">차이</th>
                 </tr>
               </thead>
@@ -5963,47 +5966,67 @@ async function parseTransitExcel(input) {
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
 
   let invoiceNo = '', containerNo = '', shipDate = '';
-  let currentStyle = '', currentSizes = [];
+  let currentStyle = '', currentSizes = [], currentDzPerBox = 6;
   const parsed = [];
+  let pendingDzsRow = null; // DZS row 임시 저장 (다음 BOXES row와 매칭)
 
   rows.forEach((row, ri) => {
     const r0 = String(row[0]||'').trim();
     const r1 = String(row[1]||'').trim();
 
     if (r0.includes('NO & DATE OF INVOICE')) {
-      const m = r0.match(/PSH\s+[\d\s\-]+/i);
+      const m = r0.match(/PSH[\s\-]+[\d\s\-]+/i);
       if (m) invoiceNo = m[0].replace(/\s+/g,'').trim();
     }
-    if (r0.match(/^[A-Z]{4}\s*\d/) && !shipDate) {
+    if (r0.match(/^[A-Z]{4}\s*\d/) && !containerNo) {
       containerNo = r0.replace(/\s+/g,'-');
       const d = row[12];
       if (d instanceof Date) shipDate = d.toISOString().slice(0,10);
     }
     if (r0 === 'STYLE :') {
-      const m = r1.match(/(\d{4}[A-Z]?)/);
-      if (m) currentStyle = m[1].replace(/N$/,'');
+      // DZ/CT 정보에서 박스당 DZ 파악 (예: "6 DZ / CT" → 6dz/box)
+      const mDz = r1.match(/(\d+)\s*DZ\s*\/\s*CT/i);
+      currentDzPerBox = mDz ? parseInt(mDz[1]) : 6;
+      const mStyle = r1.match(/(\d{4}[A-Z]?)/);
+      if (mStyle) currentStyle = mStyle[1].replace(/N$/,'');
     }
     if (r0 === 'COLOR :') {
       currentSizes = row.slice(2, 12).filter(v => v !== null && v !== undefined && String(v).trim() !== '');
+      pendingDzsRow = null;
     }
+    // DZS 행 → 임시 저장
     if (r1 === 'DZS' && r0 && r0 !== 'TOTAL') {
+      pendingDzsRow = { color: r0, dzVals: row.slice(2, 12) };
+    }
+    // BOXES 행 → DZS와 매칭해서 박스 정보 추출
+    if (r1 === 'BOXES' && pendingDzsRow) {
+      const boxVals = row.slice(2, 12);
       currentSizes.forEach((sz, i) => {
-        const dz = parseInt(row[i+2])||0;
+        const dz = parseInt(pendingDzsRow.dzVals[i])||0;
+        const boxes = parseInt(boxVals[i])||0;
         if (dz > 0 && currentStyle) {
+          // 실제 pcs/box 계산 (비정규 박스 감지)
+          const pcsPerBox = boxes > 0 ? Math.round((dz * 12) / boxes) : currentDzPerBox * 12;
+          const stdPpb = currentDzPerBox * 12; // 표준 pcs/box
           parsed.push({
             invoice_no: invoiceNo,
             container_no: containerNo,
             ship_date: shipDate,
             style_number: currentStyle,
-            color: r0,
+            color: pendingDzsRow.color,
             size: String(sz).trim(),
             qty_dz: dz,
+            qty_boxes: boxes,
+            ppb: pcsPerBox,        // 실제 pcs/box
+            std_ppb: stdPpb,       // 표준 pcs/box
+            is_nonstandard: boxes > 0 && pcsPerBox !== stdPpb,
             qty_pcs: dz * 12,
             transit_type: 'haiti_sc',
             status: 'in_transit'
           });
         }
       });
+      pendingDzsRow = null;
     }
   });
 
@@ -6028,46 +6051,71 @@ async function parseTransitExcel(input) {
   document.getElementById('transit-preview-modal').style.display = 'flex';
 }
 
-// ── 수정 가능한 테이블 렌더링
+// ── 수정 가능한 테이블 렌더링 (박스/ppb 포함)
 function renderTransitEditTable() {
   if (!_transitParsed) return;
   const tbody = document.getElementById('transit-edit-body');
-  tbody.innerHTML = _transitParsed.rows.map((r, i) => `
-    <tr id="transit-row-${i}" style="border-bottom:1px solid #f0f0f0;">
+  tbody.innerHTML = _transitParsed.rows.map((r, i) => {
+    const boxes = r.qty_boxes || Math.floor((r.qty_pcs||0) / (r.ppb||72));
+    const ppb = r.ppb || 72;
+    const isNonStd = r.is_nonstandard;
+    const rowBg = isNonStd ? '#fffde7' : '#fff';
+    return `<tr id="transit-row-${i}" style="border-bottom:1px solid #f0f0f0;background:${rowBg};">
       <td style="padding:3px 4px;border:1px solid #eee;">
         <input value="${r.style_number}" onchange="_transitParsed.rows[${i}].style_number=this.value"
-          style="width:60px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;"/>
+          style="width:58px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
         <input value="${r.color}" onchange="_transitParsed.rows[${i}].color=this.value"
-          style="width:140px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;"/>
+          style="width:140px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
         <input value="${r.size}" onchange="_transitParsed.rows[${i}].size=this.value"
-          style="width:40px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;"/>
+          style="width:38px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:right;">
         <input type="number" value="${r.qty_dz}" min="0"
           onchange="_transitParsed.rows[${i}].qty_dz=parseInt(this.value)||0;_transitParsed.rows[${i}].qty_pcs=(parseInt(this.value)||0)*12;updateTransitRowPcs(${i})"
-          style="width:50px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;"/>
+          style="width:46px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:right;">
-        <span style="font-size:11px;color:var(--text3);">${Math.floor(r.qty_dz/6)}</span>
+        <input type="number" value="${boxes}" min="0"
+          onchange="_transitParsed.rows[${i}].qty_boxes=parseInt(this.value)||0;recalcPpb(${i})"
+          style="width:44px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:#fff;"/>
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;background:#fffde7;text-align:right;" id="transit-ppb-cell-${i}">
+        <input type="number" value="${ppb}" min="1"
+          onchange="_transitParsed.rows[${i}].ppb=parseInt(this.value)||72;_transitParsed.rows[${i}].is_nonstandard=true;updateTransitRowPcs(${i})"
+          style="width:44px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:${isNonStd?'#fff8e1':'#fff'};font-weight:${isNonStd?'700':'400'};color:${isNonStd?'#e65100':'inherit'};"/>
+        ${isNonStd ? '<span style="font-size:9px;color:#e65100;">⚠️비표준</span>' : ''}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:right;" id="transit-pcs-${i}">
-        <b style="font-size:12px;">${r.qty_pcs.toLocaleString()}</b>
+        <b style="font-size:12px;color:${isNonStd?'#e65100':'inherit'};">${(r.qty_pcs||0).toLocaleString()}</b>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
         <button onclick="deleteTransitRow(${i})" style="border:none;background:none;color:#e53935;cursor:pointer;font-size:14px;">✕</button>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   updateTransitTotal();
 }
 
+function recalcPpb(i) {
+  const r = _transitParsed.rows[i];
+  const boxes = r.qty_boxes || 0;
+  if (boxes > 0) {
+    r.ppb = Math.round((r.qty_dz * 12) / boxes);
+    r.is_nonstandard = r.ppb !== (r.std_ppb || 72);
+  }
+  updateTransitRowPcs(i);
+  renderTransitEditTable(); // 비표준 스타일 리렌더
+}
+
 function updateTransitRowPcs(i) {
-  const pcs = (_transitParsed.rows[i].qty_dz||0) * 12;
+  const r = _transitParsed.rows[i];
+  r.qty_pcs = (r.qty_dz||0) * 12;
   const el = document.getElementById('transit-pcs-' + i);
-  if (el) el.innerHTML = '<b style="font-size:12px;">' + pcs.toLocaleString() + '</b>';
+  if (el) el.innerHTML = '<b style="font-size:12px;color:' + (r.is_nonstandard?'#e65100':'inherit') + ';">' + (r.qty_pcs||0).toLocaleString() + '</b>';
   updateTransitTotal();
 }
 
@@ -6109,8 +6157,20 @@ async function saveTransitData() {
   const validRows = _transitParsed.rows.filter(r => r.style_number && r.color && r.size && r.qty_pcs > 0);
   if (!validRows.length) { alert('저장할 라인이 없습니다.'); return; }
 
-  const rows = validRows.map(r => ({ ...r,
+  const rows = validRows.map(r => ({
     invoice_no: _transitParsed.invoiceNo || r.invoice_no,
+    container_no: r.container_no || _transitParsed.containerNo,
+    ship_date: r.ship_date || _transitParsed.shipDate,
+    style_number: r.style_number,
+    color: r.color,
+    size: r.size,
+    qty_dz: r.qty_dz || 0,
+    qty_boxes: r.qty_boxes || 0,
+    ppb: r.ppb || 72,
+    is_nonstandard: r.is_nonstandard || false,
+    qty_pcs: r.qty_pcs,
+    transit_type: 'haiti_sc',
+    status: 'in_transit',
     eta, notes: notes || null
   }));
 
@@ -6158,6 +6218,10 @@ async function openTransitReceive(invoiceNo) {
       <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#e3f2fd;">
         <input value="" placeholder="K2B-7" id="recv-loc-${i}"
           style="width:80px;height:26px;border:1px solid #90caf9;border-radius:3px;padding:0 6px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;"/>
+      </td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#fffde7;text-align:center;">
+        <input type="number" value="${r.ppb||72}" min="1" id="recv-ppb-${i}"
+          style="width:50px;height:26px;border:1px solid ${(r.is_nonstandard)?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:${r.is_nonstandard?'#fff8e1':'#fff'};font-weight:${r.is_nonstandard?'700':'400'};"/>
       </td>
       <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:center;" id="${diffId}">—</td>
     </tr>`;
@@ -6218,8 +6282,26 @@ async function postTransitReceiving() {
       .ilike('size', transitRow.size)
       .maybeSingle();
 
+    const ppb = parseInt(document.getElementById('recv-ppb-' + i)?.value) || transitRow.ppb || 72;
+    const isNonStd = ppb !== 72;
     if (existing) {
-      await db.from('inventory').update({ qty_on_hand: existing.qty_on_hand + pcs }).eq('id', existing.id);
+      // ppb가 기존과 다르면 별도 row (비정규 박스)
+      const existingPpb = existing.pcs_per_box || 72;
+      if (ppb !== existingPpb && transitRow.is_nonstandard) {
+        await db.from('inventory').insert({
+          warehouse_id: scWhObj.id,
+          style_id: styleObj?.id || null,
+          color: transitRow.color,
+          size: transitRow.size,
+          location: loc,
+          qty_on_hand: pcs,
+          qty_committed: 0,
+          pcs_per_box: ppb,
+          received_date: new Date().toISOString().slice(0,10)
+        });
+      } else {
+        await db.from('inventory').update({ qty_on_hand: existing.qty_on_hand + pcs }).eq('id', existing.id);
+      }
     } else {
       await db.from('inventory').insert({
         warehouse_id: scWhObj.id,
@@ -6229,6 +6311,7 @@ async function postTransitReceiving() {
         location: loc,
         qty_on_hand: pcs,
         qty_committed: 0,
+        pcs_per_box: ppb,
         received_date: new Date().toISOString().slice(0,10)
       });
     }
