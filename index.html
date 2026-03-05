@@ -5876,21 +5876,37 @@ function renderPcrTransfers() {
 }
 
 function updateAllocSum() {
+  // 단일 모달 또는 통합 모달 wrap 자동 감지
+  const wraps = document.getElementById('alloc-bins-wrap')
+    ? ['#alloc-bins-wrap']
+    : ['#alloc-both-sc-wrap', '#alloc-both-ca-wrap'];
+  const wrapSel = wraps.join(', ');
+
   let sum = 0;
-  // SC/CA bin pcs 직접 입력
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
+  document.querySelectorAll(wraps.map(w=>w+' input[data-type="box"]').join(', ')).forEach(inp => {
     sum += parseInt(inp.value)||0;
   });
-  // pcs 입력 (PCR)
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="pcs"]').forEach(inp => {
+  document.querySelectorAll(wraps.map(w=>w+' input[data-type="pcs"]').join(', ')).forEach(inp => {
     sum += parseInt(inp.value)||0;
   });
-  document.getElementById('alloc-sum').textContent = sum.toLocaleString() + ' pcs';
-  const need = parseInt(document.getElementById('alloc-need').textContent.replace(/[^0-9]/g,''))||0;
+  // 단일 모달 합계 업데이트
+  const sumEl = document.getElementById('alloc-sum');
+  if (sumEl) {
+    sumEl.textContent = sum.toLocaleString() + ' pcs';
+    const need = parseInt(document.getElementById('alloc-need')?.textContent.replace(/[^0-9]/g,''))||0;
+    const remain = need - sum;
+    const remainEl = document.getElementById('alloc-remain');
+    if (remainEl) {
+      remainEl.textContent = (remain > 0 ? remain.toLocaleString() : '0') + ' pcs';
+      remainEl.style.color = remain > 0 ? 'var(--red)' : 'var(--green)';
+    }
+    sumEl.style.color = remain <= 0 ? 'var(--green)' : 'var(--orange)';
+  }
+  // 통합 모달 합계 업데이트
+  const bothTotalEl = document.getElementById('alloc-both-total');
+  if (bothTotalEl) updateAllocBothTotals();
+  const need = parseInt((document.getElementById('alloc-need')||document.getElementById('alloc-both-need'))?.textContent.replace(/[^0-9]/g,''))||0;
   const remain = need - sum;
-  document.getElementById('alloc-remain').textContent = (remain > 0 ? remain.toLocaleString() : '0') + ' pcs';
-  document.getElementById('alloc-remain').style.color = remain > 0 ? 'var(--red)' : 'var(--green)';
-  document.getElementById('alloc-sum').style.color = remain <= 0 ? 'var(--green)' : 'var(--orange)';
 
   // ── 남은 수량 힌트 (박스 + loose)
   const hintEl = document.getElementById('alloc-remain-hint');
@@ -5916,7 +5932,7 @@ function updateAllocSum() {
   }
 
   // ── 각 bin 입력창 옆 힌트 (이 bin에서 더 채울 수 있는 수량)
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
+  document.querySelectorAll(wraps.map(w=>w+' input[data-type="box"]').join(', ')).forEach(inp => {
     const binId = inp.dataset.bin?.replace(/[^a-zA-Z0-9]/g,'_');
     const hintBinEl = document.getElementById(`alloc-bin-hint-${binId}`);
     if (!hintBinEl) return;
@@ -6132,10 +6148,13 @@ function openAllocModalBoth(event, lineIdx) {
 
   updateAllocBothTotals();
 
-  // 입력 변경 시 합계 업데이트
+  // 입력 변경 시 합계 + 박스 힌트 업데이트
   [scWrap, caWrap].forEach(wrap => {
     wrap.querySelectorAll('input').forEach(inp => {
-      inp.addEventListener('input', updateAllocBothTotals);
+      inp.addEventListener('input', () => {
+        updateAllocBothTotals();
+        updateAllocSum(); // bin hint 업데이트
+      });
     });
   });
 
