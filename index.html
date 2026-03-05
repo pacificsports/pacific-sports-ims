@@ -5429,13 +5429,13 @@ function buildAllocHtml(lineIdx, whGroup) {
         ${pcrBackOpts}
       </div>
       <div style="padding:10px 12px;background:#f0fdf4;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <div id="pcr-back-selected-label" style="flex:1;font-size:12px;color:#888;font-style:italic;">← PCR Bin 선택</div>
+        <div id="pcr-back-selected-label-${isSC?'SC':'CA'}" style="flex:1;font-size:12px;color:#888;font-style:italic;">← PCR Bin 선택</div>
         <div style="display:flex;align-items:center;gap:5px;">
           <input type="number" id="pcr-back-boxes-${isSC?'SC':'CA'}" min="1" value="1"
             style="width:46px;height:30px;border:1px solid #86efac;border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;"
-            oninput="updatePcrBackLabel(${l.ppb||72})"/>
+            oninput="updatePcrBackLabel('${isSC?'SC':'CA'}', ${l.ppb||72})"/>
           <span style="font-size:11px;color:var(--text3);">박스</span>
-          <span id="pcr-back-pcs-label" style="font-size:10px;color:#0e7c3a;font-weight:700;white-space:nowrap;">(${l.ppb||72} pcs)</span>
+          <span id="pcr-back-pcs-label-${isSC?'SC':'CA'}" style="font-size:10px;color:#0e7c3a;font-weight:700;white-space:nowrap;">(${l.ppb||72} pcs)</span>
         </div>
         <select id="pcr-back-dest-${isSC?'SC':'CA'}"
           style="height:30px;border:1px solid #86efac;border-radius:4px;padding:0 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;background:#fff;">
@@ -5679,24 +5679,27 @@ let _pcrBackSelectedBin = null;
 let _pcrBackSelectedWh = null;
 
 function selectPcrBackBin(el, ppb, wh) {
-  document.querySelectorAll('.pcr-back-bin-opt').forEach(o => o.style.background = '#fff');
+  // 같은 wh 섹션 내 선택만 초기화
+  const section = document.getElementById('pcr-back-wrap-' + wh) || el.closest('[id^="pcr-back-wrap"]');
+  if (section) section.querySelectorAll('.pcr-back-bin-opt').forEach(o => o.style.background = '#fff');
+  else document.querySelectorAll('.pcr-back-bin-opt').forEach(o => o.style.background = '#fff');
   el.style.background = '#f0fdf4';
   _pcrBackSelectedBin = el.dataset.bin;
-  _pcrBackSelectedWh = el.dataset.wh || wh;
+  _pcrBackSelectedWh = wh;
   const maxQty = parseInt(el.dataset.qty)||0;
   const maxBoxes = Math.floor(maxQty / ppb);
-  const label = document.getElementById('pcr-back-selected-label-' + (wh||'SC'));
+  const label = document.getElementById('pcr-back-selected-label-' + wh);
   if (label) label.innerHTML = `<b style="font-family:'IBM Plex Mono',monospace;">${_pcrBackSelectedBin}</b> 선택됨 · 최대 ${maxBoxes}박스`;
-  const boxInp = document.getElementById('pcr-back-boxes');
+  const boxInp = document.getElementById('pcr-back-boxes-' + wh);
   if (boxInp) { boxInp.max = maxBoxes; boxInp.value = Math.min(parseInt(boxInp.value)||1, maxBoxes); }
-  const btn = document.getElementById('pcr-back-btn');
+  const btn = document.getElementById('pcr-back-btn-' + wh);
   if (btn) { btn.disabled = false; btn.style.background = '#0e7c3a'; btn.style.cursor = 'pointer'; }
-  updatePcrBackLabel(ppb);
+  updatePcrBackLabel(wh, ppb);
 }
 
-function updatePcrBackLabel(ppb) {
-  const boxes = parseInt(document.getElementById('pcr-back-boxes-' + (wh||'SC'))?.value)||1;
-  const el = document.getElementById('pcr-back-pcs-label');
+function updatePcrBackLabel(wh, ppb) {
+  const boxes = parseInt(document.getElementById('pcr-back-boxes-' + wh)?.value)||1;
+  const el = document.getElementById('pcr-back-pcs-label-' + wh);
   if (el) el.textContent = `(${(boxes*ppb).toLocaleString()} pcs)`;
 }
 
