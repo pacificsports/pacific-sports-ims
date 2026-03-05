@@ -352,6 +352,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <div class="ntab" onclick="showPanel('invoice',this)">🧾 Invoice</div>
     <div class="ntab" onclick="showPanel('picktickets',this)">🎫 Pick Tickets</div>
     <div class="ntab" onclick="showPanel('receiving',this)">📥 Receiving</div>
+    <div class="ntab" onclick="showPanel('intransit',this)">🚢 In Transit</div>
     <div class="ntab" onclick="showPanel('styles',this)">👕 Styles</div>
     <div class="ntab" onclick="showPanel('customers',this)">🏢 Customers</div>
   </div>
@@ -983,6 +984,160 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
 
+
+    <!-- ── IN TRANSIT ── -->
+    <div class="panel" id="panel-intransit">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:16px;font-weight:700;">🚢 In Transit</h2>
+        <div style="flex:1;"></div>
+        <button class="btn btn-primary" onclick="document.getElementById('transit-upload-input').click()">
+          📂 Haiti Invoice 업로드 (Excel)
+        </button>
+        <input type="file" id="transit-upload-input" accept=".xlsx,.xls" style="display:none" onchange="parseTransitExcel(this)"/>
+        <button class="btn" onclick="openAddTransitManual()">+ 수동 입력</button>
+      </div>
+
+      <!-- Haiti → SC 섹션 -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-head">
+          <span class="card-title">🇭🇹 Haiti → SC (입고 예정)</span>
+          <span class="card-info" id="transit-sc-count"></span>
+        </div>
+        <div id="transit-sc-body">
+          <div class="empty">로딩 중...</div>
+        </div>
+      </div>
+
+      <!-- SC → CA 섹션 -->
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">🚛 SC → CA Truck (운송 중)</span>
+          <span class="card-info" id="transit-ca-count"></span>
+          <button class="btn btn-sm btn-primary" onclick="openAddScCaTransit()" style="margin-left:auto;">+ SC→CA 추가</button>
+        </div>
+        <div id="transit-ca-body">
+          <div class="empty">로딩 중...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- In Transit Upload Preview Modal -->
+    <!-- In Transit Upload Preview Modal -->
+    <div class="modal-overlay" id="transit-preview-modal" style="display:none;">
+      <div class="modal-box" style="max-width:920px;width:95vw;max-height:90vh;display:flex;flex-direction:column;">
+        <div class="modal-head" style="background:#0f4c8a;">
+          <span class="modal-title" style="color:#fff;">🚢 Haiti Invoice — 수정 후 저장</span>
+          <button class="modal-close" onclick="document.getElementById('transit-preview-modal').style.display='none'">✕</button>
+        </div>
+        <div style="padding:16px;overflow-y:auto;flex:1;">
+          <!-- Invoice 정보 -->
+          <div id="transit-preview-info" style="margin-bottom:12px;padding:10px 14px;background:#f0f7ff;border-radius:8px;font-size:12px;display:flex;gap:20px;flex-wrap:wrap;"></div>
+
+          <!-- ETA + 메모 -->
+          <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <label style="font-size:12px;font-weight:700;white-space:nowrap;">🗓 ETA:</label>
+              <input type="date" id="transit-eta-input" style="height:30px;border:1px solid var(--border);border-radius:4px;padding:0 8px;font-size:12px;"/>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex:1;">
+              <label style="font-size:12px;font-weight:700;white-space:nowrap;">메모:</label>
+              <input id="transit-notes-input" placeholder="특이사항 입력" style="flex:1;height:30px;border:1px solid var(--border);border-radius:4px;padding:0 8px;font-size:12px;"/>
+            </div>
+            <button class="btn btn-sm" onclick="addTransitRow()" style="white-space:nowrap;">+ 라인 추가</button>
+          </div>
+
+          <!-- 수정 가능한 테이블 -->
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;" id="transit-edit-table">
+              <thead>
+                <tr style="background:#e8f0fe;position:sticky;top:0;">
+                  <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Style #</th>
+                  <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Color</th>
+                  <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Size</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">DZ</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Boxes</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Pcs</th>
+                  <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">삭제</th>
+                </tr>
+              </thead>
+              <tbody id="transit-edit-body"></tbody>
+            </table>
+          </div>
+
+          <!-- 합계 -->
+          <div id="transit-edit-total" style="margin-top:10px;text-align:right;font-size:12px;color:var(--text3);padding-right:4px;"></div>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;">
+          <button class="btn" onclick="document.getElementById('transit-preview-modal').style.display='none'">취소</button>
+          <button class="btn btn-primary" onclick="saveTransitData()">🚢 In Transit으로 저장</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Receive Modal (도착 후 Packing List 대조 + Location 지정) -->
+    <div class="modal-overlay" id="transit-receive-modal" style="display:none;">
+      <div class="modal-box" style="max-width:980px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
+        <div class="modal-head" style="background:#1a5c2a;">
+          <span class="modal-title" style="color:#fff;">📦 도착 처리 — Packing List 대조 & Location 지정</span>
+          <button class="modal-close" onclick="document.getElementById('transit-receive-modal').style.display='none'">✕</button>
+        </div>
+        <div style="padding:16px;overflow-y:auto;flex:1;">
+          <div id="receive-invoice-info" style="margin-bottom:12px;padding:10px 14px;background:#f0fff4;border-radius:8px;font-size:12px;"></div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:10px;">
+            💡 <b>수량을 실제 받은 수량으로 수정</b>하고, 각 라인에 <b>Location(Bin)</b>을 지정한 후 Post하세요.
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+              <thead>
+                <tr style="background:#e8f5e9;position:sticky;top:0;">
+                  <th style="padding:7px 8px;text-align:left;border:1px solid #c8e6c9;">Style</th>
+                  <th style="padding:7px 8px;text-align:left;border:1px solid #c8e6c9;">Color</th>
+                  <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;">Size</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;">예정 DZ</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;">예정 Pcs</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;background:#fff9c4;">실제 DZ</th>
+                  <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;background:#fff9c4;">실제 Pcs</th>
+                  <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;background:#e3f2fd;">Location (Bin)</th>
+                  <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;">차이</th>
+                </tr>
+              </thead>
+              <tbody id="receive-lines-body"></tbody>
+            </table>
+          </div>
+          <div id="receive-diff-summary" style="margin-top:10px;padding:10px;border-radius:6px;font-size:12px;"></div>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;">
+          <button class="btn" onclick="document.getElementById('transit-receive-modal').style.display='none'">취소</button>
+          <button class="btn btn-primary" style="background:#1a5c2a;" onclick="postTransitReceiving()">✅ Post — 재고 반영</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SC→CA Manual Transit Modal -->
+    <div class="modal-overlay" id="sc-ca-transit-modal" style="display:none;" onclick="if(event.target===this)this.style.display='none'">
+      <div class="modal-box" style="max-width:500px;">
+        <div class="modal-head" style="background:#1a5c2a;">
+          <span class="modal-title" style="color:#fff;">🚛 SC → CA 운송 등록</span>
+          <button class="modal-close" onclick="document.getElementById('sc-ca-transit-modal').style.display='none'">✕</button>
+        </div>
+        <div style="padding:16px;display:flex;flex-direction:column;gap:12px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div><label style="font-size:11px;color:var(--text3);">Style#</label><input class="fi" id="scca-style" placeholder="2388" style="width:100%;margin-top:3px;"/></div>
+            <div><label style="font-size:11px;color:var(--text3);">Color</label><input class="fi" id="scca-color" placeholder="Black" style="width:100%;margin-top:3px;"/></div>
+            <div><label style="font-size:11px;color:var(--text3);">Size</label><input class="fi" id="scca-size" placeholder="M" style="width:100%;margin-top:3px;"/></div>
+            <div><label style="font-size:11px;color:var(--text3);">수량 (pcs)</label><input type="number" class="fi" id="scca-qty" placeholder="0" style="width:100%;margin-top:3px;"/></div>
+            <div><label style="font-size:11px;color:var(--text3);">출발일</label><input type="date" class="fi" id="scca-ship" style="width:100%;margin-top:3px;"/></div>
+            <div><label style="font-size:11px;color:var(--text3);">도착 예정일 (ETA)</label><input type="date" class="fi" id="scca-eta" style="width:100%;margin-top:3px;"/></div>
+          </div>
+          <div><label style="font-size:11px;color:var(--text3);">메모</label><input class="fi" id="scca-note" placeholder="Truck #, 드라이버 등" style="width:100%;margin-top:3px;"/></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn" onclick="document.getElementById('sc-ca-transit-modal').style.display='none'">취소</button>
+            <button class="btn btn-primary" onclick="saveScCaTransit()">✓ 저장</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div><!-- end app-body -->
 
   <div class="statusbar">
@@ -1573,6 +1728,7 @@ function showPanel(name, el) {
   if (name === 'styles') loadStyles();
   if (name === 'customers') loadCustomers();
   if (name === 'receiving') loadReceivingHistory();
+  if (name === 'intransit') loadInTransit();
 }
 
 // ══════════════════════════════════
@@ -5221,6 +5377,8 @@ function openAllocModal(event, lineIdx, whGroup) {
     html += `<div style="margin-top:10px;padding:10px 12px;border:1px solid #fca5a5;border-radius:8px;background:#fff8f8;font-size:11px;color:var(--red);">
       ⚠️ <b>전체 재고 부족 ${shortage.toLocaleString()} pcs</b> — 배분 가능: ${totalAll.toLocaleString()} pcs / 필요: ${needQty.toLocaleString()} pcs
     </div>`;
+    // In Transit 힌트 비동기 추가
+    html += `<div id="alloc-transit-hint" style="margin-top:6px;"></div>`;
   }
 
   // ── Transfer 지정 목록
@@ -5228,7 +5386,28 @@ function openAllocModal(event, lineIdx, whGroup) {
 
   document.getElementById('alloc-bins-wrap').innerHTML = html;
   updateAllocSum();
+  refreshPcrTransferSection();
   openModal('modal-alloc');
+
+  // In Transit 힌트 비동기 로드
+  const hintEl = document.getElementById('alloc-transit-hint');
+  if (hintEl) {
+    getInTransitHint(l.styleNum, l.color, l.size).then(transits => {
+      if (!transits || !transits.length) { hintEl.innerHTML = ''; return; }
+      const relevant = isSC ? transits.filter(t => t.transit_type === 'haiti_sc') : transits.filter(t => t.transit_type === 'sc_ca');
+      if (!relevant.length) { hintEl.innerHTML = ''; return; }
+      const totalQty = relevant.reduce((s,t) => s+(t.qty_pcs||0), 0);
+      const earliest = relevant.map(t=>t.eta).filter(Boolean).sort()[0];
+      const today = new Date(); today.setHours(0,0,0,0);
+      const daysLeft = earliest ? Math.ceil((new Date(earliest)-today)/86400000) : null;
+      const etaTxt = daysLeft===null?'ETA 미정':daysLeft<0?`${Math.abs(daysLeft)}일 지연`:daysLeft===0?'오늘 도착':`${daysLeft}일 후 도착`;
+      hintEl.innerHTML = '<div style="padding:8px 12px;border:1px solid #bfdbfe;border-radius:6px;background:#eff6ff;font-size:11px;display:flex;align-items:center;gap:8px;">'
+        + '<span>🚢</span>'
+        + '<span><b>In Transit: ' + totalQty.toLocaleString() + ' pcs</b> — ETA ' + (earliest||'미정') + ' (' + etaTxt + ')</span>'
+        + '<span style="color:var(--text3);">입고 후 재고 충족 예정</span>'
+        + '</div>';
+    });
+  }
 }
 
 // pcs 입력 시 박스수 자동 계산 + PCR transfer 섹션 실시간 업데이트
@@ -5675,6 +5854,453 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('mousedown', e => { m._bgClick = (e.target === m); });
   m.addEventListener('click', e => { if (e.target === m && m._bgClick) m.classList.remove('open'); });
 });
+
+// ═══════════════════════════════════════════
+// IN TRANSIT
+// ═══════════════════════════════════════════
+let _transitParsed = null;
+
+async function loadInTransit() {
+  const { data: rows } = await db.from('in_transit')
+    .select('*')
+    .eq('status', 'in_transit')
+    .order('eta', { ascending: true });
+
+  const scRows = (rows||[]).filter(r => r.transit_type === 'haiti_sc');
+  const caRows = (rows||[]).filter(r => r.transit_type === 'sc_ca');
+
+  // SC 섹션
+  document.getElementById('transit-sc-count').textContent = scRows.length + '건';
+  if (scRows.length === 0) {
+    document.getElementById('transit-sc-body').innerHTML = '<div class="empty">In Transit 없음</div>';
+  } else {
+    renderTransitTable('transit-sc-body', scRows);
+  }
+
+  // CA 섹션
+  document.getElementById('transit-ca-count').textContent = caRows.length + '건';
+  if (caRows.length === 0) {
+    document.getElementById('transit-ca-body').innerHTML = '<div class="empty">In Transit 없음</div>';
+  } else {
+    renderTransitTable('transit-ca-body', caRows);
+  }
+}
+
+function renderTransitTable(elId, rows) {
+  // 컨테이너/인보이스별 그룹
+  const groups = {};
+  rows.forEach(r => {
+    const gk = r.invoice_no || r.container_no || '—';
+    if (!groups[gk]) groups[gk] = { invoice_no: r.invoice_no, container_no: r.container_no, ship_date: r.ship_date, eta: r.eta, rows: [] };
+    groups[gk].rows.push(r);
+  });
+
+  let html = '';
+  Object.values(groups).forEach(g => {
+    const eta = g.eta ? new Date(g.eta) : null;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const daysLeft = eta ? Math.ceil((eta - today) / 86400000) : null;
+    const etaColor = daysLeft === null ? '#888' : daysLeft < 0 ? '#b42318' : daysLeft <= 3 ? '#b54708' : '#0e7c3a';
+    const etaTxt = daysLeft === null ? 'ETA 미정' : daysLeft < 0 ? `${Math.abs(daysLeft)}일 지연` : daysLeft === 0 ? '오늘 도착' : `${daysLeft}일 후 도착`;
+
+    // style별 총 pcs
+    const styleMap = {};
+    g.rows.forEach(r => {
+      const k = r.style_number;
+      if (!styleMap[k]) styleMap[k] = 0;
+      styleMap[k] += r.qty_pcs || 0;
+    });
+
+    html += `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden;">
+      <div style="padding:10px 14px;background:#f0f7ff;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <span style="font-weight:700;font-size:13px;">${g.invoice_no||'—'}</span>
+          <span style="font-size:11px;color:var(--text3);margin-left:8px;">${g.container_no||''}</span>
+        </div>
+        <div style="font-size:11px;color:var(--text3);">출항 ${g.ship_date||'—'}</div>
+        <div style="font-weight:700;font-size:12px;color:${etaColor};">🗓 ETA: ${g.eta||'미정'} (${etaTxt})</div>
+        <div style="margin-left:auto;display:flex;gap:6px;">
+          <button class="btn btn-sm" style="background:#1a5c2a;color:#fff;" onclick="openTransitReceive('${g.invoice_no}')">📦 도착 처리 & Receive</button>
+          <button class="btn btn-sm" onclick="editTransitEta('${g.invoice_no}')">✏️ ETA 수정</button>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="background:#f8faff;">
+            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);">Style</th>
+            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);">Color</th>
+            <th style="padding:6px 10px;text-align:center;border-bottom:1px solid var(--border);">Size</th>
+            <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">DZ</th>
+            <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">Pcs</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${g.rows.map(r => `<tr style="border-bottom:1px solid #f5f5f5;">
+            <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;">#${r.style_number}</td>
+            <td style="padding:5px 10px;">${r.color}</td>
+            <td style="padding:5px 10px;text-align:center;">${r.size}</td>
+            <td style="padding:5px 10px;text-align:right;">${r.qty_dz||'—'}</td>
+            <td style="padding:5px 10px;text-align:right;font-weight:700;">${(r.qty_pcs||0).toLocaleString()}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  });
+  document.getElementById(elId).innerHTML = html;
+}
+
+// ── Excel 파싱
+// ── Haiti Invoice Excel 파싱
+async function parseTransitExcel(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs');
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+
+  let invoiceNo = '', containerNo = '', shipDate = '';
+  let currentStyle = '', currentSizes = [];
+  const parsed = [];
+
+  rows.forEach((row, ri) => {
+    const r0 = String(row[0]||'').trim();
+    const r1 = String(row[1]||'').trim();
+
+    if (r0.includes('NO & DATE OF INVOICE')) {
+      const m = r0.match(/PSH\s+[\d\s\-]+/i);
+      if (m) invoiceNo = m[0].replace(/\s+/g,'').trim();
+    }
+    if (r0.match(/^[A-Z]{4}\s*\d/) && !shipDate) {
+      containerNo = r0.replace(/\s+/g,'-');
+      const d = row[12];
+      if (d instanceof Date) shipDate = d.toISOString().slice(0,10);
+    }
+    if (r0 === 'STYLE :') {
+      const m = r1.match(/(\d{4}[A-Z]?)/);
+      if (m) currentStyle = m[1].replace(/N$/,'');
+    }
+    if (r0 === 'COLOR :') {
+      currentSizes = row.slice(2, 12).filter(v => v !== null && v !== undefined && String(v).trim() !== '');
+    }
+    if (r1 === 'DZS' && r0 && r0 !== 'TOTAL') {
+      currentSizes.forEach((sz, i) => {
+        const dz = parseInt(row[i+2])||0;
+        if (dz > 0 && currentStyle) {
+          parsed.push({
+            invoice_no: invoiceNo,
+            container_no: containerNo,
+            ship_date: shipDate,
+            style_number: currentStyle,
+            color: r0,
+            size: String(sz).trim(),
+            qty_dz: dz,
+            qty_pcs: dz * 12,
+            transit_type: 'haiti_sc',
+            status: 'in_transit'
+          });
+        }
+      });
+    }
+  });
+
+  _transitParsed = { invoiceNo, containerNo, shipDate, rows: parsed };
+
+  // 헤더 정보
+  document.getElementById('transit-preview-info').innerHTML =
+    `<div><span style="color:var(--text3);">Invoice</span><br><b>${invoiceNo}</b></div>` +
+    `<div><span style="color:var(--text3);">Container</span><br><b>${containerNo}</b></div>` +
+    `<div><span style="color:var(--text3);">Ship Date</span><br><b>${shipDate}</b></div>` +
+    `<div><span style="color:var(--text3);">총 라인</span><br><b>${parsed.length}개</b></div>` +
+    `<div><span style="color:var(--text3);">총 수량</span><br><b>${parsed.reduce((s,r)=>s+r.qty_pcs,0).toLocaleString()} pcs</b></div>`;
+
+  // ETA 기본값: ship_date + 14일
+  if (shipDate) {
+    const eta = new Date(shipDate);
+    eta.setDate(eta.getDate() + 14);
+    document.getElementById('transit-eta-input').value = eta.toISOString().slice(0,10);
+  }
+
+  renderTransitEditTable();
+  document.getElementById('transit-preview-modal').style.display = 'flex';
+}
+
+// ── 수정 가능한 테이블 렌더링
+function renderTransitEditTable() {
+  if (!_transitParsed) return;
+  const tbody = document.getElementById('transit-edit-body');
+  tbody.innerHTML = _transitParsed.rows.map((r, i) => `
+    <tr id="transit-row-${i}" style="border-bottom:1px solid #f0f0f0;">
+      <td style="padding:3px 4px;border:1px solid #eee;">
+        <input value="${r.style_number}" onchange="_transitParsed.rows[${i}].style_number=this.value"
+          style="width:60px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;"/>
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;">
+        <input value="${r.color}" onchange="_transitParsed.rows[${i}].color=this.value"
+          style="width:140px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;"/>
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
+        <input value="${r.size}" onchange="_transitParsed.rows[${i}].size=this.value"
+          style="width:40px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;"/>
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;">
+        <input type="number" value="${r.qty_dz}" min="0"
+          onchange="_transitParsed.rows[${i}].qty_dz=parseInt(this.value)||0;_transitParsed.rows[${i}].qty_pcs=(parseInt(this.value)||0)*12;updateTransitRowPcs(${i})"
+          style="width:50px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;"/>
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;">
+        <span style="font-size:11px;color:var(--text3);">${Math.floor(r.qty_dz/6)}</span>
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;" id="transit-pcs-${i}">
+        <b style="font-size:12px;">${r.qty_pcs.toLocaleString()}</b>
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
+        <button onclick="deleteTransitRow(${i})" style="border:none;background:none;color:#e53935;cursor:pointer;font-size:14px;">✕</button>
+      </td>
+    </tr>`).join('');
+  updateTransitTotal();
+}
+
+function updateTransitRowPcs(i) {
+  const pcs = (_transitParsed.rows[i].qty_dz||0) * 12;
+  const el = document.getElementById('transit-pcs-' + i);
+  if (el) el.innerHTML = '<b style="font-size:12px;">' + pcs.toLocaleString() + '</b>';
+  updateTransitTotal();
+}
+
+function updateTransitTotal() {
+  if (!_transitParsed) return;
+  const totalDz = _transitParsed.rows.reduce((s,r)=>s+(r.qty_dz||0),0);
+  const totalPcs = _transitParsed.rows.reduce((s,r)=>s+(r.qty_pcs||0),0);
+  const el = document.getElementById('transit-edit-total');
+  if (el) el.innerHTML = `<b>총 ${_transitParsed.rows.length}개 라인 | ${totalDz.toLocaleString()} DZ | ${totalPcs.toLocaleString()} pcs (${Math.round(totalPcs/72)} boxes)</b>`;
+}
+
+function deleteTransitRow(i) {
+  _transitParsed.rows.splice(i, 1);
+  renderTransitEditTable();
+}
+
+function addTransitRow() {
+  if (!_transitParsed) return;
+  _transitParsed.rows.push({
+    invoice_no: _transitParsed.invoiceNo,
+    container_no: _transitParsed.containerNo,
+    ship_date: _transitParsed.shipDate,
+    style_number: '', color: '', size: '', qty_dz: 0, qty_pcs: 0,
+    transit_type: 'haiti_sc', status: 'in_transit'
+  });
+  renderTransitEditTable();
+  // 마지막 행으로 스크롤
+  const tbody = document.getElementById('transit-edit-body');
+  if (tbody) tbody.lastElementChild?.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── In Transit 저장
+async function saveTransitData() {
+  if (!_transitParsed) return;
+  const eta = document.getElementById('transit-eta-input').value;
+  const notes = document.getElementById('transit-notes-input').value;
+  if (!eta) { alert('ETA 날짜를 입력해주세요.'); return; }
+
+  const validRows = _transitParsed.rows.filter(r => r.style_number && r.color && r.size && r.qty_pcs > 0);
+  if (!validRows.length) { alert('저장할 라인이 없습니다.'); return; }
+
+  const rows = validRows.map(r => ({ ...r,
+    invoice_no: _transitParsed.invoiceNo || r.invoice_no,
+    eta, notes: notes || null
+  }));
+
+  await db.from('in_transit').delete().eq('invoice_no', rows[0].invoice_no);
+  const { error } = await db.from('in_transit').insert(rows);
+  if (error) { alert('저장 실패: ' + error.message); return; }
+
+  document.getElementById('transit-preview-modal').style.display = 'none';
+  showToast('🚢 ' + rows.length + '개 라인 In Transit 저장 완료 (ETA: ' + eta + ')');
+  loadInTransit();
+  _transitParsed = null;
+}
+
+// ── 도착 처리 → Receive 모달
+async function openTransitReceive(invoiceNo) {
+  const { data: rows } = await db.from('in_transit')
+    .select('*').eq('invoice_no', invoiceNo).eq('status','in_transit');
+  if (!rows || !rows.length) return;
+
+  const g = rows[0];
+  document.getElementById('receive-invoice-info').innerHTML =
+    '<b>Invoice:</b> ' + invoiceNo +
+    ' &nbsp;|&nbsp; <b>Container:</b> ' + (g.container_no||'—') +
+    ' &nbsp;|&nbsp; <b>Ship Date:</b> ' + (g.ship_date||'—') +
+    ' &nbsp;|&nbsp; <b>ETA:</b> ' + (g.eta||'—');
+
+  // Receiving 라인 렌더
+  const tbody = document.getElementById('receive-lines-body');
+  tbody.innerHTML = rows.map((r, i) => {
+    const diffId = 'recv-diff-' + i;
+    return `<tr id="recv-row-${i}" data-id="${r.id}">
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${r.style_number}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-size:11px;">${r.color}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:center;font-size:11px;">${r.size}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;font-size:11px;color:var(--text3);">${r.qty_dz||'—'}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;font-size:11px;color:var(--text3);">${(r.qty_pcs||0).toLocaleString()}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#fffde7;">
+        <input type="number" value="${r.qty_dz||0}" min="0" id="recv-dz-${i}"
+          onchange="updateRecvPcs(${i}, ${r.qty_pcs||0})"
+          style="width:55px;height:26px;border:1px solid #f9a825;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;"/>
+      </td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;background:#fffde7;" id="recv-pcs-${i}">
+        <b>${(r.qty_pcs||0).toLocaleString()}</b>
+      </td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#e3f2fd;">
+        <input value="" placeholder="K2B-7" id="recv-loc-${i}"
+          style="width:80px;height:26px;border:1px solid #90caf9;border-radius:3px;padding:0 6px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;"/>
+      </td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:center;" id="${diffId}">—</td>
+    </tr>`;
+  }).join('');
+
+  // 인보이스 번호 저장
+  document.getElementById('transit-receive-modal').dataset.invoiceNo = invoiceNo;
+  document.getElementById('transit-receive-modal').style.display = 'flex';
+  document.getElementById('receive-diff-summary').innerHTML = '';
+}
+
+function updateRecvPcs(i, origPcs) {
+  const dz = parseInt(document.getElementById('recv-dz-' + i).value)||0;
+  const pcs = dz * 12;
+  document.getElementById('recv-pcs-' + i).innerHTML = '<b>' + pcs.toLocaleString() + '</b>';
+  const diff = pcs - origPcs;
+  const diffEl = document.getElementById('recv-diff-' + i);
+  if (diffEl) {
+    if (diff === 0) diffEl.innerHTML = '<span style="color:#2e7d32;">✓</span>';
+    else if (diff > 0) diffEl.innerHTML = '<span style="color:#1565c0;font-weight:700;">+' + diff + '</span>';
+    else diffEl.innerHTML = '<span style="color:#c62828;font-weight:700;">' + diff + '</span>';
+  }
+}
+
+// ── Post — 재고 반영
+async function postTransitReceiving() {
+  const modal = document.getElementById('transit-receive-modal');
+  const invoiceNo = modal.dataset.invoiceNo;
+  const rows = document.querySelectorAll('#receive-lines-body tr');
+
+  let posted = 0, errors = [];
+  const scWhObj = warehouses.find(w => w.code === 'SC');
+  if (!scWhObj) { alert('SC 창고를 찾을 수 없습니다.'); return; }
+
+  for (const row of rows) {
+    const i = row.id.replace('recv-row-','');
+    const id = row.dataset.id;
+    const dz = parseInt(document.getElementById('recv-dz-' + i)?.value)||0;
+    const pcs = dz * 12;
+    const loc = (document.getElementById('recv-loc-' + i)?.value||'').trim().toUpperCase();
+
+    if (!pcs) continue;
+    if (!loc) { errors.push('Row ' + i + ': Location 미입력'); continue; }
+
+    // in_transit row에서 style/color/size 가져오기
+    const { data: transitRow } = await db.from('in_transit').select('*').eq('id', id).maybeSingle();
+    if (!transitRow) continue;
+
+    // style_id 조회
+    const styleObj = styles.find(s => s.style_number === transitRow.style_number);
+
+    // SC inventory upsert (기존 location 있으면 qty 추가)
+    const { data: existing } = await db.from('inventory')
+      .select('id, qty_on_hand')
+      .eq('warehouse_id', scWhObj.id)
+      .eq('location', loc)
+      .ilike('color', transitRow.color)
+      .ilike('size', transitRow.size)
+      .maybeSingle();
+
+    if (existing) {
+      await db.from('inventory').update({ qty_on_hand: existing.qty_on_hand + pcs }).eq('id', existing.id);
+    } else {
+      await db.from('inventory').insert({
+        warehouse_id: scWhObj.id,
+        style_id: styleObj?.id || null,
+        color: transitRow.color,
+        size: transitRow.size,
+        location: loc,
+        qty_on_hand: pcs,
+        qty_committed: 0,
+        received_date: new Date().toISOString().slice(0,10)
+      });
+    }
+    posted++;
+  }
+
+  if (errors.length) {
+    document.getElementById('receive-diff-summary').innerHTML =
+      '<div style="color:#c62828;padding:8px;background:#fff8f8;border-radius:4px;">⚠️ ' + errors.join('<br>') + '</div>';
+    return;
+  }
+
+  // in_transit 상태 → arrived
+  await db.from('in_transit').update({ status: 'arrived' }).eq('invoice_no', invoiceNo);
+
+  modal.style.display = 'none';
+  showToast('✅ ' + posted + '개 라인 재고 반영 완료!');
+  await loadScInventory();
+  loadInTransit();
+}
+
+async function markTransitArrived(invoiceNo) {
+  if (!confirm(`${invoiceNo} 도착 처리하시겠습니까?`)) return;
+  await db.from('in_transit').update({ status: 'arrived' }).eq('invoice_no', invoiceNo);
+  showToast('✅ 도착 처리 완료');
+  loadInTransit();
+}
+
+async function editTransitEta(invoiceNo) {
+  const newEta = prompt('새 ETA 날짜 입력 (YYYY-MM-DD):');
+  if (!newEta) return;
+  await db.from('in_transit').update({ eta: newEta }).eq('invoice_no', invoiceNo);
+  showToast('✅ ETA 수정 완료');
+  loadInTransit();
+}
+
+function openAddScCaTransit() {
+  document.getElementById('sc-ca-transit-modal').style.display = 'flex';
+}
+
+async function saveScCaTransit() {
+  const style = document.getElementById('scca-style').value.trim();
+  const color = document.getElementById('scca-color').value.trim();
+  const size  = document.getElementById('scca-size').value.trim();
+  const qty   = parseInt(document.getElementById('scca-qty').value)||0;
+  const ship  = document.getElementById('scca-ship').value;
+  const eta   = document.getElementById('scca-eta').value;
+  const note  = document.getElementById('scca-note').value.trim();
+  if (!style||!color||!size||!qty||!eta) { alert('필수 항목을 입력해주세요.'); return; }
+  await db.from('in_transit').insert({
+    invoice_no: `SC-CA-${Date.now()}`,
+    container_no: note||null,
+    ship_date: ship||null,
+    eta, style_number: style, color, size,
+    qty_dz: null, qty_pcs: qty,
+    transit_type: 'sc_ca', status: 'in_transit'
+  });
+  document.getElementById('sc-ca-transit-modal').style.display = 'none';
+  showToast('✅ SC→CA 운송 등록 완료');
+  loadInTransit();
+}
+
+// ── Bin 배분 모달에서 In Transit 힌트 표시
+async function getInTransitHint(styleNum, color, size) {
+  const { data } = await db.from('in_transit')
+    .select('qty_pcs, eta, transit_type')
+    .eq('style_number', styleNum)
+    .ilike('color', color)
+    .ilike('size', size)
+    .eq('status', 'in_transit');
+  return data || [];
+}
 </script>
 </body>
 </html>
