@@ -5402,7 +5402,7 @@ function buildAllocHtml(lineIdx, whGroup) {
       const age = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
       const ageTxt = age===null?'날짜미기입':age===0?'오늘':age+'일전';
       return `<div class="pcr-back-bin-opt" data-bin="${b.bin}" data-qty="${b.qty}"
-        onclick="${noPcr ? '' : 'selectPcrBackBin(this, ' + (l.ppb||72) + ')'}"
+        onclick="${noPcr ? '' : 'selectPcrBackBin(this, ' + (l.ppb||72) + ', \'' + (isSC?'SC':'CA') + '\')'}"
         style="padding:9px 12px;${noPcr?'opacity:0.4;cursor:not-allowed;':'cursor:pointer;'}border-bottom:1px solid #f0e6d3;display:flex;align-items:center;gap:10px;background:#fff;transition:background 0.1s;"
         onmouseover="${noPcr?'':'this.style.background=\'#f0fdf4\''}" onmouseout="this.style.background='#fff'">
         <div style="flex:1;">
@@ -5431,17 +5431,17 @@ function buildAllocHtml(lineIdx, whGroup) {
       <div style="padding:10px 12px;background:#f0fdf4;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <div id="pcr-back-selected-label" style="flex:1;font-size:12px;color:#888;font-style:italic;">← PCR Bin 선택</div>
         <div style="display:flex;align-items:center;gap:5px;">
-          <input type="number" id="pcr-back-boxes" min="1" value="1"
+          <input type="number" id="pcr-back-boxes-${isSC?'SC':'CA'}" min="1" value="1"
             style="width:46px;height:30px;border:1px solid #86efac;border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;"
             oninput="updatePcrBackLabel(${l.ppb||72})"/>
           <span style="font-size:11px;color:var(--text3);">박스</span>
           <span id="pcr-back-pcs-label" style="font-size:10px;color:#0e7c3a;font-weight:700;white-space:nowrap;">(${l.ppb||72} pcs)</span>
         </div>
-        <select id="pcr-back-dest"
+        <select id="pcr-back-dest-${isSC?'SC':'CA'}"
           style="height:30px;border:1px solid #86efac;border-radius:4px;padding:0 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;background:#fff;">
           ${scDestOpts}
         </select>
-        <button id="pcr-back-btn" onclick="execPcrBackTransfer('${isSC?'SC':'CA'}', ${l.ppb||72})" ${noPcr ? 'disabled' : 'disabled'}
+        <button id="pcr-back-btn-${isSC?'SC':'CA'}" onclick="execPcrBackTransfer('${isSC?'SC':'CA'}', ${l.ppb||72})" ${noPcr ? 'disabled' : 'disabled'}
           style="height:30px;padding:0 14px;border-radius:4px;border:none;background:#ccc;color:#fff;font-size:11px;font-weight:700;cursor:not-allowed;white-space:nowrap;">
           ↩️ 되돌리기${noPcr ? ' (재고 없음)' : ''}
         </button>
@@ -5676,14 +5676,16 @@ function updatePcrTransferLabel(wh, ppb) {
 }
 
 let _pcrBackSelectedBin = null;
+let _pcrBackSelectedWh = null;
 
-function selectPcrBackBin(el, ppb) {
+function selectPcrBackBin(el, ppb, wh) {
   document.querySelectorAll('.pcr-back-bin-opt').forEach(o => o.style.background = '#fff');
   el.style.background = '#f0fdf4';
   _pcrBackSelectedBin = el.dataset.bin;
+  _pcrBackSelectedWh = el.dataset.wh || wh;
   const maxQty = parseInt(el.dataset.qty)||0;
   const maxBoxes = Math.floor(maxQty / ppb);
-  const label = document.getElementById('pcr-back-selected-label');
+  const label = document.getElementById('pcr-back-selected-label-' + (wh||'SC'));
   if (label) label.innerHTML = `<b style="font-family:'IBM Plex Mono',monospace;">${_pcrBackSelectedBin}</b> 선택됨 · 최대 ${maxBoxes}박스`;
   const boxInp = document.getElementById('pcr-back-boxes');
   if (boxInp) { boxInp.max = maxBoxes; boxInp.value = Math.min(parseInt(boxInp.value)||1, maxBoxes); }
@@ -5693,15 +5695,15 @@ function selectPcrBackBin(el, ppb) {
 }
 
 function updatePcrBackLabel(ppb) {
-  const boxes = parseInt(document.getElementById('pcr-back-boxes')?.value)||1;
+  const boxes = parseInt(document.getElementById('pcr-back-boxes-' + (wh||'SC'))?.value)||1;
   const el = document.getElementById('pcr-back-pcs-label');
   if (el) el.textContent = `(${(boxes*ppb).toLocaleString()} pcs)`;
 }
 
 async function execPcrBackTransfer(whGroup, ppb) {
   const bin  = _pcrBackSelectedBin;
-  const boxes = parseInt(document.getElementById('pcr-back-boxes')?.value)||1;
-  const dest  = document.getElementById('pcr-back-dest')?.value;
+  const boxes = parseInt(document.getElementById('pcr-back-boxes-' + whGroup)?.value)||1;
+  const dest  = document.getElementById('pcr-back-dest-' + whGroup)?.value;
   if (!bin) { alert('PCR Bin을 선택해주세요.'); return; }
   if (!dest) { alert('되돌릴 SC Bin을 선택해주세요.'); return; }
   const qty = boxes * ppb;
@@ -5760,11 +5762,13 @@ async function execPcrBackTransfer(whGroup, ppb) {
   // 현재 입력값 poLines에 저장
   const liveAllocB = {};
   const livePcrAllocB = {};
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
+  const isBothB = _allocState.whGroup === 'SC&CA';
+  const wrapSelB = isBothB ? `#alloc-both-${whGroup.toLowerCase()}-wrap` : '#alloc-bins-wrap';
+  document.querySelectorAll(wrapSelB + ' input[data-type="box"]').forEach(inp => {
     const v = parseInt(inp.value)||0;
     if (v > 0) liveAllocB[inp.dataset.bin] = v;
   });
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="pcs"]').forEach(inp => {
+  document.querySelectorAll(wrapSelB + ' input[data-type="pcs"]').forEach(inp => {
     const v = parseInt(inp.value)||0;
     if (v > 0) livePcrAllocB[inp.dataset.bin] = v;
   });
@@ -5776,7 +5780,11 @@ async function execPcrBackTransfer(whGroup, ppb) {
 
   await loadScInventory();
   await new Promise(r => setTimeout(r, 100));
-  openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
+  if (_allocState.whGroup === 'SC&CA') {
+    openAllocModalBoth({ stopPropagation:()=>{} }, _allocState.lineIdx);
+  } else {
+    openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
+  }
 }
 
 async function execPcrTransfer(whGroup, ppb) {
