@@ -5852,9 +5852,13 @@ async function execPcrTransfer(whGroup, ppb) {
 
   showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty} pcs) 이동 완료`);
 
-  // SC bin 입력값 유지, PCR은 0 리셋 (새 재고로 다시 입력)
+  // 현재 입력값 저장 (통합/단일 모달 모두 처리)
+  const isBoth = _allocState.whGroup === 'SC&CA';
+  const wrapSel = isBoth
+    ? `#alloc-both-${whGroup.toLowerCase()}-wrap input[data-type="box"]`
+    : '#alloc-bins-wrap input[data-type="box"]';
   const liveAlloc = {};
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
+  document.querySelectorAll(wrapSel).forEach(inp => {
     const v = parseInt(inp.value)||0;
     if (v > 0) liveAlloc[inp.dataset.bin] = v;
   });
@@ -5862,8 +5866,14 @@ async function execPcrTransfer(whGroup, ppb) {
   else poLines[_allocState.lineIdx].allocCA = { ...liveAlloc };
 
   await loadScInventory();
-  await new Promise(r => setTimeout(r, 100)); // binInventory 반영 대기
-  openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
+  await new Promise(r => setTimeout(r, 100));
+
+  // 통합 모달이면 openAllocModalBoth, 단일이면 openAllocModal
+  if (isBoth) {
+    openAllocModalBoth({ stopPropagation:()=>{} }, _allocState.lineIdx);
+  } else {
+    openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
+  }
 }
 
 function renderPcrTransfers() {
