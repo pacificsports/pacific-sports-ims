@@ -5418,16 +5418,16 @@ async function execPcrBackTransfer(whGroup, ppb) {
   const pcrWhObj = warehouses.find(w => w.code === pcrWh);
   if (!scWhObj || !pcrWhObj) { alert('창고 정보를 찾을 수 없습니다.'); return; }
 
-  // PCR bin 차감
-  const { data: pcrRow } = await db.from('inventory')
+  // PCR 전체 row 조회 → qty 차감 (location 무관)
+  const { data: pcrAllRows } = await db.from('inventory')
     .select('id, qty_on_hand')
     .eq('warehouse_id', pcrWhObj.id)
-    .eq('location', bin)
     .ilike('color', l.color)
     .ilike('size', l.size)
-    .maybeSingle();
+    .order('qty_on_hand', { ascending: false });
 
-  if (!pcrRow) { alert('PCR 재고를 찾을 수 없습니다.'); return; }
+  if (!pcrAllRows || pcrAllRows.length === 0) { alert('PCR 재고를 찾을 수 없습니다.'); return; }
+  const pcrRow = pcrAllRows[0];
   if (pcrRow.qty_on_hand < qty) { alert(`PCR 재고 부족! 현재 ${pcrRow.qty_on_hand} pcs`); return; }
   await db.from('inventory').update({ qty_on_hand: pcrRow.qty_on_hand - qty }).eq('id', pcrRow.id);
 
@@ -5479,11 +5479,11 @@ async function execPcrBackTransfer(whGroup, ppb) {
 }
 
 async function execPcrTransfer(whGroup, ppb) {
-  const bin   = _pcrSelectedBin;
+  const bin  = _pcrSelectedBin;
   const boxes = parseInt(document.getElementById('pcr-transfer-boxes')?.value)||1;
   if (!bin) { alert('Bin을 선택해주세요.'); return; }
   _pcrSelectedBin = null;
-  const qty   = boxes * ppb;
+  const qty  = boxes * ppb;
   const pcrWh = whGroup + '-PCR';
 
   if (!_allocState) return;
@@ -5493,12 +5493,11 @@ async function execPcrTransfer(whGroup, ppb) {
   const btn = document.querySelector('[onclick*="execPcrTransfer"]');
   if (btn) { btn.textContent = '처리 중...'; btn.disabled = true; }
 
-  // DB: SC bin 차감
   const scWhObj  = warehouses.find(w => w.code === whGroup);
   const pcrWhObj = warehouses.find(w => w.code === pcrWh);
   if (!scWhObj || !pcrWhObj) { alert('창고 정보를 찾을 수 없습니다.'); return; }
 
-  // SC bin 재고 조회
+  // 1. SC bin 조회 → qty 차감
   const { data: scRow } = await db.from('inventory')
     .select('id, qty_on_hand')
     .eq('warehouse_id', scWhObj.id)
@@ -5509,32 +5508,27 @@ async function execPcrTransfer(whGroup, ppb) {
 
   if (!scRow) { alert('해당 Bin 재고를 찾을 수 없습니다.'); return; }
   if (scRow.qty_on_hand < qty) { alert(`재고 부족! 현재 ${scRow.qty_on_hand} pcs`); return; }
-
-  // SC bin 차감
   await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - qty }).eq('id', scRow.id);
 
-  // PCR에 추가 — 모든 PCR row 합산 후 하나로 통합
-  const styleObj = styles.find(s => s.style_number === l.styleNum);
+  // 2. PCR 창고에서 같은 color/size row 전체 조회
   const { data: pcrRows } = await db.from('inventory')
-    .select('id, qty_on_hand, location')
+    .select('id, qty_on_hand')
     .eq('warehouse_id', pcrWhObj.id)
     .ilike('color', l.color)
     .ilike('size', l.size);
 
   if (pcrRows && pcrRows.length > 0) {
-    // 전체 PCR qty 합산 + 이번 이동분 추가
-    const totalPcrQty = pcrRows.reduce((s, r) => s + (r.qty_on_hand||0), 0) + qty;
-    // 첫번째 row에 전체 합산, 나머지 row 삭제 (중복 제거)
-    const mainRow = pcrRows[0];
-    await db.from('inventory').update({ qty_on_hand: totalPcrQty }).eq('id', mainRow.id);
+    // 기존 row 중 첫번째에 qty 추가, 나머지 중복 row 삭제
+    await db.from('inventory').update({ qty_on_hand: pcrRows[0].qty_on_hand + qty }).eq('id', pcrRows[0].id);
     for (let i = 1; i < pcrRows.length; i++) {
       await db.from('inventory').delete().eq('id', pcrRows[i].id);
     }
   } else {
-    // PCR 재고 없으면 신규 생성
+    // PCR row 없으면 신규 생성 — style_id는 scRow와 같은 style로
+    const { data: scStyleRow } = await db.from('inventory').select('style_id').eq('id', scRow.id).maybeSingle();
     await db.from('inventory').insert({
       warehouse_id: pcrWhObj.id,
-      style_id: styleObj?.id || null,
+      style_id: scStyleRow?.style_id || null,
       color: l.color, size: l.size,
       location: 'PCR-ROOM',
       qty_on_hand: qty, qty_committed: 0,
@@ -5544,20 +5538,15 @@ async function execPcrTransfer(whGroup, ppb) {
 
   showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty} pcs) 이동 완료`);
 
-  // ── SC bin 입력값만 poLines에 저장 (PCR은 0으로 리셋 → 새 재고로 다시 입력)
+  // SC bin 입력값 유지, PCR은 0 리셋 (새 재고로 다시 입력)
   const liveAlloc = {};
   document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
     const v = parseInt(inp.value)||0;
     if (v > 0) liveAlloc[inp.dataset.bin] = v;
   });
+  if (whGroup === 'SC') poLines[_allocState.lineIdx].allocSC = { ...liveAlloc };
+  else poLines[_allocState.lineIdx].allocCA = { ...liveAlloc };
 
-  if (whGroup === 'SC') {
-    poLines[_allocState.lineIdx].allocSC = { ...liveAlloc }; // PCR alloc 제외 (0 리셋)
-  } else {
-    poLines[_allocState.lineIdx].allocCA = { ...liveAlloc };
-  }
-
-  // binInventory 갱신 후 모달 재오픈
   await loadScInventory();
   openAllocModal({ stopPropagation:()=>{} }, _allocState.lineIdx, whGroup);
 }
