@@ -5259,7 +5259,7 @@ function openAllocModal(event, lineIdx, whGroup) {
     html += `<div style="padding:10px 12px;border:1px dashed ${pcrBorder};border-radius:8px;margin-bottom:8px;background:${pcrBg};display:flex;align-items:center;gap:10px;">
       <div style="flex:1;">
         <div style="font-size:12px;color:#aaa;font-style:italic;">재고 없음</div>
-        <div style="font-size:10px;color:#aaa;margin-top:2px;">SC → PCR Transfer 후 입력 가능</div>
+        <div style="font-size:10px;color:#aaa;margin-top:2px;">${isSC ? 'SC → SC-PCR' : 'CA → CA-PCR'} Transfer 후 입력 가능</div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;">
         <label style="font-size:10px;color:var(--text3);">pcs:</label>
@@ -5734,17 +5734,14 @@ async function execPcrTransfer(whGroup, ppb) {
   const { error: scErr } = await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - qty }).eq('id', scRow.id);
   console.log('SC 차감 결과:', scErr || 'OK');
 
-  // 2. PCR 창고에서 같은 color/size row 전체 조회 (대소문자 무관)
-  const { data: allPcrRows } = await db.from('inventory')
+  // 2. PCR 창고에서 같은 color/size row 조회 (ilike + warehouse 필터)
+  const { data: pcrRows, error: pcrFetchErr } = await db.from('inventory')
     .select('id, qty_on_hand, color, size')
-    .eq('warehouse_id', pcrWhObj.id);
+    .eq('warehouse_id', pcrWhObj.id)
+    .ilike('color', l.color)
+    .ilike('size', l.size);
 
-  // color/size 소문자 비교로 매칭
-  const pcrRows = (allPcrRows||[]).filter(r =>
-    (r.color||'').toUpperCase() === (l.color||'').toUpperCase() &&
-    (r.size||'').toUpperCase() === (l.size||'').toUpperCase()
-  );
-  console.log('🔍 PCR rows 매칭:', pcrRows.length, '개 / 전체:', allPcrRows?.length, '개');
+  console.log('🔍 PCR rows 매칭:', pcrRows?.length, '개', pcrFetchErr || '');
 
   if (pcrRows.length > 0) {
     // 전체 합산 + 이번 이동분 → 첫번째 row에 저장, 나머지 삭제
