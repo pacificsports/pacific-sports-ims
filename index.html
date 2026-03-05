@@ -5346,7 +5346,7 @@ function buildAllocHtml(lineIdx, whGroup) {
         const ageTxt = age===null?'날짜미기입':age===0?'오늘 입고':`${age}일전 입고`;
         const isFifo = i === 0;
         return `<div class="pcr-bin-opt" data-bin="${b.bin}" data-remain="${b.remaining}" data-boxes="${b.remainBoxes}"
-          onclick="selectPcrBin(this, ${l.ppb||72})"
+          onclick="selectPcrBin(this, ${l.ppb||72}, '${isSC?'SC':'CA'}')"
           style="padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0e6d3;display:flex;align-items:center;gap:10px;transition:background 0.1s;"
           onmouseover="this.style.background='#fff3e0'" onmouseout="this.style.background='#fff'">
           <div style="flex:1;">
@@ -5371,19 +5371,19 @@ function buildAllocHtml(lineIdx, whGroup) {
           <span style="font-size:11px;font-weight:700;color:#fff;">${isSC ? '✂️ SC → SC-PCR 이동' : '✂️ CA → CA-PCR 이동'} (배분 후 남은 수량 기준)</span>
           ${_sectionDisabled ? '<span style="font-size:10px;color:rgba(255,255,255,0.8);">✅ PCR 재고 충분</span>' : ''}
         </div>
-        <div id="pcr-transfer-wrap" style="background:#fff;border-bottom:1px solid ${pcrBorder};${_sectionDisabled?'pointer-events:none;':''}">
+        <div id="pcr-transfer-wrap-${isSC?'SC':'CA'}" style="background:#fff;border-bottom:1px solid ${pcrBorder};${_sectionDisabled?'pointer-events:none;':''}">
           ${binItemsHtml}
         </div>
         <div style="padding:10px 12px;background:${pcrBg};display:flex;align-items:center;gap:8px;">
-          <div id="pcr-selected-bin-label" style="flex:1;font-size:12px;color:#888;font-style:italic;">← Bin 선택</div>
+          <div id="pcr-selected-bin-label-${isSC?'SC':'CA'}" style="flex:1;font-size:12px;color:#888;font-style:italic;">← Bin 선택</div>
           <div style="display:flex;align-items:center;gap:5px;">
-            <input type="number" id="pcr-transfer-boxes" min="1" value="1"
+            <input type="number" id="pcr-transfer-boxes-${isSC?'SC':'CA'}" min="1" value="1"
               style="width:46px;height:30px;border:1px solid ${pcrBorder};border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;"
-              oninput="updatePcrTransferLabel(${l.ppb||72})"/>
+              oninput="updatePcrTransferLabel('${isSC?'SC':'CA'}', ${l.ppb||72})"/>
             <span style="font-size:11px;color:var(--text3);">박스</span>
-            <span id="pcr-transfer-pcs-label" style="font-size:10px;color:${pcrColor};font-weight:700;white-space:nowrap;">(${l.ppb||72} pcs)</span>
+            <span id="pcr-transfer-pcs-label-${isSC?'SC':'CA'}" style="font-size:10px;color:${pcrColor};font-weight:700;white-space:nowrap;">(${l.ppb||72} pcs)</span>
           </div>
-          <button id="pcr-transfer-btn" onclick="execPcrTransfer('${isSC?'SC':'CA'}', ${l.ppb||72})" disabled
+          <button id="pcr-transfer-btn-${isSC?'SC':'CA'}" onclick="execPcrTransfer('${isSC?'SC':'CA'}', ${l.ppb||72})" disabled
             style="height:30px;padding:0 14px;border-radius:4px;border:none;background:#ccc;color:#fff;font-size:11px;font-weight:700;cursor:not-allowed;white-space:nowrap;">
             ✂️ Transfer
           </button>
@@ -5561,7 +5561,8 @@ function refreshPcrTransferSection() {
     })
     .filter(b => b.remainBoxes > 0);
 
-  const transferWrap = document.getElementById('pcr-transfer-wrap');
+  const wg = _allocState?.whGroup || 'SC';
+  const transferWrap = document.getElementById('pcr-transfer-wrap-' + wg);
   if (!transferWrap) return;
 
   if (pcrBinData.length === 0) {
@@ -5574,7 +5575,7 @@ function refreshPcrTransferSection() {
     const ageCls = age===null?'#888':age>=90?'#b42318':age>=30?'#b54708':'#0e7c3a';
     const ageTxt = age===null?'날짜미기입':age===0?'오늘 입고':`${age}일전 입고`;
     return `<div class="pcr-bin-opt" data-bin="${b.bin}" data-remain="${b.remaining}" data-boxes="${b.remainBoxes}"
-      onclick="selectPcrBin(this, ${ppb})"
+      onclick="selectPcrBin(this, ${ppb}, '${whGroup}')"
       style="padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0e6d3;display:flex;align-items:center;gap:10px;background:#fff;transition:background 0.1s;"
       onmouseover="this.style.background='#fff3e0'" onmouseout="this.style.background='#fff'">
       <div style="flex:1;">
@@ -5634,32 +5635,35 @@ function checkPcrInput(inp) {
 }
 
 let _pcrSelectedBin = null;
+let _pcrSelectedWh = null;
 
-function selectPcrBin(el, ppb) {
-  // 선택 표시
-  document.querySelectorAll('.pcr-bin-opt').forEach(o => o.style.background = '#fff');
+function selectPcrBin(el, ppb, wh) {
+  // 같은 창고 섹션 내 선택 표시만 초기화
+  const wrap = document.getElementById('pcr-transfer-wrap-' + wh);
+  if (wrap) wrap.querySelectorAll('.pcr-bin-opt').forEach(o => o.style.background = '#fff');
   el.style.background = '#fff3e0';
   _pcrSelectedBin = el.dataset.bin;
+  _pcrSelectedWh = wh;
   const maxBoxes = parseInt(el.dataset.boxes)||1;
 
-  // 라벨 업데이트
-  const label = document.getElementById('pcr-selected-bin-label');
+  // 해당 창고 라벨 업데이트
+  const label = document.getElementById('pcr-selected-bin-label-' + wh);
   if (label) label.innerHTML = `<b style="font-family:'IBM Plex Mono',monospace;">${_pcrSelectedBin}</b> 선택됨 · 최대 ${maxBoxes}박스`;
 
   // 박스 수 max 업데이트
-  const boxInp = document.getElementById('pcr-transfer-boxes');
+  const boxInp = document.getElementById('pcr-transfer-boxes-' + wh);
   if (boxInp) { boxInp.max = maxBoxes; boxInp.value = Math.min(parseInt(boxInp.value)||1, maxBoxes); }
 
-  // Transfer 버튼 활성화
-  const btn = document.getElementById('pcr-transfer-btn');
-  if (btn) { btn.disabled = false; btn.style.background = ''; btn.style.cursor = 'pointer'; btn.style.background = '#a84212'; }
+  // 해당 창고 Transfer 버튼만 활성화
+  const btn = document.getElementById('pcr-transfer-btn-' + wh);
+  if (btn) { btn.disabled = false; btn.style.cursor = 'pointer'; btn.style.background = '#a84212'; }
 
-  updatePcrTransferLabel(ppb);
+  updatePcrTransferLabel(wh, ppb);
 }
 
-function updatePcrTransferLabel(ppb) {
-  const boxes = parseInt(document.getElementById('pcr-transfer-boxes')?.value)||1;
-  const el = document.getElementById('pcr-transfer-pcs-label');
+function updatePcrTransferLabel(wh, ppb) {
+  const boxes = parseInt(document.getElementById('pcr-transfer-boxes-' + wh)?.value)||1;
+  const el = document.getElementById('pcr-transfer-pcs-label-' + wh);
   if (el) el.textContent = `(${(boxes*ppb).toLocaleString()} pcs)`;
 }
 
@@ -5769,7 +5773,7 @@ async function execPcrBackTransfer(whGroup, ppb) {
 
 async function execPcrTransfer(whGroup, ppb) {
   const bin  = _pcrSelectedBin;
-  const boxes = parseInt(document.getElementById('pcr-transfer-boxes')?.value)||1;
+  const boxes = parseInt(document.getElementById('pcr-transfer-boxes-' + whGroup)?.value)||1;
   if (!bin) { alert('Bin을 선택해주세요.'); return; }
   _pcrSelectedBin = null;
   const qty  = boxes * ppb;
@@ -6178,8 +6182,23 @@ function updateAllocBothTotals() {
   const remain = needQty - total;
   document.getElementById('alloc-both-total').textContent = total.toLocaleString() + ' pcs';
   document.getElementById('alloc-both-total').style.color = total >= needQty ? '#0e7c3a' : 'var(--text)';
-  document.getElementById('alloc-both-remain').textContent = remain > 0 ? remain.toLocaleString() + ' pcs 부족' : remain < 0 ? Math.abs(remain).toLocaleString() + ' pcs 초과' : '✓ 완료';
-  document.getElementById('alloc-both-remain').style.color = remain === 0 ? '#0e7c3a' : remain < 0 ? '#1565c0' : 'var(--red)';
+  const remainEl2 = document.getElementById('alloc-both-remain');
+  if (remain > 0) {
+    const ppb = 72;
+    const remBoxes = Math.floor(remain/ppb), remLoose = remain%ppb;
+    let hint = remain.toLocaleString() + ' pcs 부족';
+    if (remBoxes > 0 && remLoose > 0) hint += ` → ${remBoxes}박스(${(remBoxes*ppb).toLocaleString()} pcs) + ${remLoose} loose 더 필요`;
+    else if (remBoxes > 0) hint += ` → ${remBoxes}박스(${(remBoxes*ppb).toLocaleString()} pcs) 더 필요`;
+    else hint += ` → loose ${remLoose} pcs 더 필요`;
+    remainEl2.textContent = hint;
+    remainEl2.style.color = 'var(--red)';
+  } else if (remain < 0) {
+    remainEl2.textContent = Math.abs(remain).toLocaleString() + ' pcs 초과';
+    remainEl2.style.color = '#1565c0';
+  } else {
+    remainEl2.textContent = '✓ 완료';
+    remainEl2.style.color = '#0e7c3a';
+  }
 }
 
 function applyAllocBoth() {
