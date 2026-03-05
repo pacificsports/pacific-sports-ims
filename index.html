@@ -2778,8 +2778,8 @@ async function saveInvoice() {
     const sku = (l.styleNum + l.color.replace(/\s+/g,'').substring(0,6) + l.size.replace(/\s+/g,'')).toLowerCase();
     const { data: invRows } = await db.from('inventory')
       .select('id, qty_on_hand, location, warehouse_id, received_date')
-      .ilike('color', l.color)
-      .ilike('size', l.size)
+      .eq('color', (l.color||'').toUpperCase())
+      .eq('size', (l.size||'').toUpperCase())
       .eq('warehouse_id', whId)
       .order('received_date', { ascending: true, nullsFirst: false })
       .order('qty_on_hand', { ascending: false });
@@ -3450,13 +3450,13 @@ async function openBackOrderDetail(orderId) {
     // SC 재고
     const { data: scRows } = await db.from('inventory')
       .select('id, qty_on_hand, location, warehouse_id')
-      .ilike('color', l.color).ilike('size', l.size)
+      .eq('color', (l.color||'').toUpperCase()).eq('size', (l.size||'').toUpperCase())
       .eq('warehouse_id', scWh?.id || '')
       .order('received_date', { ascending: true, nullsFirst: false });
     // CA 재고
     const { data: caRows } = await db.from('inventory')
       .select('id, qty_on_hand, location, warehouse_id')
-      .ilike('color', l.color).ilike('size', l.size)
+      .eq('color', (l.color||'').toUpperCase()).eq('size', (l.size||'').toUpperCase())
       .eq('warehouse_id', caWh?.id || '')
       .order('received_date', { ascending: true, nullsFirst: false });
 
@@ -3898,8 +3898,8 @@ async function postReceiving() {
     .select('id, qty_backordered, orders(id, order_number, customer_name, status)')
     .eq('is_backordered', true)
     .gt('qty_backordered', 0)
-    .ilike('color', color)
-    .ilike('size', size);
+    .eq('color', (color||'').toUpperCase())
+    .eq('size', (size||'').toUpperCase());
 
   // style_number 필터 (DB join이 제한적이라 client-side 필터)
   const relevantBO = (matchingBO || []).filter(l =>
@@ -5722,8 +5722,8 @@ async function execPcrBackTransfer(whGroup, ppb) {
   const { data: pcrAllRows } = await db.from('inventory')
     .select('id, qty_on_hand')
     .eq('warehouse_id', pcrWhObj.id)
-    .ilike('color', l.color)
-    .ilike('size', l.size)
+    .eq('color', (l.color||'').toUpperCase())
+    .eq('size', (l.size||'').toUpperCase())
     .order('qty_on_hand', { ascending: false });
 
   if (!pcrAllRows || pcrAllRows.length === 0) { alert('PCR 재고를 찾을 수 없습니다.'); return; }
@@ -5736,8 +5736,8 @@ async function execPcrBackTransfer(whGroup, ppb) {
     .select('id, qty_on_hand')
     .eq('warehouse_id', scWhObj.id)
     .eq('location', dest)
-    .ilike('color', l.color)
-    .ilike('size', l.size)
+    .eq('color', (l.color||'').toUpperCase())
+    .eq('size', (l.size||'').toUpperCase())
     .maybeSingle();
 
   if (scRow) {
@@ -5806,8 +5806,8 @@ async function execPcrTransfer(whGroup, ppb) {
     .select('id, qty_on_hand')
     .eq('warehouse_id', scWhObj.id)
     .eq('location', bin)
-    .ilike('color', l.color)
-    .ilike('size', l.size)
+    .eq('color', (l.color||'').toUpperCase())
+    .eq('size', (l.size||'').toUpperCase())
     .maybeSingle();
   console.log('🔍 SC bin 조회:', bin, l.color, l.size, '→', scRow);
 
@@ -5821,8 +5821,8 @@ async function execPcrTransfer(whGroup, ppb) {
   const { data: pcrRows, error: pcrFetchErr } = await db.from('inventory')
     .select('id, qty_on_hand, color, size')
     .eq('warehouse_id', pcrWhObj.id)
-    .ilike('color', l.color)
-    .ilike('size', l.size);
+    .eq('color', (l.color||'').toUpperCase())
+    .eq('size', (l.size||'').toUpperCase());
 
   console.log('🔍 PCR rows 매칭:', pcrRows?.length, '개', pcrFetchErr || '');
 
@@ -6572,8 +6572,8 @@ async function postTransitReceiving() {
       .select('id, qty_on_hand')
       .eq('warehouse_id', scWhObj.id)
       .eq('location', loc)
-      .ilike('color', transitRow.color)
-      .ilike('size', transitRow.size)
+      .eq('color', (transitRow.color||'').toUpperCase())
+      .eq('size', (transitRow.size||'').toUpperCase())
       .maybeSingle();
 
     const ppb = parseInt(document.getElementById('recv-ppb-' + i)?.value) || transitRow.ppb || 72;
@@ -6673,8 +6673,8 @@ async function getInTransitHint(styleNum, color, size) {
   const { data } = await db.from('in_transit')
     .select('qty_pcs, eta, transit_type')
     .eq('style_number', styleNum)
-    .ilike('color', color)
-    .ilike('size', size)
+    .eq('color', (color||'').toUpperCase())
+    .eq('size', (size||'').toUpperCase())
     .eq('status', 'in_transit');
   return data || [];
 }
