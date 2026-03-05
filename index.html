@@ -5106,7 +5106,7 @@ function openAllocModal(event, lineIdx, whGroup) {
       })
       .filter(b => b.remainBoxes > 0);
 
-    if (pcrBinData.length > 0) {
+    if (l.loose > 0 && pcrBinData.length > 0) {
       const binItemsHtml = pcrBinData.map((b, i) => {
         const age = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
         const ageCls = age===null?'#888':age>=90?'#b42318':age>=30?'#b54708':'#0e7c3a';
@@ -5158,19 +5158,19 @@ function openAllocModal(event, lineIdx, whGroup) {
     }
   }
 
-  // ── PCR → SC 역방향 Transfer (PCR 재고 있으면 항상 표시)
-  if (totalPcr > 0) {
-    // pcrBins 없으면 totalPcr 기반으로 가상 bin 생성
-    const effectivePcrBins = pcrBins.length > 0 ? pcrBins : [{ bin: 'PCR-ROOM', qty: totalPcr, received_date: null }];
+  // ── PCR → SC 되돌리기: 항상 표시, 재고 없으면 버튼 비활성
+  if (true) {
+    const effectivePcrBins = pcrBins.length > 0 ? pcrBins : [{ bin: 'PCR-ROOM', qty: 0, received_date: null }];
+    const noPcr = totalPcr === 0;
     const pcrBackOpts = effectivePcrBins.map(b => {
       const maxBoxes = Math.floor(b.qty / (l.ppb||72));
       const loose = b.qty % (l.ppb||72);
       const age = b.received_date ? Math.floor((Date.now()-new Date(b.received_date))/86400000) : null;
       const ageTxt = age===null?'날짜미기입':age===0?'오늘':age+'일전';
       return `<div class="pcr-back-bin-opt" data-bin="${b.bin}" data-qty="${b.qty}"
-        onclick="selectPcrBackBin(this, ${l.ppb||72})"
-        style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #f0e6d3;display:flex;align-items:center;gap:10px;background:#fff;transition:background 0.1s;"
-        onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background='#fff'">
+        onclick="${noPcr ? '' : 'selectPcrBackBin(this, ' + (l.ppb||72) + ')'}"
+        style="padding:9px 12px;${noPcr?'opacity:0.4;cursor:not-allowed;':'cursor:pointer;'}border-bottom:1px solid #f0e6d3;display:flex;align-items:center;gap:10px;background:#fff;transition:background 0.1s;"
+        onmouseover="${noPcr?'':'this.style.background=\'#f0fdf4\''}" onmouseout="this.style.background='#fff'">
         <div style="flex:1;">
           <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;">${b.bin} <span style="font-size:10px;font-weight:400;color:${pcrColor};">(PCR)</span></div>
           <div style="font-size:10px;color:#888;margin-top:2px;">${ageTxt} 입고</div>
@@ -5207,9 +5207,9 @@ function openAllocModal(event, lineIdx, whGroup) {
           style="height:30px;border:1px solid #86efac;border-radius:4px;padding:0 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;background:#fff;">
           ${scDestOpts}
         </select>
-        <button id="pcr-back-btn" onclick="execPcrBackTransfer('${isSC?'SC':'CA'}', ${l.ppb||72})" disabled
+        <button id="pcr-back-btn" onclick="execPcrBackTransfer('${isSC?'SC':'CA'}', ${l.ppb||72})" ${noPcr ? 'disabled' : 'disabled'}
           style="height:30px;padding:0 14px;border-radius:4px;border:none;background:#ccc;color:#fff;font-size:11px;font-weight:700;cursor:not-allowed;white-space:nowrap;">
-          ↩️ 되돌리기
+          ↩️ 되돌리기${noPcr ? ' (재고 없음)' : ''}
         </button>
       </div>
     </div>`;
