@@ -1187,7 +1187,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
         <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
           <button class="btn" onclick="closeModal('modal-alloc-both');_allocState=null;document.getElementById('alloc-both-sc-wrap').innerHTML='';document.getElementById('alloc-both-ca-wrap').innerHTML='';">취소</button>
-          <button class="btn btn-primary" onclick="applyAllocBoth()">✓ 적용</button>
+          <button class="btn btn-primary" id="alloc-both-apply-btn" onclick="applyAllocBoth()">✓ 적용</button>
         </div>
       </div>
     </div>
@@ -1392,7 +1392,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div id="alloc-remain-wrap">
           <span style="color:var(--text3)">남은 수량</span><br>
           <strong id="alloc-remain" style="font-family:'IBM Plex Mono',monospace;color:var(--red)">0</strong>
-          <div id="alloc-remain-hint" style="font-size:10px;color:var(--text3);margin-top:2px;"></div>
+          <div id="alloc-remain-hint" style="font-size:10px;margin-top:4px;"></div>
         </div>
       </div>
 
@@ -1402,7 +1402,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     </div>
     <div class="modal-foot">
       <button class="btn" onclick="closeModal('modal-alloc');_allocState=null;">취소</button>
-      <button class="btn btn-green" onclick="applyAlloc()">✓ 적용</button>
+      <button class="btn btn-green" id="alloc-apply-btn" onclick="applyAlloc()">✓ 적용</button>
     </div>
   </div>
 </div>
@@ -6356,12 +6356,30 @@ function updateAllocSum() {
       hintEl.textContent = hint;
       hintEl.style.color = 'var(--red)';
     } else if (remain < 0) {
-      hintEl.textContent = `⚠️ ${Math.abs(remain)} pcs 초과 배분`;
-      hintEl.style.color = 'var(--orange)';
+      const over = Math.abs(remain);
+      hintEl.innerHTML = `<span style="background:#b91c1c;color:#fff;padding:2px 8px;border-radius:4px;font-weight:700;font-size:11px;">🚫 ${over} pcs 초과 배분 — 수정 후 적용 가능</span>`;
+      hintEl.style.color = '';
     } else {
       hintEl.textContent = '✅ 딱 맞음';
       hintEl.style.color = 'var(--green)';
     }
+  }
+
+  // 초과 배분 시 적용 버튼 비활성화
+  const applyBtn = document.getElementById('alloc-apply-btn');
+  const applyBothBtn = document.getElementById('alloc-both-apply-btn');
+  const isOver = remain < 0;
+  if (applyBtn) {
+    applyBtn.disabled = isOver;
+    applyBtn.style.opacity = isOver ? '0.4' : '1';
+    applyBtn.style.cursor = isOver ? 'not-allowed' : 'pointer';
+    applyBtn.title = isOver ? `${Math.abs(remain)}pcs 초과 배분 — 수정 필요` : '';
+  }
+  if (applyBothBtn) {
+    applyBothBtn.disabled = isOver;
+    applyBothBtn.style.opacity = isOver ? '0.4' : '1';
+    applyBothBtn.style.cursor = isOver ? 'not-allowed' : 'pointer';
+    applyBothBtn.title = isOver ? `${Math.abs(remain)}pcs 초과 배분 — 수정 필요` : '';
   }
 
   // ── 각 bin 입력창 옆 힌트 (이 bin에서 더 채울 수 있는 수량)
