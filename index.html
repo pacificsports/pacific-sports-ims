@@ -109,6 +109,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 .c-b{background:var(--primary-light);color:var(--primary);border:1px solid #b3cff0;}
 .c-o{background:var(--orange-light);color:var(--orange);border:1px solid #f5c68a;}
 .c-r{background:var(--red-light);color:var(--red);border:1px solid #f5b3b0;}
+.c-purple{background:#ede9fe;color:#6d28d9;border:1px solid #c4b5fd;}
 .c-gray{background:#f2f4f7;color:var(--text3);border:1px solid var(--border);}
 
 /* LOCATION BADGES */
@@ -637,6 +638,13 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <div class="ff"><label>Customer Name *</label><input class="fi" id="inv-cust" placeholder="OUT OF HAND GRAPHICS" oninput="liveRenderDocs()"/></div>
               <div class="ff"><label>Customer PO # *</label><input class="fi" id="inv-cust-po" placeholder="P42028" oninput="liveRenderDocs()"/></div>
               <div class="ff"><label>Terms</label><input class="fi" id="inv-cust-terms" value="N30" oninput="liveRenderDocs()"/></div>
+              <div class="ff" style="display:flex;align-items:center;gap:10px;padding:6px 0;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;">
+                  <input type="checkbox" id="inv-is-reserve" onchange="liveRenderDocs()" style="width:16px;height:16px;accent-color:#7c3aed;cursor:pointer;"/>
+                  <span style="font-weight:700;color:#7c3aed;font-size:13px;">🔒 Reserve PO</span>
+                </label>
+                <span style="font-size:11px;color:var(--text3);">재고를 이 고객용으로 확보</span>
+              </div>
               <div class="ff"><label>Bill To Address</label><textarea class="fi" id="inv-bill-addr" rows="3" style="height:64px;padding:6px;resize:none;" placeholder="6650 S Narragansett Ave&#10;Unit B&#10;Bedford Park IL 60638" oninput="liveRenderDocs()"></textarea></div>
               <div class="ff"><label>Ship To <span style="color:var(--text4);font-weight:400">(비우면 Bill To와 동일)</span></label><textarea class="fi" id="inv-ship-addr" rows="3" style="height:64px;padding:6px;resize:none;" oninput="liveRenderDocs()"></textarea></div>
               <div class="ff">
@@ -1818,7 +1826,7 @@ async function loadScInventory() {
   let allInv = [], from = 0;
   while (true) {
     const { data } = await db.from('inventory')
-      .select('qty_on_hand, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)')
+      .select('id, qty_on_hand, qty_committed, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)')
       .range(from, from + 999);
     if (!data || data.length === 0) break;
     allInv = allInv.concat(data);
@@ -1855,7 +1863,7 @@ async function loadScInventory() {
       if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
       const existing = window.binInventory[wh][key].find(b => b.bin === loc);
       if (existing) { existing.qty += qty; }
-      else { window.binInventory[wh][key].push({ bin: loc, qty, received_date: rcvDate }); }
+      else { window.binInventory[wh][key].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
 
       // PCR 계열은 color|size fallback key도 추가 저장 (style_id NULL인 row 대비)
       if (wh === 'SC-PCR' || wh === 'CA-PCR') {
@@ -1864,7 +1872,7 @@ async function loadScInventory() {
           if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
           const ex2 = window.binInventory[wh][csKey].find(b => b.bin === loc);
           if (ex2) { ex2.qty += qty; }
-          else { window.binInventory[wh][csKey].push({ bin: loc, qty, received_date: rcvDate }); }
+          else { window.binInventory[wh][csKey].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
         }
       }
     }
@@ -1928,13 +1936,21 @@ async function loadInvoices() {
 }
 
 function openNewInvoice() {
-  poLines = [];
   currentInvoiceData = null;
   document.getElementById('inv-list-view').style.display = 'none';
   document.getElementById('inv-detail-view').style.display = 'block';
   document.getElementById('inv-entry-form').style.display = 'block';
   document.getElementById('inv-save-btn').style.display = 'inline-flex';
   document.getElementById('inv-doc-title').textContent = 'New Invoice';
+
+  // Draft 복원 시도
+  const hasDraft = loadDraft();
+  if (hasDraft) {
+    renderEntryTable();
+    liveRenderDocs();
+    return;
+  }
+  poLines = [];
 
   // 창고 드롭다운 — SC only (SC-PCR 제외)
   const whSel = document.getElementById('inv-wh-sel');
@@ -1948,6 +1964,7 @@ function openNewInvoice() {
     if (el) el.value = '';
   });
   document.getElementById('inv-cust-terms').value = 'N30';
+  const reserveChk = document.getElementById('inv-is-reserve'); if (reserveChk) reserveChk.checked = false;
   document.getElementById('po-lines-body').innerHTML = '';
   document.getElementById('quick-code').value = '';
   document.getElementById('quick-qty').value = '';
@@ -2387,7 +2404,7 @@ function renderEntryTable() {
       <td style="font-weight:700">#${l.styleNum}</td>
       <td><input class="fi" value="${l.color}" style="width:100%;height:24px;font-size:11px;padding:2px 4px;" onchange="poLines[${idx}].color=this.value;renderEntryTable();liveRenderDocs()"/></td>
       <td><input class="fi" value="${l.size}" style="width:50px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].size=this.value;const ppb=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb);poLines[${idx}].loose=poLines[${idx}].qty%ppb;renderEntryTable();liveRenderDocs()"/></td>
-      <td><input type="number" class="fi" value="${l.qty}" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;font-weight:700;" onchange="poLines[${idx}].qty=parseInt(this.value)||0;const ppb2=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb2);poLines[${idx}].loose=poLines[${idx}].qty%ppb2;renderEntryTable();liveRenderDocs()"/></td>
+      <td><input type="number" class="fi" value="${l.qty}" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;font-weight:700;" onchange="poLines[${idx}].qty=parseInt(this.value)||0;const ppb2=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb2);poLines[${idx}].loose=poLines[${idx}].qty%ppb2;saveDraft();renderEntryTable();liveRenderDocs()"/></td>
       <td><input type="number" class="fi" value="${l.price}" step="0.01" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].price=parseFloat(this.value)||0;renderEntryTable();liveRenderDocs()"/></td>
       <td style="text-align:center;font-size:18px;font-weight:700;background:#e8f5e9;color:#2e7d32">${l.cases}</td>
       <td style="text-align:center;font-size:18px;font-weight:700;background:${l.loose>0?'#fff3e0':'#f5f5f5'};color:${l.loose>0?'#e65100':'#888'}">${l.loose}</td>
@@ -2742,12 +2759,276 @@ var totalPcs = lines.reduce(function(s,l){ return s + l.qty; }, 0);
     </td></tr>`;
 }
 
+
+
+// ── Reserved 재고 사용 모달
+let _useReservedState = null;
+
+async function showUseReservedModal(bin, wh, committed, invId) {
+  // 해당 bin/color/size에 연결된 reserve order_lines 조회
+  const l = _allocState ? poLines[_allocState.lineIdx] : null;
+  if (!l) return;
+
+  const whObj = warehouses.find(w => w.code === wh);
+  const { data: reserveLines } = await db.from('order_lines')
+    .select('id, reserved_qty, backordered_reserved_qty, color, size, orders(order_number, customer_name, customer_po, status)')
+    .eq('warehouse_id', whObj?.id)
+    .eq('color', (l.color||'').toUpperCase())
+    .eq('size', (l.size||'').toUpperCase())
+    .gt('reserved_qty', 0);
+
+  const lines = (reserveLines||[]).filter(rl => rl.orders?.status?.includes('reserved'));
+  if (lines.length === 0) {
+    alert('이 재고에 연결된 Reserve PO가 없습니다.');
+    return;
+  }
+
+  _useReservedState = { bin, wh, committed, invId, lines, color: l.color, size: l.size };
+
+  document.getElementById('use-reserved-info').innerHTML =
+    `<b style="font-family:'IBM Plex Mono',monospace;">${bin}</b> — 🔒 ${committed.toLocaleString()}pcs Reserved`;
+  document.getElementById('use-reserved-qty').value = Math.min(committed, 72);
+  document.getElementById('use-reserved-qty').max = committed;
+  document.getElementById('use-reserved-max').textContent = `최대 ${committed}pcs`;
+
+  const linesHtml = lines.map(rl => `
+    <div style="padding:8px 12px;border-bottom:1px solid #f3f0ff;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:#6d28d9;">${rl.orders?.order_number}</span>
+          <span style="font-size:11px;color:var(--text3);margin-left:6px;">${rl.orders?.customer_name}</span>
+        </div>
+        <span style="font-size:11px;font-weight:700;color:#6d28d9;">🔒 ${rl.reserved_qty}pcs</span>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:4px;cursor:pointer;">
+        <input type="radio" name="reserve-line" value="${rl.id}" style="accent-color:#7c3aed;"/>
+        <span style="font-size:11px;color:var(--text2);">이 PO에서 차출</span>
+      </label>
+    </div>`).join('');
+
+  document.getElementById('use-reserved-lines').innerHTML = linesHtml;
+  // 첫번째 선택
+  const firstRadio = document.querySelector('#use-reserved-lines input[type="radio"]');
+  if (firstRadio) firstRadio.checked = true;
+
+  document.getElementById('modal-use-reserved').style.display = 'flex';
+}
+
+async function confirmUseReserved() {
+  const s = _useReservedState;
+  if (!s) return;
+  const useQty = parseInt(document.getElementById('use-reserved-qty').value)||0;
+  if (useQty <= 0 || useQty > s.committed) { alert('수량을 확인해주세요.'); return; }
+
+  const selectedLineId = document.querySelector('#use-reserved-lines input[name="reserve-line"]:checked')?.value;
+  if (!selectedLineId) { alert('Reserve PO를 선택해주세요.'); return; }
+
+  const invRow = await db.from('inventory').select('qty_committed').eq('id', s.invId).single();
+  const curCommitted = invRow?.data?.qty_committed || 0;
+
+  await useReservedQty(selectedLineId, useQty, s.invId, 0, curCommitted);
+  closeModal('modal-use-reserved');
+  _useReservedState = null;
+}
+
+// ── Haiti 입고 시 Reserved 자동 재확보
+async function autoRestoreReserved(warehouseId, color, size, newQty) {
+  // 해당 창고+SKU에 backordered reserved lines 있는지 확인
+  const { data: backLines } = await db.from('order_lines')
+    .select('id, backordered_reserved_qty, reserved_qty, order_id')
+    .eq('warehouse_id', warehouseId)
+    .eq('color', (color||'').toUpperCase())
+    .eq('size', (size||'').toUpperCase())
+    .gt('backordered_reserved_qty', 0);
+
+  if (!backLines || backLines.length === 0) return 0;
+
+  let remaining = newQty;
+  for (const line of backLines) {
+    if (remaining <= 0) break;
+    const restore = Math.min(remaining, line.backordered_reserved_qty||0);
+
+    // qty_committed 증가
+    const { data: inv } = await db.from('inventory')
+      .select('id, qty_committed, qty_on_hand')
+      .eq('warehouse_id', warehouseId)
+      .eq('color', (color||'').toUpperCase())
+      .eq('size', (size||'').toUpperCase())
+      .order('qty_on_hand', { ascending: false })
+      .limit(1).single();
+
+    if (inv) {
+      await db.from('inventory').update({
+        qty_committed: (inv.qty_committed||0) + restore
+      }).eq('id', inv.id);
+    }
+
+    // order_line 업데이트
+    const newReserved = (line.reserved_qty||0) + restore;
+    const newBack = (line.backordered_reserved_qty||0) - restore;
+    await db.from('order_lines').update({
+      reserved_qty: newReserved,
+      backordered_reserved_qty: newBack,
+      is_backordered: newBack > 0
+    }).eq('id', line.id);
+
+    // order status 업데이트
+    const { data: allLines } = await db.from('order_lines').select('backordered_reserved_qty').eq('order_id', line.order_id);
+    const totalBack = (allLines||[]).reduce((s,l) => s + (l.backordered_reserved_qty||0), 0);
+    const newStatus = totalBack === 0 ? 'reserved' : 'reserved_partial';
+    await db.from('orders').update({ status: newStatus }).eq('id', line.order_id);
+
+    remaining -= restore;
+    console.log(`✅ Reserve 재확보: ${restore}pcs → order_line ${line.id}`);
+  }
+  return newQty - remaining; // 실제 재확보된 수량
+}
+
+// ── Reserve PO 저장
+async function saveReservePO(cust, po, whId, shipDate, custSelId) {
+  if (!cust || !whId) { alert('Customer name과 Warehouse는 필수입니다.'); return; }
+  if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
+
+  const totalPcs = poLines.reduce((s, l) => s + l.qty, 0);
+  const totalAmt = poLines.reduce((s, l) => s + l.qty * (l.price || 0), 0);
+
+  // 주문 번호 생성 (RSVP- 접두사)
+  const year = new Date().getFullYear();
+  const { data: lastOrders } = await db.from('orders')
+    .select('order_number').like('order_number', `RSVP-${year}-%`)
+    .order('order_number', { ascending: false }).limit(1);
+  let seq = 1;
+  if (lastOrders?.length > 0) {
+    const parts = lastOrders[0].order_number.split('-');
+    seq = (parseInt(parts[parts.length-1]) || 0) + 1;
+  }
+  const orderNum = `RSVP-${year}-${String(seq).padStart(4,'0')}`;
+
+  // Order 저장
+  const { data: order, error } = await db.from('orders').insert({
+    order_number: orderNum,
+    customer_name: cust, customer_po: po,
+    customer_id: custSelId || null,
+    warehouse_id: whId,
+    ship_date: shipDate || null,
+    status: 'reserved',
+    is_reserve: true,
+    total_pcs: totalPcs, total_amount: totalAmt,
+    bill_address: document.getElementById('inv-bill-addr')?.value || '',
+    ship_address: document.getElementById('inv-ship-addr')?.value || '',
+    terms: document.getElementById('inv-cust-terms')?.value || 'N30',
+    created_by: currentUser.email
+  }).select().single();
+  if (error) { alert('Error saving reserve PO: ' + error.message); return; }
+
+  // Order Lines 저장 + qty_committed 증가
+  for (const l of poLines) {
+    const s = styles.find(x => x.style_number === l.styleNum);
+
+    // 현재 재고에서 committed 가능한 수량 확인
+    const { data: invRows } = await db.from('inventory')
+      .select('id, qty_on_hand, qty_committed, location')
+      .eq('warehouse_id', whId)
+      .eq('color', (l.color||'').toUpperCase())
+      .eq('size', (l.size||'').toUpperCase())
+      .order('qty_on_hand', { ascending: false });
+
+    const totalAvail = (invRows||[]).reduce((s,r) => s + Math.max(0, (r.qty_on_hand||0) - (r.qty_committed||0)), 0);
+    const canCommit = Math.min(l.qty, totalAvail);
+    const backQty = l.qty - canCommit;
+
+    await db.from('order_lines').insert({
+      order_id: order.id,
+      style_id: s?.id || null,
+      warehouse_id: whId,
+      color: l.color, size: l.size,
+      qty_pieces: l.qty,
+      qty_filled: 0,
+      qty_backordered: backQty,
+      is_backordered: backQty > 0,
+      reserved_qty: canCommit,
+      backordered_reserved_qty: backQty,
+      pcs_per_box: l.ppb||72,
+      qty_boxes: Math.floor(l.qty / (l.ppb||72)),
+      qty_loose: l.qty % (l.ppb||72),
+      location: invRows?.[0]?.location || null,
+      unit_price: l.price || 0
+    });
+
+    // qty_committed 증가
+    let toCommit = canCommit;
+    for (const inv of (invRows||[])) {
+      if (toCommit <= 0) break;
+      const avail = Math.max(0, (inv.qty_on_hand||0) - (inv.qty_committed||0));
+      const commit = Math.min(toCommit, avail);
+      if (commit > 0) {
+        await db.from('inventory').update({
+          qty_committed: (inv.qty_committed||0) + commit
+        }).eq('id', inv.id);
+        toCommit -= commit;
+      }
+    }
+  }
+
+  // Reserve 상태 업데이트 (일부 backorder면 reserved_partial)
+  const hasBack = poLines.some(l => {
+    const tot = (window.binInventory?.SC || window.binInventory?.CA) ? l.qty : l.qty;
+    return false; // 위에서 이미 처리
+  });
+  
+  clearDraft();
+  showToast(`🔒 Reserve PO ${orderNum} 저장 완료`);
+  poLines = [];
+  document.getElementById('inv-entry-form').style.display = 'none';
+  document.getElementById('inv-save-btn').style.display = 'none';
+  document.getElementById('inv-list-view').style.display = 'block';
+  await loadInvoices();
+}
+
+// ── Reserve PO에서 수량 사용 (긴급 오더용)
+async function useReservedQty(orderLineId, useQty, invId, invQty, invCommitted) {
+  if (!confirm(`Reserved ${useQty}pcs를 이 오더에 사용하시겠습니까?
+해당 Reserve PO는 backordered 상태로 변경됩니다.`)) return;
+
+  // 1. inventory qty_committed 감소
+  await db.from('inventory').update({
+    qty_committed: Math.max(0, invCommitted - useQty)
+  }).eq('id', invId);
+
+  // 2. order_line reserved_qty 감소, backordered 증가
+  const { data: ol } = await db.from('order_lines').select('reserved_qty, backordered_reserved_qty, order_id').eq('id', orderLineId).single();
+  if (ol) {
+    const newReserved = Math.max(0, (ol.reserved_qty||0) - useQty);
+    const newBack = (ol.backordered_reserved_qty||0) + useQty;
+    await db.from('order_lines').update({
+      reserved_qty: newReserved,
+      backordered_reserved_qty: newBack,
+      is_backordered: newBack > 0
+    }).eq('id', orderLineId);
+
+    // order 전체 status 업데이트
+    const { data: allLines } = await db.from('order_lines').select('reserved_qty, backordered_reserved_qty').eq('order_id', ol.order_id);
+    const totalBack = (allLines||[]).reduce((s,l) => s + (l.backordered_reserved_qty||0), 0);
+    const totalReserved = (allLines||[]).reduce((s,l) => s + (l.reserved_qty||0), 0);
+    const newStatus = totalReserved === 0 ? 'backordered' : totalBack > 0 ? 'reserved_partial' : 'reserved';
+    await db.from('orders').update({ status: newStatus }).eq('id', ol.order_id);
+  }
+
+  showToast(`✅ ${useQty}pcs 사용 완료 — Reserve PO backordered 처리`);
+  await loadScInventory();
+  renderEntryTable();
+}
+
 async function saveInvoice() {
   const cust    = document.getElementById('inv-cust')?.value.trim();
   const po      = document.getElementById('inv-cust-po')?.value.trim();
   const whId    = document.getElementById('inv-wh-sel')?.value;
   const shipDate = document.getElementById('inv-ship-date-inp')?.value;
   const custSelId = document.getElementById('inv-cust-sel')?.value || null;
+  const isReserve = document.getElementById('inv-is-reserve')?.checked || false;
+
+  // Reserve PO면 별도 처리
+  if (isReserve) { await saveReservePO(cust, po, whId, shipDate, custSelId); return; }
 
   if (!cust || !whId) { alert('Customer name과 Warehouse는 필수입니다.'); return; }
   if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
@@ -5009,12 +5290,14 @@ function statusChip(s) {
     open:'c-b', processing:'c-b',
     backordered:'c-r', partial:'c-o',
     shipped:'c-g', cancelled:'c-gray',
-   credit_hold:'c-r', paid:'c-g', rejected:'c-r'
+    credit_hold:'c-r', paid:'c-g', rejected:'c-r',
+    reserved:'c-purple', reserved_partial:'c-purple'
   };
   const label = {
     backordered:'🔴 back order', partial:'⚠️ partial',
     open:'open', shipped:'shipped', cancelled:'cancelled',
-    credit_hold:'🚫 credit hold', paid:'✅ paid', rejected:'❌ rejected'
+    credit_hold:'🚫 credit hold', paid:'✅ paid', rejected:'❌ rejected',
+    reserved:'🔒 reserved', reserved_partial:'🔒 partial reserved'
   };
   return `<span class="chip ${map[s]||'c-gray'}">${label[s]||s}</span>`;
 }
@@ -5222,10 +5505,11 @@ function buildAllocHtml(lineIdx, whGroup) {
               <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:14px;">${b.bin}</span>
               ${i===0?'<span style="background:#0e7c3a;color:#fff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">FIFO ↑</span>':''}
             </div>
-            <div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:10px;">
+            <div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap;">
               <span>재고 <b style="color:${mainColor}">${b.qty.toLocaleString()}</b> pcs</span>
               <span style="font-family:'IBM Plex Mono',monospace;">${maxBoxes}박스 + ${loosePcs} loose</span>
               <span style="${ageCls}">${ageTxt}</span>
+              ${(b.committed||0)>0 ? `<span style="color:#7c3aed;font-weight:700;">🔒 ${b.committed}pcs Reserved</span>` : ''}
             </div>
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
@@ -5244,6 +5528,14 @@ function buildAllocHtml(lineIdx, whGroup) {
             <div style="font-size:10px;text-align:right;margin-top:1px;" id="alloc-bin-hint-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}"></div>
           </div>
         </div>
+        ${(b.committed||0)>0 ? `
+        <div style="margin-top:8px;padding:6px 8px;background:#f5f3ff;border-radius:4px;border:1px solid #c4b5fd;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <span style="font-size:10px;color:#6d28d9;font-weight:600;">🔒 ${b.committed}pcs Reserved — 잠긴 재고</span>
+          <button onclick="showUseReservedModal('${b.bin}','${isSC?'SC':'CA'}',${b.committed||0},'${b.inv_id||''}')"
+            style="font-size:10px;padding:3px 10px;border-radius:4px;border:1px solid #7c3aed;background:#7c3aed;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap;">
+            ⚡ Use Reserved
+          </button>
+        </div>` : ''}
         ${loosePcs > 0 ? `
         <div style="margin-top:8px;padding:6px 8px;background:rgba(0,0,0,0.04);border-radius:4px;display:flex;align-items:center;gap:8px;">
           <span style="font-size:10px;color:var(--text3);">이 bin에 loose ${loosePcs} pcs 있음 →</span>
@@ -6018,8 +6310,11 @@ function applyAlloc() {
 
   _pcrTransfers = [];
   closeModal('modal-alloc');
+  saveDraft();
   renderEntryTable();
   liveRenderDocs();
+  // 재고 표시 업데이트
+  loadScInventory().then(() => renderEntryTable());
 }
 
 function openModal(id) {
@@ -6259,8 +6554,57 @@ function applyAllocBoth() {
   poLines[lineIdx].allocCA = Object.keys(caAlloc).length > 0 ? caAlloc : null;
 
   closeModal('modal-alloc-both');
-  renderOrderLines();
+  saveDraft();
+  renderEntryTable();
+  liveRenderDocs();
+  loadScInventory().then(() => renderEntryTable());
   showToast('✅ SC + CA Bin 배분 저장');
+}
+
+
+// ── Invoice Draft 자동저장 (localStorage)
+function saveDraft() {
+  try {
+    const draft = {
+      cust: document.getElementById('inv-cust')?.value || '',
+      custPo: document.getElementById('inv-cust-po')?.value || '',
+      whId: document.getElementById('inv-wh-sel')?.value || '',
+      shipDate: document.getElementById('inv-ship-date-inp')?.value || '',
+      custSelId: document.getElementById('inv-cust-sel')?.value || '',
+      poLines: poLines,
+      savedAt: new Date().toISOString()
+    };
+    localStorage.setItem('invoice_draft', JSON.stringify(draft));
+  } catch(e) { console.warn('Draft save failed:', e); }
+}
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem('invoice_draft');
+    if (!raw) return false;
+    const draft = JSON.parse(raw);
+    // 24시간 이내 draft만 복원
+    if (!draft.savedAt || Date.now() - new Date(draft.savedAt) > 86400000) {
+      localStorage.removeItem('invoice_draft');
+      return false;
+    }
+    poLines = draft.poLines || [];
+    if (poLines.length === 0) return false;
+
+    // 헤더 복원
+    if (draft.cust) { const el = document.getElementById('inv-cust'); if(el) el.value = draft.cust; }
+    if (draft.custPo) { const el = document.getElementById('inv-cust-po'); if(el) el.value = draft.custPo; }
+    if (draft.whId) { const el = document.getElementById('inv-wh-sel'); if(el) el.value = draft.whId; }
+    if (draft.shipDate) { const el = document.getElementById('inv-ship-date-inp'); if(el) el.value = draft.shipDate; }
+    if (draft.custSelId) { const el = document.getElementById('inv-cust-sel'); if(el) el.value = draft.custSelId; }
+
+    showToast('📋 이전 작업 내용을 복원했습니다');
+    return true;
+  } catch(e) { console.warn('Draft load failed:', e); return false; }
+}
+
+function clearDraft() {
+  localStorage.removeItem('invoice_draft');
 }
 
 // ── Haiti Invoice Excel 파싱
@@ -6625,6 +6969,9 @@ async function postTransitReceiving() {
         received_date: new Date().toISOString().slice(0,10)
       });
     }
+    // ── Reserved 자동 재확보
+    const restored = await autoRestoreReserved(scWhObj.id, transitRow.color, transitRow.size, pcs);
+    if (restored > 0) showToast(`🔒 ${restored}pcs → Reserved PO 재확보 완료`);
     posted++;
   }
 
@@ -6695,5 +7042,29 @@ async function getInTransitHint(styleNum, color, size) {
   return data || [];
 }
 </script>
+
+<!-- ── Use Reserved Modal ── -->
+<div class="modal-overlay" id="modal-use-reserved" style="display:none;z-index:10000;">
+  <div class="modal-box" style="max-width:460px;">
+    <div style="padding:14px 16px;background:#6d28d9;display:flex;align-items:center;justify-content:space-between;">
+      <span style="font-weight:700;color:#fff;font-size:14px;">⚡ Reserved 재고 사용</span>
+      <button onclick="closeModal('modal-use-reserved')" style="background:none;border:none;color:rgba(255,255,255,0.8);font-size:18px;cursor:pointer;">×</button>
+    </div>
+    <div style="padding:16px;">
+      <div id="use-reserved-info" style="font-size:13px;color:var(--text2);margin-bottom:12px;"></div>
+      <div style="margin-bottom:16px;">
+        <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">사용할 수량 (pcs)</label>
+        <input type="number" id="use-reserved-qty" min="1" style="width:120px;height:36px;border:1px solid #c4b5fd;border-radius:6px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:700;"/>
+        <span id="use-reserved-max" style="font-size:11px;color:#7c3aed;margin-left:8px;"></span>
+      </div>
+      <div id="use-reserved-lines" style="max-height:200px;overflow-y:auto;border:1px solid #e8e8e8;border-radius:6px;margin-bottom:16px;"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button onclick="closeModal('modal-use-reserved')" class="btn">취소</button>
+        <button onclick="confirmUseReserved()" class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;">⚡ 사용 확정</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
