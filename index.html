@@ -5231,9 +5231,17 @@ function autoFillCustomer() {
   if (termsEl) termsEl.value = c.terms || 'N30';
   // 우선 창고 저장
   window._custPrefWh = c.preferred_warehouse || 'SC';
+  // AUTO면 주소 기반으로 SC/CA 판단
+  let prefWh = c.preferred_warehouse || 'SC';
+  if (prefWh === 'AUTO') {
+    const westStates = ['CA','WA','OR','NV','AZ','UT','CO','NM','ID','MT','WY','HI','AK'];
+    const addr = (c.bill_address || c.ship_address || '').toUpperCase();
+    const stMatch = addr.match(/\b([A-Z]{2})\s+\d{5}/);
+    const custState = stMatch ? stMatch[1] : '';
+    prefWh = westStates.includes(custState) ? 'CA' : 'SC';
+  }
   // 모든 라인 Ship 컬럼 업데이트
-  const prefWh = c.preferred_warehouse || 'SC';
-  applyWhToAllLines(prefWh);
+  applyWhToAllLines(warehouses.find(w => w.code === prefWh)?.id || prefWh);
   // 상단 Warehouse 드롭다운도 맞춤
   const whSel = document.getElementById('inv-wh-sel');
   if (whSel) {
