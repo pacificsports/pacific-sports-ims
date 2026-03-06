@@ -2432,13 +2432,16 @@ function renderEntryTable() {
           const ppb=l.ppb||72;
           const alloc=l.allocSC||null;
           const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
-          const scAllocTotal = alloc ? Object.values(alloc).reduce((s,v)=>s+(v||0),0) : 0;
-          const sqAvail = Math.max(0, sq - scAllocTotal);
+          // main bin alloc vs PCR alloc 분리
+          const scMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
+          const scPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
+          const sqAvail = Math.max(0, sq - scMainAlloc);
+          const pqAvail = Math.max(0, pq - scPcrAlloc);
           const warn=l.cases>0&&sqAvail<l.cases*ppb;
           return `<div style="display:flex;flex-direction:column;gap:3px;">
             <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sqAvail.toLocaleString()}${scAllocTotal>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}${warn?' ⚠️':''}</span>
-              ${pq>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#a84212;">+${pq.toLocaleString()} PCR</span>`:''}
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sqAvail.toLocaleString()}${scMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}${warn?' ⚠️':''}</span>
+              ${pqAvail>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#a84212;">+${pqAvail.toLocaleString()} PCR${scPcrAlloc>0?` <span style="font-size:9px;color:#888">/${pq}</span>`:''}</span>`:pq>0&&scPcrAlloc>0?`<span style="font-size:10px;color:#888;text-decoration:line-through;font-family:'IBM Plex Mono',monospace;">+${pq} PCR</span>`:''}
             </div>
             ${(l.wh||'SC')==='CA'
               ? `<button class="loc-pick-btn" disabled title="CA 출고 선택됨" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
@@ -2462,13 +2465,15 @@ function renderEntryTable() {
           const cpq=caPcrInventory[k]?.qty||0;
           const alloc=l.allocCA||null;
           const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
-          const caAllocTotal = alloc ? Object.values(alloc).reduce((s,v)=>s+(v||0),0) : 0;
-          const cqAvail = Math.max(0, cq - caAllocTotal);
+          const caMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
+          const caPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
+          const cqAvail = Math.max(0, cq - caMainAlloc);
+          const cpqAvail = Math.max(0, cpq - caPcrAlloc);
           return `<div style="display:flex;flex-direction:column;gap:3px;">
             <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cqAvail.toLocaleString()}${caAllocTotal>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${cq.toLocaleString()}</span>`:''}
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cqAvail.toLocaleString()}${caMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${cq.toLocaleString()}</span>`:''}
               </span>
-              ${cpq>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#5b21b6;">+${cpq.toLocaleString()} PCR</span>`:''}
+              ${cpqAvail>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#5b21b6;">+${cpqAvail.toLocaleString()} PCR${caPcrAlloc>0?` <span style="font-size:9px;color:#888">/${cpq}</span>`:''}</span>`:cpq>0&&caPcrAlloc>0?`<span style="font-size:10px;color:#888;text-decoration:line-through;font-family:'IBM Plex Mono',monospace;">+${cpq} PCR</span>`:''}
             </div>
             ${l.wh === 'SC&CA'
               ? `<button class="loc-pick-btn wh-ca${(l.allocCA&&Object.keys(l.allocCA).length)?' filled':''}" onclick="openAllocModalBoth(event,${idx})" title="SC + CA 동시 Bin 배분" style="background:linear-gradient(90deg,#eff6ff 50%,#e8f5e9 50%);border-color:#86efac;">
@@ -5177,15 +5182,8 @@ const qty = l.qty || 0;
 
   poLines = [...poLines, ...newLines];
 
-  // preferred_warehouse 라인에 적용
-  const _pw = window._applyPrefWhResolved || window._custPrefWh || 'SC';
-  poLines.forEach(l => { l.wh = _pw; });
-  // 상단 Warehouse 드롭다운 세팅
-  const _whSel = document.getElementById('inv-wh-sel');
-  if (_whSel) {
-    const _whObj = warehouses.find(w => w.code === _pw);
-    if (_whObj) _whSel.value = _whObj.id;
-  }
+  // 상단 Warehouse 드롭다운 — 라인별 wh 기반으로 자동 동기화
+  syncWhDropdown();
 
   renderEntryTable();
   liveRenderDocs();
