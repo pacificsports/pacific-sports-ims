@@ -1854,12 +1854,6 @@ async function loadScInventory() {
       if (!scInventory[key]) scInventory[key] = entry; else scInventory[key].qty += qty;
     } else if (wh === 'SC-PCR') {
       if (!pcrInventory[key]) pcrInventory[key] = entry; else pcrInventory[key].qty += qty;
-      // style_id NULL인 row 대비: color|size fallback key도 저장
-      const pcrCsKey = `|${(row.color||'').toUpperCase()}|${(row.size||'').toUpperCase()}`;
-      if (pcrCsKey !== key) {
-        if (!pcrInventory[pcrCsKey]) pcrInventory[pcrCsKey] = { qty, location: loc || '—' };
-        else pcrInventory[pcrCsKey].qty += qty;
-      }
     } else if (wh === 'CA') {
       if (!caInventory[key]) caInventory[key] = entry; else caInventory[key].qty += qty;
     } else if (wh === 'CA-PCR') {
@@ -2098,10 +2092,7 @@ function getStyleDesc(styleNum) {
 // ── PCR 재고 조회
 function getPcrStock(styleNum, color, size) {
   const key = `${styleNum}|${color.toUpperCase()}|${size.toUpperCase()}`;
-  if (pcrInventory[key]) return pcrInventory[key];
-  // style_id NULL인 SC-PCR row는 "|COLOR|SIZE" key로 저장됨
-  const csKey = `|${color.toUpperCase()}|${size.toUpperCase()}`;
-  return pcrInventory[csKey] || null;
+  return pcrInventory[key] || null;
 }
 
 // ── SC 재고 조회 (location 포함)
@@ -6359,18 +6350,12 @@ function updateAllocSum() {
   document.querySelectorAll(wraps.map(w=>w+' input[data-type="pcs"]').join(', ')).forEach(inp => {
     sum += parseInt(inp.value)||0;
   });
-
-  // need/remain 단일 계산 — 열린 모달 기준
-  const needEl = bothOpen
-    ? document.getElementById('alloc-both-need')
-    : document.getElementById('alloc-need');
-  const need = parseInt(needEl?.textContent.replace(/[^0-9]/g,''))||0;
-  const remain = need - sum;
-
   // 단일 모달 합계 업데이트
   const sumEl = document.getElementById('alloc-sum');
   if (sumEl) {
     sumEl.textContent = sum.toLocaleString() + ' pcs';
+    const need = parseInt(document.getElementById('alloc-need')?.textContent.replace(/[^0-9]/g,''))||0;
+    const remain = need - sum;
     const remainEl = document.getElementById('alloc-remain');
     if (remainEl) {
       remainEl.textContent = (remain > 0 ? remain.toLocaleString() : '0') + ' pcs';
@@ -6381,6 +6366,9 @@ function updateAllocSum() {
   // 통합 모달 합계 업데이트
   const bothTotalEl = document.getElementById('alloc-both-total');
   if (bothTotalEl) updateAllocBothTotals();
+  const needEl = bothOpen ? document.getElementById('alloc-both-need') : document.getElementById('alloc-need');
+  const need = parseInt(needEl?.textContent.replace(/[^0-9]/g,''))||0;
+  const remain = need - sum;
 
   // ── 남은 수량 힌트 (박스 + loose)
   const hintEl = document.getElementById('alloc-remain-hint');
