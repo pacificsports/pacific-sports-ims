@@ -1916,13 +1916,13 @@ function getDefaultBins(styleNum, color, size) {
 
 async function loadInvoices() {
   fillWhDropdown();
-  // 상태 복원
+  // 상태 복원 — 재고 로드 완료 후
   const invView = localStorage.getItem('inv_view');
   if (invView === 'new') {
-    // draft가 있으면 New Invoice 화면으로
     const draft = localStorage.getItem('invoice_draft');
     if (draft) {
-      setTimeout(() => openNewInvoice(), 100);
+      await loadScInventory();
+      openNewInvoice();
     } else {
       localStorage.removeItem('inv_view');
     }
@@ -2452,7 +2452,8 @@ function renderEntryTable() {
           const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
           const sq=scInventory[k]?.qty||0;
           const pcrCsKey=`|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
-          const pq=Math.max(pcrInventory[k]?.qty||0, pcrInventory[pcrCsKey]?.qty||0);
+          const scPcrBins = (window.binInventory?.['SC-PCR']?.[k] || window.binInventory?.['SC-PCR']?.[pcrCsKey] || []);
+          const pq = scPcrBins.reduce((s,b)=>s+(b.qty||0), 0);
           const ppb=l.ppb||72;
           const alloc=l.allocSC||null;
           const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
@@ -2486,7 +2487,9 @@ function renderEntryTable() {
         ${(function(){
           const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
           const cq=caInventory[k]?.qty||0;
-          const cpq=caPcrInventory[k]?.qty||0;
+          const caPcrCsKey=`|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+          const caPcrBins = (window.binInventory?.['CA-PCR']?.[k] || window.binInventory?.['CA-PCR']?.[caPcrCsKey] || []);
+          const cpq = caPcrBins.reduce((s,b)=>s+(b.qty||0), 0);
           const alloc=l.allocCA||null;
           const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
           const caMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
