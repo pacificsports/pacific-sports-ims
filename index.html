@@ -2416,12 +2416,15 @@ function renderEntryTable() {
           const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
           const sq=scInventory[k]?.qty||0;
           const pq=pcrInventory[k]?.qty||0;
-          const ppb=l.ppb||72; const warn=l.cases>0&&sq<l.cases*ppb;
+          const ppb=l.ppb||72;
           const alloc=l.allocSC||null;
           const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
+          const scAllocTotal = alloc ? Object.values(alloc).reduce((s,v)=>s+(v||0),0) : 0;
+          const sqAvail = Math.max(0, sq - scAllocTotal);
+          const warn=l.cases>0&&sqAvail<l.cases*ppb;
           return `<div style="display:flex;flex-direction:column;gap:3px;">
             <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sq.toLocaleString()}${warn?' ⚠️':''}</span>
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sqAvail.toLocaleString()}${scAllocTotal>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}${warn?' ⚠️':''}</span>
               ${pq>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#a84212;">+${pq.toLocaleString()} PCR</span>`:''}
             </div>
             ${(l.wh||'SC')==='CA'
@@ -2446,9 +2449,12 @@ function renderEntryTable() {
           const cpq=caPcrInventory[k]?.qty||0;
           const alloc=l.allocCA||null;
           const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
+          const caAllocTotal = alloc ? Object.values(alloc).reduce((s,v)=>s+(v||0),0) : 0;
+          const cqAvail = Math.max(0, cq - caAllocTotal);
           return `<div style="display:flex;flex-direction:column;gap:3px;">
             <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cq.toLocaleString()}</span>
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cqAvail.toLocaleString()}${caAllocTotal>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${cq.toLocaleString()}</span>`:''}
+              </span>
               ${cpq>0?`<span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#5b21b6;">+${cpq.toLocaleString()} PCR</span>`:''}
             </div>
             ${l.wh === 'SC&CA'
@@ -5452,6 +5458,7 @@ window.addEventListener('scroll', closeLpDropdown, true);
 // BIN 배분 모달
 // ══════════════════════════════════
 let _allocState = null; // { lineIdx, whGroup }
+let _allocLoading = false;
 
 function buildAllocHtml(lineIdx, whGroup) {
   const l = poLines[lineIdx];
@@ -6316,7 +6323,14 @@ function applyAlloc() {
   saveDraft();
   renderEntryTable();
   liveRenderDocs();
-  loadScInventory().then(() => renderEntryTable());
+  // 재고 로딩 중 배분 버튼 잠금
+  _allocLoading = true;
+  document.querySelectorAll('[onclick*="openAllocModal"]').forEach(b => b.style.pointerEvents = 'none');
+  loadScInventory().then(() => {
+    _allocLoading = false;
+    document.querySelectorAll('[onclick*="openAllocModal"]').forEach(b => b.style.pointerEvents = '');
+    renderEntryTable();
+  });
 }
 
 function openModal(id) {
@@ -6557,13 +6571,18 @@ function applyAllocBoth() {
 
   _allocState = null;
   closeModal('modal-alloc-both');
-  // 통합 모달 내용 클리어 — 단일 모달에서 ID 충돌 방지
   const scWrap = document.getElementById('alloc-both-sc-wrap'); if (scWrap) scWrap.innerHTML = '';
   const caWrap = document.getElementById('alloc-both-ca-wrap'); if (caWrap) caWrap.innerHTML = '';
   saveDraft();
   renderEntryTable();
   liveRenderDocs();
-  loadScInventory().then(() => renderEntryTable());
+  _allocLoading = true;
+  document.querySelectorAll('[onclick*="openAllocModal"]').forEach(b => b.style.pointerEvents = 'none');
+  loadScInventory().then(() => {
+    _allocLoading = false;
+    document.querySelectorAll('[onclick*="openAllocModal"]').forEach(b => b.style.pointerEvents = '');
+    renderEntryTable();
+  });
   showToast('✅ SC + CA Bin 배분 저장');
 }
 
