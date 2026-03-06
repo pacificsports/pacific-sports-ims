@@ -651,7 +651,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <div class="ff"><label>Ship To <span style="color:var(--text4);font-weight:400">(비우면 Bill To와 동일)</span></label><textarea class="fi" id="inv-ship-addr" rows="3" style="height:64px;padding:6px;resize:none;" oninput="liveRenderDocs()"></textarea></div>
               <div class="ff">
                 <label>Warehouse (F.O.B.) *</label>
-               <select class="fsel" id="inv-wh-sel" onchange="renderEntryTable();liveRenderDocs()"><option value="">Select...</option></select>
+               <select class="fsel" id="inv-wh-sel" onchange="applyWhToAllLines(this.value);renderEntryTable();liveRenderDocs()"><option value="">Select...</option></select>
                 <label style="margin-top:8px;display:block">Ship Date</label>
                 <input class="fi" id="inv-ship-date-inp" type="date" oninput="liveRenderDocs()"/>
               </div>
@@ -1909,6 +1909,7 @@ function getDefaultBins(styleNum, color, size) {
 }
 
 async function loadInvoices() {
+  fillWhDropdown();
   await loadScInventory();
   document.getElementById('invoice-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data } = await db.from('orders')
@@ -1937,6 +1938,19 @@ async function loadInvoices() {
     </table>`;
 }
 
+
+function fillWhDropdown() {
+  const whSel = document.getElementById('inv-wh-sel');
+  if (!whSel) return;
+  const cur = whSel.value;
+  whSel.innerHTML = '<option value="">Select warehouse...</option>';
+  warehouses.filter(w => !w.code.includes('PCR')).forEach(w =>
+    whSel.innerHTML += `<option value="${w.id}" data-code="${w.code}" data-name="${w.name}">${w.code} — ${w.name}</option>`
+  );
+  whSel.innerHTML += `<option value="SC&CA">SC &amp; CA — 양쪽 출고</option>`;
+  if (cur) whSel.value = cur;
+}
+
 function openNewInvoice() {
   currentInvoiceData = null;
   document.getElementById('inv-list-view').style.display = 'none';
@@ -1944,6 +1958,9 @@ function openNewInvoice() {
   document.getElementById('inv-entry-form').style.display = 'block';
   document.getElementById('inv-save-btn').style.display = 'inline-flex';
   document.getElementById('inv-doc-title').textContent = 'New Invoice';
+
+  // 창고 드롭다운 먼저 채우기
+  fillWhDropdown();
 
   // Draft 복원 시도
   const hasDraft = loadDraft();
@@ -1954,12 +1971,8 @@ function openNewInvoice() {
   }
   poLines = [];
 
-  // 창고 드롭다운 — SC only (SC-PCR 제외)
-  const whSel = document.getElementById('inv-wh-sel');
-  whSel.innerHTML = '<option value="">Select warehouse...</option>';
-  warehouses.filter(w => !w.code.includes('PCR')).forEach(w =>
-    whSel.innerHTML += `<option value="${w.id}" data-code="${w.code}" data-name="${w.name}">${w.code} — ${w.name}</option>`
-  );
+  // 창고 드롭다운 — PCR 제외
+  fillWhDropdown();
 
   ['inv-cust','inv-cust-po','inv-bill-addr','inv-ship-addr'].forEach(id => {
     const el = document.getElementById(id);
@@ -2473,7 +2486,7 @@ function renderEntryTable() {
         })()}
       </td>
       <td style="text-align:center;font-size:11px;">
-        <select class="fsel" style="width:72px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;renderEntryTable();liveRenderDocs()">
+        <select class="fsel" style="width:72px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;syncWhDropdown();renderEntryTable();liveRenderDocs()">
           <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
           <option value="CA" ${l.wh==='CA'?'selected':''}>CA</option>
           <option value="SC&CA" ${l.wh==='SC&CA'?'selected':''}>SC &amp; CA</option>
@@ -5167,6 +5180,41 @@ function updateCustomerSelects() {
   sel.value = cur;
 }
 
+
+// Ship 컬럼 변경 → 상단 Warehouse 드롭다운 자동 동기화
+function syncWhDropdown() {
+  if (!poLines.length) return;
+  const whs = poLines.map(l => l.wh || 'SC');
+  const allSC = whs.every(w => w === 'SC');
+  const allCA = whs.every(w => w === 'CA');
+
+  const whSel = document.getElementById('inv-wh-sel');
+  if (!whSel) return;
+
+  if (allSC) {
+    const whObj = warehouses.find(w => w.code === 'SC');
+    if (whObj) whSel.value = whObj.id;
+  } else if (allCA) {
+    const whObj = warehouses.find(w => w.code === 'CA');
+    if (whObj) whSel.value = whObj.id;
+  } else {
+    // 하나라도 다르면 SC&CA
+    whSel.value = 'SC&CA';
+  }
+}
+
+// 상단 Warehouse → 모든 라인 Ship 컬럼 일괄 적용
+function applyWhToAllLines(whId) {
+  if (!whId || !poLines.length) return;
+  if (whId === 'SC&CA') {
+    poLines.forEach(l => { l.wh = 'SC&CA'; });
+    return;
+  }
+  const whObj = warehouses.find(w => w.id === whId);
+  if (!whObj) return;
+  poLines.forEach(l => { l.wh = whObj.code; });
+}
+
 function autoFillCustomer() {
   const sel = document.getElementById('inv-cust-sel');
   const custId = sel.value;
@@ -5183,6 +5231,16 @@ function autoFillCustomer() {
   if (termsEl) termsEl.value = c.terms || 'N30';
   // 우선 창고 저장
   window._custPrefWh = c.preferred_warehouse || 'SC';
+  // 모든 라인 Ship 컬럼 업데이트
+  const prefWh = c.preferred_warehouse || 'SC';
+  applyWhToAllLines(prefWh);
+  // 상단 Warehouse 드롭다운도 맞춤
+  const whSel = document.getElementById('inv-wh-sel');
+  if (whSel) {
+    const whObj = warehouses.find(w => w.code === prefWh);
+    if (whObj) whSel.value = whObj.id;
+  }
+  renderEntryTable();
   liveRenderDocs();
 }
 
