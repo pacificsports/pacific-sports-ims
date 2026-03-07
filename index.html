@@ -3255,6 +3255,37 @@ if (error) { alert('Error saving order: ' + error.message); return; }
     if (transfers.length > 0) await db.from('transfers').insert(transfers);
   }
 
+  // ── PO Confirm 이메일 발송
+  try {
+    const custObj = customers.find(c => c.id === custSelId);
+    const custEmail = custObj?.email;
+    if (custEmail) {
+      const whOpt = document.querySelector('#inv-wh-sel option:checked');
+      const whName = whOpt?.textContent || '';
+      await fetch('https://po-confirm-email.hjbae.workers.dev/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_number: orderNum,
+          customer_name: cust,
+          customer_po: po,
+          customer_email: custEmail,
+          total_pcs: totalPcs,
+          total_amount: totalAmt,
+          ship_date: shipDate || '',
+          warehouse: whName,
+          lines: poLines.map(l => ({
+            style: l.styleNum,
+            color: l.color,
+            size: l.size,
+            qty: l.qty,
+            unit_price: l.price || 0
+          }))
+        })
+      });
+    }
+  } catch(e) { console.warn('PO confirm email error:', e); }
+
   // ── 결과 알림
   if (hasBackorder) {
     const boCount = lineChecks.filter(l => l.backQty > 0).length;
