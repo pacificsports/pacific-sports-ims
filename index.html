@@ -2445,19 +2445,32 @@ function renderEntryTable() {
       <td><input class="fi" value="${l.size}" style="width:50px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].size=this.value;const ppb=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb);poLines[${idx}].loose=poLines[${idx}].qty%ppb;renderEntryTable();liveRenderDocs()"/></td>
       <td><input type="number" class="fi" value="${l.qty}" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;font-weight:700;" onchange="poLines[${idx}].qty=parseInt(this.value)||0;const ppb2=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb2);poLines[${idx}].loose=poLines[${idx}].qty%ppb2;saveDraft();renderEntryTable();liveRenderDocs()"/></td>
       <td><input type="number" class="fi" value="${l.price}" step="0.01" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].price=parseFloat(this.value)||0;renderEntryTable();liveRenderDocs()"/></td>
-      <td style="text-align:center;font-size:18px;font-weight:700;background:#e8f5e9;color:#2e7d32">${l.cases}</td>
+      <td style="text-align:center;font-size:18px;font-weight:700;background:#e8f5e9;color:#2e7d32">${(function(){
+        const allocSC = l.allocSC || {};
+        const allocCA = l.allocCA || {};
+        const totalAlloc = [...Object.values(allocSC), ...Object.values(allocCA)].reduce((s,v)=>s+(v||0),0);
+        const ppb = l.ppb || 72;
+        const allocBoxes = Math.floor(totalAlloc / ppb);
+        return allocBoxes;
+      })()}</td>
       <td style="text-align:center;font-size:18px;font-weight:700;background:${l.loose>0?'#fff3e0':'#f5f5f5'};color:${l.loose>0?'#e65100':'#888'}">${l.loose}</td>
 
-      <td style="text-align:center;font-size:13px;font-weight:700;">
+      <td style="text-align:center;font-size:12px;font-weight:700;">
         ${(function(){
           const allocSC = l.allocSC || {};
           const allocCA = l.allocCA || {};
           const totalAlloc = [...Object.values(allocSC), ...Object.values(allocCA)].reduce((s,v)=>s+(v||0),0);
           const backQty = Math.max(0, l.qty - totalAlloc);
           if (totalAlloc === 0) return '<span style="color:#999;">—</span>';
-          return backQty > 0
-            ? `<span style="color:#b91c1c;font-weight:700;">${backQty.toLocaleString()}</span>`
-            : '<span style="color:#2e7d32;">—</span>';
+          if (backQty <= 0) return '<span style="color:#2e7d32;">—</span>';
+          const ppb = l.ppb || 72;
+          const backBoxes = Math.floor(backQty / ppb);
+          const backLoose = backQty % ppb;
+          let txt = '';
+          if (backBoxes > 0 && backLoose > 0) txt = `${backBoxes}박스 + ${backLoose} pcs`;
+          else if (backBoxes > 0) txt = `${backBoxes}박스 (${backQty} pcs)`;
+          else txt = `${backLoose} pcs`;
+          return `<span style="color:#b91c1c;font-weight:700;">${txt}</span>`;
         })()}
       </td>
       <td style="padding:4px 8px;">
