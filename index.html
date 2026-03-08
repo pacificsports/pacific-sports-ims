@@ -3159,9 +3159,11 @@ async function saveInvoice() {
 
   const lineChecks = await Promise.all(poLines.map(async l => {
     const sku = (l.styleNum + l.color.replace(/\s+/g,'').substring(0,6) + l.size.replace(/\s+/g,'')).toLowerCase();
+    const lineWh = l.wh || 'SC';
+    const isLineSplit = (lineWh === 'SC&CA');
 
-    if (isSplitWh) {
-      // SC&CA: canFill = allocSC 합 + allocCA 합 (이미 배분된 수량 기준)
+    if (isLineSplit) {
+      // SC&CA 라인: canFill = allocSC + allocCA 합산
       const allocSC = l.allocSC || {};
       const allocCA = l.allocCA || {};
       const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
@@ -3171,20 +3173,32 @@ async function saveInvoice() {
       return { ...l, invRows: [], totalStock: canFill, canFill, backQty, sku, scQty, caQty };
     }
 
+    // SC 또는 CA 단독 라인: alloc 기준으로 canFill 계산
+    const allocSC = l.allocSC || {};
+    const allocCA = l.allocCA || {};
+    const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
+    const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
+    const allocTotal = scQty + caQty;
+
+    // alloc이 있으면 alloc 기준, 없으면 DB 재고 조회
+    if (allocTotal > 0) {
+      const canFill = Math.min(l.qty, allocTotal);
+      const backQty = Math.max(0, l.qty - canFill);
+      return { ...l, invRows: [], totalStock: allocTotal, canFill, backQty, sku, scQty, caQty };
+    }
+
+    const lineWhId = lineWh === 'CA' ? (warehouses.find(w=>w.code==='CA')?.id || whId)
+                   : (warehouses.find(w=>w.code==='SC')?.id || whId);
     const { data: invRows } = await db.from('inventory')
       .select('id, qty_on_hand, location, warehouse_id, received_date')
       .eq('color', (l.color||'').toUpperCase())
       .eq('size', (l.size||'').toUpperCase())
-      .eq('warehouse_id', whId)
+      .eq('warehouse_id', lineWhId)
       .order('received_date', { ascending: true, nullsFirst: false })
       .order('qty_on_hand', { ascending: false });
     const totalStock = (invRows || []).reduce((s, r) => s + (r.qty_on_hand || 0), 0);
     const canFill    = Math.min(l.qty, totalStock);
     const backQty    = l.qty - canFill;
-    const allocSC = l.allocSC || {};
-    const allocCA = l.allocCA || {};
-    const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
-    const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
     return { ...l, invRows: invRows || [], totalStock, canFill, backQty, sku, scQty, caQty };
   }));
 
@@ -3269,8 +3283,10 @@ if (error) { alert('Error saving order: ' + error.message); return; }
       unit_price: l.price || 0
     });
 
-    // 재고 차감 — SC&CA는 bin 배분 시 이미 처리되므로 skip
-    if (!isSplitWh) {
+    // 재고 차감 — SC&CA 또는 alloc 있는 라인은 bin 배분 시 이미 처리됐으므로 skip
+    const isLineSplitDeduct = (l.wh === 'SC&CA');
+    const hasAlloc = ((l.scQty || 0) + (l.caQty || 0)) > 0;
+    if (!isLineSplitDeduct && !hasAlloc) {
       let remaining = l.canFill;
       for (const inv of l.invRows) {
         if (remaining <= 0) break;
