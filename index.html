@@ -3187,8 +3187,9 @@ async function saveInvoice() {
       return { ...l, invRows: [], totalStock: allocTotal, canFill, backQty, sku, scQty, caQty };
     }
 
-    const lineWhId = lineWh === 'CA' ? (warehouses.find(w=>w.code==='CA')?.id || whId)
-                   : (warehouses.find(w=>w.code==='SC')?.id || whId);
+    const lineWhId = lineWh === 'CA'
+      ? (warehouses.find(w => w.code === 'CA')?.id || caWhId || whId)
+      : (warehouses.find(w => w.code === 'SC')?.id || scWhId || effectiveWhId || whId);
     const { data: invRows } = await db.from('inventory')
       .select('id, qty_on_hand, location, warehouse_id, received_date')
       .eq('color', (l.color||'').toUpperCase())
@@ -3196,6 +3197,7 @@ async function saveInvoice() {
       .eq('warehouse_id', lineWhId)
       .order('received_date', { ascending: true, nullsFirst: false })
       .order('qty_on_hand', { ascending: false });
+    console.log(`[lineCheck] ${l.color} ${l.size} wh=${lineWh} lineWhId=${lineWhId} invRows=${invRows?.length} totalStock=${(invRows||[]).reduce((s,r)=>s+(r.qty_on_hand||0),0)}`);
     const totalStock = (invRows || []).reduce((s, r) => s + (r.qty_on_hand || 0), 0);
     const canFill    = Math.min(l.qty, totalStock);
     const backQty    = l.qty - canFill;
