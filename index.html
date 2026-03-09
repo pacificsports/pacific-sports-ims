@@ -4147,14 +4147,43 @@ async function loadOrderStatus() {
     return scoreA - scoreB;
   });
 
-  const cols = {
-    entered:   sortByUrgency(orders.filter(o => ['po_entered','open','credit_hold'].includes(o.status))),
-    preparing: sortByUrgency(orders.filter(o => o.status === 'preparing')),
-    ready:     sortByUrgency(orders.filter(o => o.status === 'ready_to_ship')),
-    shipped:   orders.filter(o => o.status === 'shipped'),
-    invoiced:  orders.filter(o => o.status === 'invoiced'),
-    backorder: sortByUrgency(orders.filter(o => ['backordered','partial'].includes(o.status))),
+  // SC&CA 오더는 SC 블록 + CA 블록 두 개로 분리
+  // 각 "가상 카드"를 만들어서 col별로 분류
+  const makeCards = (orders) => {
+    const cards = [];
+    orders.forEach(o => {
+      const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
+      if (isSplit) {
+        cards.push({ ...o, _wh: 'SC', _status: o.sc_status || o.status });
+        cards.push({ ...o, _wh: 'CA', _status: o.ca_status || o.status });
+      } else {
+        const wh = o.wh_code || o.warehouses?.code || 'SC';
+        cards.push({ ...o, _wh: wh, _status: o.status });
+      }
+    });
+    return cards;
   };
+
+  const allCards = makeCards(orders);
+
+  const statusMatch = (card, statuses) => statuses.includes(card._status);
+
+  const cols = {
+    entered:   sortByUrgency(allCards.filter(c => statusMatch(c, ['po_entered','open','credit_hold']))),
+    preparing: sortByUrgency(allCards.filter(c => statusMatch(c, ['preparing']))),
+    ready:     sortByUrgency(allCards.filter(c => statusMatch(c, ['ready_to_ship']))),
+    shipped:   allCards.filter(c => statusMatch(c, ['shipped'])),
+    invoiced:  allCards.filter(c => statusMatch(c, ['invoiced'])),
+    backorder: sortByUrgency(allCards.filter(c => statusMatch(c, ['backordered','partial']))),
+  };
+
+  // KPI는 unique 오더 기준
+  document.getElementById('os-kpi-entered').textContent   = [...new Set(cols.entered.map(c=>c.id))].length;
+  document.getElementById('os-kpi-preparing').textContent = [...new Set(cols.preparing.map(c=>c.id))].length;
+  document.getElementById('os-kpi-ready').textContent     = [...new Set(cols.ready.map(c=>c.id))].length;
+  document.getElementById('os-kpi-shipped').textContent   = [...new Set(cols.shipped.map(c=>c.id))].length;
+  document.getElementById('os-kpi-invoiced').textContent  = [...new Set(cols.invoiced.map(c=>c.id))].length;
+  document.getElementById('os-kpi-backorder').textContent = [...new Set(cols.backorder.map(c=>c.id))].length;
 
   Object.entries(cols).forEach(([col, list]) => {
     const el = document.getElementById(`os-col-${col}`);
@@ -4163,32 +4192,29 @@ async function loadOrderStatus() {
       return;
     }
     el.innerHTML = list.map(o => {
-      const whCode = o.wh_code || o.warehouses?.code || '—';
-      const whBadge = (whCode === 'SC&CA' || o.is_split_warehouse)
-                    ? '<span style="font-size:9px;background:#e0e7ff;color:#3730a3;padding:1px 5px;border-radius:3px;font-weight:700;">SC+CA</span>'
-                    : whCode === 'CA' ? '<span class="loc-ca">CA</span>'
-                    : '<span class="loc-sc">SC</span>';
-      const isBack = o.status === 'backordered';
-      const isCreditHold = o.status === 'credit_hold';
+      const wh = o._wh;
+      const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
+      const whColor = wh === 'CA' ? '#0f2744' : '#064e22';
+      const whBg = wh === 'CA' ? '#eff6ff' : '#f0fdf4';
+      const whBorder = wh === 'CA' ? '#93c5fd' : '#86efac';
+      const whBadge = isSplit
+        ? `<span style="font-size:9px;background:${whBg};color:${whColor};padding:2px 7px;border-radius:4px;font-weight:800;border:1px solid ${whBorder};">${wh}</span>`
+        : wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+
+      const isBack = o._status === 'backordered';
+      const isCreditHold = o._status === 'credit_hold';
       const isUrgent = o.priority === 'urgent';
-
-      // 48시간 경과 체크 (Shipped/Invoiced는 제외)
       const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
-      const isOverdue = !['shipped','invoiced'].includes(o.status) && hoursElapsed > 48;
-      const isWarning = !['shipped','invoiced'].includes(o.status) && hoursElapsed > 24 && hoursElapsed <= 48;
-      const hoursLabel = hoursElapsed < 24
-        ? `${Math.floor(hoursElapsed)}h ago`
-        : hoursElapsed < 48
-        ? `${Math.floor(hoursElapsed)}h ago`
-        : `${Math.floor(hoursElapsed / 24)}d ${Math.floor(hoursElapsed % 24)}h ago`;
-
+      const isOverdue = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 48;
+      const isWarning = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 24 && hoursElapsed <= 48;
+      const hoursLabel = hoursElapsed < 48 ? `${Math.floor(hoursElapsed)}h ago` : `${Math.floor(hoursElapsed/24)}d ${Math.floor(hoursElapsed%24)}h ago`;
       const cardBg = isOverdue ? '#fffbeb' : '#fff';
-      const borderColor = isOverdue ? '#f59e0b'
-                        : isUrgent ? '#dc2626'
-                        : isBack ? '#dc2626'
-                        : isCreditHold ? '#ea580c'
-                        : '#e5e7eb';
-      const priStripe = isUrgent ? 'border-left:3px solid #dc2626;' : '';
+      const borderColor = isOverdue ? '#f59e0b' : isUrgent ? '#dc2626' : isBack ? '#dc2626' : isCreditHold ? '#ea580c' : isSplit ? whBorder : '#e5e7eb';
+      const priStripe = isUrgent ? 'border-left:3px solid #dc2626;' : isSplit ? `border-left:3px solid ${whColor};` : '';
+
+      // SC&CA 분리 오더는 해당 WH 수량만 표시
+      let displayPcs = o.total_pcs || 0;
+      let displayAmt = o.total_amount || 0;
 
       return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:1px solid ${borderColor};${priStripe}border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.12)'" onmouseout="this.style.boxShadow='none'">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
@@ -4201,25 +4227,22 @@ async function loadOrderStatus() {
         <div style="font-size:12px;font-weight:600;color:#111827;margin-bottom:2px;">${o.customer_name}</div>
         <div style="font-size:10px;color:#6b7280;">PO# ${o.customer_po || '—'}</div>
         <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;">
-          <span style="color:#374151;font-weight:600;">${(o.total_pcs||0).toLocaleString()} pcs</span>
-          <span style="color:var(--primary);font-weight:700;">$${(o.total_amount||0).toLocaleString()}</span>
+          <span style="color:#374151;font-weight:600;">${displayPcs.toLocaleString()} pcs</span>
+          <span style="color:var(--primary);font-weight:700;">$${displayAmt.toLocaleString()}</span>
         </div>
         ${o.ship_date ? `<div style="font-size:10px;color:#6b7280;margin-top:3px;">Ship: ${o.ship_date}</div>` : ''}
         ${isOverdue
-          ? `<div style="display:flex;align-items:center;gap:4px;margin-top:5px;padding:4px 7px;background:#fef3c7;border-radius:5px;border:1px solid #fcd34d;">
-               <span style="font-size:11px;">⏰</span>
-               <span style="font-size:10px;font-weight:700;color:#92400e;">${hoursLabel} — 배송 지연!</span>
-             </div>`
+          ? `<div style="display:flex;align-items:center;gap:4px;margin-top:5px;padding:4px 7px;background:#fef3c7;border-radius:5px;border:1px solid #fcd34d;"><span style="font-size:11px;">⏰</span><span style="font-size:10px;font-weight:700;color:#92400e;">${hoursLabel} — 배송 지연!</span></div>`
           : isWarning
           ? `<div style="font-size:10px;color:#b45309;margin-top:4px;">⏱ ${hoursLabel} — 마감 임박</div>`
           : `<div style="font-size:10px;color:#9ca3af;margin-top:3px;">${hoursLabel}</div>`
         }
         ${isBack ? '<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">⚠️ Back Order</div>' : ''}
         ${isCreditHold ? '<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold</div>' : ''}
-        ${col === 'entered' && !isCreditHold ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();printPickTicket('${o.id}')">🖨️ Print Pick Ticket</button>` : ''}
-        ${col === 'preparing' ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;" onclick="event.stopPropagation();preparationComplete('${o.id}')">✅ Preparation Complete</button>` : ''}
-        ${col === 'ready' ? `<button class="btn btn-sm btn-green" style="width:100%;margin-top:8px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}')">🚚 Mark as Shipped</button>` : ''}
-        ${col === 'shipped' ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}')">📧 Review & Send Invoice</button>` : ''}
+        ${col === 'entered' && !isCreditHold ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();printPickTicket('${o.id}','${wh}')">🖨️ Print Pick Ticket</button>` : ''}
+        ${col === 'preparing' ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">✅ Preparation Complete</button>` : ''}
+        ${col === 'ready' ? `<button class="btn btn-sm btn-green" style="width:100%;margin-top:8px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>` : ''}
+        ${col === 'shipped' ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>` : ''}
         ${col === 'backorder' ? `
           <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
             <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();startBackOrder('${o.id}','SC')">▶ Start Order — SC</button>
@@ -4485,54 +4508,88 @@ async function submitPartialShip() {
 let _ptOrderId = null; // Pick Ticket 프린트 후 preparing으로 이동할 오더 ID
 let _plOrderId = null; // Packing List 확인 후 ready_to_ship으로 이동할 오더 ID
 let _invoiceOrderId = null; // Invoice review 오더 ID
+let _invoiceWh = null;
+
+// ── WH별 status 업데이트 헬퍼
+async function updateWhStatus(orderId, wh, newStatus) {
+  const isSplit = (wh === 'SC' || wh === 'CA');
+  if (!isSplit) {
+    await db.from('orders').update({ status: newStatus }).eq('id', orderId);
+    return;
+  }
+  const col = wh === 'SC' ? 'sc_status' : 'ca_status';
+  // 상대방 status 확인
+  const { data: o } = await db.from('orders').select('sc_status,ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
+  const update = { [col]: newStatus };
+  // 둘 다 같은 status면 메인 status도 업데이트
+  const otherCol = wh === 'SC' ? 'ca_status' : 'sc_status';
+  const otherStatus = o?.[otherCol] || o?.status;
+  if (otherStatus === newStatus) {
+    update.status = newStatus;
+  }
+  await db.from('orders').update(update).eq('id', orderId);
+}
 
 // ── 1단계: Pick Ticket 프린트 → Preparing
-async function printPickTicket(orderId) {
+async function printPickTicket(orderId, wh) {
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', orderId);
   if (!order || !lines) return;
 
   _ptOrderId = orderId;
+  _ptWh = wh || 'SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
-  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, lines, isSplit);
+  // wh에 해당하는 라인만 필터
+  const filteredLines = isSplit
+    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
+    : lines;
+
+  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, filteredLines, false, wh);
   document.getElementById('modal-pt-preview').style.display = 'flex';
 }
 
-function closePtAndPrepare() {
+let _ptWh = 'SC';
+
+async function closePtAndPrepare() {
   closeModal('modal-pt-preview');
   if (_ptOrderId) {
-    db.from('orders').update({ status: 'preparing' }).eq('id', _ptOrderId).then(() => {
-      _ptOrderId = null;
-      loadOrderStatus();
-    });
+    await updateWhStatus(_ptOrderId, _ptWh, 'preparing');
+    _ptOrderId = null;
+    loadOrderStatus();
   }
 }
 
 // ── 2단계: Preparation Complete → Packing List → Ready to Ship
-async function preparationComplete(orderId) {
+async function preparationComplete(orderId, wh) {
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', orderId);
   if (!order || !lines) return;
 
   _plOrderId = orderId;
+  _plWh = wh || 'SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const filteredLines = isSplit
+    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
+    : lines;
 
-  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, lines, isSplit);
+  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false);
   document.getElementById('modal-pl-preview').style.display = 'flex';
 }
+
+let _plWh = 'SC';
 
 async function confirmPreparationComplete() {
   closeModal('modal-pl-preview');
   if (_plOrderId) {
-    await db.from('orders').update({ status: 'ready_to_ship' }).eq('id', _plOrderId);
+    await updateWhStatus(_plOrderId, _plWh, 'ready_to_ship');
     _plOrderId = null;
     loadOrderStatus();
   }
 }
 
 // ── 3단계: Mark as Shipped → 재고 차감 + Back Order 처리
-async function doShipped(orderId) {
+async function doShipped(orderId, wh) {
   const shipDate = prompt('출고 날짜 (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
   if (!shipDate) return;
 
@@ -4606,14 +4663,12 @@ async function doShipped(orderId) {
     const parts = lastInvOrders[0].invoice_number.split('-');
     invSeq = (parseInt(parts[parts.length - 1]) || 0) + 1;
   }
-  const invoiceNumber = `INV-${invYear}-${String(invSeq).padStart(4, '0')}`;
+  const whSuffix = wh ? `-${wh}` : '';
+  const invoiceNumber = `INV-${invYear}-${String(invSeq).padStart(4, '0')}${whSuffix}`;
 
-  // 오더 status 업데이트 + invoice_number 저장
-  await db.from('orders').update({
-    status: 'shipped',
-    ship_date: shipDate,
-    invoice_number: invoiceNumber
-  }).eq('id', orderId);
+  // WH별 status 업데이트
+  await updateWhStatus(orderId, wh || 'SC', 'shipped');
+  await db.from('orders').update({ ship_date: shipDate, invoice_number: invoiceNumber }).eq('id', orderId);
 
   // Back Order가 있으면 별도 Back Order 레코드 생성
   if (totalBackQty > 0) {
@@ -4664,16 +4719,22 @@ async function doShipped(orderId) {
 }
 
 // ── 4단계: Review & Send Invoice
-async function reviewAndSendInvoice(orderId) {
+async function reviewAndSendInvoice(orderId, wh) {
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', orderId);
   if (!order || !lines) return;
 
   _invoiceOrderId = orderId;
+  _invoiceWh = wh || null;
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
-  const invoiceNum = order.invoice_number || order.order_number;
 
-  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, lines, isSplit, invoiceNum);
+  // wh에 해당하는 라인만 필터
+  const filteredLines = isSplit && wh
+    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
+    : lines;
+
+  const invoiceNum = order.invoice_number || order.order_number;
+  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, invoiceNum);
   document.getElementById('invoice-review-email').textContent = order.email || '(이메일 없음)';
   document.getElementById('modal-invoice-review').style.display = 'flex';
 }
@@ -4683,7 +4744,7 @@ async function sendInvoiceEmail() {
   const btn = document.querySelector('#modal-invoice-review .btn-primary');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 발송 중...'; }
 
-  await db.from('orders').update({ status: 'invoiced' }).eq('id', _invoiceOrderId);
+  await updateWhStatus(_invoiceOrderId, _invoiceWh || 'SC', 'invoiced');
 
   // 이메일 발송
   try {
@@ -4701,6 +4762,7 @@ async function sendInvoiceEmail() {
   closeModal('modal-invoice-review');
   showToast('✅ Invoice 발송 완료!');
   _invoiceOrderId = null;
+  _invoiceWh = null;
   loadOrderStatus();
 }
 
