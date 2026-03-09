@@ -7809,29 +7809,28 @@ async function execPcrTransfer(whGroup, ppb) {
     });
   }
 
-  // 현재 라인 입력값 저장
-  const wrapSel = isBoth
-    ? `#alloc-both-${whGroup.toLowerCase()}-wrap input[data-type="box"]`
-    : '#alloc-bins-wrap input[data-type="box"]';
-  const liveAlloc = {};
-  document.querySelectorAll(wrapSel).forEach(inp => {
-    const v = parseInt(inp.value)||0;
-    if (v > 0) liveAlloc[inp.dataset.bin] = v;
-  });
-  if (whGroup === 'SC') poLines[_allocState.lineIdx].allocSC = { ...liveAlloc };
-  else poLines[_allocState.lineIdx].allocCA = { ...liveAlloc };
-
-  // 상대방 WH 입력값도 저장
-  if (isBoth) {
-    const otherWh = whGroup === 'SC' ? 'CA' : 'SC';
-    const otherSel = `#alloc-both-${otherWh.toLowerCase()}-wrap input[data-type="box"]`;
-    const otherAlloc = {};
-    document.querySelectorAll(otherSel).forEach(inp => {
+  // 현재 라인 입력값 저장 (box + pcs 둘 다)
+  const saveWrapInputs = (wrapId) => {
+    const alloc = {};
+    document.querySelectorAll(`${wrapId} input[data-type="box"], ${wrapId} input[data-type="pcs"]`).forEach(inp => {
       const v = parseInt(inp.value)||0;
-      if (v > 0) otherAlloc[inp.dataset.bin] = v;
+      if (v > 0) alloc[inp.dataset.bin] = v;
     });
-    if (otherWh === 'SC') poLines[_allocState.lineIdx].allocSC = { ...otherAlloc };
-    else poLines[_allocState.lineIdx].allocCA = { ...otherAlloc };
+    console.log(`[saveWrapInputs] ${wrapId}:`, JSON.stringify(alloc));
+    return alloc;
+  };
+
+  if (isBoth) {
+    const scAlloc = saveWrapInputs('#alloc-both-sc-wrap');
+    const caAlloc = saveWrapInputs('#alloc-both-ca-wrap');
+    console.log('[execPcrTransfer] saving allocSC:', JSON.stringify(scAlloc), 'allocCA:', JSON.stringify(caAlloc));
+    poLines[_allocState.lineIdx].allocSC = scAlloc;
+    poLines[_allocState.lineIdx].allocCA = caAlloc;
+  } else {
+    const wrapId = '#alloc-bins-wrap';
+    const liveAlloc = saveWrapInputs(wrapId);
+    if (whGroup === 'SC') poLines[_allocState.lineIdx].allocSC = liveAlloc;
+    else poLines[_allocState.lineIdx].allocCA = liveAlloc;
   }
 
   await loadScInventory();
