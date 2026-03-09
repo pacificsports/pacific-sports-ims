@@ -3314,20 +3314,18 @@ async function saveInvoice() {
     return { ...l, invRows: invRows || [], totalStock, canFill, backQty, sku, scQty, caQty };
   }));
 
-  const hasBackorder = lineChecks.some(l => l.backQty > 0);
-  const orderStatus = _creditHold ? 'credit_hold'
-    : hasBackorder ? (lineChecks.every(l => l.canFill === 0) ? 'backordered' : 'partial')
-    : 'po_entered';
+  const hasBackorder = false; // 저장 시에는 재고 체크 안 함 — Shipped 단계에서 처리
+  const orderStatus = _creditHold ? 'credit_hold' : 'po_entered';
 
   const totalPcs = poLines.reduce((s, l) => s + l.qty, 0);
   const totalAmt = poLines.reduce((s, l) => s + l.qty * (l.price || 0), 0);
 
   // ── 2. Order 저장
-  // Invoice 번호 자동생성 — INV-2026-0001 형식
+  // PO 번호 자동생성 — PO-2026-0001 형식
   const year = new Date().getFullYear();
   const { data: lastOrders } = await db.from('orders')
     .select('order_number')
-    .like('order_number', `INV-${year}-%`)
+    .like('order_number', `PO-${year}-%`)
     .order('order_number', { ascending: false })
     .limit(1);
   let seq = 1;
@@ -3336,20 +3334,27 @@ async function saveInvoice() {
     const parts = lastNum.split('-');
     seq = (parseInt(parts[parts.length - 1]) || 0) + 1;
   }
-  const orderNum = `INV-${year}-${String(seq).padStart(4, '0')}`;
+  // INV 번호도 체크해서 중복 방지
+  const { data: lastInvOrders } = await db.from('orders')
+    .select('order_number')
+    .like('order_number', `INV-${year}-%`)
+    .order('order_number', { ascending: false })
+    .limit(1);
+  const orderNum = `PO-${year}-${String(seq).padStart(4, '0')}`;
   const { data: order, error } = await db.from('orders').insert({
     order_number: orderNum,
     customer_name: cust,
     customer_po: po,
     customer_id: custSelId || null,
     warehouse_id: effectiveWhId,
+    wh_code: document.getElementById('inv-wh-sel')?.value || 'SC',
     is_split_warehouse: isSplitWh,
     ship_date: shipDate || null,
-    status: _creditHold ? 'credit_hold' : orderStatus,
+    status: orderStatus,
     total_pcs: totalPcs,
     total_amount: totalAmt,
-    bill_address: document.getElementById('inv-bill-addr')?.value || '',
-    ship_address: document.getElementById('inv-ship-addr')?.value || '',
+    bill_addr: document.getElementById('inv-bill-addr')?.value || '',
+    ship_addr: document.getElementById('inv-ship-addr')?.value || '',
     terms: document.getElementById('inv-cust-terms')?.value || 'N30',
     priority: document.getElementById('inv-priority')?.value || 'normal',
     created_by: currentUser.email
@@ -3372,82 +3377,64 @@ if (error) { alert('Error saving order: ' + error.message); return; }
       });
     } catch(e) { console.warn('Credit hold email error:', e); }
   }
-  // ── 3. Order Lines 저장 + 재고 차감
+  // ── 3. Order Lines 저장 + qty_committed 예약 (재고 차감은 Shipped 단계에서)
   for (const l of lineChecks) {
     const s = styles.find(x => x.style_number === l.styleNum);
-    const lineIsSplit = (l.wh === 'SC&CA');
-    const lineWhId = l.wh === 'CA' ? (caWhId || whId)
-                   : (scWhId || whId);  // SC, SC&CA 모두 SC warehouse_id 사용
-    const firstLocation = lineIsSplit
-      ? (l.allocSC ? Object.keys(l.allocSC)[0] : (l.allocCA ? Object.keys(l.allocCA)[0] : null))
-      : (l.invRows[0]?.location || l.location || null);
+    const lineWhId = l.wh === 'CA' ? (caWhId || whId) : (scWhId || whId);
 
     const insertPayload = {
       order_id: order.id,
       style_id: s?.id || null,
       warehouse_id: lineWhId,
+      wh: l.wh || 'SC',
       color: l.color, size: l.size,
       qty_pieces: l.qty,
-      qty_filled: l.canFill,
-      qty_backordered: l.backQty,
-      is_backordered: l.backQty > 0,
+      qty_filled: 0,
+      qty_backordered: 0,
+      is_backordered: false,
       pcs_per_box: l.ppb,
-      qty_boxes: Math.floor(l.canFill / l.ppb),
-      qty_loose: l.canFill % l.ppb,
-      location: firstLocation,
+      qty_boxes: Math.floor(l.qty / l.ppb),
+      qty_loose: l.qty % l.ppb,
+      location: l.location || null,
       unit_price: l.price || 0
     };
-    console.log('[order_lines insert]', JSON.stringify(insertPayload));
     const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
     if (lineErr) console.error('[order_lines ERROR]', lineErr.message, lineErr.details, lineErr.hint);
 
-    // 재고 차감 — SC&CA 또는 alloc 있는 라인은 bin 배분 시 이미 처리됐으므로 skip
-    const isLineSplitDeduct = (l.wh === 'SC&CA');
-    const hasAlloc = ((l.scQty || 0) + (l.caQty || 0)) > 0;
-    if (!isLineSplitDeduct && !hasAlloc) {
-      let remaining = l.canFill;
-      for (const inv of l.invRows) {
-        if (remaining <= 0) break;
-        const deduct = Math.min(remaining, inv.qty_on_hand);
-        await db.from('inventory').update({
-          qty_on_hand: inv.qty_on_hand - deduct
-        }).eq('id', inv.id);
-        remaining -= deduct;
+    // qty_committed 예약 — 가용 재고에서 이 오더 수량만큼 잠금
+    const lineWhCode = l.wh || 'SC';
+    const commitWhIds = lineWhCode === 'SC&CA'
+      ? [scWhId, caWhId].filter(Boolean)
+      : lineWhCode === 'CA' ? [caWhId || whId] : [scWhId || whId];
+
+    let toCommit = l.qty;
+    for (const cwId of commitWhIds) {
+      if (toCommit <= 0) break;
+      const { data: invRows } = await db.from('inventory')
+        .select('id, qty_on_hand, qty_committed')
+        .eq('color', (l.color||'').toUpperCase())
+        .eq('size', (l.size||'').toUpperCase())
+        .eq('warehouse_id', cwId)
+        .order('qty_on_hand', { ascending: false });
+      for (const inv of (invRows || [])) {
+        if (toCommit <= 0) break;
+        const avail = Math.max(0, (inv.qty_on_hand||0) - (inv.qty_committed||0));
+        const commit = Math.min(toCommit, avail);
+        if (commit > 0) {
+          await db.from('inventory').update({ qty_committed: (inv.qty_committed||0) + commit }).eq('id', inv.id);
+          toCommit -= commit;
+        }
       }
     }
   }
 
-  // ── 4. Pick Ticket 생성 (채울 수량 있을 때만)
-  const fillableLines = lineChecks.filter(l => l.canFill > 0);
-  if (fillableLines.length > 0) {
-    await db.from('pick_tickets').insert({
-      order_id: order.id,
-      ticket_number: 'PT-' + orderNum,
-      warehouse_id: whId,
-      status: 'pending'
-    });
-  }
-
-  // ── 5. Transfer Order (SC→PCR Loose Pcs 부족 시)
-  const scPcrWh = warehouses.find(w => w.code === 'SC-PCR');
-  if (scPcrWh && scWh && whCode === 'SC') {
-    const transfers = lineChecks
-      .filter(l => l.canFill > 0 && l.canFill % l.ppb > 0 && (l.pcrQty === null || l.pcrQty < l.canFill % l.ppb))
-      .map((l, i) => ({
-        transfer_number: `TF-${orderNum}-${i+1}`,
-        from_warehouse_id: scWh.id,
-        to_warehouse_id: scPcrWh.id,
-        style_id: styles.find(x => x.style_number === l.styleNum)?.id || null,
-        color: l.color, size: l.size,
-        qty_pieces: (l.canFill % l.ppb) - (l.pcrQty || 0),
-        from_location: l.invRows[0]?.location || '',
-        reason: 'pick_shortage',
-        order_id: order.id,
-        status: 'pending',
-        created_by: currentUser.email
-      }));
-    if (transfers.length > 0) await db.from('transfers').insert(transfers);
-  }
+  // ── Pick Ticket 레코드 생성
+  await db.from('pick_tickets').insert({
+    order_id: order.id,
+    ticket_number: 'PT-' + orderNum,
+    warehouse_id: whId,
+    status: 'pending'
+  }).catch(e => console.warn('PT insert error:', e));
 
   // ── PO Confirm 이메일 발송
   try {
@@ -3494,13 +3481,7 @@ if (error) { alert('Error saving order: ' + error.message); return; }
   } catch(e) { console.warn('PO confirm email error:', e); }
 
   // ── 결과 알림
-  if (hasBackorder) {
-    const boCount = lineChecks.filter(l => l.backQty > 0).length;
-    const boQty   = lineChecks.reduce((s, l) => s + l.backQty, 0);
-    alert(`⚠️ Invoice ${orderNum} 저장됨\n\n재고 부족 — ${boCount}개 라인, ${boQty.toLocaleString()} pcs Back Order\n채울 수 있는 수량은 재고 차감 완료`);
-  } else {
-    alert(`✅ Invoice ${orderNum} 저장 완료!\n${totalPcs.toLocaleString()} pcs 재고 차감됨`);
-  }
+  showToast(`✅ ${orderNum} 저장됨 — Order Status에서 Pick Ticket 프린트하세요`);
 
   document.getElementById('inv-entry-form').style.display = 'none';
   document.getElementById('po-save-btn').style.display = 'none';
@@ -4523,11 +4504,120 @@ async function confirmPreparationComplete() {
   }
 }
 
-// ── 3단계: Mark as Shipped
+// ── 3단계: Mark as Shipped → 재고 차감 + Back Order 처리
 async function doShipped(orderId) {
   const shipDate = prompt('출고 날짜 (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
   if (!shipDate) return;
-  await db.from('orders').update({ status: 'shipped', ship_date: shipDate }).eq('id', orderId);
+
+  const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
+  const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', orderId);
+  if (!order || !lines) return;
+
+  const warehouses = await db.from('warehouses').select('*').then(r => r.data || []);
+  const scWh = warehouses.find(w => w.code === 'SC');
+  const caWh = warehouses.find(w => w.code === 'CA');
+
+  let totalBackQty = 0;
+  const backLines = [];
+
+  for (const l of lines) {
+    const lineWh = l.wh || 'SC';
+    const whIds = lineWh === 'SC&CA'
+      ? [scWh?.id, caWh?.id].filter(Boolean)
+      : lineWh === 'CA' ? [caWh?.id] : [scWh?.id];
+
+    let toFill = l.qty_pieces;
+    let filled = 0;
+
+    for (const wId of whIds) {
+      if (toFill <= 0) break;
+      const { data: invRows } = await db.from('inventory')
+        .select('id, qty_on_hand, qty_committed')
+        .eq('color', (l.color||'').toUpperCase())
+        .eq('size', (l.size||'').toUpperCase())
+        .eq('warehouse_id', wId)
+        .order('qty_on_hand', { ascending: false });
+
+      for (const inv of (invRows || [])) {
+        if (toFill <= 0) break;
+        const deduct = Math.min(toFill, inv.qty_on_hand || 0);
+        const commitRelease = Math.min(inv.qty_committed || 0, deduct);
+        if (deduct > 0) {
+          await db.from('inventory').update({
+            qty_on_hand: (inv.qty_on_hand || 0) - deduct,
+            qty_committed: Math.max(0, (inv.qty_committed || 0) - commitRelease)
+          }).eq('id', inv.id);
+          filled += deduct;
+          toFill -= deduct;
+        }
+      }
+    }
+
+    const backQty = l.qty_pieces - filled;
+    if (backQty > 0) {
+      totalBackQty += backQty;
+      backLines.push({ ...l, qty_filled: filled, qty_backordered: backQty });
+    }
+
+    // order_line 업데이트
+    await db.from('order_lines').update({
+      qty_filled: filled,
+      qty_backordered: backQty,
+      is_backordered: backQty > 0
+    }).eq('id', l.id);
+  }
+
+  // 오더 status 업데이트
+  await db.from('orders').update({
+    status: 'shipped',
+    ship_date: shipDate
+  }).eq('id', orderId);
+
+  // Back Order가 있으면 별도 Back Order 레코드 생성
+  if (totalBackQty > 0) {
+    const boNum = order.order_number + '-BO';
+    const { data: boOrder } = await db.from('orders').insert({
+      order_number: boNum,
+      customer_name: order.customer_name,
+      customer_po: order.customer_po,
+      customer_id: order.customer_id,
+      warehouse_id: order.warehouse_id,
+      wh_code: order.wh_code,
+      is_split_warehouse: order.is_split_warehouse,
+      ship_date: null,
+      status: 'backordered',
+      total_pcs: totalBackQty,
+      total_amount: backLines.reduce((s,l) => s + (l.qty_backordered||0) * (l.unit_price||0), 0),
+      bill_addr: order.bill_addr,
+      ship_addr: order.ship_addr,
+      terms: order.terms,
+      priority: order.priority,
+      parent_order_id: orderId,
+      created_by: order.created_by
+    }).select().single().then(r => r.data);
+
+    if (boOrder) {
+      for (const l of backLines) {
+        await db.from('order_lines').insert({
+          order_id: boOrder.id,
+          style_id: l.style_id,
+          warehouse_id: l.warehouse_id,
+          wh: l.wh,
+          color: l.color, size: l.size,
+          qty_pieces: l.qty_backordered,
+          qty_filled: 0, qty_backordered: l.qty_backordered,
+          is_backordered: true,
+          pcs_per_box: l.pcs_per_box,
+          qty_boxes: 0, qty_loose: l.qty_backordered,
+          unit_price: l.unit_price
+        });
+      }
+      showToast(`🚚 Shipped! Back Order ${boNum} 생성됨 (${totalBackQty.toLocaleString()} pcs)`);
+    }
+  } else {
+    showToast(`🚚 ${order.order_number} Shipped 완료!`);
+  }
+
   loadOrderStatus();
 }
 
