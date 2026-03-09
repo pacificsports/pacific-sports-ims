@@ -3120,9 +3120,13 @@ async function saveInvoice() {
   // SC&CA 혼합이면 SC를 주 창고로, is_split_warehouse = true
   const isSplitWh = (whId === 'SC&CA');
   let effectiveWhId = whId;
+  const scWh = warehouses.find(w => w.code === 'SC');
+  const caWh = warehouses.find(w => w.code === 'CA');
+  const scWhId = scWh?.id;
+  const caWhId = caWh?.id;
   if (isSplitWh) {
-    const scWh = warehouses.find(w => w.code === 'SC');
-    effectiveWhId = scWh?.id || whId;
+    if (!scWhId) { alert('SC 창고 정보를 찾을 수 없습니다. 페이지를 새로고침 후 다시 시도해주세요.'); return; }
+    effectiveWhId = scWhId;
   }
 
   // Reserve PO면 별도 처리
@@ -3150,11 +3154,9 @@ async function saveInvoice() {
     }
   }
 
-  const whCode = warehouses.find(w => w.id === whId)?.code || '';
+  const whCode = warehouses.find(w => w.id === effectiveWhId)?.code || '';
 
   // ── 1. 라인별 재고 확인 (해당 창고 + SKU)
-  const scWhId = warehouses.find(w => w.code === 'SC')?.id;
-  const caWhId = warehouses.find(w => w.code === 'CA')?.id;
 
   const lineChecks = await Promise.all(poLines.map(async l => {
     const sku = (l.styleNum + l.color.replace(/\s+/g,'').substring(0,6) + l.size.replace(/\s+/g,'')).toLowerCase();
