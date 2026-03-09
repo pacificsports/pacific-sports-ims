@@ -350,8 +350,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
   <div class="navtabs">
     <div class="ntab active" onclick="showPanel('dashboard',this)">📊 Dashboard</div>
     <div class="ntab" onclick="showPanel('inventory',this)">📦 Inventory</div>
-    <div class="ntab" onclick="showPanel('orders',this)">📋 Orders <span class="badge" id="open-orders-badge">0</span></div>
-    <div class="ntab" onclick="showPanel('invoice',this)">🧾 Invoice</div>
+    <div class="ntab" onclick="showPanel('customerpos',this)">📋 Customer POs <span class="badge" id="open-orders-badge">0</span></div>
+    <div class="ntab" onclick="showPanel('orderstatus',this)">🚦 Order Status</div>
+    <div class="ntab" onclick="showPanel('invoice',this)">🧾 Invoices</div>
     <div class="ntab" onclick="showPanel('picktickets',this)">🎫 Pick Tickets</div>
     <div class="ntab" onclick="showPanel('receiving',this)">📥 Receiving</div>
     <div class="ntab" onclick="showPanel('intransit',this)">🚢 In Transit</div>
@@ -434,57 +435,111 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     </div>
 
     <!-- ── ORDERS 현황 ── -->
-    <div class="panel" id="panel-orders">
-      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
-        <button class="btn" onclick="loadOrders()">🔄 Refresh</button>
-        <span style="font-size:11px;color:var(--text3)">오더 클릭 → Invoice / Pick Ticket 열기</span>
+    <div class="panel" id="panel-customerpos">
+      <!-- 상단 버튼 & 검색 -->
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="openNewPO()">➕ New Customer PO</button>
+        <button class="btn" onclick="loadCustomerPOs()">🔄 Refresh</button>
+        <input class="fi" id="po-search-input" placeholder="🔍 PO# or Customer 검색..." style="width:220px;height:30px;font-size:12px;" oninput="filterCustomerPOs()">
+        <select class="fsel" id="po-filter-customer" onchange="filterCustomerPOs()" style="height:30px;font-size:11px;min-width:160px;">
+          <option value="">All Customers</option>
+        </select>
+        <select class="fsel" id="po-filter-status" onchange="filterCustomerPOs()" style="height:30px;font-size:11px;">
+          <option value="">All Status</option>
+          <option value="po_entered">PO Entered</option>
+          <option value="preparing">Preparing</option>
+          <option value="ready_to_ship">Ready to Ship</option>
+          <option value="shipped">Shipped</option>
+          <option value="invoiced">Invoiced</option>
+          <option value="backordered">Back Order</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
       </div>
 
-      <!-- KPI 요약 -->
-      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px;" id="orders-kpi-row">
-        <div class="kpi r"><div class="kpi-label">🔴 Back Order</div><div class="kpi-val" id="kpi-backorder">—</div><div class="kpi-sub">재고 부족</div></div>
-        <div class="kpi" style="border-left:4px solid #e65100;"><div class="kpi-label">🚫 Credit Hold</div><div class="kpi-val" id="kpi-credit-hold">—</div><div class="kpi-sub">승인 대기</div></div>
-        <div class="kpi o"><div class="kpi-label">🟡 Open</div><div class="kpi-val" id="kpi-open">—</div><div class="kpi-sub">진행 중</div></div>
-        <div class="kpi"><div class="kpi-label">🔵 Partial</div><div class="kpi-val" id="kpi-partial">—</div><div class="kpi-sub">일부 처리</div></div>
-        <div class="kpi g"><div class="kpi-label">🟢 Shipped</div><div class="kpi-val" id="kpi-shipped">—</div><div class="kpi-sub">출하 완료</div></div>
-        <div class="kpi"><div class="kpi-label">📦 Total</div><div class="kpi-val" id="kpi-total-orders">—</div><div class="kpi-sub">전체 오더</div></div>
-      </div>
-      <!-- Credit Hold 섹션 -->
-      <div id="credit-hold-section" style="display:none;background:#fff3e0;border:2px solid #e65100;border-radius:8px;padding:14px;margin-bottom:14px;">
-        <div style="font-weight:700;color:#e65100;margin-bottom:10px;">🚫 CREDIT HOLD — 승인 대기</div>
-        <div id="credit-hold-wrap"></div>
-      </div>
-      <!-- Back Order 섹션 -->
-      <div class="card" id="backorder-card" style="border-left:4px solid var(--red);">
-        <div class="card-head" style="background:#fef2f2;">
-          <span class="card-title" style="color:var(--red)">🔴 Back Orders — 재고 부족</span>
-          <span class="card-info" id="backorder-count"></span>
+      <!-- 통계 KPI -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+        <div class="kpi" style="border-left:4px solid #1a56a0;">
+          <div class="kpi-label">📋 This Week</div>
+          <div class="kpi-val" id="po-kpi-week">—</div>
+          <div class="kpi-sub" id="po-kpi-week-vs" style="color:#6b7280;">vs last week</div>
         </div>
-        <div id="backorder-wrap"><div class="loading"><div class="spinner"></div></div></div>
+        <div class="kpi" style="border-left:4px solid #0891b2;">
+          <div class="kpi-label">📅 This Month</div>
+          <div class="kpi-val" id="po-kpi-month">—</div>
+          <div class="kpi-sub" id="po-kpi-month-vs" style="color:#6b7280;">vs last month</div>
+        </div>
+        <div class="kpi" style="border-left:4px solid #7c3aed;">
+          <div class="kpi-label">📆 This Year</div>
+          <div class="kpi-val" id="po-kpi-year">—</div>
+          <div class="kpi-sub" id="po-kpi-year-vs" style="color:#6b7280;">vs last year</div>
+        </div>
+        <div class="kpi" style="border-left:4px solid #dc2626;">
+          <div class="kpi-label">🔴 Back Orders</div>
+          <div class="kpi-val" id="po-kpi-backorder">—</div>
+          <div class="kpi-sub">재고 부족</div>
+        </div>
       </div>
 
-      <!-- 전체 오더 리스트 -->
+      <!-- PO 리스트 -->
       <div class="card">
         <div class="card-head">
-          <span class="card-title">📋 All Orders</span>
-          <div style="display:flex;gap:6px;">
-            <select class="fsel" id="orders-filter-status" onchange="filterOrders()" style="height:26px;font-size:11px;">
-              <option value="">All Status</option>
-              <option value="backordered">Back Order</option>
-              <option value="credit_hold">Credit Hold</option>
-              <option value="open">Open</option>
-              <option value="partial">Partial</option>
-              <option value="shipped">Shipped</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-            <select class="fsel" id="orders-filter-wh" onchange="filterOrders()" style="height:26px;font-size:11px;">
-              <option value="">All WH</option>
-              <option value="CA">CA</option>
-              <option value="SC">SC</option>
-            </select>
-          </div>
+          <span class="card-title">📋 Customer POs</span>
+          <span class="card-info" id="po-count"></span>
         </div>
-        <div id="orders-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
+        <div id="customerpo-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+
+      <!-- PO 입력 폼 (New PO / Edit PO) -->
+      <div id="po-entry-view" style="display:none;"></div>
+    </div>
+
+    <!-- ── ORDER STATUS ── -->
+    <div class="panel" id="panel-orderstatus">
+      <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;">
+        <button class="btn" onclick="loadOrderStatus()">🔄 Refresh</button>
+        <select class="fsel" id="os-filter-wh" onchange="loadOrderStatus()" style="height:28px;font-size:11px;">
+          <option value="">All Warehouses</option>
+          <option value="SC">SC — Sumter</option>
+          <option value="CA">CA — Eastvale</option>
+        </select>
+      </div>
+
+      <!-- 전체 상태 요약 바 -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;" id="os-kpi-row">
+        <div class="kpi" style="border-left:4px solid #6b7280;cursor:pointer;" onclick="osFilterStatus('po_entered')">
+          <div class="kpi-label">📥 PO Entered</div><div class="kpi-val" id="os-kpi-entered">—</div></div>
+        <div class="kpi" style="border-left:4px solid #f59e0b;cursor:pointer;" onclick="osFilterStatus('preparing')">
+          <div class="kpi-label">📦 Preparing</div><div class="kpi-val" id="os-kpi-preparing">—</div></div>
+        <div class="kpi" style="border-left:4px solid #0891b2;cursor:pointer;" onclick="osFilterStatus('ready_to_ship')">
+          <div class="kpi-label">✅ Ready to Ship</div><div class="kpi-val" id="os-kpi-ready">—</div></div>
+        <div class="kpi" style="border-left:4px solid #16a34a;cursor:pointer;" onclick="osFilterStatus('shipped')">
+          <div class="kpi-label">🚚 Shipped</div><div class="kpi-val" id="os-kpi-shipped">—</div></div>
+        <div class="kpi" style="border-left:4px solid #7c3aed;cursor:pointer;" onclick="osFilterStatus('invoiced')">
+          <div class="kpi-label">🧾 Invoiced</div><div class="kpi-val" id="os-kpi-invoiced">—</div></div>
+      </div>
+
+      <!-- 칸반 보드 -->
+      <div id="os-kanban" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;align-items:start;">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#f3f4f6;border-radius:6px;">📥 PO Entered</div>
+          <div id="os-col-entered" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#d97706;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#fffbeb;border-radius:6px;">📦 Preparing</div>
+          <div id="os-col-preparing" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#0891b2;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#ecfeff;border-radius:6px;">✅ Ready to Ship</div>
+          <div id="os-col-ready" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#f0fdf4;border-radius:6px;">🚚 Shipped</div>
+          <div id="os-col-shipped" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#f5f3ff;border-radius:6px;">🧾 Invoiced</div>
+          <div id="os-col-invoiced" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
+        </div>
       </div>
     </div>
 
@@ -572,9 +627,13 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <!-- 상단 버튼 -->
         <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
           <button class="btn" onclick="localStorage.removeItem('inv_view');backToInvoiceList()">← Back</button>
-          <button class="btn btn-primary" onclick="window.print()">🖨 Print</button>
+          <button class="btn btn-primary" onclick="printCurrentDoc()">🖨 Print</button>
           <button class="btn btn-green" id="inv-save-btn" onclick="saveInvoice()" style="display:none">✓ Save</button>
+          <button class="btn" id="btn-prep-complete" style="display:none;background:#0891b2;color:#fff;border-color:#0891b2;" onclick="markPrepComplete()">✅ Preparation Complete</button>
+          <button class="btn" id="btn-shipped" style="display:none;background:#16a34a;color:#fff;border-color:#16a34a;" onclick="markOrderShipped()">🚚 Shipped</button>
+          <button class="btn" id="btn-approve-invoice" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="approveAndSendInvoice()">🧾 Approve & Send Invoice</button>
           <span id="inv-doc-title" style="font-size:13px;font-weight:700;color:var(--primary-dark);margin-left:4px;"></span>
+          <span id="inv-status-badge" style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:12px;background:#f3f4f6;color:#6b7280;"></span>
         </div>
 
         <!-- DOC TABS -->
@@ -1782,7 +1841,8 @@ function showPanel(name, el) {
 
   if (name === 'dashboard') loadDashboard();
   if (name === 'inventory') loadInventory();
-  if (name === 'orders') loadOrders();
+  if (name === 'customerpos') loadCustomerPOs();
+  if (name === 'orderstatus') loadOrderStatus();
   if (name === 'invoice') loadInvoices();
   if (name === 'picktickets') loadPickTickets();
   if (name === 'styles') loadStyles();
@@ -2038,9 +2098,90 @@ async function openInvoice(orderId) {
 
   currentInvoiceData = { order };
   document.getElementById('inv-doc-title').textContent = order.order_number + ' — ' + order.customer_name;
+
+  // 상태 배지 & 버튼 표시
+  updateStatusButtons(order.status);
+
   renderAllDocs();
   switchDocTab('invoice');
 }
+
+function updateStatusButtons(status) {
+  const statusLabels = {
+    po_entered: { label: 'PO Entered', color: '#6b7280', bg: '#f3f4f6' },
+    preparing:  { label: 'Preparing',  color: '#d97706', bg: '#fffbeb' },
+    ready_to_ship: { label: 'Ready to Ship', color: '#0891b2', bg: '#ecfeff' },
+    shipped:    { label: 'Shipped',    color: '#16a34a', bg: '#f0fdf4' },
+    invoiced:   { label: 'Invoiced',   color: '#7c3aed', bg: '#f5f3ff' },
+    backordered:{ label: 'Back Order', color: '#dc2626', bg: '#fff1f2' },
+    partial:    { label: 'Partial',    color: '#ea580c', bg: '#fff7ed' },
+    open:       { label: 'Open',       color: '#1a56a0', bg: '#eff6ff' },
+    credit_hold:{ label: 'Credit Hold',color: '#c2410c', bg: '#fff7ed' },
+  };
+  const st = statusLabels[status] || { label: status, color: '#6b7280', bg: '#f3f4f6' };
+  const badge = document.getElementById('inv-status-badge');
+  if (badge) { badge.textContent = st.label; badge.style.background = st.bg; badge.style.color = st.color; }
+
+  const btnPrep    = document.getElementById('btn-prep-complete');
+  const btnShipped = document.getElementById('btn-shipped');
+  const btnApprove = document.getElementById('btn-approve-invoice');
+  if (btnPrep)    btnPrep.style.display    = (status === 'preparing') ? 'inline-flex' : 'none';
+  if (btnShipped) btnShipped.style.display = (status === 'ready_to_ship') ? 'inline-flex' : 'none';
+  if (btnApprove) btnApprove.style.display = (status === 'shipped') ? 'inline-flex' : 'none';
+}
+
+function printCurrentDoc() {
+  // Pick Ticket 탭이 활성화돼 있으면 → status를 preparing으로 변경
+  const activeDocTab = document.querySelector('.doc-tab.active')?.id;
+  if (activeDocTab === 'tab-pt' && currentInvoiceData?.order?.id) {
+    const orderId = currentInvoiceData.order.id;
+    const curStatus = currentInvoiceData.order.status;
+    if (curStatus === 'po_entered' || curStatus === 'open') {
+      db.from('orders').update({ status: 'preparing' }).eq('id', orderId).then(() => {
+        currentInvoiceData.order.status = 'preparing';
+        updateStatusButtons('preparing');
+        if (document.getElementById('btn-prep-complete')) {
+          document.getElementById('btn-prep-complete').style.display = 'inline-flex';
+        }
+      });
+    }
+  }
+  window.print();
+}
+
+async function markPrepComplete() {
+  if (!currentInvoiceData?.order?.id) return;
+  if (!confirm('Preparation Complete 처리하시겠습니까?\nPacking List가 생성되고 Status가 Ready to Ship으로 변경됩니다.')) return;
+  const orderId = currentInvoiceData.order.id;
+  await db.from('orders').update({ status: 'ready_to_ship' }).eq('id', orderId);
+  currentInvoiceData.order.status = 'ready_to_ship';
+  updateStatusButtons('ready_to_ship');
+  alert('✅ Ready to Ship 상태로 변경됐습니다!');
+}
+
+async function markOrderShipped() {
+  if (!currentInvoiceData?.order?.id) return;
+  const shipDate = prompt('출고 날짜를 입력하세요 (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+  if (!shipDate) return;
+  const orderId = currentInvoiceData.order.id;
+  await db.from('orders').update({ status: 'shipped', ship_date: shipDate }).eq('id', orderId);
+  currentInvoiceData.order.status = 'shipped';
+  currentInvoiceData.order.ship_date = shipDate;
+  updateStatusButtons('shipped');
+  alert('🚚 Shipped 처리 완료!\nAccounting에서 Invoice를 검토 후 발송해주세요.');
+}
+
+async function approveAndSendInvoice() {
+  if (!currentInvoiceData?.order?.id) return;
+  if (!confirm('Invoice를 최종 승인하고 거래처에 이메일을 발송할까요?')) return;
+  const orderId = currentInvoiceData.order.id;
+  await db.from('orders').update({ status: 'invoiced' }).eq('id', orderId);
+  currentInvoiceData.order.status = 'invoiced';
+  updateStatusButtons('invoiced');
+  alert('🧾 Invoiced 처리 완료!\n(이메일 자동발송 기능은 곧 추가됩니다)');
+}
+
+function openInvoiceDetail(orderId) { openInvoice(orderId); }
 
 function backToInvoiceList() {
   localStorage.removeItem('inv_view');
@@ -3206,9 +3347,9 @@ async function saveInvoice() {
   }));
 
   const hasBackorder = lineChecks.some(l => l.backQty > 0);
-  const orderStatus  = hasBackorder
-    ? (lineChecks.every(l => l.canFill === 0) ? 'backordered' : 'partial')
-    : 'open';
+  const orderStatus = _creditHold ? 'credit_hold'
+    : hasBackorder ? (lineChecks.every(l => l.canFill === 0) ? 'backordered' : 'partial')
+    : 'po_entered';
 
   const totalPcs = poLines.reduce((s, l) => s + l.qty, 0);
   const totalAmt = poLines.reduce((s, l) => s + l.qty * (l.price || 0), 0);
@@ -3717,155 +3858,252 @@ return `<tr style="cursor:pointer;font-weight:500;" onclick="document.querySelec
 // ══════════════════════════════════
 let allOrders = [];
 
-async function loadOrders() {
-  document.getElementById('orders-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  document.getElementById('backorder-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+// ══════════════════════════════════
+// CUSTOMER POs
+// ══════════════════════════════════
+let allCustomerPOs = [];
 
+async function loadCustomerPOs() {
+  document.getElementById('customerpo-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data } = await db.from('orders')
     .select('*, warehouses(code,name)')
     .order('created_at', { ascending: false });
-  allOrders = data || [];
+  allCustomerPOs = data || [];
 
-  // KPI
- const counts = { backordered:0, partial:0, open:0, shipped:0, cancelled:0, credit_hold:0 };
-  allOrders.forEach(o => { if (counts[o.status] !== undefined) counts[o.status]++; });
-  document.getElementById('kpi-backorder').textContent   = counts.backordered;
-  document.getElementById('kpi-open').textContent        = counts.open + counts.partial;
-  document.getElementById('kpi-partial').textContent     = counts.partial;
-  document.getElementById('kpi-shipped').textContent     = counts.shipped;
-  document.getElementById('kpi-total-orders').textContent = allOrders.length;
-  document.getElementById('kpi-credit-hold').textContent = counts.credit_hold;
+  // 고객 필터 드롭다운 채우기
+  const custSel = document.getElementById('po-filter-customer');
+  const curCust = custSel.value;
+  const uniqueCustomers = [...new Set(allCustomerPOs.map(o => o.customer_name).filter(Boolean))].sort();
+  custSel.innerHTML = '<option value="">All Customers</option>' +
+    uniqueCustomers.map(c => `<option value="${c}"${c===curCust?' selected':''}>${c}</option>`).join('');
 
-  // Badge 업데이트
-  const badgeCount = counts.backordered + counts.open + counts.partial;
-  document.getElementById('open-orders-badge').textContent = badgeCount || '';
+  // KPI 계산
+  const now = new Date();
+  const startOfWeek = new Date(now); startOfWeek.setDate(now.getDate() - now.getDay()); startOfWeek.setHours(0,0,0,0);
+  const startOfLastWeek = new Date(startOfWeek); startOfLastWeek.setDate(startOfWeek.getDate() - 7);
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+  const startOfYear = new Date(now.getFullYear(), 0, 1);
+  const startOfLastYear = new Date(now.getFullYear() - 1, 0, 1);
+  const endOfLastYear = new Date(now.getFullYear() - 1, 11, 31);
 
-  // Back Order 섹션
-  const backOrders = allOrders.filter(o => o.status === 'backordered' || o.status === 'partial');
-  if (backOrders.length === 0) {
-    document.getElementById('backorder-wrap').innerHTML = '<div class="empty" style="color:var(--green)">✅ Back Order 없음</div>';
-    document.getElementById('backorder-card').style.borderLeftColor = 'var(--green)';
-    document.getElementById('backorder-count').textContent = '';
-  } else {
-    const now = new Date(); now.setHours(0,0,0,0);
-    document.getElementById('backorder-count').textContent = `${backOrders.length}건`;
-    document.getElementById('backorder-wrap').innerHTML = `
-      <table class="tbl">
-        <thead><tr>
-          <th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>
-          <th>Ship Date</th><th>ETA</th><th>메모</th><th>Status</th><th>Action</th>
-        </tr></thead>
-        <tbody>${backOrders.map(o => {
-          const eta = o.eta_date;
-          let etaTxt = eta || '—', etaStyle = '';
-          if (eta) {
-            const etaDiff = Math.ceil((new Date(eta) - now) / 86400000);
-            if (etaDiff < 0) { etaTxt = `⚠️ ${eta} (${Math.abs(etaDiff)}일 지남)`; etaStyle = 'color:var(--red);font-weight:700'; }
-            else if (etaDiff <= 3) { etaTxt = `${eta} (${etaDiff}일 후)`; etaStyle = 'color:var(--orange);font-weight:700'; }
-            else { etaTxt = `${eta} (${etaDiff}일)`; etaStyle = 'color:var(--text2)'; }
-          }
-          const whBadge = o.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>';
-          return `<tr style="background:${o.status==='backordered'?'#fff8f8':'#fffde7'};cursor:pointer" onclick="openBackOrderDetail('${o.id}')">
-            <td class="mono" style="font-weight:700;color:var(--red)">${o.order_number}</td>
-            <td style="font-weight:600">${o.customer_name}</td>
-            <td class="mono">${o.customer_po||'—'}</td>
-            <td>${whBadge}</td>
-            <td>${o.ship_date||'—'}</td>
-            <td style="font-size:11px;${etaStyle}">${etaTxt}</td>
-            <td style="font-size:11px;color:var(--text3);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${o.bo_note||'—'}</td>
-            <td>${statusChip(o.status)}</td>
-            <td>
-              <button class="btn btn-sm" style="background:var(--red);color:#fff;white-space:nowrap" onclick="event.stopPropagation();openBackOrderDetail('${o.id}')">
-                🔴 처리
-              </button>
-            </td>
-          </tr>`;
-        }).join('')}
-        </tbody>
-      </table>`;
-  }
+  const sum = (arr) => arr.reduce((s, o) => s + (o.total_amount || 0), 0);
+  const inRange = (o, start, end) => {
+    const d = new Date(o.created_at);
+    return d >= start && (!end || d <= end);
+  };
 
-  // Credit Hold 섹션
-  const creditHoldOrders = allOrders.filter(o => o.status === 'credit_hold' || o.status === 'rejected');
-  const chSection = document.getElementById('credit-hold-section');
-  if (creditHoldOrders.length === 0) {
-    chSection.style.display = 'none';
-  } else {
-    chSection.style.display = 'block';
-    document.getElementById('credit-hold-wrap').innerHTML = `
-      <table class="tbl">
-        <thead><tr>
-          <th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>
-          <th>Total Pcs</th><th>Amount</th><th>Status</th><th>Action</th>
-        </tr></thead>
-        <tbody>${creditHoldOrders.map(o => `
-          <tr style="background:#fff3e0;">
-            <td class="mono" style="font-weight:700;color:#e65100">${o.order_number}</td>
-            <td style="font-weight:600">${o.customer_name}</td>
-            <td class="mono">${o.customer_po||'—'}</td>
-            <td>${o.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</td>
-            <td style="text-align:center;font-weight:700">${(o.total_pcs||0).toLocaleString()}</td>
-            <td style="font-weight:700">$${(o.total_amount||0).toLocaleString()}</td>
-            <td>${statusChip(o.status)}</td>
-            <td>
-              <button class="btn btn-sm" style="background:#e65100;color:#fff" onclick="event.stopPropagation();sendCreditHoldEmail('${o.id}','${o.order_number}','${(o.customer_name||'').replace(/'/g,'&#39;')}','${o.customer_po||''}',${o.total_amount||0})">
-                📧 Approve 요청
-              </button>
-            </td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
-  }
-  // 전체 오더 테이블
-  renderOrdersTable();
+  const thisWeek = allCustomerPOs.filter(o => inRange(o, startOfWeek));
+  const lastWeek = allCustomerPOs.filter(o => inRange(o, startOfLastWeek, startOfWeek));
+  const thisMonth = allCustomerPOs.filter(o => inRange(o, startOfMonth));
+  const lastMonth = allCustomerPOs.filter(o => inRange(o, startOfLastMonth, endOfLastMonth));
+  const thisYear = allCustomerPOs.filter(o => inRange(o, startOfYear));
+  const lastYear = allCustomerPOs.filter(o => inRange(o, startOfLastYear, endOfLastYear));
+  const backorders = allCustomerPOs.filter(o => o.status === 'backordered' || o.status === 'partial');
+
+  const fmt = (v) => '$' + Math.round(v).toLocaleString();
+  const pct = (a, b) => b === 0 ? '' : ((a - b) / b * 100).toFixed(0);
+  const vsLabel = (cur, prev) => {
+    const p = pct(cur, prev);
+    if (!p) return 'no prior data';
+    const n = parseFloat(p);
+    return `${n >= 0 ? '▲' : '▼'} ${Math.abs(n)}% vs prior`;
+  };
+
+  document.getElementById('po-kpi-week').textContent = fmt(sum(thisWeek));
+  document.getElementById('po-kpi-week-vs').textContent = vsLabel(sum(thisWeek), sum(lastWeek));
+  document.getElementById('po-kpi-week-vs').style.color = sum(thisWeek) >= sum(lastWeek) ? '#16a34a' : '#dc2626';
+  document.getElementById('po-kpi-month').textContent = fmt(sum(thisMonth));
+  document.getElementById('po-kpi-month-vs').textContent = vsLabel(sum(thisMonth), sum(lastMonth));
+  document.getElementById('po-kpi-month-vs').style.color = sum(thisMonth) >= sum(lastMonth) ? '#16a34a' : '#dc2626';
+  document.getElementById('po-kpi-year').textContent = fmt(sum(thisYear));
+  document.getElementById('po-kpi-year-vs').textContent = vsLabel(sum(thisYear), sum(lastYear));
+  document.getElementById('po-kpi-year-vs').style.color = sum(thisYear) >= sum(lastYear) ? '#16a34a' : '#dc2626';
+  document.getElementById('po-kpi-backorder').textContent = backorders.length;
+
+  // Badge
+  const active = allCustomerPOs.filter(o => !['shipped','invoiced','cancelled'].includes(o.status)).length;
+  document.getElementById('open-orders-badge').textContent = active || '';
+
+  renderCustomerPOTable();
 }
 
-function filterOrders() { renderOrdersTable(); }
+function filterCustomerPOs() { renderCustomerPOTable(); }
 
-function renderOrdersTable() {
-  const statusFilter = document.getElementById('orders-filter-status')?.value || '';
-  const whFilter     = document.getElementById('orders-filter-wh')?.value || '';
-  let filtered = allOrders;
-  if (statusFilter) filtered = filtered.filter(o => o.status === statusFilter);
-  if (whFilter)     filtered = filtered.filter(o => o.warehouses?.code === whFilter);
+function renderCustomerPOTable() {
+  const search = (document.getElementById('po-search-input')?.value || '').toLowerCase();
+  const custFilter = document.getElementById('po-filter-customer')?.value || '';
+  const statusFilter = document.getElementById('po-filter-status')?.value || '';
+
+  let filtered = allCustomerPOs.filter(o => {
+    if (custFilter && o.customer_name !== custFilter) return false;
+    if (statusFilter && o.status !== statusFilter) return false;
+    if (search) {
+      const hay = `${o.order_number} ${o.customer_name} ${o.customer_po}`.toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  document.getElementById('po-count').textContent = `${filtered.length}건`;
+
+  const statusLabel = {
+    po_entered: { label: 'PO Entered', color: '#6b7280', bg: '#f3f4f6' },
+    preparing:  { label: 'Preparing',  color: '#d97706', bg: '#fffbeb' },
+    ready_to_ship: { label: 'Ready to Ship', color: '#0891b2', bg: '#ecfeff' },
+    shipped:    { label: 'Shipped',    color: '#16a34a', bg: '#f0fdf4' },
+    invoiced:   { label: 'Invoiced',   color: '#7c3aed', bg: '#f5f3ff' },
+    backordered:{ label: 'Back Order', color: '#dc2626', bg: '#fff1f2' },
+    partial:    { label: 'Partial',    color: '#ea580c', bg: '#fff7ed' },
+    open:       { label: 'Open',       color: '#1a56a0', bg: '#eff6ff' },
+    credit_hold:{ label: 'Credit Hold',color: '#c2410c', bg: '#fff7ed' },
+    cancelled:  { label: 'Cancelled',  color: '#9ca3af', bg: '#f9fafb' },
+  };
 
   if (filtered.length === 0) {
-    document.getElementById('orders-table-wrap').innerHTML = '<div class="empty">해당 오더 없음</div>';
+    document.getElementById('customerpo-table-wrap').innerHTML = '<div class="empty">검색 결과가 없습니다</div>';
     return;
   }
-  document.getElementById('orders-table-wrap').innerHTML = `
+
+  document.getElementById('customerpo-table-wrap').innerHTML = `
     <table class="tbl">
       <thead><tr>
         <th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>
-        <th>Ship Date</th><th>Total Pcs</th><th>Status</th><th>Action</th>
+        <th>Total Pcs</th><th>Total Amount</th><th>Ship Date</th>
+        <th>Status</th><th>Created</th><th></th>
       </tr></thead>
-      <tbody>${filtered.map(o => `
-        <tr onclick="openBackOrderDetail('${o.id}')" style="cursor:pointer;${o.status==='backordered'?'background:#fff8f8':o.status==='partial'?'background:#fffde7':''}">
+      <tbody>${filtered.map(o => {
+        const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
+        const whCode = o.warehouses?.code || o.wh_code || '—';
+        const whBadge = whCode === 'CA' ? '<span class="loc-ca">CA</span>'
+                      : whCode === 'SC' ? '<span class="loc-sc">SC</span>'
+                      : `<span style="font-size:10px;background:#e0e7ff;color:#3730a3;padding:2px 6px;border-radius:4px;">SC+CA</span>`;
+        return `<tr style="cursor:pointer;" onclick="openPODetail('${o.id}')">
           <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
-          <td>${o.customer_name}</td>
-          <td class="mono">${o.customer_po||'—'}</td>
-          <td>${o.warehouses?.code==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</td>
-          <td>${o.ship_date||'—'}</td>
-          <td class="num">${(o.total_pcs||0).toLocaleString()}</td>
-          <td>${statusChip(o.status)}</td>
-          <td>
-            ${o.status==='rejected'
-              ? `<div style="display:flex;gap:4px;">
-                  <button class="btn btn-sm" style="background:#e65100;color:#fff" onclick="event.stopPropagation();sendCreditHoldEmail('${o.id}','${o.order_number}','${(o.customer_name||'').replace(/'/g,'&#39;')}','${o.customer_po||''}',${o.total_amount||0})">📧 Re-submit</button>
-                  <button class="btn btn-sm" style="background:#c62828;color:#fff" onclick="event.stopPropagation();cancelOrder('${o.id}')">🗑 Cancel</button>
-                </div>`
-              : o.status==='credit_hold'
-              ? `<button class="btn btn-sm" style="background:#e65100;color:#fff" onclick="event.stopPropagation();sendCreditHoldEmail('${o.id}','${o.order_number}','${(o.customer_name||'').replace(/'/g,'&#39;')}','${o.customer_po||''}',${o.total_amount||0})">📧 Approve 요청</button>`
-              : (o.status==='backordered'||o.status==='partial')
-              ? `<button class="btn btn-sm" style="background:var(--red);color:#fff" onclick="event.stopPropagation();openBackOrderDetail('${o.id}')">🔴 Back Order</button>`
-              : `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openInvoiceFromOrders('${o.id}')">🧾 Invoice</button>`
-            }
-          </td>
-        </tr>`).join('')}
+          <td style="font-weight:600">${o.customer_name}</td>
+          <td class="mono">${o.customer_po || '—'}</td>
+          <td>${whBadge}</td>
+          <td style="text-align:center">${(o.total_pcs||0).toLocaleString()}</td>
+          <td style="font-weight:700;color:var(--primary)">$${(o.total_amount||0).toLocaleString()}</td>
+          <td>${o.ship_date || '—'}</td>
+          <td><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:${st.bg};color:${st.color};">${st.label}</span></td>
+          <td style="font-size:11px;color:var(--text3)">${(o.created_at||'').slice(0,10)}</td>
+          <td><button class="btn btn-sm" onclick="event.stopPropagation();openPODetail('${o.id}')">열기 →</button></td>
+        </tr>`;
+      }).join('')}
       </tbody>
     </table>`;
 }
 
+function openNewPO() {
+  // 기존 Invoice 탭의 New Invoice 기능으로 연결
+  showPanel('invoice', document.querySelector('.ntab[onclick*="invoice"]'));
+  setTimeout(() => openNewInvoice(), 100);
+}
+
+function openPODetail(orderId) {
+  // Invoice 탭에서 해당 오더 열기
+  showPanel('invoice', document.querySelector('.ntab[onclick*="invoice"]'));
+  setTimeout(() => openInvoiceDetail(orderId), 100);
+}
+
+// ══════════════════════════════════
+// ORDER STATUS (칸반)
+// ══════════════════════════════════
+let allOrderStatusData = [];
+
+async function loadOrderStatus() {
+  const whFilter = document.getElementById('os-filter-wh')?.value || '';
+  ['entered','preparing','ready','shipped','invoiced'].forEach(k =>
+    document.getElementById(`os-col-${k}`).innerHTML = '<div style="font-size:11px;color:#9ca3af;padding:8px;">로딩 중...</div>'
+  );
+
+  const { data } = await db.from('orders')
+    .select('*, warehouses(code,name)')
+    .not('status', 'in', '("cancelled")')
+    .order('created_at', { ascending: false });
+
+  let orders = data || [];
+  if (whFilter) orders = orders.filter(o => o.warehouses?.code === whFilter || (o.is_split_warehouse && whFilter === 'SC'));
+
+  allOrderStatusData = orders;
+
+  // KPI
+  const count = (s) => orders.filter(o => o.status === s).length;
+  document.getElementById('os-kpi-entered').textContent   = count('po_entered') + count('open') + count('backordered') + count('partial') + count('credit_hold');
+  document.getElementById('os-kpi-preparing').textContent = count('preparing');
+  document.getElementById('os-kpi-ready').textContent     = count('ready_to_ship');
+  document.getElementById('os-kpi-shipped').textContent   = count('shipped');
+  document.getElementById('os-kpi-invoiced').textContent  = count('invoiced');
+
+  // 칸반 열 매핑
+  const cols = {
+    entered:   orders.filter(o => ['po_entered','open','backordered','partial','credit_hold'].includes(o.status)),
+    preparing: orders.filter(o => o.status === 'preparing'),
+    ready:     orders.filter(o => o.status === 'ready_to_ship'),
+    shipped:   orders.filter(o => o.status === 'shipped'),
+    invoiced:  orders.filter(o => o.status === 'invoiced'),
+  };
+
+  Object.entries(cols).forEach(([col, list]) => {
+    const el = document.getElementById(`os-col-${col}`);
+    if (list.length === 0) {
+      el.innerHTML = '<div style="font-size:11px;color:#9ca3af;text-align:center;padding:16px;">없음</div>';
+      return;
+    }
+    el.innerHTML = list.map(o => {
+      const whCode = o.warehouses?.code || (o.is_split_warehouse ? 'SC+CA' : '—');
+      const whBadge = whCode === 'CA' ? '<span class="loc-ca">CA</span>'
+                    : whCode === 'SC' ? '<span class="loc-sc">SC</span>'
+                    : `<span style="font-size:9px;background:#e0e7ff;color:#3730a3;padding:1px 5px;border-radius:3px;">SC+CA</span>`;
+      const isBack = o.status === 'backordered';
+      const isCreditHold = o.status === 'credit_hold';
+      const borderColor = isBack ? '#dc2626' : isCreditHold ? '#ea580c' : '#e5e7eb';
+      return `<div onclick="openPODetail('${o.id}')" style="background:#fff;border:1px solid ${borderColor};border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.12)'" onmouseout="this.style.boxShadow='none'">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</span>
+          ${whBadge}
+        </div>
+        <div style="font-size:12px;font-weight:600;color:#111827;margin-bottom:2px;">${o.customer_name}</div>
+        <div style="font-size:10px;color:#6b7280;">PO# ${o.customer_po || '—'}</div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;">
+          <span style="color:#374151;font-weight:600;">${(o.total_pcs||0).toLocaleString()} pcs</span>
+          <span style="color:var(--primary);font-weight:700;">$${(o.total_amount||0).toLocaleString()}</span>
+        </div>
+        ${o.ship_date ? `<div style="font-size:10px;color:#6b7280;margin-top:3px;">Ship: ${o.ship_date}</div>` : ''}
+        ${isBack ? '<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">⚠️ Back Order</div>' : ''}
+        ${isCreditHold ? '<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold</div>' : ''}
+        ${col === 'ready' ? `<button class="btn btn-sm btn-green" style="width:100%;margin-top:8px;font-size:10px;" onclick="event.stopPropagation();markShipped('${o.id}')">🚚 Mark as Shipped</button>` : ''}
+        ${col === 'shipped' ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();approveAndInvoice('${o.id}')">🧾 Approve & Invoice</button>` : ''}
+      </div>`;
+    }).join('');
+  });
+}
+
+function osFilterStatus(status) {
+  document.getElementById('po-filter-status').value = status;
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+}
+
+async function markShipped(orderId) {
+  const shipDate = prompt('출고 날짜를 입력하세요 (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+  if (!shipDate) return;
+  await db.from('orders').update({ status: 'shipped', ship_date: shipDate }).eq('id', orderId);
+  loadOrderStatus();
+}
+
+async function approveAndInvoice(orderId) {
+  if (!confirm('Invoice를 생성하고 거래처에 이메일을 발송할까요?')) return;
+  await db.from('orders').update({ status: 'invoiced' }).eq('id', orderId);
+  alert('Invoice 생성 완료! (이메일 발송 기능은 곧 추가됩니다)');
+  loadOrderStatus();
+}
+
+async function loadOrders() {
+  // 기존 호환성 유지 — customerpos로 리다이렉트
+  loadCustomerPOs();
+}
 function openInvoiceFromOrders(orderId) {
   showPanel('invoice', document.querySelector('.ntab[onclick*="invoice"]'));
   setTimeout(() => openInvoice(orderId), 100);
