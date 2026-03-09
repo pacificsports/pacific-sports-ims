@@ -541,6 +541,10 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 <input type="checkbox" id="inv-is-reserve" style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer;"/>
                 <span style="font-weight:700;color:#7c3aed;font-size:12px;white-space:nowrap;">🔒 Reserve PO</span>
               </label>
+              <select id="inv-priority" onchange="updatePriorityStyle(this)" style="height:34px;padding:0 10px;border:1px solid #e5e7eb;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;background:#fff;min-width:130px;">
+                <option value="normal" style="color:#374151;">— Normal</option>
+                <option value="urgent" style="color:#dc2626;">🔴 Urgent</option>
+              </select>
               <label style="cursor:pointer">
                 <input type="file" id="po-pdf-input" accept=".pdf" style="display:none" onclick="poLines=[];renderEntryTable();liveRenderDocs()" onchange="parsePoPdf(this)"/>
                 <span class="btn btn-primary" style="pointer-events:none;white-space:nowrap">📎 PO PDF 업로드</span>
@@ -598,14 +602,6 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                       <option value="N30">Net 30</option><option value="N60">Net 60</option>
                       <option value="N90">Net 90</option><option value="CIA">CIA</option>
                       <option value="COD">COD</option><option value="PPD">Prepaid</option>
-                    </select>
-                  </div>
-                  <div class="ff">
-                    <label>Priority</label>
-                    <select class="fsel" id="inv-priority" style="font-weight:600;">
-                      <option value="normal" style="color:#374151;">— Normal</option>
-                      <option value="priority" style="color:#d97706;">⚡ Priority</option>
-                      <option value="urgent" style="color:#dc2626;">🔴 Urgent</option>
                     </select>
                   </div>
                 </div>
@@ -1917,7 +1913,7 @@ function _openNewInvoiceInner() {
     const el = document.getElementById(id); if (el) el.value = '';
   });
   document.getElementById('inv-cust-terms').value = 'N30';
-  const prioritySel = document.getElementById('inv-priority'); if (prioritySel) prioritySel.value = 'normal';
+  const prioritySel = document.getElementById('inv-priority'); if (prioritySel) { prioritySel.value = 'normal'; updatePriorityStyle(prioritySel); }
   const reserveChk = document.getElementById('inv-is-reserve'); if (reserveChk) reserveChk.checked = false;
   document.getElementById('po-lines-body').innerHTML = '';
   document.getElementById('quick-code').value = '';
@@ -1960,10 +1956,31 @@ async function openInvoice(orderId) {
   currentInvoiceData = { order };
   document.getElementById('po-doc-title').textContent = order.order_number + ' — ' + order.customer_name;
   const prioritySel = document.getElementById('inv-priority');
-  if (prioritySel) prioritySel.value = order.priority || 'normal';
+  if (prioritySel) { prioritySel.value = order.priority || 'normal'; updatePriorityStyle(prioritySel); }
   updateStatusButtons(order.status);
   renderAllDocs();
   switchDocTab('invoice');
+}
+
+function updatePriorityStyle(sel) {
+  if (!sel) sel = document.getElementById('inv-priority');
+  if (!sel) return;
+  const styles = {
+    normal: { border: '#e5e7eb', bg: '#fff',    color: '#374151' },
+    urgent: { border: '#fca5a5', bg: '#fef2f2', color: '#dc2626' },
+  };
+  const s = styles[sel.value] || styles.normal;
+  sel.style.borderColor = s.border;
+  sel.style.background  = s.bg;
+  sel.style.color       = s.color;
+
+  // Urgent 선택 시 Ship Date를 오늘 날짜로 자동 설정
+  if (sel.value === 'urgent') {
+    const shipDateEl = document.getElementById('inv-ship-date-inp');
+    if (shipDateEl && !shipDateEl.value) {
+      shipDateEl.value = new Date().toISOString().slice(0, 10);
+    }
+  }
 }
 
 function updateStatusButtons(status) {
@@ -3949,9 +3966,8 @@ function renderCustomerPOTable() {
                       : whCode === 'SC' ? '<span class="loc-sc">SC</span>'
                       : `<span style="font-size:10px;background:#e0e7ff;color:#3730a3;padding:2px 6px;border-radius:4px;">SC+CA</span>`;
         const priBadge = o.priority === 'urgent'   ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 Urgent</span>'
-                       : o.priority === 'priority' ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fffbeb;color:#d97706;border:1px solid #fcd34d;">⚡ Priority</span>'
                        : '<span style="font-size:10px;color:#9ca3af;">—</span>';
-        const rowBg = o.priority === 'urgent' ? 'background:#fff5f5;' : o.priority === 'priority' ? 'background:#fffdf0;' : '';
+        const rowBg = o.priority === 'urgent' ? 'background:#fff5f5;' : '';
         return `<tr style="cursor:pointer;${rowBg}" onclick="openPODetail('${o.id}')">
           <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
           <td style="font-weight:600">${o.customer_name}</td>
@@ -4014,7 +4030,7 @@ async function loadOrderStatus() {
   document.getElementById('os-kpi-backorder').textContent = backOrders.length;
 
   // 칸반 열 매핑 — backordered/partial은 칸반에서 제외 (하단 섹션으로 이동)
-  const priOrder = { urgent: 0, priority: 1, normal: 2 };
+  const priOrder = { urgent: 0, normal: 1 };
   const sortByPri = (arr) => [...arr].sort((a, b) => (priOrder[a.priority]??2) - (priOrder[b.priority]??2));
 
   const cols = {
@@ -4040,7 +4056,6 @@ async function loadOrderStatus() {
       const isBack = o.status === 'backordered';
       const isCreditHold = o.status === 'credit_hold';
       const isUrgent = o.priority === 'urgent';
-      const isPriority = o.priority === 'priority';
 
       // 48시간 경과 체크 (Shipped/Invoiced는 제외)
       const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
@@ -4055,18 +4070,16 @@ async function loadOrderStatus() {
       const cardBg = isOverdue ? '#fffbeb' : '#fff';
       const borderColor = isOverdue ? '#f59e0b'
                         : isUrgent ? '#dc2626'
-                        : isPriority ? '#f59e0b'
                         : isBack ? '#dc2626'
                         : isCreditHold ? '#ea580c'
                         : '#e5e7eb';
-      const priStripe = isUrgent ? 'border-left:3px solid #dc2626;' : isPriority && !isOverdue ? 'border-left:3px solid #f59e0b;' : '';
+      const priStripe = isUrgent ? 'border-left:3px solid #dc2626;' : '';
 
       return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:1px solid ${borderColor};${priStripe}border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.12)'" onmouseout="this.style.boxShadow='none'">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
           <span style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</span>
           <div style="display:flex;gap:4px;align-items:center;">
             ${isUrgent ? '<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 URGENT</span>' : ''}
-            ${isPriority ? '<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:#fffbeb;color:#d97706;border:1px solid #fcd34d;">⚡ PRIORITY</span>' : ''}
             ${whBadge}
           </div>
         </div>
