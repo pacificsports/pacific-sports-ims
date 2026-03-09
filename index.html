@@ -3232,6 +3232,11 @@ async function saveInvoice() {
   const custSelId = document.getElementById('inv-cust-sel')?.value || null;
   const isReserve = document.getElementById('inv-is-reserve')?.checked || false;
 
+  console.log('[saveInvoice] cust:', cust, 'whId:', whId, 'poLines:', poLines.length, 'warehouses:', warehouses?.length);
+
+  if (!cust || !whId) { alert('Customer name과 Warehouse는 필수입니다.'); return; }
+  if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
+
   // SC&CA 혼합이면 SC를 주 창고로, is_split_warehouse = true
   const isSplitWh = (whId === 'SC&CA');
   let effectiveWhId = whId;
@@ -3247,9 +3252,6 @@ async function saveInvoice() {
   // Reserve PO면 별도 처리
   if (isReserve) { await saveReservePO(cust, po, effectiveWhId, shipDate, custSelId); return; }
 
-  if (!cust || !whId) { alert('Customer name과 Warehouse는 필수입니다.'); return; }
-  if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
-  // ── Credit Limit 체크
   var _creditHold = false;
   var _creditInfo = {};
   if (custSelId) {
@@ -3353,7 +3355,7 @@ async function saveInvoice() {
     customer_po: po,
     customer_id: custSelId || null,
     warehouse_id: effectiveWhId,
-    wh_code: document.getElementById('inv-wh-sel')?.value || 'SC',
+    wh_code: document.getElementById('inv-wh-sel')?.selectedOptions[0]?.dataset?.code || 'SC',
     is_split_warehouse: isSplitWh,
     ship_date: shipDate || null,
     status: orderStatus,
@@ -3435,12 +3437,14 @@ if (error) { alert('Error saving order: ' + error.message); return; }
   }
 
   // ── Pick Ticket 레코드 생성
-  await db.from('pick_tickets').insert({
-    order_id: order.id,
-    ticket_number: 'PT-' + orderNum,
-    warehouse_id: whId,
-    status: 'pending'
-  }).catch(e => console.warn('PT insert error:', e));
+  try {
+    await db.from('pick_tickets').insert({
+      order_id: order.id,
+      ticket_number: 'PT-' + orderNum,
+      warehouse_id: whId,
+      status: 'pending'
+    });
+  } catch(e) { console.warn('PT insert error:', e); }
 
   // ── PO Confirm 이메일 발송
   try {
