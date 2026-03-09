@@ -15,7 +15,7 @@
   --red:#b42318; --red-light:#fef2f2;
   --text:#101828; --text2:#344054; --text3:#667085; --text4:#98a2b3;
   --header:#0f2744;
-  --ca:#1a56a0; --ca-light:#dbeafe;A
+  --ca:#1a56a0; --ca-light:#dbeafe;
   --sc:#0e7c3a; --sc-light:#dcfce7;
   --grid-head:#e8ecf2;
 }
@@ -349,11 +349,12 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
   <!-- NAV TABS -->
   <div class="navtabs">
     <div class="ntab active" onclick="showPanel('dashboard',this)">📊 Dashboard</div>
-    <div class="ntab" onclick="showPanel('inventory',this)">📦 Inventory</div>
-    <div class="ntab" onclick="showPanel('customerpos',this)">📋 Customer POs <span class="badge" id="open-orders-badge">0</span></div>
     <div class="ntab" onclick="showPanel('orderstatus',this)">🚦 Order Status</div>
-    <div class="ntab" onclick="showPanel('invoice',this)">🧾 Invoices</div>
+    <div class="ntab" onclick="showPanel('customerpos',this)">📋 Customer POs <span class="badge" id="open-orders-badge">0</span></div>
     <div class="ntab" onclick="showPanel('picktickets',this)">🎫 Pick Tickets</div>
+    <div class="ntab" onclick="showPanel('packinglists',this)">📦 Packing Lists</div>
+    <div class="ntab" onclick="showPanel('invoice',this)">🧾 Invoices</div>
+    <div class="ntab" onclick="showPanel('inventory',this)">🏭 Inventory</div>
     <div class="ntab" onclick="showPanel('receiving',this)">📥 Receiving</div>
     <div class="ntab" onclick="showPanel('intransit',this)">🚢 In Transit</div>
     <div class="ntab" onclick="showPanel('styles',this)">👕 Styles</div>
@@ -618,6 +619,17 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ── PACKING LISTS ── -->
+    <div class="panel" id="panel-packinglists">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+        <button class="btn" onclick="loadPackingLists()">🔄 Refresh</button>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="card-title">📦 Packing Lists</span><span class="card-info" id="pl-count"></span></div>
+        <div id="pl-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
       </div>
     </div>
 
@@ -1859,6 +1871,7 @@ function showPanel(name, el) {
   if (name === 'orderstatus') loadOrderStatus();
   if (name === 'invoice') loadInvoices();
   if (name === 'picktickets') loadPickTickets();
+  if (name === 'packinglists') loadPackingLists();
   if (name === 'styles') loadStyles();
   if (name === 'customers') loadCustomers();
   if (name === 'receiving') loadReceivingHistory();
@@ -4581,6 +4594,55 @@ async function submitOrder() {
 // ══════════════════════════════════
 // PICK TICKETS
 // ══════════════════════════════════
+async function loadPackingLists() {
+  const wrap = document.getElementById('pl-table-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  const { data } = await db.from('pick_tickets')
+    .select('*, orders(order_number, customer_name, customer_po, status, ship_date, warehouses(code))')
+    .in('orders.status', ['ready_to_ship', 'shipped', 'invoiced'])
+    .order('created_at', { ascending: false });
+
+  // ready_to_ship 이상인 것만
+  const pts = (data || []).filter(pt => ['ready_to_ship','shipped','invoiced'].includes(pt.orders?.status));
+  document.getElementById('pl-count').textContent = `${pts.length}건`;
+
+  if (pts.length === 0) {
+    wrap.innerHTML = '<div class="empty">Preparation Complete된 Packing List가 없습니다</div>';
+    return;
+  }
+
+  const statusChipPl = (s) => {
+    const map = { ready_to_ship:'✅ Ready to Ship', shipped:'🚚 Shipped', invoiced:'🧾 Invoiced' };
+    const colors = { ready_to_ship:'#0891b2', shipped:'#16a34a', invoiced:'#7c3aed' };
+    const bgs = { ready_to_ship:'#ecfeff', shipped:'#f0fdf4', invoiced:'#f5f3ff' };
+    return `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:${bgs[s]||'#f3f4f6'};color:${colors[s]||'#6b7280'};">${map[s]||s}</span>`;
+  };
+
+  wrap.innerHTML = `<table class="tbl">
+    <thead><tr>
+      <th>Pick Ticket #</th><th>Order #</th><th>Customer</th><th>PO #</th>
+      <th>WH</th><th>Ship Date</th><th>Status</th><th></th>
+    </tr></thead>
+    <tbody>${pts.map(pt => {
+      const o = pt.orders || {};
+      const wh = o.warehouses?.code || '—';
+      const whBadge = wh==='CA'?'<span class="loc-ca">CA</span>':wh==='SC'?'<span class="loc-sc">SC</span>':'—';
+      return `<tr style="cursor:pointer;" onclick="openInvoice('${o.id||''}')">
+        <td class="mono" style="font-weight:700;color:var(--primary)">${pt.ticket_number||'—'}</td>
+        <td class="mono">${o.order_number||'—'}</td>
+        <td style="font-weight:600">${o.customer_name||'—'}</td>
+        <td class="mono">${o.customer_po||'—'}</td>
+        <td>${whBadge}</td>
+        <td>${o.ship_date||'—'}</td>
+        <td>${statusChipPl(o.status)}</td>
+        <td><button class="btn btn-sm" onclick="event.stopPropagation();openInvoice('${o.id||''}')">열기 →</button></td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
 async function loadPickTickets() {
   document.getElementById('pt-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data } = await db.from('pick_tickets')
