@@ -4031,15 +4031,21 @@ async function loadOrderStatus() {
 
   // 칸반 열 매핑 — backordered/partial은 칸반에서 제외 (하단 섹션으로 이동)
   const priOrder = { urgent: 0, normal: 1 };
-  const sortByPri = (arr) => [...arr].sort((a, b) => (priOrder[a.priority]??2) - (priOrder[b.priority]??2));
+  const sortByUrgency = (arr) => [...arr].sort((a, b) => {
+    const hoursA = a.created_at ? (Date.now() - new Date(a.created_at).getTime()) / 3600000 : 0;
+    const hoursB = b.created_at ? (Date.now() - new Date(b.created_at).getTime()) / 3600000 : 0;
+    const scoreA = (a.priority === 'urgent' ? 0 : 1) * 10000 + (hoursA > 48 ? 0 : hoursA > 24 ? 5000 : 8000) + (10000 - Math.min(hoursA, 9999));
+    const scoreB = (b.priority === 'urgent' ? 0 : 1) * 10000 + (hoursB > 48 ? 0 : hoursB > 24 ? 5000 : 8000) + (10000 - Math.min(hoursB, 9999));
+    return scoreA - scoreB;
+  });
 
   const cols = {
-    entered:   sortByPri(orders.filter(o => ['po_entered','open','credit_hold'].includes(o.status))),
-    preparing: sortByPri(orders.filter(o => o.status === 'preparing')),
-    ready:     sortByPri(orders.filter(o => o.status === 'ready_to_ship')),
-    shipped:   sortByPri(orders.filter(o => o.status === 'shipped')),
+    entered:   sortByUrgency(orders.filter(o => ['po_entered','open','credit_hold'].includes(o.status))),
+    preparing: sortByUrgency(orders.filter(o => o.status === 'preparing')),
+    ready:     sortByUrgency(orders.filter(o => o.status === 'ready_to_ship')),
+    shipped:   orders.filter(o => o.status === 'shipped'),
     invoiced:  orders.filter(o => o.status === 'invoiced'),
-    backorder: sortByPri(orders.filter(o => ['backordered','partial'].includes(o.status))),
+    backorder: sortByUrgency(orders.filter(o => ['backordered','partial'].includes(o.status))),
   };
 
   Object.entries(cols).forEach(([col, list]) => {
