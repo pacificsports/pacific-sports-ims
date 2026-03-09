@@ -3264,14 +3264,17 @@ if (error) { alert('Error saving order: ' + error.message); return; }
   // ── 3. Order Lines 저장 + 재고 차감
   for (const l of lineChecks) {
     const s = styles.find(x => x.style_number === l.styleNum);
-    const firstLocation = isSplitWh
+    const lineIsSplit = (l.wh === 'SC&CA');
+    const lineWhId = l.wh === 'CA' ? (caWhId || whId)
+                   : (scWhId || whId);  // SC, SC&CA 모두 SC warehouse_id 사용
+    const firstLocation = lineIsSplit
       ? (l.allocSC ? Object.keys(l.allocSC)[0] : (l.allocCA ? Object.keys(l.allocCA)[0] : null))
       : (l.invRows[0]?.location || l.location || null);
 
     await db.from('order_lines').insert({
       order_id: order.id,
       style_id: s?.id || null,
-      warehouse_id: isSplitWh ? (scWhId || whId) : whId,
+      warehouse_id: lineWhId,
       color: l.color, size: l.size,
       qty_pieces: l.qty,
       qty_filled: l.canFill,
