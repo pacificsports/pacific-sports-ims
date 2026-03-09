@@ -4226,7 +4226,7 @@ async function loadOrderStatus() {
       const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
       const isOverdue = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 48;
       const isWarning = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 24 && hoursElapsed <= 48;
-      const cardBg = isOverdue ? '#fffbeb' : isSplit ? poColorMap[o.id] : '#fff';
+      const cardBg = isSplit ? poColorMap[o.id] : '#fff';
 
       // 왼쪽 stripe: SC=초록, CA=주황
       const stripeColor = wh === 'CA' ? CA_BORDER : SC_BORDER;
@@ -4247,7 +4247,21 @@ async function loadOrderStatus() {
       const displayPcs = o.total_pcs || 0;
       const displayAmt = o.total_amount || 0;
 
-      return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:2px solid ${borderColor};${leftStripe}border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.15)'" onmouseout="this.style.boxShadow='none'">
+      // overdue/warning 배너 (배경색 변경 없이 카드 상단 띠로만 표시)
+      const overdueBanner = isOverdue
+        ? `<div style="margin:-10px -12px 8px -12px;padding:4px 10px;background:#dc2626;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:5px;">
+             <span style="font-size:11px;">⏰</span>
+             <span style="font-size:10px;font-weight:700;color:#fff;">${hoursLabel} — 배송 지연!</span>
+           </div>`
+        : isWarning
+        ? `<div style="margin:-10px -12px 8px -12px;padding:4px 10px;background:#f59e0b;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:5px;">
+             <span style="font-size:11px;">⏱</span>
+             <span style="font-size:10px;font-weight:700;color:#fff;">${hoursLabel} — 마감 임박</span>
+           </div>`
+        : '';
+
+      return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:2px solid ${borderColor};${leftStripe}border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;overflow:hidden;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.15)'" onmouseout="this.style.boxShadow='none'">
+        ${overdueBanner}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
           <span style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</span>
           <div style="display:flex;gap:4px;align-items:center;">
@@ -4255,19 +4269,21 @@ async function loadOrderStatus() {
             ${whBadge}
           </div>
         </div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7280;margin-bottom:5px;">
+          <span>PO: ${o.created_at ? new Date(o.created_at).toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}) : '—'}</span>
+          <span style="color:${isUrgent || isOverdue ? '#dc2626' : '#6b7280'};font-weight:${isUrgent || isOverdue ? '700' : '400'};">Ship by: ${o.ship_date ? new Date(o.ship_date+'T00:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}) : isUrgent ? '<span style="color:#dc2626;font-weight:700;">Today</span>' : (() => { const d = new Date(o.created_at); d.setDate(d.getDate()+2); return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}); })()}</span>
+        </div>
         <div style="font-size:12px;font-weight:600;color:#111827;margin-bottom:2px;">${o.customer_name}</div>
         <div style="font-size:10px;color:#6b7280;">PO# ${o.customer_po || '—'}</div>
         <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;">
           <span style="color:#374151;font-weight:600;">${displayPcs.toLocaleString()} pcs</span>
           <span style="color:var(--primary);font-weight:700;">$${displayAmt.toLocaleString()}</span>
         </div>
-        ${o.ship_date ? `<div style="font-size:10px;color:#6b7280;margin-top:3px;">Ship: ${o.ship_date}</div>` : ''}
-        ${isOverdue
-          ? `<div style="display:flex;align-items:center;gap:4px;margin-top:5px;padding:4px 7px;background:#fef3c7;border-radius:5px;border:1px solid #fcd34d;"><span style="font-size:11px;">⏰</span><span style="font-size:10px;font-weight:700;color:#92400e;">${hoursLabel} — 배송 지연!</span></div>`
-          : isWarning
-          ? `<div style="font-size:10px;color:#b45309;margin-top:4px;">⏱ ${hoursLabel} — 마감 임박</div>`
-          : `<div style="font-size:10px;color:#9ca3af;margin-top:3px;">${hoursLabel}</div>`
-        }
+        <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:10px;color:#6b7280;">
+          <span>📅 ${o.created_at ? new Date(o.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</span>
+          <span>${o.ship_date ? '🚚 ' + new Date(o.ship_date + 'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '🚚 —'}</span>
+        </div>
+        <div style="font-size:10px;color:#9ca3af;margin-top:3px;">${hoursLabel}</div>
         ${isBack ? '<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">⚠️ Back Order</div>' : ''}
         ${isCreditHold ? '<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold</div>' : ''}
         ${col === 'entered' && !isCreditHold ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();printPickTicket('${o.id}','${wh}')">🖨️ Print Pick Ticket</button>` : ''}
