@@ -3224,7 +3224,18 @@ async function useReservedQty(orderLineId, useQty, invId, invQty, invCommitted) 
   renderEntryTable();
 }
 
+let _savingInProgress = false;
 async function saveInvoice() {
+  if (_savingInProgress) return;
+  _savingInProgress = true;
+  try {
+    await _doSaveInvoice();
+  } finally {
+    _savingInProgress = false;
+  }
+}
+
+async function _doSaveInvoice() {
   const cust    = document.getElementById('inv-cust')?.value.trim();
   const po      = document.getElementById('inv-cust-po')?.value.trim();
   const whId    = document.getElementById('inv-wh-sel')?.value;
@@ -3441,7 +3452,7 @@ if (error) { alert('Error saving order: ' + error.message); return; }
     await db.from('pick_tickets').insert({
       order_id: order.id,
       ticket_number: 'PT-' + orderNum,
-      warehouse_id: whId,
+      warehouse_id: effectiveWhId,
       status: 'pending'
     });
   } catch(e) { console.warn('PT insert error:', e); }
@@ -3453,6 +3464,26 @@ if (error) { alert('Error saving order: ' + error.message); return; }
     if (custEmail) {
       const whOpt = document.querySelector('#inv-wh-sel option:checked');
       const whName = whOpt?.textContent || '';
+      const emailLines = lineChecks.map(l => {
+        const allocSC = l.allocSC || {};
+        const allocCA = l.allocCA || {};
+        const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
+        const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
+        const totalAlloc = scQty + caQty;
+        const backQty = Math.max(0, l.qty - totalAlloc);
+        return {
+          style: l.styleNum,
+          color: l.color,
+          size: l.size,
+          qty: l.qty,
+          fill_qty: totalAlloc || l.qty,
+          back_qty: backQty,
+          sc_qty: scQty,
+          ca_qty: caQty,
+          unit_price: l.price || 0
+        };
+      });
+      const hasAnyBackorder = emailLines.some(l => l.back_qty > 0);
       await fetch('https://po-confirm-email.hjbae.workers.dev/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3465,26 +3496,8 @@ if (error) { alert('Error saving order: ' + error.message); return; }
           total_amount: totalAmt,
           ship_date: shipDate || '',
           warehouse: whName,
-          has_backorder: hasBackorder,
-          lines: lineChecks.map(l => {
-            const allocSC = l.allocSC || {};
-            const allocCA = l.allocCA || {};
-            const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
-            const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
-            const totalAlloc = scQty + caQty;
-            const backQty = Math.max(0, l.qty - totalAlloc);
-            return {
-              style: l.styleNum,
-              color: l.color,
-              size: l.size,
-              qty: l.qty,
-              fill_qty: totalAlloc,
-              back_qty: backQty,
-              sc_qty: scQty,
-              ca_qty: caQty,
-              unit_price: l.price || 0
-            };
-          })
+          has_backorder: hasAnyBackorder,
+          lines: emailLines
         })
       });
     }
