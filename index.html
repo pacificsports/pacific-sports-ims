@@ -15,7 +15,7 @@
   --red:#b42318; --red-light:#fef2f2;
   --text:#101828; --text2:#344054; --text3:#667085; --text4:#98a2b3;
   --header:#0f2744;
-  --ca:#1a56a0; --ca-light:#dbeafe;
+  --ca:#1a56a0; --ca-light:#dbeafe;A
   --sc:#0e7c3a; --sc-light:#dcfce7;
   --grid-head:#e8ecf2;
 }
@@ -458,25 +458,39 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
       <!-- 통계 KPI -->
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
-        <div class="kpi" style="border-left:4px solid #1a56a0;">
+        <div class="kpi" style="border-left:4px solid #1a56a0;cursor:pointer;" onclick="showPoBreakdown('week')" title="거래처별 상세 보기">
           <div class="kpi-label">📋 This Week</div>
-          <div class="kpi-val" id="po-kpi-week">—</div>
+          <div class="kpi-val" id="po-kpi-week" style="text-decoration:underline dotted;text-underline-offset:3px;">—</div>
           <div class="kpi-sub" id="po-kpi-week-vs" style="color:#6b7280;">vs last week</div>
         </div>
-        <div class="kpi" style="border-left:4px solid #0891b2;">
+        <div class="kpi" style="border-left:4px solid #0891b2;cursor:pointer;" onclick="showPoBreakdown('month')" title="거래처별 상세 보기">
           <div class="kpi-label">📅 This Month</div>
-          <div class="kpi-val" id="po-kpi-month">—</div>
+          <div class="kpi-val" id="po-kpi-month" style="text-decoration:underline dotted;text-underline-offset:3px;">—</div>
           <div class="kpi-sub" id="po-kpi-month-vs" style="color:#6b7280;">vs last month</div>
         </div>
-        <div class="kpi" style="border-left:4px solid #7c3aed;">
+        <div class="kpi" style="border-left:4px solid #7c3aed;cursor:pointer;" onclick="showPoBreakdown('year')" title="거래처별 상세 보기">
           <div class="kpi-label">📆 This Year</div>
-          <div class="kpi-val" id="po-kpi-year">—</div>
+          <div class="kpi-val" id="po-kpi-year" style="text-decoration:underline dotted;text-underline-offset:3px;">—</div>
           <div class="kpi-sub" id="po-kpi-year-vs" style="color:#6b7280;">vs last year</div>
         </div>
         <div class="kpi" style="border-left:4px solid #dc2626;">
           <div class="kpi-label">🔴 Back Orders</div>
           <div class="kpi-val" id="po-kpi-backorder">—</div>
           <div class="kpi-sub">재고 부족</div>
+        </div>
+      </div>
+
+      <!-- 거래처별 Breakdown 모달 -->
+      <div id="po-breakdown-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:12px;padding:28px;width:560px;max-width:95vw;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+            <div>
+              <div id="po-breakdown-title" style="font-size:16px;font-weight:700;color:#111827;"></div>
+              <div id="po-breakdown-total" style="font-size:13px;color:#6b7280;margin-top:2px;"></div>
+            </div>
+            <button onclick="document.getElementById('po-breakdown-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+          </div>
+          <div id="po-breakdown-body"></div>
         </div>
       </div>
 
@@ -3930,6 +3944,115 @@ async function loadCustomerPOs() {
 }
 
 function filterCustomerPOs() { renderCustomerPOTable(); }
+
+function showPoBreakdown(period) {
+  const now = new Date();
+  const startOfWeek = new Date(now); startOfWeek.setDate(now.getDate() - now.getDay()); startOfWeek.setHours(0,0,0,0);
+  const startOfLastWeek = new Date(startOfWeek); startOfLastWeek.setDate(startOfWeek.getDate() - 7);
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+  const startOfYear = new Date(now.getFullYear(), 0, 1);
+  const startOfLastYear = new Date(now.getFullYear() - 1, 0, 1);
+  const endOfLastYear = new Date(now.getFullYear() - 1, 11, 31);
+
+  const inRange = (o, start, end) => { const d = new Date(o.created_at); return d >= start && (!end || d <= end); };
+
+  let current, previous, titleText, vsText;
+  if (period === 'week') {
+    current  = allCustomerPOs.filter(o => inRange(o, startOfWeek));
+    previous = allCustomerPOs.filter(o => inRange(o, startOfLastWeek, startOfWeek));
+    titleText = '📋 This Week — Customer Breakdown';
+    vsText = 'vs Last Week';
+  } else if (period === 'month') {
+    current  = allCustomerPOs.filter(o => inRange(o, startOfMonth));
+    previous = allCustomerPOs.filter(o => inRange(o, startOfLastMonth, endOfLastMonth));
+    titleText = '📅 This Month — Customer Breakdown';
+    vsText = 'vs Last Month';
+  } else {
+    current  = allCustomerPOs.filter(o => inRange(o, startOfYear));
+    previous = allCustomerPOs.filter(o => inRange(o, startOfLastYear, endOfLastYear));
+    titleText = '📆 This Year — Customer Breakdown';
+    vsText = 'vs Last Year';
+  }
+
+  // 거래처별 집계
+  const byCustomer = {};
+  current.forEach(o => {
+    const k = o.customer_name || 'Unknown';
+    if (!byCustomer[k]) byCustomer[k] = { amount: 0, pcs: 0, orders: 0 };
+    byCustomer[k].amount += o.total_amount || 0;
+    byCustomer[k].pcs    += o.total_pcs || 0;
+    byCustomer[k].orders++;
+  });
+  const prevByCustomer = {};
+  previous.forEach(o => {
+    const k = o.customer_name || 'Unknown';
+    if (!prevByCustomer[k]) prevByCustomer[k] = { amount: 0 };
+    prevByCustomer[k].amount += o.total_amount || 0;
+  });
+
+  const sorted = Object.entries(byCustomer).sort((a, b) => b[1].amount - a[1].amount);
+  const totalAmt = sorted.reduce((s, [, v]) => s + v.amount, 0);
+  const totalPcs = sorted.reduce((s, [, v]) => s + v.pcs, 0);
+
+  const fmt = (v) => '$' + Math.round(v).toLocaleString();
+  const pctBar = (v) => Math.round(v / totalAmt * 100);
+
+  document.getElementById('po-breakdown-title').textContent = titleText;
+  document.getElementById('po-breakdown-total').textContent =
+    `Total: ${fmt(totalAmt)} / ${totalPcs.toLocaleString()} pcs / ${current.length} POs`;
+
+  document.getElementById('po-breakdown-body').innerHTML = sorted.length === 0
+    ? '<div style="text-align:center;color:#9ca3af;padding:24px;">데이터 없음</div>'
+    : `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr style="border-bottom:2px solid #e5e7eb;">
+            <th style="text-align:left;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase;">Customer</th>
+            <th style="text-align:right;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase;">POs</th>
+            <th style="text-align:right;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase;">Pcs</th>
+            <th style="text-align:right;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase;">Amount</th>
+            <th style="text-align:right;padding:8px 6px;color:#6b7280;font-size:11px;text-transform:uppercase;">${vsText}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${sorted.map(([name, v], i) => {
+            const prev = prevByCustomer[name]?.amount || 0;
+            const diff = v.amount - prev;
+            const diffPct = prev > 0 ? ((diff / prev) * 100).toFixed(0) : null;
+            const vsHtml = diffPct !== null
+              ? `<span style="color:${diff>=0?'#16a34a':'#dc2626'};font-weight:600;">${diff>=0?'▲':'▼'}${Math.abs(diffPct)}%</span>`
+              : '<span style="color:#9ca3af;">—</span>';
+            const bar = pctBar(v.amount);
+            return `<tr style="border-bottom:1px solid #f3f4f6;">
+              <td style="padding:10px 6px;">
+                <div style="font-weight:600;color:#111827;">${name}</div>
+                <div style="height:4px;background:#e5e7eb;border-radius:2px;margin-top:5px;width:100%;">
+                  <div style="height:4px;background:#1a56a0;border-radius:2px;width:${bar}%;"></div>
+                </div>
+              </td>
+              <td style="text-align:right;padding:10px 6px;color:#6b7280;">${v.orders}</td>
+              <td style="text-align:right;padding:10px 6px;color:#374151;">${v.pcs.toLocaleString()}</td>
+              <td style="text-align:right;padding:10px 6px;font-weight:700;color:#111827;">${fmt(v.amount)}</td>
+              <td style="text-align:right;padding:10px 6px;">${vsHtml}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+        <tfoot>
+          <tr style="border-top:2px solid #e5e7eb;background:#f9fafb;">
+            <td style="padding:10px 6px;font-weight:700;">Total</td>
+            <td style="text-align:right;padding:10px 6px;font-weight:700;">${current.length}</td>
+            <td style="text-align:right;padding:10px 6px;font-weight:700;">${totalPcs.toLocaleString()}</td>
+            <td style="text-align:right;padding:10px 6px;font-weight:700;color:#1a56a0;">${fmt(totalAmt)}</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>`;
+
+  const modal = document.getElementById('po-breakdown-modal');
+  modal.style.display = 'flex';
+  modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
+}
 
 function renderCustomerPOTable() {
   const search = (document.getElementById('po-search-input')?.value || '').toLowerCase();
