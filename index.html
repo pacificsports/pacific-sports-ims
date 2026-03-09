@@ -6641,6 +6641,27 @@ function buildAllocHtml(lineIdx, whGroup) {
   return html;
 }
 
+function openBinAllocModal() {
+  if (!poLines || poLines.length === 0) {
+    showToast('먼저 Order Line을 추가해주세요.');
+    return;
+  }
+  // 배분 안 된 첫 번째 라인부터 열기
+  const idx = poLines.findIndex(l => {
+    const hasSC = l.allocSC && Object.keys(l.allocSC).length > 0;
+    const hasCA = l.allocCA && Object.keys(l.allocCA).length > 0;
+    return !hasSC && !hasCA;
+  });
+  const targetIdx = idx >= 0 ? idx : 0;
+  const l = poLines[targetIdx];
+  const wh = l.wh || 'SC';
+  if (wh === 'SC&CA') {
+    openAllocModalBoth({ stopPropagation: () => {} }, targetIdx);
+  } else {
+    openAllocModal({ stopPropagation: () => {} }, targetIdx, wh === 'CA' ? 'CA' : 'SC');
+  }
+}
+
 function openAllocModal(event, lineIdx, whGroup) {
   event.stopPropagation();
   const l = poLines[lineIdx];
@@ -7349,7 +7370,15 @@ function renderTransitTable(elId, rows) {
 function openAllocModalBoth(event, lineIdx) {
   event.stopPropagation();
   const l = poLines[lineIdx];
-  if (!l) return;
+  if (!l) { console.error('openAllocModalBoth: line not found', lineIdx); return; }
+
+  // binInventory가 없으면 재고 먼저 로드
+  if (!window.binInventory || Object.keys(window.binInventory['SC'] || {}).length === 0) {
+    loadScInventory().then(() => openAllocModalBoth(event, lineIdx));
+    showToast('재고 로딩 중...잠시 후 다시 클릭해주세요.');
+    return;
+  }
+
   _allocState = { lineIdx, whGroup: 'SC&CA' };
 
   // 거래처 preference 읽기
