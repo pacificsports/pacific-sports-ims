@@ -7248,7 +7248,7 @@ function buildAllocHtml(lineIdx, whGroup) {
         const remainBoxes = Math.floor(remaining / (l.ppb||72));
         return { ...b, allocated, remaining, remainBoxes };
       })
-      .filter(b => b.remainBoxes > 0);
+      .filter(b => b.remaining > 0);
 
     if (true) { // 항상 표시
       const binItemsHtml = pcrBinData.map((b, i) => {
@@ -7795,8 +7795,21 @@ async function execPcrTransfer(whGroup, ppb) {
 
   showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty} pcs) 이동 완료`);
 
-  // 현재 입력값 저장 (통합/단일 모달 모두 처리)
+  // 모든 라인의 현재 입력값 먼저 저장 (re-render 전에 날아가지 않도록)
   const isBoth = _allocState.whGroup === 'SC&CA';
+  if (isBoth) {
+    poLines.forEach((line, idx) => {
+      const scInputs = document.querySelectorAll(`#alloc-both-sc-wrap input[data-type="box"]`);
+      const caInputs = document.querySelectorAll(`#alloc-both-ca-wrap input[data-type="box"]`);
+      if (idx === _allocState.lineIdx) {
+        // 현재 라인은 아래에서 따로 저장
+      } else {
+        // 다른 라인은 건드리지 않음 — poLines에 이미 저장됨
+      }
+    });
+  }
+
+  // 현재 라인 입력값 저장
   const wrapSel = isBoth
     ? `#alloc-both-${whGroup.toLowerCase()}-wrap input[data-type="box"]`
     : '#alloc-bins-wrap input[data-type="box"]';
@@ -7807,6 +7820,19 @@ async function execPcrTransfer(whGroup, ppb) {
   });
   if (whGroup === 'SC') poLines[_allocState.lineIdx].allocSC = { ...liveAlloc };
   else poLines[_allocState.lineIdx].allocCA = { ...liveAlloc };
+
+  // 상대방 WH 입력값도 저장
+  if (isBoth) {
+    const otherWh = whGroup === 'SC' ? 'CA' : 'SC';
+    const otherSel = `#alloc-both-${otherWh.toLowerCase()}-wrap input[data-type="box"]`;
+    const otherAlloc = {};
+    document.querySelectorAll(otherSel).forEach(inp => {
+      const v = parseInt(inp.value)||0;
+      if (v > 0) otherAlloc[inp.dataset.bin] = v;
+    });
+    if (otherWh === 'SC') poLines[_allocState.lineIdx].allocSC = { ...otherAlloc };
+    else poLines[_allocState.lineIdx].allocCA = { ...otherAlloc };
+  }
 
   await loadScInventory();
   await new Promise(r => setTimeout(r, 100));
@@ -8160,6 +8186,8 @@ function openAllocModalBoth(lineIdx) {
   _allocState = { lineIdx, whGroup: 'SC&CA' };
 
   updateAllocBothTotals();
+  refreshPcrTransferFor('SC', l);
+  refreshPcrTransferFor('CA', l);
 
   // 입력 변경 시 합계 + 박스 힌트 업데이트
   [scWrap, caWrap].forEach(wrap => {
