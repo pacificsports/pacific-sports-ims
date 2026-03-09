@@ -3485,7 +3485,7 @@ if (error) { alert('Error saving order: ' + error.message); return; }
 
   document.getElementById('inv-entry-form').style.display = 'none';
   document.getElementById('po-save-btn').style.display = 'none';
-  openInvoice(order.id);
+  backToPoList();
 }
 
 // ══════════════════════════════════
@@ -4568,10 +4568,25 @@ async function doShipped(orderId) {
     }).eq('id', l.id);
   }
 
-  // 오더 status 업데이트
+  // Invoice 번호 생성 — INV-2026-0001 형식
+  const invYear = new Date().getFullYear();
+  const { data: lastInvOrders } = await db.from('orders')
+    .select('invoice_number')
+    .like('invoice_number', `INV-${invYear}-%`)
+    .order('invoice_number', { ascending: false })
+    .limit(1);
+  let invSeq = 1;
+  if (lastInvOrders?.length > 0) {
+    const parts = lastInvOrders[0].invoice_number.split('-');
+    invSeq = (parseInt(parts[parts.length - 1]) || 0) + 1;
+  }
+  const invoiceNumber = `INV-${invYear}-${String(invSeq).padStart(4, '0')}`;
+
+  // 오더 status 업데이트 + invoice_number 저장
   await db.from('orders').update({
     status: 'shipped',
-    ship_date: shipDate
+    ship_date: shipDate,
+    invoice_number: invoiceNumber
   }).eq('id', orderId);
 
   // Back Order가 있으면 별도 Back Order 레코드 생성
@@ -4630,8 +4645,9 @@ async function reviewAndSendInvoice(orderId) {
 
   _invoiceOrderId = orderId;
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const invoiceNum = order.invoice_number || order.order_number;
 
-  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, lines, isSplit);
+  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, lines, isSplit, invoiceNum);
   document.getElementById('invoice-review-email').textContent = order.email || '(이메일 없음)';
   document.getElementById('modal-invoice-review').style.display = 'flex';
 }
@@ -4881,12 +4897,13 @@ function buildPackingListHtml(order, lines, isSplit) {
 // ═══════════════════════════════════════════════════════
 // Invoice HTML 빌더 (Review용)
 // ═══════════════════════════════════════════════════════
-function buildInvoiceHtml(order, lines, isSplit) {
-  const dateStr = new Date().toLocaleDateString();
+function buildInvoiceHtml(order, lines, isSplit, invoiceNum) {
+  const dateStr = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
-  const renderInvSection = (sectionLines, whLabel, whColor, numSuffix) => {
+  const renderInvSection = (sectionLines, whLabel, whColor, suffix) => {
     if (!sectionLines.length) return '';
+    const invNo = invoiceNum ? invoiceNum + (suffix||'') : '—';
     const sorted = [...sectionLines].sort((a,b) => {
       const ca = (a.color||'').localeCompare(b.color||'');
       return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
@@ -4916,7 +4933,7 @@ function buildInvoiceHtml(order, lines, isSplit) {
           </div>
           <div style="text-align:right;">
             <div style="font-size:20px;font-weight:800;color:#7c3aed;">INVOICE</div>
-            <div style="font-size:11px;color:#555;">${order.order_number}${numSuffix}</div>
+            <div style="font-size:11px;color:#555;">${invNo}</div>
             <div style="font-size:11px;color:#555;">${dateStr}</div>
           </div>
         </div>
