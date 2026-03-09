@@ -4198,6 +4198,7 @@ async function loadOrderStatus() {
           <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
             <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();startBackOrder('${o.id}','SC')">▶ Start Order — SC</button>
             <button class="btn btn-sm" style="width:100%;font-size:10px;background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;" onclick="event.stopPropagation();startBackOrder('${o.id}','CA')">▶ Start Order — CA</button>
+            <button class="btn btn-sm" style="width:100%;font-size:10px;background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();cancelBackOrder('${o.id}','${o.order_number}')">✕ Cancel Back Order</button>
           </div>` : ''}
       </div>`;
     }).join('');
@@ -4658,6 +4659,36 @@ async function sendInvoiceEmail() {
   closeModal('modal-invoice-review');
   showToast('✅ Invoice 발송 완료!');
   _invoiceOrderId = null;
+  loadOrderStatus();
+}
+
+// ── Back Order 취소
+async function cancelBackOrder(orderId, orderNum) {
+  if (!confirm(`${orderNum} Back Order를 취소할까요?\n예약된 재고도 함께 해제됩니다.`)) return;
+
+  // 이 오더의 order_lines 가져와서 committed 해제
+  const { data: lines } = await db.from('order_lines').select('*').eq('order_id', orderId);
+  for (const l of (lines || [])) {
+    const { data: invRows } = await db.from('inventory')
+      .select('id, qty_committed')
+      .eq('color', (l.color||'').toUpperCase())
+      .eq('size', (l.size||'').toUpperCase())
+      .eq('warehouse_id', l.warehouse_id);
+    let toRelease = l.qty_pieces || 0;
+    for (const inv of (invRows || [])) {
+      if (toRelease <= 0) break;
+      const release = Math.min(toRelease, inv.qty_committed || 0);
+      if (release > 0) {
+        await db.from('inventory').update({
+          qty_committed: Math.max(0, (inv.qty_committed || 0) - release)
+        }).eq('id', inv.id);
+        toRelease -= release;
+      }
+    }
+  }
+
+  await db.from('orders').update({ status: 'cancelled' }).eq('id', orderId);
+  showToast(`✕ ${orderNum} 취소 완료 — 재고 예약 해제됨`);
   loadOrderStatus();
 }
 
