@@ -3271,7 +3271,7 @@ if (error) { alert('Error saving order: ' + error.message); return; }
       ? (l.allocSC ? Object.keys(l.allocSC)[0] : (l.allocCA ? Object.keys(l.allocCA)[0] : null))
       : (l.invRows[0]?.location || l.location || null);
 
-    await db.from('order_lines').insert({
+    const insertPayload = {
       order_id: order.id,
       style_id: s?.id || null,
       warehouse_id: lineWhId,
@@ -3285,7 +3285,10 @@ if (error) { alert('Error saving order: ' + error.message); return; }
       qty_loose: l.canFill % l.ppb,
       location: firstLocation,
       unit_price: l.price || 0
-    });
+    };
+    console.log('[order_lines insert]', JSON.stringify(insertPayload));
+    const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
+    if (lineErr) console.error('[order_lines ERROR]', lineErr.message, lineErr.details, lineErr.hint);
 
     // 재고 차감 — SC&CA 또는 alloc 있는 라인은 bin 배분 시 이미 처리됐으므로 skip
     const isLineSplitDeduct = (l.wh === 'SC&CA');
