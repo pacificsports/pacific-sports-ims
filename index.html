@@ -4185,6 +4185,24 @@ async function loadOrderStatus() {
   document.getElementById('os-kpi-invoiced').textContent  = [...new Set(cols.invoiced.map(c=>c.id))].length;
   document.getElementById('os-kpi-backorder').textContent = [...new Set(cols.backorder.map(c=>c.id))].length;
 
+  // PO별 배경색 팔레트 (SC&CA 분리 오더에만 적용)
+  const PO_PALETTES = [
+    { bg: '#fef9ec', stripe: '#f59e0b' },  // 노랑
+    { bg: '#f0fdf9', stripe: '#10b981' },  // 민트
+    { bg: '#fdf4ff', stripe: '#a855f7' },  // 보라
+    { bg: '#fff7ed', stripe: '#f97316' },  // 주황
+    { bg: '#f0f9ff', stripe: '#0ea5e9' },  // 하늘
+    { bg: '#fff1f2', stripe: '#f43f5e' },  // 핑크
+  ];
+  // 분리 오더 ID → 팔레트 인덱스 매핑
+  const splitOrderIds = [...new Set(allCards.filter(c => c.wh_code === 'SC&CA' || c.is_split_warehouse).map(c => c.id))];
+  const poColorMap = {};
+  splitOrderIds.forEach((id, i) => { poColorMap[id] = PO_PALETTES[i % PO_PALETTES.length]; });
+
+  // SC 테두리: 진초록 #16a34a, CA 테두리: 진파랑 #2563eb
+  const SC_BORDER = '#16a34a';
+  const CA_BORDER = '#2563eb';
+
   Object.entries(cols).forEach(([col, list]) => {
     const el = document.getElementById(`os-col-${col}`);
     if (list.length === 0) {
@@ -4194,29 +4212,41 @@ async function loadOrderStatus() {
     el.innerHTML = list.map(o => {
       const wh = o._wh;
       const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
-      const whColor = wh === 'CA' ? '#0f2744' : '#064e22';
-      const whBg = wh === 'CA' ? '#eff6ff' : '#f0fdf4';
-      const whBorder = wh === 'CA' ? '#93c5fd' : '#86efac';
-      const whBadge = isSplit
-        ? `<span style="font-size:9px;background:${whBg};color:${whColor};padding:2px 7px;border-radius:4px;font-weight:800;border:1px solid ${whBorder};">${wh}</span>`
-        : wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+
+      // 테두리: SC=진초록, CA=진파랑 (분리 오더만), 일반 오더는 기존 방식
+      const palette = isSplit ? poColorMap[o.id] : null;
+      const borderColor = isSplit
+        ? (wh === 'CA' ? CA_BORDER : SC_BORDER)
+        : o._status === 'backordered' ? '#dc2626'
+        : o._status === 'credit_hold' ? '#ea580c'
+        : o.priority === 'urgent' ? '#dc2626'
+        : '#e5e7eb';
+
+      // 배경: 같은 PO는 같은 색, 일반은 흰색/overdue 노랑
+      const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
+      const isOverdue = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 48;
+      const isWarning = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 24 && hoursElapsed <= 48;
+      const cardBg = isOverdue ? '#fffbeb' : isSplit ? palette.bg : '#fff';
 
       const isBack = o._status === 'backordered';
       const isCreditHold = o._status === 'credit_hold';
       const isUrgent = o.priority === 'urgent';
-      const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
-      const isOverdue = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 48;
-      const isWarning = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 24 && hoursElapsed <= 48;
       const hoursLabel = hoursElapsed < 48 ? `${Math.floor(hoursElapsed)}h ago` : `${Math.floor(hoursElapsed/24)}d ${Math.floor(hoursElapsed%24)}h ago`;
-      const cardBg = isOverdue ? '#fffbeb' : '#fff';
-      const borderColor = isOverdue ? '#f59e0b' : isUrgent ? '#dc2626' : isBack ? '#dc2626' : isCreditHold ? '#ea580c' : isSplit ? whBorder : '#e5e7eb';
-      const priStripe = isUrgent ? 'border-left:3px solid #dc2626;' : isSplit ? `border-left:3px solid ${whColor};` : '';
 
-      // SC&CA 분리 오더는 해당 WH 수량만 표시
-      let displayPcs = o.total_pcs || 0;
-      let displayAmt = o.total_amount || 0;
+      // WH 배지: SC=초록, CA=파랑 (항상 고정)
+      const whBadge = isSplit
+        ? wh === 'CA'
+          ? `<span style="font-size:10px;background:#2563eb;color:#fff;padding:2px 8px;border-radius:4px;font-weight:800;">CA</span>`
+          : `<span style="font-size:10px;background:#16a34a;color:#fff;padding:2px 8px;border-radius:4px;font-weight:800;">SC</span>`
+        : wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
 
-      return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:1px solid ${borderColor};${priStripe}border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.12)'" onmouseout="this.style.boxShadow='none'">
+      // 왼쪽 세로 stripe: 팔레트 색상
+      const leftStripe = isSplit ? `border-left:4px solid ${palette.stripe};` : isUrgent ? 'border-left:3px solid #dc2626;' : '';
+
+      const displayPcs = o.total_pcs || 0;
+      const displayAmt = o.total_amount || 0;
+
+      return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:2px solid ${borderColor};${leftStripe}border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.15)'" onmouseout="this.style.boxShadow='none'">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
           <span style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</span>
           <div style="display:flex;gap:4px;align-items:center;">
