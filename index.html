@@ -546,8 +546,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 <span style="font-weight:700;color:#9ca3af;font-size:12px;white-space:nowrap;" id="inv-urgent-txt">🔴 Urgent</span>
               </label>
               <input type="hidden" id="inv-priority" value="normal"/>
-              <input type="file" id="po-pdf-input" accept=".pdf" style="display:none" onchange="parsePoPdf(this)"/>
-              <button class="btn btn-primary" style="white-space:nowrap" onclick="document.getElementById('po-pdf-input').value=''; poLines=[]; renderEntryTable(); liveRenderDocs(); document.getElementById('po-pdf-input').click();">📎 PO PDF 업로드</button>
+              <button class="btn btn-primary" style="white-space:nowrap" onclick="triggerPdfUpload()">📎 PO PDF 업로드</button>
             </div>
 
             <!-- ── PO 파싱 진행 중 ── -->
@@ -1678,7 +1677,7 @@ function showPanel(name, el) {
   if (name === 'inventory') loadInventory();
   if (name === 'customerpos') loadCustomerPOs();
   if (name === 'orderstatus') loadOrderStatus();
-  if (name === 'invoice') loadInvoices();
+  if (name === 'invoice') { localStorage.removeItem('inv_view'); loadInvoices(); }
   if (name === 'picktickets') loadPickTickets();
   if (name === 'packinglists') loadPackingLists();
   if (name === 'styles') loadStyles();
@@ -1812,20 +1811,6 @@ function getDefaultBins(styleNum, color, size) {
 
 async function loadInvoices() {
   fillWhDropdown();
-  // 상태 복원 — 재고 로드 완료 후
-  const invView = localStorage.getItem('inv_view');
-  if (invView === 'new') {
-    const draft = localStorage.getItem('invoice_draft');
-    if (draft) {
-      await loadScInventory();
-      openNewInvoice();
-    } else {
-      localStorage.removeItem('inv_view');
-    }
-  } else if (invView && invView.startsWith('detail:')) {
-    const invId = invView.split(':')[1];
-    setTimeout(() => openInvoice(invId), 300);
-  }
   await loadScInventory();
   document.getElementById('invoice-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data } = await db.from('orders')
@@ -1962,6 +1947,15 @@ async function openInvoice(orderId) {
   updateStatusButtons(order.status);
   renderAllDocs();
   switchDocTab('invoice');
+}
+
+function triggerPdfUpload() {
+  poLines = [];
+  renderEntryTable();
+  liveRenderDocs();
+  const inp = document.getElementById('po-pdf-input');
+  inp.value = '';
+  inp.click();
 }
 
 function onUrgentChange(chk) {
@@ -3744,16 +3738,19 @@ let allOrders = [];
 let allCustomerPOs = [];
 
 async function loadCustomerPOs() {
-  // 상태 복원 — refresh 시 PO 입력/상세 뷰 복원
+  // 상태 복원 — refresh 시 PO 입력/상세 뷰 복원 (customerpos 탭에서만)
   const invView = localStorage.getItem('inv_view');
-  if (invView === 'new') {
-    await loadScInventory();
-    _openNewInvoiceInner();
-    return;
-  } else if (invView && invView.startsWith('detail:')) {
-    const invId = invView.split(':')[1];
-    setTimeout(() => openInvoice(invId), 200);
-    return;
+  const lastPanel = localStorage.getItem('last_panel');
+  if (invView && lastPanel === 'customerpos') {
+    if (invView === 'new') {
+      await loadScInventory();
+      _openNewInvoiceInner();
+      return;
+    } else if (invView.startsWith('detail:')) {
+      const invId = invView.split(':')[1];
+      setTimeout(() => openInvoice(invId), 200);
+      return;
+    }
   }
 
   document.getElementById('customerpo-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
@@ -7973,5 +7970,7 @@ async function getInTransitHint(styleNum, color, size) {
   </div>
 </div>
 
+<!-- PDF file input — body 레벨에 위치시켜 display:none 중첩 문제 방지 -->
+<input type="file" id="po-pdf-input" accept=".pdf" style="position:fixed;left:-9999px;opacity:0;" onchange="parsePoPdf(this)"/>
 </body>
 </html>
