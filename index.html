@@ -3353,12 +3353,30 @@ async function _doSaveInvoice() {
     const parts = lastNum.split('-');
     seq = (parseInt(parts[parts.length - 1]) || 0) + 1;
   }
-  // INV 번호도 체크해서 중복 방지
-  const { data: lastInvOrders } = await db.from('orders')
-    .select('order_number')
-    .like('order_number', `INV-${year}-%`)
-    .order('order_number', { ascending: false })
-    .limit(1);
+  // SC/CA 수량·금액 분리 계산
+  const scTotalPcs = lineChecks.reduce((s, l) => {
+    const allocSC = l.allocSC || {};
+    const scQty = Object.values(allocSC).reduce((a,v)=>a+(v||0),0);
+    return s + (l.wh === 'CA' ? 0 : l.wh === 'SC&CA' ? scQty : l.qty);
+  }, 0);
+  const caTotalPcs = lineChecks.reduce((s, l) => {
+    const allocCA = l.allocCA || {};
+    const caQty = Object.values(allocCA).reduce((a,v)=>a+(v||0),0);
+    return s + (l.wh === 'SC' ? 0 : l.wh === 'SC&CA' ? caQty : l.qty);
+  }, 0);
+  const scTotalAmt = lineChecks.reduce((s, l) => {
+    const allocSC = l.allocSC || {};
+    const scQty = Object.values(allocSC).reduce((a,v)=>a+(v||0),0);
+    const qty = l.wh === 'CA' ? 0 : l.wh === 'SC&CA' ? scQty : l.qty;
+    return s + qty * (l.price || 0);
+  }, 0);
+  const caTotalAmt = lineChecks.reduce((s, l) => {
+    const allocCA = l.allocCA || {};
+    const caQty = Object.values(allocCA).reduce((a,v)=>a+(v||0),0);
+    const qty = l.wh === 'SC' ? 0 : l.wh === 'SC&CA' ? caQty : l.qty;
+    return s + qty * (l.price || 0);
+  }, 0);
+
   const orderNum = `PO-${year}-${String(seq).padStart(4, '0')}`;
   const { data: order, error } = await db.from('orders').insert({
     order_number: orderNum,
@@ -3372,6 +3390,10 @@ async function _doSaveInvoice() {
     status: orderStatus,
     total_pcs: totalPcs,
     total_amount: totalAmt,
+    sc_total_pcs: scTotalPcs,
+    ca_total_pcs: caTotalPcs,
+    sc_total_amount: scTotalAmt,
+    ca_total_amount: caTotalAmt,
     bill_addr: document.getElementById('inv-bill-addr')?.value || '',
     ship_addr: document.getElementById('inv-ship-addr')?.value || '',
     terms: document.getElementById('inv-cust-terms')?.value || 'N30',
@@ -4245,7 +4267,14 @@ async function loadOrderStatus() {
         : wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
 
       const displayPcs = o.total_pcs || 0;
-      const displayAmt = o.total_amount || 0;
+      const scPcs = o.sc_total_pcs || 0;
+      const caPcs = o.ca_total_pcs || 0;
+      const displayAmt = isSplit
+        ? (wh === 'CA' ? (o.ca_total_amount || 0) : (o.sc_total_amount || 0))
+        : (o.total_amount || 0);
+      const pcsLabel = isSplit
+        ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#6b7280;">(SC: ${scPcs.toLocaleString()} / CA: ${caPcs.toLocaleString()})</span>`
+        : `${displayPcs.toLocaleString()} pcs`;
 
       // overdue/warning 배너 (배경색 변경 없이 카드 상단 띠로만 표시)
       const overdueBanner = isOverdue
@@ -4269,19 +4298,21 @@ async function loadOrderStatus() {
             ${whBadge}
           </div>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:9px;color:#6b7280;margin-bottom:5px;">
-          <span>PO: ${o.created_at ? new Date(o.created_at).toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}) : '—'}</span>
-          <span style="color:${isUrgent || isOverdue ? '#dc2626' : '#6b7280'};font-weight:${isUrgent || isOverdue ? '700' : '400'};">Ship by: ${o.ship_date ? new Date(o.ship_date+'T00:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}) : isUrgent ? '<span style="color:#dc2626;font-weight:700;">Today</span>' : (() => { const d = new Date(o.created_at); d.setDate(d.getDate()+2); return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}); })()}</span>
-        </div>
         <div style="font-size:12px;font-weight:600;color:#111827;margin-bottom:2px;">${o.customer_name}</div>
         <div style="font-size:10px;color:#6b7280;">PO# ${o.customer_po || '—'}</div>
-        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;">
-          <span style="color:#374151;font-weight:600;">${displayPcs.toLocaleString()} pcs</span>
-          <span style="color:var(--primary);font-weight:700;">$${displayAmt.toLocaleString()}</span>
-        </div>
         <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:10px;color:#6b7280;">
-          <span>📅 ${o.created_at ? new Date(o.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</span>
-          <span>${o.ship_date ? '🚚 ' + new Date(o.ship_date + 'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '🚚 —'}</span>
+          <span>📅 Rcvd: ${o.created_at ? new Date(o.created_at).toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}) : '—'}</span>
+          <span style="color:${isOverdue ? '#dc2626' : isWarning ? '#b45309' : '#6b7280'};font-weight:${isOverdue||isWarning ? '700':'400'};">🚚 ${
+            o.ship_date
+              ? new Date(o.ship_date+'T00:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'})
+              : isUrgent
+              ? '<span style="color:#dc2626;font-weight:700;">Today</span>'
+              : (() => { const d = new Date(o.created_at); d.setDate(d.getDate()+2); return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}); })()
+          }</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;align-items:baseline;">
+          <span style="color:#374151;font-weight:600;">${pcsLabel}</span>
+          <span style="color:var(--primary);font-weight:700;white-space:nowrap;margin-left:6px;">$${displayAmt.toLocaleString()}</span>
         </div>
         <div style="font-size:10px;color:#9ca3af;margin-top:3px;">${hoursLabel}</div>
         ${isBack ? '<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">⚠️ Back Order</div>' : ''}
