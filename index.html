@@ -438,8 +438,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <!-- ── ORDERS 현황 ── -->
     <div class="panel" id="panel-customerpos">
       <!-- 상단 버튼 & 검색 -->
-      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="openNewPO()">➕ New Customer PO</button>
+      <div id="po-toolbar" style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="openNewInvoice()">➕ New Customer PO</button>
         <button class="btn" onclick="loadCustomerPOs()">🔄 Refresh</button>
         <input class="fi" id="po-search-input" placeholder="🔍 PO# or Customer 검색..." style="width:220px;height:30px;font-size:12px;" oninput="filterCustomerPOs()">
         <select class="fsel" id="po-filter-customer" onchange="filterCustomerPOs()" style="height:30px;font-size:11px;min-width:160px;">
@@ -458,7 +458,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
 
       <!-- 통계 KPI -->
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+      <div id="po-kpi-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
         <div class="kpi" style="border-left:4px solid #1a56a0;cursor:pointer;" onclick="showPoBreakdown('week')" title="거래처별 상세 보기">
           <div class="kpi-label">📋 This Week</div>
           <div class="kpi-val" id="po-kpi-week" style="text-decoration:underline dotted;text-underline-offset:3px;">—</div>
@@ -496,7 +496,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
 
       <!-- PO 리스트 -->
-      <div class="card">
+      <div id="po-list-card" class="card">
         <div class="card-head">
           <span class="card-title">📋 Customer POs</span>
           <span class="card-info" id="po-count"></span>
@@ -505,7 +505,150 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
 
       <!-- PO 입력 폼 (New PO / Edit PO) -->
-      <div id="po-entry-view" style="display:none;"></div>
+      <div id="po-entry-view" style="display:none;">
+        <!-- 상단 버튼 -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+          <button class="btn" onclick="backToPoList()">← Back</button>
+          <button class="btn btn-primary" onclick="printCurrentDoc()">🖨 Print</button>
+          <button class="btn btn-green" id="po-save-btn" onclick="saveInvoice()" style="display:none">✓ Save PO</button>
+          <button class="btn" id="po-btn-prep-complete" style="display:none;background:#0891b2;color:#fff;border-color:#0891b2;" onclick="markPrepComplete()">✅ Preparation Complete</button>
+          <button class="btn" id="po-btn-shipped" style="display:none;background:#16a34a;color:#fff;border-color:#16a34a;" onclick="markOrderShipped()">🚚 Shipped</button>
+          <button class="btn" id="po-btn-approve-invoice" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="approveAndSendInvoice()">🧾 Approve & Send Invoice</button>
+          <span id="po-doc-title" style="font-size:13px;font-weight:700;color:var(--primary-dark);margin-left:4px;"></span>
+          <span id="po-status-badge" style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:12px;background:#f3f4f6;color:#6b7280;"></span>
+        </div>
+
+        <!-- DOC TABS -->
+        <div style="display:flex;gap:0;margin-bottom:0;">
+          <div class="doc-tab active" id="tab-invoice" onclick="switchDocTab('invoice')">🧾 Invoice</div>
+          <div class="doc-tab" id="tab-pt" onclick="switchDocTab('pt')">🎫 Pick Ticket</div>
+          <div class="doc-tab" id="tab-transfer" onclick="switchDocTab('transfer')">🔄 Transfer Order</div>
+          <div class="doc-tab" id="tab-pl" onclick="switchDocTab('pl')">📦 Packing List</div>
+        </div>
+
+        <!-- DOC VIEWS — Invoice -->
+        <div id="doc-invoice" class="doc-view">
+          <div id="inv-entry-form" style="display:none;margin-bottom:16px;">
+
+            <!-- ── PO PDF 업로드 ── -->
+            <div id="po-upload-section" style="background:linear-gradient(135deg,#e8f4fd,#f0f7ff);border:2px dashed #90caf9;border-radius:8px;padding:16px;margin-bottom:14px;display:flex;align-items:center;gap:14px;">
+              <div style="font-size:28px">📄</div>
+              <div style="flex:1">
+                <div style="font-weight:700;font-size:13px;color:var(--primary-dark);margin-bottom:2px;">PO PDF 자동 파싱</div>
+                <div style="font-size:11px;color:var(--text2)">고객 PO PDF를 업로드하면 Claude가 자동으로 거래처 정보 및 스타일/컬러/수량을 인식합니다</div>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:5px 10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px;" title="Reserve PO로 처리">
+                <input type="checkbox" id="inv-is-reserve" style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer;"/>
+                <span style="font-weight:700;color:#7c3aed;font-size:12px;white-space:nowrap;">🔒 Reserve PO</span>
+              </label>
+              <label style="cursor:pointer">
+                <input type="file" id="po-pdf-input" accept=".pdf" style="display:none" onclick="poLines=[];renderEntryTable();liveRenderDocs()" onchange="parsePoPdf(this)"/>
+                <span class="btn btn-primary" style="pointer-events:none;white-space:nowrap">📎 PO PDF 업로드</span>
+              </label>
+            </div>
+
+            <!-- ── PO 파싱 진행 중 ── -->
+            <div id="po-parsing-status" style="display:none;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:12px 16px;margin-bottom:14px;align-items:center;gap:10px;">
+              <div class="spinner"></div>
+              <div>
+                <div style="font-weight:600;font-size:12px;color:#e65100">Claude가 PO를 읽고 있어요...</div>
+                <div style="font-size:11px;color:var(--text2)" id="po-parsing-msg">PDF 파싱 중...</div>
+              </div>
+            </div>
+
+            <!-- ── PO 파싱 결과 확인 ── -->
+            <div id="po-preview-section" style="display:none;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;padding:14px;margin-bottom:14px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <div style="font-weight:700;font-size:13px;color:var(--green)">✅ PO 파싱 완료 — 내용을 확인하세요</div>
+                <button class="btn btn-sm" onclick="clearPoPreview()" style="font-size:11px">✕ 취소</button>
+              </div>
+              <div id="po-preview-warning" style="display:none;background:#fff3e0;border:1px solid #ffb74d;border-radius:4px;padding:8px 12px;font-size:11px;color:#e65100;margin-bottom:10px;"></div>
+              <div id="po-preview-info" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;font-size:12px;"></div>
+              <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">파싱된 라인</div>
+              <div id="po-preview-lines" style="overflow-x:auto;"></div>
+              <div style="display:flex;gap:8px;margin-top:12px;">
+                <button class="btn btn-green" onclick="applyPoPreview()" style="font-weight:700">✓ 이대로 적용</button>
+                <button class="btn" onclick="clearPoPreview()">다시 업로드</button>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:8px;">
+                  <input type="checkbox" id="inv-is-reserve-preview" onchange="document.getElementById('inv-is-reserve').checked=this.checked" style="width:14px;height:14px;accent-color:#7c3aed;cursor:pointer;"/>
+                  <span style="font-weight:700;color:#7c3aed;font-size:12px;">🔒 Reserve PO</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- ── 거래처/창고 정보 ── -->
+            <div class="card" style="margin-bottom:12px;">
+              <div class="card-head" style="background:#f8fafc;"><span class="card-title" style="font-size:12px;">📋 Order Info</span></div>
+              <div style="padding:12px 14px;">
+                <div class="fgrid fg4" style="margin-bottom:10px;">
+                  <div class="ff">
+                    <label>Customer <span style="color:var(--red)">*</span></label>
+                    <select class="fsel" id="inv-cust-sel" onchange="onCustSelChange(this)" style="margin-bottom:4px;">
+                      <option value="">— Select Customer —</option>
+                    </select>
+                    <input class="fi" id="inv-cust" placeholder="또는 직접 입력..." style="font-size:11px;"/>
+                  </div>
+                  <div class="ff"><label>Customer PO #</label><input class="fi" id="inv-cust-po" placeholder="e.g. PO-12345"/></div>
+                  <div class="ff">
+                    <label>Warehouse <span style="color:var(--red)">*</span></label>
+                    <select class="fsel" id="inv-wh-sel" onchange="onWhChange()"></select>
+                  </div>
+                  <div class="ff"><label>Terms</label>
+                    <select class="fsel" id="inv-cust-terms">
+                      <option value="N30">Net 30</option><option value="N60">Net 60</option>
+                      <option value="N90">Net 90</option><option value="CIA">CIA</option>
+                      <option value="COD">COD</option><option value="PPD">Prepaid</option>
+                    </select>
+                  </div>
+                  <div class="ff">
+                    <label>Priority</label>
+                    <select class="fsel" id="inv-priority" style="font-weight:600;">
+                      <option value="normal" style="color:#374151;">— Normal</option>
+                      <option value="priority" style="color:#d97706;">⚡ Priority</option>
+                      <option value="urgent" style="color:#dc2626;">🔴 Urgent</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="fgrid fg2">
+                  <div class="ff"><label>Bill To Address</label><textarea class="fi" id="inv-bill-addr" rows="2" placeholder="Billing address..." style="resize:vertical;font-size:11px;"></textarea></div>
+                  <div class="ff"><label>Ship To Address</label><textarea class="fi" id="inv-ship-addr" rows="2" placeholder="Same as bill to if blank" style="resize:vertical;font-size:11px;"></textarea></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── 라인 입력 ── -->
+            <div class="card" style="margin-bottom:10px;">
+              <div class="card-head" style="background:#f8fafc;"><span class="card-title" style="font-size:12px;">📦 Order Lines</span></div>
+              <div style="padding:10px 14px;">
+                <!-- 빠른 입력 -->
+                <div style="display:flex;gap:6px;align-items:flex-end;margin-bottom:10px;flex-wrap:wrap;">
+                  <div class="ff" style="min-width:120px;"><label style="font-size:10px;">Item Code</label><input class="fi" id="quick-code" placeholder="e.g. 1388WHITES" style="font-family:'IBM Plex Mono',monospace;" onkeydown="if(event.key==='Enter')quickAddLine()"/></div>
+                  <div class="ff" style="min-width:70px;"><label style="font-size:10px;">Qty (pcs)</label><input class="fi" id="quick-qty" type="number" min="1" placeholder="144" onkeydown="if(event.key==='Enter')quickAddLine()"/></div>
+                  <div class="ff" style="min-width:70px;"><label style="font-size:10px;">Unit $</label><input class="fi" id="quick-price" type="number" step="0.01" placeholder="4.50" onkeydown="if(event.key==='Enter')quickAddLine()"/></div>
+                  <button class="btn btn-primary btn-sm" onclick="quickAddLine()" style="height:30px;white-space:nowrap;">+ Add Line</button>
+                  <button class="btn btn-sm" onclick="openBinAllocModal()" style="height:30px;white-space:nowrap;">📦 Allocate Bins</button>
+                </div>
+                <div id="parse-preview" style="display:none;"></div>
+                <div style="overflow-x:auto;">
+                  <table class="order-line-table" id="order-line-table">
+                    <thead><tr>
+                      <th>Item Code</th><th>Style</th><th>Color</th><th>Size</th>
+                      <th>Qty(pcs)</th><th>Unit$</th><th>SC/SC-PCR</th><th>CA/CA-PCR</th>
+                      <th>Ship</th><th>Full Boxes</th><th>Loose Pcs(PCR)</th><th>Back Order</th><th>✕</th>
+                    </tr></thead>
+                    <tbody id="po-lines-body"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+          </div>
+          <div id="doc-invoice-content"></div>
+        </div>
+        <div id="doc-pt" class="doc-view" style="display:none;"></div>
+        <div id="doc-transfer" class="doc-view" style="display:none;"></div>
+        <div id="doc-pl" class="doc-view" style="display:none;"></div>
+      </div>
     </div>
 
     <!-- ── ORDER STATUS ── -->
@@ -520,7 +663,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
 
       <!-- 전체 상태 요약 바 -->
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;" id="os-kpi-row">
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:18px;" id="os-kpi-row">
         <div class="kpi" style="border-left:4px solid #6b7280;cursor:pointer;" onclick="osFilterStatus('po_entered')">
           <div class="kpi-label">📥 PO Entered</div><div class="kpi-val" id="os-kpi-entered">—</div></div>
         <div class="kpi" style="border-left:4px solid #f59e0b;cursor:pointer;" onclick="osFilterStatus('preparing')">
@@ -531,6 +674,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div class="kpi-label">🚚 Shipped</div><div class="kpi-val" id="os-kpi-shipped">—</div></div>
         <div class="kpi" style="border-left:4px solid #7c3aed;cursor:pointer;" onclick="osFilterStatus('invoiced')">
           <div class="kpi-label">🧾 Invoiced</div><div class="kpi-val" id="os-kpi-invoiced">—</div></div>
+        <div class="kpi" style="border-left:4px solid #dc2626;cursor:pointer;" onclick="document.getElementById('os-backorder-section').scrollIntoView({behavior:'smooth'})">
+          <div class="kpi-label">🔴 Back Orders</div><div class="kpi-val" id="os-kpi-backorder">—</div></div>
       </div>
 
       <!-- 칸반 보드 -->
@@ -556,7 +701,48 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div id="os-col-invoiced" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
         </div>
       </div>
-    </div>
+
+      <!-- ── BACK ORDER 섹션 ── -->
+      <div id="os-backorder-section" style="margin-top:28px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+          <div style="font-size:13px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;">🔴 Back Orders</div>
+          <div style="flex:1;height:2px;background:#fee2e2;border-radius:2px;"></div>
+          <span style="font-size:11px;color:#6b7280;" id="os-backorder-subtitle">재고 부족 — 입고 후 자동 처리 가능</span>
+        </div>
+        <div id="os-backorder-wrap">
+          <div class="empty" style="color:#9ca3af;">Back Order 없음 ✅</div>
+        </div>
+      </div>
+
+      <!-- Partial Ship 모달 -->
+      <div id="partial-ship-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:12px;padding:28px;width:640px;max-width:95vw;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+            <div style="font-size:16px;font-weight:700;color:#111827;">🚚 Partial Shipment</div>
+            <button onclick="document.getElementById('partial-ship-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+          </div>
+          <div id="partial-ship-order-info" style="font-size:12px;color:#6b7280;margin-bottom:16px;"></div>
+
+          <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;margin-bottom:8px;">출고 수량 입력 — 각 라인별로 실제 출고할 수량을 입력하세요</div>
+          <div id="partial-ship-lines" style="margin-bottom:16px;"></div>
+
+          <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:16px;">
+            <div style="flex:1;">
+              <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">출고 날짜 <span style="color:#dc2626">*</span></label>
+              <input class="fi" type="date" id="partial-ship-date" style="font-family:'IBM Plex Mono',monospace;"/>
+            </div>
+          </div>
+
+          <div style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;font-size:11px;color:#713f12;margin-bottom:16px;">
+            ℹ️ 출고된 수량은 <b>Shipped</b> 처리되고, 나머지는 <b>Back Order</b>로 분리됩니다.
+          </div>
+
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn" onclick="document.getElementById('partial-ship-modal').style.display='none'">취소</button>
+            <button class="btn btn-green" onclick="submitPartialShip()" style="font-weight:700;">✓ Partial Ship 처리</button>
+          </div>
+        </div>
+      </div>
 
     <!-- ── PICK TICKETS ── -->
     <div class="panel" id="panel-picktickets">
@@ -635,11 +821,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
     <!-- ── INVOICE ── -->
     <div class="panel" id="panel-invoice">
-
-      <!-- LIST VIEW -->
       <div id="inv-list-view">
         <div style="display:flex;gap:8px;margin-bottom:12px;">
-          <button class="btn btn-primary" onclick="openNewInvoice()">➕ New Invoice / PO</button>
           <button class="btn" onclick="loadInvoices()">🔄 Refresh</button>
         </div>
         <div class="card">
@@ -647,367 +830,6 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div id="invoice-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
         </div>
       </div>
-
-      <!-- INVOICE ENTRY / DETAIL VIEW -->
-      <div id="inv-detail-view" style="display:none">
-        <!-- 상단 버튼 -->
-        <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
-          <button class="btn" onclick="localStorage.removeItem('inv_view');backToInvoiceList()">← Back</button>
-          <button class="btn btn-primary" onclick="printCurrentDoc()">🖨 Print</button>
-          <button class="btn btn-green" id="inv-save-btn" onclick="saveInvoice()" style="display:none">✓ Save</button>
-          <button class="btn" id="btn-prep-complete" style="display:none;background:#0891b2;color:#fff;border-color:#0891b2;" onclick="markPrepComplete()">✅ Preparation Complete</button>
-          <button class="btn" id="btn-shipped" style="display:none;background:#16a34a;color:#fff;border-color:#16a34a;" onclick="markOrderShipped()">🚚 Shipped</button>
-          <button class="btn" id="btn-approve-invoice" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="approveAndSendInvoice()">🧾 Approve & Send Invoice</button>
-          <span id="inv-doc-title" style="font-size:13px;font-weight:700;color:var(--primary-dark);margin-left:4px;"></span>
-          <span id="inv-status-badge" style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:12px;background:#f3f4f6;color:#6b7280;"></span>
-        </div>
-
-        <!-- DOC TABS -->
-        <div style="display:flex;gap:0;margin-bottom:0;">
-          <div class="doc-tab active" id="tab-invoice" onclick="switchDocTab('invoice')">🧾 Invoice</div>
-          <div class="doc-tab" id="tab-pt" onclick="switchDocTab('pt')">🎫 Pick Ticket</div>
-          <div class="doc-tab" id="tab-transfer" onclick="switchDocTab('transfer')">🔄 Transfer Order</div>
-          <div class="doc-tab" id="tab-pl" onclick="switchDocTab('pl')">📦 Packing List</div>
-        </div>
-
-        <!-- ═══ INVOICE DOC ═══ -->
-        <div id="doc-invoice" class="doc-view">
-          <!-- ENTRY FORM -->
-          <div id="inv-entry-form" style="display:none;margin-bottom:16px;">
-
-            <!-- ── PO PDF 업로드 ── -->
-            <div id="po-upload-section" style="background:linear-gradient(135deg,#e8f4fd,#f0f7ff);border:2px dashed #90caf9;border-radius:8px;padding:16px;margin-bottom:14px;display:flex;align-items:center;gap:14px;">
-              <div style="font-size:28px">📄</div>
-              <div style="flex:1">
-                <div style="font-weight:700;font-size:13px;color:var(--primary-dark);margin-bottom:2px;">PO PDF 자동 파싱</div>
-                <div style="font-size:11px;color:var(--text2)">고객 PO PDF를 업로드하면 Claude가 자동으로 거래처 정보 및 스타일/컬러/수량을 인식합니다</div>
-              </div>
-              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:5px 10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px;" title="Reserve PO로 처리">
-                <input type="checkbox" id="inv-is-reserve" style="width:15px;height:15px;accent-color:#7c3aed;cursor:pointer;"/>
-                <span style="font-weight:700;color:#7c3aed;font-size:12px;white-space:nowrap;">🔒 Reserve PO</span>
-              </label>
-              <label style="cursor:pointer">
-                <input type="file" id="po-pdf-input" accept=".pdf" style="display:none" onclick="poLines=[];renderEntryTable();liveRenderDocs()" onchange="parsePoPdf(this)"/>
-                <span class="btn btn-primary" style="pointer-events:none;white-space:nowrap">📎 PO PDF 업로드</span>
-              </label>
-            </div>
-
-            <!-- ── PO 파싱 진행 중 ── -->
-            <div id="po-parsing-status" style="display:none;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:12px 16px;margin-bottom:14px;display:none;align-items:center;gap:10px;">
-              <div class="spinner"></div>
-              <div>
-                <div style="font-weight:600;font-size:12px;color:#e65100">Claude가 PO를 읽고 있어요...</div>
-                <div style="font-size:11px;color:var(--text2)" id="po-parsing-msg">PDF 파싱 중...</div>
-              </div>
-            </div>
-
-            <!-- ── PO 파싱 결과 확인 ── -->
-            <div id="po-preview-section" style="display:none;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;padding:14px;margin-bottom:14px;">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <div style="font-weight:700;font-size:13px;color:var(--green)">✅ PO 파싱 완료 — 내용을 확인하세요</div>
-                <button class="btn btn-sm" onclick="clearPoPreview()" style="font-size:11px">✕ 취소</button>
-              </div>
-              <div id="po-preview-warning" style="display:none;background:#fff3e0;border:1px solid #ffb74d;border-radius:4px;padding:8px 12px;font-size:11px;color:#e65100;margin-bottom:10px;"></div>
-              <div id="po-preview-info" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;font-size:12px;"></div>
-              <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">파싱된 라인</div>
-              <div id="po-preview-lines" style="overflow-x:auto;"></div>
-              <div style="display:flex;gap:8px;margin-top:12px;">
-                <button class="btn btn-green" onclick="applyPoPreview()" style="font-weight:700">✓ 이대로 적용</button>
-                <button class="btn" onclick="clearPoPreview()">다시 업로드</button>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-left:8px;">
-                  <input type="checkbox" id="inv-is-reserve-preview" onchange="document.getElementById('inv-is-reserve').checked=this.checked" style="width:14px;height:14px;accent-color:#7c3aed;cursor:pointer;"/>
-                  <span style="font-weight:700;color:#7c3aed;font-size:12px;">🔒 Reserve PO</span>
-                </label>
-              </div>
-            </div>
-
-            <div style="background:#f0f4fa;border:1px solid var(--border);border-radius:6px;padding:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;">
-              <div class="ff" style="grid-column:1/-1">
-                <label>Customer <span style="font-weight:400;color:var(--text3)">(선택하면 자동완성)</span></label>
-                <select class="fsel" id="inv-cust-sel" onchange="autoFillCustomer()" style="width:100%;height:32px;">
-                  <option value="">— 직접 입력 또는 선택 —</option>
-                </select>
-              </div>
-              <div class="ff"><label>Customer Name *</label><input class="fi" id="inv-cust" placeholder="OUT OF HAND GRAPHICS" oninput="liveRenderDocs()"/></div>
-              <div class="ff"><label>Customer PO # *</label><input class="fi" id="inv-cust-po" placeholder="P42028" oninput="liveRenderDocs()"/></div>
-              <div class="ff"><label>Terms</label><input class="fi" id="inv-cust-terms" value="N30" oninput="liveRenderDocs()"/></div>
-
-              <div class="ff"><label>Bill To Address</label><textarea class="fi" id="inv-bill-addr" rows="3" style="height:64px;padding:6px;resize:none;" placeholder="6650 S Narragansett Ave&#10;Unit B&#10;Bedford Park IL 60638" oninput="liveRenderDocs()"></textarea></div>
-              <div class="ff"><label>Ship To <span style="color:var(--text4);font-weight:400">(비우면 Bill To와 동일)</span></label><textarea class="fi" id="inv-ship-addr" rows="3" style="height:64px;padding:6px;resize:none;" oninput="liveRenderDocs()"></textarea></div>
-              <div class="ff">
-                <label>Warehouse (F.O.B.) *</label>
-               <select class="fsel" id="inv-wh-sel" onchange="applyWhToAllLines(this.value);renderEntryTable();liveRenderDocs()"><option value="">Select...</option></select>
-                <label style="margin-top:8px;display:block">Ship Date</label>
-                <input class="fi" id="inv-ship-date-inp" type="date" oninput="liveRenderDocs()"/>
-              </div>
-            </div>
-
-            <!-- ── Style+Color 재고 조회 그리드 ── -->
-            <div style="background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:10px;">
-              <div style="background:var(--header);color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
-                <span style="font-weight:700;font-size:12px;letter-spacing:0.5px;">📦 STYLE + COLOR 재고 조회</span>
-                <span style="font-size:10px;opacity:0.7">Style# 과 Color 입력 → 창고별 사이즈 재고 확인 후 수량 입력</span>
-              </div>
-              <div style="display:flex;gap:8px;align-items:flex-end;padding:10px 12px;background:#f8faff;border-bottom:1px solid var(--border);">
-                <div style="width:120px">
-                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Style #</label>
-                  <input class="fi" id="grid-style" placeholder="1368" style="font-family:'IBM Plex Mono',monospace;text-transform:uppercase;"
-                    oninput="this.value=this.value.toUpperCase()"/>
-                </div>
-                <div style="flex:1">
-                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Color</label>
-                  <input class="fi" id="grid-color" placeholder="BLACK" style="font-family:'IBM Plex Mono',monospace;text-transform:uppercase;"
-                    oninput="this.value=this.value.toUpperCase()"/>
-                </div>
-                <div style="width:80px">
-                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Unit $</label>
-                  <input type="number" class="fi" id="grid-price" placeholder="2.35" step="0.01" style="text-align:center;"/>
-                </div>
-                <button class="btn btn-primary" onclick="loadStyleColorGrid()" style="height:34px">🔍 조회</button>
-              </div>
-              <div id="style-color-grid" style="display:none;overflow-x:auto;padding:12px 14px;">
-                <!-- 동적으로 렌더됨 -->
-              </div>
-              <div id="style-color-grid-empty" style="display:none;padding:16px 14px;font-size:12px;color:var(--text3);">
-                해당 Style/Color 재고 없음
-              </div>
-            </div>
-
-            <!-- 라인 입력 -->
-            <div style="background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
-              <div style="background:var(--header);color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
-                <span style="font-weight:700;font-size:12px;letter-spacing:0.5px;">ORDER LINES — Item Code 입력</span>
-                <span style="font-size:10px;opacity:0.7">예: 2388BLACKM · 1368CHARS · 1362CHARCOL</span>
-              </div>
-              <div style="display:flex;gap:8px;align-items:flex-end;padding:10px 12px;background:#f8faff;border-bottom:1px solid var(--border);">
-                <div style="flex:1.5">
-                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Item Code</label>
-                  <input class="fi" id="quick-code" placeholder="2388BLACKM" style="font-family:'IBM Plex Mono',monospace;font-size:13px;text-transform:uppercase;"
-                    oninput="this.value=this.value.toUpperCase();previewParse()"
-                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();document.getElementById('quick-qty').focus();}"/>
-                </div>
-                <div style="width:80px">
-                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Qty (pcs)</label>
-                  <input type="number" class="fi" id="quick-qty" placeholder="90" min="0" style="text-align:center;"
-                    onkeydown="if(event.key==='Enter'||event.key==='Tab'){event.preventDefault();document.getElementById('quick-price').focus();}"/>
-                </div>
-                <div style="width:75px">
-                  <label style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;display:block;margin-bottom:3px">Unit $</label>
-                  <input type="number" class="fi" id="quick-price" placeholder="2.35" step="0.01" style="text-align:center;"
-                    onkeydown="if(event.key==='Enter'){event.preventDefault();addQuickLine();}"/>
-                </div>
-                <button class="btn btn-primary" onclick="addQuickLine()" style="height:34px;white-space:nowrap;padding:0 14px">+ Add</button>
-              </div>
-              <div id="parse-preview" style="display:none;font-size:11px;color:var(--primary);padding:4px 12px;background:#e8f0fb;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;"></div>
-              <details style="border-bottom:1px solid var(--border);">
-                <summary style="font-size:11px;color:var(--primary);cursor:pointer;font-weight:600;padding:8px 12px;">📋 여러 줄 한 번에 붙여넣기</summary>
-                <div style="padding:10px 12px;background:#fffde7;">
-                  <div style="font-size:10px;color:var(--text3);margin-bottom:6px;">한 줄에 하나씩: <code>ItemCode  Qty  Price</code></div>
-                  <textarea id="bulk-paste" class="fi" rows="4" style="height:80px;font-family:'IBM Plex Mono',monospace;font-size:12px;resize:vertical;"
-                    placeholder="2388BLACKXS	18	2.35&#10;2388BLACKS	18	2.35&#10;2388BLACKM	24	2.35&#10;2388BLACKL	24	2.35"></textarea>
-                  <button class="btn btn-primary" style="margin-top:6px" onclick="parseBulkPaste()">✓ Parse & Add All</button>
-                </div>
-              </details>
-              <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;">
-                  <thead>
-                    <tr style="background:var(--header);color:#fff;">
-                      <th style="padding:8px 10px;font-size:10px;text-align:left;">Item Code</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:left;">Style</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:left;">Color</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:left;">Size</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;">Qty (pcs)</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;">Unit $</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1b5e2033;color:#0e7c3a;">🟢 SC / SC-PCR<br><span style="font-weight:400;font-size:9px;">재고 · Bin 배분</span></th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#1547a033;color:#1a56a0;">🔵 CA / CA-PCR<br><span style="font-weight:400;font-size:9px;">재고 · Bin 배분</span></th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;">Ship</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;">Full Boxes</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;">Loose Pcs (PCR)</th>
-                      <th style="padding:8px 10px;font-size:10px;text-align:center;background:#b91c1c;color:#fff;">Back Order</th>
-                      <th style="padding:8px 10px;font-size:10px;"></th>
-                    </tr>
-                  </thead>
-                  <tbody id="po-lines-body"></tbody>
-                  <tfoot>
-                    <tr style="background:#f0f4fa;font-weight:700;">
-                      <td colspan="4" style="padding:8px 10px;">TOTAL</td>
-                      <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--primary)" id="po-total-pcs">0</td>
-                      <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;" id="po-total-amt">$0.00</td>
-                      <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--green);font-size:16px;" id="po-total-cases">0</td>
-                      <td style="padding:8px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:var(--orange);font-size:16px;" id="po-total-loose">0</td>
-  <td colspan="7"></td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          <!-- INVOICE 출력 문서 -->
-          <div class="inv-doc" id="invoice-print">
-            <div class="inv-doc-header">
-              <div class="inv-left"><div class="inv-co">PACIFIC SPORTS INC</div><div class="inv-co-addr" id="inv-from-addr"></div></div>
-              <div class="inv-right">
-                <div class="inv-doc-type">INVOICE</div>
-                <div class="inv-meta-row"><span>Invoice No.</span><span id="inv-number">—</span></div>
-                <div class="inv-meta-row"><span>Date</span><span id="inv-date">—</span></div>
-              </div>
-            </div>
-            <div class="inv-addr-row">
-              <div><div class="inv-addr-label">Bill To</div><div class="inv-addr-val" id="inv-bill-to">—</div></div>
-              <div><div class="inv-addr-label">Ship To</div><div class="inv-addr-val" id="inv-ship-to">—</div></div>
-              <div><div class="inv-addr-label">PO Number</div><div class="inv-addr-val" id="inv-po">—</div></div>
-              <div><div class="inv-addr-label">Terms</div><div class="inv-addr-val" id="inv-terms">—</div></div>
-              <div><div class="inv-addr-label">Ship Date</div><div class="inv-addr-val" id="inv-ship-date">—</div></div>
-              <div><div class="inv-addr-label">F.O.B.</div><div class="inv-addr-val" id="inv-fob">—</div></div>
-            </div>
-            <table class="inv-tbl">
-              <thead><tr><th>Qty (pcs)</th><th>Description</th><th>Color</th><th>Size</th><th>Unit $/pcs</th><th>Amount</th></tr></thead>
-              <tbody id="inv-lines-body"></tbody>
-              <tfoot>
-                <tr><td colspan="4" style="text-align:right;font-weight:600;padding:8px 10px;">Total Pieces:</td><td id="inv-total-pcs" style="font-family:'IBM Plex Mono',monospace;font-weight:700;padding:8px 10px;"></td><td></td></tr>
-   <tr style="background:#f8faff;"><td colspan="4" style="text-align:right;font-weight:700;font-size:14px;padding:8px 10px;">TOTAL AMOUNT:</td><td colspan="2" id="inv-total-amt-doc" style="font-family:IBM Plex Mono,monospace;font-weight:700;font-size:16px;color:var(--primary);padding:8px 10px;">$0.00</td></tr>
-              </tfoot>
-            </table>
-          </div>
-          <div id="inv-ca-section" style="display:none;"></div>
-        </div>
-
-        <!-- ═══ PICK TICKET ═══ -->
-        <div id="doc-pt" class="doc-view" style="display:none">
-          <div class="inv-doc" id="pt-print">
-            <div class="inv-doc-header">
-              <div class="inv-left"><div class="inv-co">PACIFIC SPORTS INC</div><div class="inv-co-addr" id="pt-from-addr"></div></div>
-              <div class="inv-right">
-                <div class="inv-doc-type" style="color:var(--green)">PICK TICKET</div>
-                <div class="inv-meta-row"><span>Ref #</span><span id="pt-ref">—</span></div>
-                <div class="inv-meta-row"><span>Date</span><span id="pt-date2">—</span></div>
-              </div>
-            </div>
-            <div class="inv-addr-row">
-              <div><div class="inv-addr-label">Sold To</div><div class="inv-addr-val" id="pt-sold-to">—</div></div>
-              <div><div class="inv-addr-label">Ship To</div><div class="inv-addr-val" id="pt-ship-to2">—</div></div>
-              <div><div class="inv-addr-label">Customer PO</div><div class="inv-addr-val" id="pt-po2">—</div></div>
-              <div><div class="inv-addr-label">Via</div><div class="inv-addr-val" id="pt-via">—</div></div>
-              <div><div class="inv-addr-label">F.O.B.</div><div class="inv-addr-val" id="pt-fob2">—</div></div>
-              <div><div class="inv-addr-label">Warehouse</div><div class="inv-addr-val" id="pt-wh2">—</div></div>
-            </div>
-            <div style="background:#e8f5e9;border:2px solid #4caf50;border-radius:4px;padding:8px 12px;margin-bottom:8px;">
-              <div style="font-size:10px;font-weight:700;color:#2e7d32;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">📦 SC WAREHOUSE — Full Boxes</div>
-              <table class="inv-tbl">
-                <thead><tr><th>Description</th><th>Color</th><th>Size</th><th style="text-align:center;background:#1b5e20">Full Boxes</th><th>SC Location</th><th style="text-align:center">Picked ✓</th></tr></thead>
-                <tbody id="pt-wh-body"></tbody>
-              </table>
-            </div>
-            <div style="background:#fff8e1;border:2px solid #f9a825;border-radius:4px;padding:8px 12px;margin-bottom:8px;">
-              <div style="font-size:10px;font-weight:700;color:#e65100;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">✂️ SC-PCR (Pcs Room) — Loose Pieces</div>
-              <table class="inv-tbl">
-                <thead><tr><th>Description</th><th>Color</th><th>Size</th><th style="text-align:center;background:#e65100;color:#fff">Loose Pcs</th><th>PCR Stock</th><th style="text-align:center">Status</th><th style="text-align:center">Picked ✓</th></tr></thead>
-                <tbody id="pt-pcr-body"></tbody>
-              </table>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0;">
-              <div style="background:#e8f5e9;border:1px solid #4caf50;border-radius:4px;padding:10px;text-align:center;">
-                <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#2e7d32" id="pt-sum-boxes2">0</div>
-                <div style="font-size:10px;color:#555;text-transform:uppercase">Full Boxes</div>
-              </div>
-              <div style="background:#fff8e1;border:1px solid #f9a825;border-radius:4px;padding:10px;text-align:center;">
-                <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#e65100" id="pt-sum-loose2">0</div>
-                <div style="font-size:10px;color:#555;text-transform:uppercase">Loose Pcs (PCR)</div>
-              </div>
-              <div style="background:#e3f2fd;border:1px solid #1565c0;border-radius:4px;padding:10px;text-align:center;">
-                <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#1565c0" id="pt-sum-total2">0</div>
-                <div style="font-size:10px;color:#555;text-transform:uppercase">Total Pieces</div>
-              </div>
-              <div style="background:#fce4ec;border:1px solid #c62828;border-radius:4px;padding:10px;text-align:center;">
-                <div style="font-size:16px;font-weight:700;color:#c62828" id="pt-transfer-alert">—</div>
-                <div style="font-size:10px;color:#555;text-transform:uppercase">Transfer Needed</div>
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;margin-top:16px;border-top:2px solid #000;padding-top:12px;">
-              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Piece pulled by</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Order complete by</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Date</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Verified by</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ═══ TRANSFER ORDER ═══ -->
-        <div id="doc-transfer" class="doc-view" style="display:none">
-          <div id="transfer-none" style="text-align:center;padding:40px;color:var(--text3);">
-            <div style="font-size:40px;margin-bottom:12px">✅</div>
-            <div style="font-size:16px;font-weight:600">SC-PCR 재고 충분</div>
-            <div style="font-size:13px;margin-top:6px">Transfer Order가 필요 없습니다</div>
-          </div>
-          <div id="transfer-doc" style="display:none">
-            <div class="inv-doc" id="transfer-print">
-              <div class="inv-doc-header">
-                <div class="inv-left"><div class="inv-co">PACIFIC SPORTS INC</div><div style="font-size:11px;color:#555;margin-top:4px">SC Warehouse → SC Pcs Room (Transfer)</div></div>
-                <div class="inv-right">
-                  <div class="inv-doc-type" style="color:#e65100;">TRANSFER ORDER</div>
-                  <div class="inv-meta-row"><span>Ref #</span><span id="tf-ref">—</span></div>
-                  <div class="inv-meta-row"><span>Date</span><span id="tf-date">—</span></div>
-                </div>
-              </div>
-              <div style="background:#fff3e0;border:2px solid #ff6d00;border-radius:6px;padding:12px;margin-bottom:14px;">
-                <div style="font-size:12px;font-weight:700;color:#bf360c;margin-bottom:4px;">⚠️ SC-PCR (Pcs Room) 재고 부족 — SC Warehouse에서 이동 필요</div>
-                <div style="font-size:11px;color:#555;">아래 항목을 SC Warehouse Location에서 꺼내서 Pcs Room으로 이동해 주세요.</div>
-              </div>
-              <table class="inv-tbl">
-                <thead>
-                  <tr>
-                    <th>Description</th><th>Color</th><th>Size</th>
-                    <th style="text-align:center;background:#1565c0">SC Location</th>
-                    <th style="text-align:center">박스 열기</th>
-                    <th style="text-align:center;background:#e65100;color:#fff">PCR로 이동 (pcs)</th>
-                    <th style="text-align:center">Done ✓</th>
-                  </tr>
-                </thead>
-                <tbody id="transfer-body"></tbody>
-              </table>
-              <div style="margin-top:16px;border-top:2px solid #000;padding-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
-                <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">SC Warehouse (이동한 사람)</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-                <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">PCR 수령 확인</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-                <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Date / Time</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ═══ PACKING LIST ═══ -->
-        <div id="doc-pl" class="doc-view" style="display:none">
-          <div class="inv-doc" id="pl-print">
-            <div class="inv-doc-header">
-              <div class="inv-left"><div class="inv-co">PACIFIC SPORTS INC</div><div class="inv-co-addr" id="pl-from-addr"></div></div>
-              <div class="inv-right">
-                <div class="inv-doc-type" style="color:var(--orange)">PACKING LIST</div>
-                <div class="inv-meta-row"><span>Ref #</span><span id="pl-ref">—</span></div>
-                <div class="inv-meta-row"><span>Date</span><span id="pl-date">—</span></div>
-              </div>
-            </div>
-            <div class="inv-addr-row">
-              <div><div class="inv-addr-label">Sold To</div><div class="inv-addr-val" id="pl-sold-to">—</div></div>
-              <div><div class="inv-addr-label">Ship To</div><div class="inv-addr-val" id="pl-ship-to">—</div></div>
-              <div><div class="inv-addr-label">Customer PO</div><div class="inv-addr-val" id="pl-po">—</div></div>
-              <div><div class="inv-addr-label">Via</div><div class="inv-addr-val" id="pl-via">—</div></div>
-              <div><div class="inv-addr-label">F.O.B.</div><div class="inv-addr-val" id="pl-fob">—</div></div>
-              <div></div>
-            </div>
-            <table class="inv-tbl">
-              <thead><tr><th>Description</th><th>Color</th><th>Size</th><th style="text-align:center">Qty (pcs)</th><th style="text-align:center;background:#2e7d32;color:#fff">Qty (carton)</th><th style="text-align:center;background:#f9a825;color:#000">Partial Box #</th></tr></thead>
-              <tbody id="pl-lines-body"></tbody>
-              <tfoot id="pl-footer"></tfoot>
-            </table>
-            <div style="margin-top:16px;border-top:2px solid #000;padding-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
-              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Pick up by (Print Name)</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Company</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-              <div><div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#666;margin-bottom:20px">Date</div><div style="border-bottom:1px solid #999;height:1px"></div></div>
-            </div>
-          </div>
-        </div>
-
-      </div><!-- end inv-detail-view -->
     </div><!-- end panel-invoice -->
 
     <!-- ── RECEIVING ── -->
@@ -2058,35 +1880,52 @@ function fillWhDropdown() {
   if (cur) whSel.value = cur;
 }
 
+// Customer PO 탭에서 PO 입력/상세 뷰 열기/닫기
+const _poListElIds = ['po-toolbar','po-kpi-grid','po-breakdown-modal','po-list-card'];
+
+function showPoEntryView() {
+  document.getElementById('po-toolbar')?.style && (document.getElementById('po-toolbar').style.display = 'none');
+  document.getElementById('po-kpi-grid')?.style && (document.getElementById('po-kpi-grid').style.display = 'none');
+  document.getElementById('po-list-card')?.style && (document.getElementById('po-list-card').style.display = 'none');
+  document.getElementById('po-breakdown-modal').style.display = 'none';
+  document.getElementById('po-entry-view').style.display = 'block';
+}
+
+function backToPoList() {
+  localStorage.removeItem('inv_view');
+  document.getElementById('po-entry-view').style.display = 'none';
+  document.getElementById('po-toolbar')?.style && (document.getElementById('po-toolbar').style.display = '');
+  document.getElementById('po-kpi-grid')?.style && (document.getElementById('po-kpi-grid').style.display = '');
+  document.getElementById('po-list-card')?.style && (document.getElementById('po-list-card').style.display = '');
+  loadCustomerPOs();
+}
+
 function openNewInvoice() {
+  // Customer PO 탭으로 이동 후 새 PO 폼 열기
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+  setTimeout(() => _openNewInvoiceInner(), 80);
+}
+
+function _openNewInvoiceInner() {
   localStorage.setItem('inv_view', 'new');
   currentInvoiceData = null;
-  document.getElementById('inv-list-view').style.display = 'none';
-  document.getElementById('inv-detail-view').style.display = 'block';
+  showPoEntryView();
+
   document.getElementById('inv-entry-form').style.display = 'block';
-  document.getElementById('inv-save-btn').style.display = 'inline-flex';
-  document.getElementById('inv-doc-title').textContent = 'New Invoice';
+  document.getElementById('po-save-btn').style.display = 'inline-flex';
+  document.getElementById('po-doc-title').textContent = 'New Customer PO';
+  updateStatusButtons(null);
 
-  // 창고 드롭다운 먼저 채우기
   fillWhDropdown();
-
-  // Draft 복원 시도
   const hasDraft = loadDraft();
-  if (hasDraft) {
-    renderEntryTable();
-    liveRenderDocs();
-    return;
-  }
+  if (hasDraft) { renderEntryTable(); liveRenderDocs(); return; }
   poLines = [];
-
-  // 창고 드롭다운 — PCR 제외
   fillWhDropdown();
-
   ['inv-cust','inv-cust-po','inv-bill-addr','inv-ship-addr'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = '';
+    const el = document.getElementById(id); if (el) el.value = '';
   });
   document.getElementById('inv-cust-terms').value = 'N30';
+  const prioritySel = document.getElementById('inv-priority'); if (prioritySel) prioritySel.value = 'normal';
   const reserveChk = document.getElementById('inv-is-reserve'); if (reserveChk) reserveChk.checked = false;
   document.getElementById('po-lines-body').innerHTML = '';
   document.getElementById('quick-code').value = '';
@@ -2098,18 +1937,21 @@ function openNewInvoice() {
 }
 
 async function openInvoice(orderId) {
+  // Customer PO 탭으로 이동 후 상세 뷰 열기
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+  await new Promise(r => setTimeout(r, 80));
+
   localStorage.setItem('inv_view', 'detail:' + orderId);
-  document.getElementById('inv-list-view').style.display = 'none';
-  document.getElementById('inv-detail-view').style.display = 'block';
+  showPoEntryView();
+
   document.getElementById('inv-entry-form').style.display = 'none';
-  document.getElementById('inv-save-btn').style.display = 'none';
+  document.getElementById('po-save-btn').style.display = 'none';
 
   const [{ data: order }, { data: lines }] = await Promise.all([
     db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single(),
     db.from('order_lines').select('*, styles(style_number,description,category)').eq('order_id', orderId)
   ]);
 
-  // order_lines → poLines 형식으로 변환
   poLines = (lines || []).map(l => ({
     styleNum: l.styles?.style_number || '',
     description: l.styles?.description || '',
@@ -2124,11 +1966,10 @@ async function openInvoice(orderId) {
   }));
 
   currentInvoiceData = { order };
-  document.getElementById('inv-doc-title').textContent = order.order_number + ' — ' + order.customer_name;
-
-  // 상태 배지 & 버튼 표시
+  document.getElementById('po-doc-title').textContent = order.order_number + ' — ' + order.customer_name;
+  const prioritySel = document.getElementById('inv-priority');
+  if (prioritySel) prioritySel.value = order.priority || 'normal';
   updateStatusButtons(order.status);
-
   renderAllDocs();
   switchDocTab('invoice');
 }
@@ -2145,13 +1986,16 @@ function updateStatusButtons(status) {
     open:       { label: 'Open',       color: '#1a56a0', bg: '#eff6ff' },
     credit_hold:{ label: 'Credit Hold',color: '#c2410c', bg: '#fff7ed' },
   };
-  const st = statusLabels[status] || { label: status, color: '#6b7280', bg: '#f3f4f6' };
-  const badge = document.getElementById('inv-status-badge');
-  if (badge) { badge.textContent = st.label; badge.style.background = st.bg; badge.style.color = st.color; }
-
-  const btnPrep    = document.getElementById('btn-prep-complete');
-  const btnShipped = document.getElementById('btn-shipped');
-  const btnApprove = document.getElementById('btn-approve-invoice');
+  const st = status ? (statusLabels[status] || { label: status, color: '#6b7280', bg: '#f3f4f6' }) : null;
+  const badge = document.getElementById('po-status-badge');
+  if (badge) {
+    badge.textContent = st?.label || '';
+    badge.style.background = st?.bg || '#f3f4f6';
+    badge.style.color = st?.color || '#6b7280';
+  }
+  const btnPrep    = document.getElementById('po-btn-prep-complete');
+  const btnShipped = document.getElementById('po-btn-shipped');
+  const btnApprove = document.getElementById('po-btn-approve-invoice');
   if (btnPrep)    btnPrep.style.display    = (status === 'preparing') ? 'inline-flex' : 'none';
   if (btnShipped) btnShipped.style.display = (status === 'ready_to_ship') ? 'inline-flex' : 'none';
   if (btnApprove) btnApprove.style.display = (status === 'shipped') ? 'inline-flex' : 'none';
@@ -2167,8 +2011,8 @@ function printCurrentDoc() {
       db.from('orders').update({ status: 'preparing' }).eq('id', orderId).then(() => {
         currentInvoiceData.order.status = 'preparing';
         updateStatusButtons('preparing');
-        if (document.getElementById('btn-prep-complete')) {
-          document.getElementById('btn-prep-complete').style.display = 'inline-flex';
+        if (document.getElementById('po-btn-prep-complete')) {
+          document.getElementById('po-btn-prep-complete').style.display = 'inline-flex';
         }
       });
     }
@@ -2210,12 +2054,9 @@ async function approveAndSendInvoice() {
 
 function openInvoiceDetail(orderId) { openInvoice(orderId); }
 
-function backToInvoiceList() {
-  localStorage.removeItem('inv_view');
-  document.getElementById('inv-list-view').style.display = 'block';
-  document.getElementById('inv-detail-view').style.display = 'none';
-  loadInvoices();
-}
+function backToInvoiceList() { backToPoList(); }
+
+function handleBackBtn() { backToPoList(); }
 
 function switchDocTab(tab) {
   ['invoice','pt','transfer','pl'].forEach(t => {
@@ -3238,8 +3079,8 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
   showToast(`🔒 Reserve PO ${orderNum} 저장 완료`);
   poLines = [];
   document.getElementById('inv-entry-form').style.display = 'none';
-  document.getElementById('inv-save-btn').style.display = 'none';
-  document.getElementById('inv-list-view').style.display = 'block';
+  document.getElementById('po-save-btn').style.display = 'none';
+  backToPoList();//;
   await loadInvoices();
 }
 
@@ -3410,10 +3251,10 @@ async function saveInvoice() {
     bill_address: document.getElementById('inv-bill-addr')?.value || '',
     ship_address: document.getElementById('inv-ship-addr')?.value || '',
     terms: document.getElementById('inv-cust-terms')?.value || 'N30',
+    priority: document.getElementById('inv-priority')?.value || 'normal',
     created_by: currentUser.email
   }).select().single();
 if (error) { alert('Error saving order: ' + error.message); return; }
-  // ── Credit Hold 이메일 발송
   if (_creditHold) {
     try {
       await fetch('https://credit-hold-email.hjbae.workers.dev/send', {
@@ -3562,7 +3403,7 @@ if (error) { alert('Error saving order: ' + error.message); return; }
   }
 
   document.getElementById('inv-entry-form').style.display = 'none';
-  document.getElementById('inv-save-btn').style.display = 'none';
+  document.getElementById('po-save-btn').style.display = 'none';
   openInvoice(order.id);
 }
 
@@ -4107,7 +3948,7 @@ function renderCustomerPOTable() {
       <thead><tr>
         <th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>
         <th>Total Pcs</th><th>Total Amount</th><th>Ship Date</th>
-        <th>Status</th><th>Created</th><th></th>
+        <th>Priority</th><th>Status</th><th>Created</th><th></th>
       </tr></thead>
       <tbody>${filtered.map(o => {
         const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
@@ -4115,7 +3956,11 @@ function renderCustomerPOTable() {
         const whBadge = whCode === 'CA' ? '<span class="loc-ca">CA</span>'
                       : whCode === 'SC' ? '<span class="loc-sc">SC</span>'
                       : `<span style="font-size:10px;background:#e0e7ff;color:#3730a3;padding:2px 6px;border-radius:4px;">SC+CA</span>`;
-        return `<tr style="cursor:pointer;" onclick="openPODetail('${o.id}')">
+        const priBadge = o.priority === 'urgent'   ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 Urgent</span>'
+                       : o.priority === 'priority' ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fffbeb;color:#d97706;border:1px solid #fcd34d;">⚡ Priority</span>'
+                       : '<span style="font-size:10px;color:#9ca3af;">—</span>';
+        const rowBg = o.priority === 'urgent' ? 'background:#fff5f5;' : o.priority === 'priority' ? 'background:#fffdf0;' : '';
+        return `<tr style="cursor:pointer;${rowBg}" onclick="openPODetail('${o.id}')">
           <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
           <td style="font-weight:600">${o.customer_name}</td>
           <td class="mono">${o.customer_po || '—'}</td>
@@ -4123,6 +3968,7 @@ function renderCustomerPOTable() {
           <td style="text-align:center">${(o.total_pcs||0).toLocaleString()}</td>
           <td style="font-weight:700;color:var(--primary)">$${(o.total_amount||0).toLocaleString()}</td>
           <td>${o.ship_date || '—'}</td>
+          <td>${priBadge}</td>
           <td><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:${st.bg};color:${st.color};">${st.label}</span></td>
           <td style="font-size:11px;color:var(--text3)">${(o.created_at||'').slice(0,10)}</td>
           <td><button class="btn btn-sm" onclick="event.stopPropagation();openPODetail('${o.id}')">열기 →</button></td>
@@ -4167,20 +4013,28 @@ async function loadOrderStatus() {
 
   // KPI
   const count = (s) => orders.filter(o => o.status === s).length;
-  document.getElementById('os-kpi-entered').textContent   = count('po_entered') + count('open') + count('backordered') + count('partial') + count('credit_hold');
+  const backOrders = orders.filter(o => ['backordered','partial'].includes(o.status));
+  document.getElementById('os-kpi-entered').textContent   = count('po_entered') + count('open') + count('credit_hold');
   document.getElementById('os-kpi-preparing').textContent = count('preparing');
   document.getElementById('os-kpi-ready').textContent     = count('ready_to_ship');
   document.getElementById('os-kpi-shipped').textContent   = count('shipped');
   document.getElementById('os-kpi-invoiced').textContent  = count('invoiced');
+  document.getElementById('os-kpi-backorder').textContent = backOrders.length;
 
-  // 칸반 열 매핑
+  // 칸반 열 매핑 — backordered/partial은 칸반에서 제외 (하단 섹션으로 이동)
+  const priOrder = { urgent: 0, priority: 1, normal: 2 };
+  const sortByPri = (arr) => [...arr].sort((a, b) => (priOrder[a.priority]??2) - (priOrder[b.priority]??2));
+
   const cols = {
-    entered:   orders.filter(o => ['po_entered','open','backordered','partial','credit_hold'].includes(o.status)),
-    preparing: orders.filter(o => o.status === 'preparing'),
-    ready:     orders.filter(o => o.status === 'ready_to_ship'),
-    shipped:   orders.filter(o => o.status === 'shipped'),
+    entered:   sortByPri(orders.filter(o => ['po_entered','open','credit_hold'].includes(o.status))),
+    preparing: sortByPri(orders.filter(o => o.status === 'preparing')),
+    ready:     sortByPri(orders.filter(o => o.status === 'ready_to_ship')),
+    shipped:   sortByPri(orders.filter(o => o.status === 'shipped')),
     invoiced:  orders.filter(o => o.status === 'invoiced'),
   };
+
+  // Back Order 섹션 렌더링
+  renderBackOrderSection(backOrders);
 
   Object.entries(cols).forEach(([col, list]) => {
     const el = document.getElementById(`os-col-${col}`);
@@ -4195,11 +4049,36 @@ async function loadOrderStatus() {
                     : `<span style="font-size:9px;background:#e0e7ff;color:#3730a3;padding:1px 5px;border-radius:3px;">SC+CA</span>`;
       const isBack = o.status === 'backordered';
       const isCreditHold = o.status === 'credit_hold';
-      const borderColor = isBack ? '#dc2626' : isCreditHold ? '#ea580c' : '#e5e7eb';
-      return `<div onclick="openPODetail('${o.id}')" style="background:#fff;border:1px solid ${borderColor};border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.12)'" onmouseout="this.style.boxShadow='none'">
+      const isUrgent = o.priority === 'urgent';
+      const isPriority = o.priority === 'priority';
+
+      // 48시간 경과 체크 (Shipped/Invoiced는 제외)
+      const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
+      const isOverdue = !['shipped','invoiced'].includes(o.status) && hoursElapsed > 48;
+      const isWarning = !['shipped','invoiced'].includes(o.status) && hoursElapsed > 24 && hoursElapsed <= 48;
+      const hoursLabel = hoursElapsed < 24
+        ? `${Math.floor(hoursElapsed)}h ago`
+        : hoursElapsed < 48
+        ? `${Math.floor(hoursElapsed)}h ago`
+        : `${Math.floor(hoursElapsed / 24)}d ${Math.floor(hoursElapsed % 24)}h ago`;
+
+      const cardBg = isOverdue ? '#fffbeb' : '#fff';
+      const borderColor = isOverdue ? '#f59e0b'
+                        : isUrgent ? '#dc2626'
+                        : isPriority ? '#f59e0b'
+                        : isBack ? '#dc2626'
+                        : isCreditHold ? '#ea580c'
+                        : '#e5e7eb';
+      const priStripe = isUrgent ? 'border-left:3px solid #dc2626;' : isPriority && !isOverdue ? 'border-left:3px solid #f59e0b;' : '';
+
+      return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:1px solid ${borderColor};${priStripe}border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.12)'" onmouseout="this.style.boxShadow='none'">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
           <span style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</span>
-          ${whBadge}
+          <div style="display:flex;gap:4px;align-items:center;">
+            ${isUrgent ? '<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 URGENT</span>' : ''}
+            ${isPriority ? '<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:#fffbeb;color:#d97706;border:1px solid #fcd34d;">⚡ PRIORITY</span>' : ''}
+            ${whBadge}
+          </div>
         </div>
         <div style="font-size:12px;font-weight:600;color:#111827;margin-bottom:2px;">${o.customer_name}</div>
         <div style="font-size:10px;color:#6b7280;">PO# ${o.customer_po || '—'}</div>
@@ -4208,6 +4087,15 @@ async function loadOrderStatus() {
           <span style="color:var(--primary);font-weight:700;">$${(o.total_amount||0).toLocaleString()}</span>
         </div>
         ${o.ship_date ? `<div style="font-size:10px;color:#6b7280;margin-top:3px;">Ship: ${o.ship_date}</div>` : ''}
+        ${isOverdue
+          ? `<div style="display:flex;align-items:center;gap:4px;margin-top:5px;padding:4px 7px;background:#fef3c7;border-radius:5px;border:1px solid #fcd34d;">
+               <span style="font-size:11px;">⏰</span>
+               <span style="font-size:10px;font-weight:700;color:#92400e;">${hoursLabel} — 배송 지연!</span>
+             </div>`
+          : isWarning
+          ? `<div style="font-size:10px;color:#b45309;margin-top:4px;">⏱ ${hoursLabel} — 마감 임박</div>`
+          : `<div style="font-size:10px;color:#9ca3af;margin-top:3px;">${hoursLabel}</div>`
+        }
         ${isBack ? '<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">⚠️ Back Order</div>' : ''}
         ${isCreditHold ? '<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold</div>' : ''}
         ${col === 'ready' ? `<button class="btn btn-sm btn-green" style="width:100%;margin-top:8px;font-size:10px;" onclick="event.stopPropagation();markShipped('${o.id}')">🚚 Mark as Shipped</button>` : ''}
@@ -4220,6 +4108,248 @@ async function loadOrderStatus() {
 function osFilterStatus(status) {
   document.getElementById('po-filter-status').value = status;
   showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+}
+
+// ── Back Order 섹션 렌더링
+async function renderBackOrderSection(backOrders) {
+  const wrap = document.getElementById('os-backorder-wrap');
+  const subtitle = document.getElementById('os-backorder-subtitle');
+
+  if (backOrders.length === 0) {
+    wrap.innerHTML = '<div class="empty" style="color:#16a34a;padding:20px;">✅ Back Order 없음</div>';
+    subtitle.textContent = '재고 부족 오더 없음';
+    return;
+  }
+
+  subtitle.textContent = `${backOrders.length}건 — 부분 출고 후 잔여 수량 Back Order 처리 가능`;
+
+  // 각 오더의 라인 데이터 함께 로드
+  const orderIds = backOrders.map(o => o.id);
+  const { data: allLines } = await db.from('order_lines')
+    .select('*, styles(style_number,description)')
+    .in('order_id', orderIds);
+
+  const linesByOrder = {};
+  (allLines || []).forEach(l => {
+    if (!linesByOrder[l.order_id]) linesByOrder[l.order_id] = [];
+    linesByOrder[l.order_id].push(l);
+  });
+
+  wrap.innerHTML = `
+    <div style="overflow-x:auto;">
+      <table class="tbl">
+        <thead><tr>
+          <th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>
+          <th>Status</th><th>Total Pcs</th><th>Back Order Pcs</th><th>Ship Date</th><th>Action</th>
+        </tr></thead>
+        <tbody>
+          ${backOrders.map(o => {
+            const lines = linesByOrder[o.id] || [];
+            const backPcs = lines.reduce((s, l) => s + (l.qty_backordered || 0), 0);
+            const shipPcs = (o.total_pcs || 0) - backPcs;
+            const whCode = o.warehouses?.code || '—';
+            const whBadge = whCode === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+            const statusChipHtml = o.status === 'backordered'
+              ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fef2f2;color:#dc2626;">🔴 Full Backorder</span>'
+              : '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fff7ed;color:#ea580c;">🟠 Partial</span>';
+            return `<tr style="background:${o.status==='backordered'?'#fff8f8':'#fffdf5'};">
+              <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
+              <td style="font-weight:600">${o.customer_name}</td>
+              <td class="mono">${o.customer_po || '—'}</td>
+              <td>${whBadge}</td>
+              <td>${statusChipHtml}</td>
+              <td style="text-align:center;">${(o.total_pcs||0).toLocaleString()}</td>
+              <td style="text-align:center;font-weight:700;color:#dc2626;">${backPcs.toLocaleString()}</td>
+              <td>${o.ship_date || '—'}</td>
+              <td>
+                <div style="display:flex;gap:6px;">
+                  ${shipPcs > 0 ? `<button class="btn btn-sm btn-green" onclick="openPartialShip('${o.id}')">🚚 Partial Ship</button>` : ''}
+                  <button class="btn btn-sm" onclick="openPODetail('${o.id}')">열기 →</button>
+                </div>
+              </td>
+            </tr>
+            <tr style="background:${o.status==='backordered'?'#fff8f8':'#fffdf5'};">
+              <td colspan="9" style="padding:0 12px 10px;">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  ${lines.filter(l => (l.qty_backordered||0) > 0).map(l =>
+                    `<span style="font-size:10px;padding:2px 8px;background:#fef2f2;border:1px solid #fca5a5;border-radius:4px;color:#991b1b;">
+                      ${l.styles?.style_number || '?'} ${l.color} ${l.size} — <b>${(l.qty_backordered||0).toLocaleString()} pcs B/O</b>
+                    </span>`
+                  ).join('')}
+                </div>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ── Partial Ship 모달 열기
+async function openPartialShip(orderId) {
+  const order = allOrderStatusData.find(o => o.id === orderId);
+  if (!order) return;
+
+  const { data: lines } = await db.from('order_lines')
+    .select('*, styles(style_number,description)')
+    .eq('order_id', orderId);
+
+  document.getElementById('partial-ship-order-info').textContent =
+    `${order.order_number} — ${order.customer_name}  |  PO# ${order.customer_po || '—'}`;
+
+  document.getElementById('partial-ship-date').value = new Date().toISOString().slice(0,10);
+
+  document.getElementById('partial-ship-lines').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr style="border-bottom:2px solid #e5e7eb;">
+          <th style="text-align:left;padding:6px 8px;color:#6b7280;font-size:11px;">Style</th>
+          <th style="text-align:left;padding:6px 8px;color:#6b7280;font-size:11px;">Color</th>
+          <th style="text-align:left;padding:6px 8px;color:#6b7280;font-size:11px;">Size</th>
+          <th style="text-align:center;padding:6px 8px;color:#6b7280;font-size:11px;">Ordered</th>
+          <th style="text-align:center;padding:6px 8px;color:#dc2626;font-size:11px;">B/O</th>
+          <th style="text-align:center;padding:6px 8px;color:#16a34a;font-size:11px;">Ship Now</th>
+          <th style="text-align:center;padding:6px 8px;color:#6b7280;font-size:11px;">Remaining B/O</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(lines||[]).map(l => {
+          const ordered = l.qty_pieces || 0;
+          const backQty = l.qty_backordered || 0;
+          const canShip = ordered - backQty;
+          const rowBg = backQty > 0 ? 'background:#fff8f8;' : '';
+          return `<tr style="border-bottom:1px solid #f3f4f6;${rowBg}">
+            <td style="padding:7px 8px;font-weight:600;">${l.styles?.style_number || '—'}</td>
+            <td style="padding:7px 8px;">${l.color || '—'}</td>
+            <td style="padding:7px 8px;font-family:monospace;">${l.size || '—'}</td>
+            <td style="text-align:center;padding:7px 8px;">${ordered.toLocaleString()}</td>
+            <td style="text-align:center;padding:7px 8px;color:#dc2626;font-weight:700;">${backQty > 0 ? backQty.toLocaleString() : '—'}</td>
+            <td style="text-align:center;padding:7px 8px;">
+              <input type="number" class="fi partial-ship-qty" data-line-id="${l.id}" data-ordered="${ordered}" data-backqty="${backQty}"
+                min="0" max="${ordered}" value="${canShip}"
+                style="width:70px;text-align:center;font-family:monospace;font-weight:700;color:#16a34a;"
+                oninput="updateRemainingBO(this)"/>
+            </td>
+            <td style="text-align:center;padding:7px 8px;" id="remaining-bo-${l.id}">
+              <span style="font-size:11px;color:#dc2626;font-weight:600;">${backQty > 0 ? backQty.toLocaleString() + ' pcs' : '—'}</span>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+
+  const modal = document.getElementById('partial-ship-modal');
+  modal.style.display = 'flex';
+  modal._orderId = orderId;
+  modal.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
+}
+
+function updateRemainingBO(input) {
+  const ordered = parseInt(input.dataset.ordered) || 0;
+  const shipNow = Math.min(parseInt(input.value) || 0, ordered);
+  input.value = shipNow;
+  const remaining = ordered - shipNow;
+  const lineId = input.dataset.lineId;
+  const el = document.getElementById(`remaining-bo-${lineId}`);
+  if (el) el.innerHTML = remaining > 0
+    ? `<span style="font-size:11px;color:#dc2626;font-weight:600;">${remaining.toLocaleString()} pcs</span>`
+    : '<span style="font-size:11px;color:#16a34a;">✓ 전량 출고</span>';
+}
+
+async function submitPartialShip() {
+  const modal = document.getElementById('partial-ship-modal');
+  const orderId = modal._orderId;
+  const shipDate = document.getElementById('partial-ship-date').value;
+
+  if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
+
+  const qtyInputs = document.querySelectorAll('.partial-ship-qty');
+  const updates = [];
+  let totalShip = 0, totalBO = 0;
+
+  qtyInputs.forEach(inp => {
+    const lineId = inp.dataset.lineId;
+    const ordered = parseInt(inp.dataset.ordered) || 0;
+    const shipNow = parseInt(inp.value) || 0;
+    const remaining = ordered - shipNow;
+    totalShip += shipNow;
+    totalBO += remaining;
+    updates.push({ lineId, shipNow, remaining });
+  });
+
+  if (totalShip === 0) { alert('출고 수량을 1개 이상 입력해주세요.'); return; }
+  if (!confirm(`총 ${totalShip.toLocaleString()} pcs 출고, ${totalBO.toLocaleString()} pcs Back Order 처리하시겠습니까?`)) return;
+
+  // 각 라인 업데이트
+  for (const u of updates) {
+    await db.from('order_lines').update({
+      qty_pieces: u.shipNow,
+      qty_backordered: u.remaining,
+      is_backordered: u.remaining > 0
+    }).eq('id', u.lineId);
+  }
+
+  // 오더 status 및 수량 업데이트
+  const newStatus = totalBO > 0 ? 'partial' : 'shipped';
+  await db.from('orders').update({
+    status: newStatus,
+    ship_date: shipDate,
+    total_pcs: totalShip
+  }).eq('id', orderId);
+
+  // totalBO > 0이면 Back Order 오더 별도 생성
+  if (totalBO > 0) {
+    const origOrder = allOrderStatusData.find(o => o.id === orderId);
+    const boLines = updates.filter(u => u.remaining > 0);
+    const year = new Date().getFullYear();
+    const { data: lastOrders } = await db.from('orders').select('order_number').ilike('order_number', `INV-${year}-%`).order('order_number', { ascending: false }).limit(1);
+    const lastNum = lastOrders?.[0] ? parseInt(lastOrders[0].order_number.split('-')[2]) : 0;
+    const boOrderNum = `INV-${year}-${String(lastNum + 1).padStart(4,'0')}-BO`;
+
+    const { data: boOrder } = await db.from('orders').insert({
+      order_number: boOrderNum,
+      customer_name: origOrder?.customer_name,
+      customer_po: origOrder?.customer_po,
+      customer_id: origOrder?.customer_id,
+      warehouse_id: origOrder?.warehouse_id,
+      status: 'backordered',
+      total_pcs: totalBO,
+      total_amount: 0,
+      priority: origOrder?.priority || 'normal',
+      terms: origOrder?.terms,
+      bill_address: origOrder?.bill_address,
+      ship_address: origOrder?.ship_address,
+      created_by: currentUser.email,
+      notes: `Back Order from ${origOrder?.order_number}`
+    }).select().single();
+
+    if (boOrder) {
+      // 원본 라인에서 BO 라인 복사
+      const { data: origLines } = await db.from('order_lines').select('*').eq('order_id', orderId);
+      for (const u of boLines) {
+        const origLine = origLines?.find(l => l.id === u.lineId);
+        if (!origLine) continue;
+        await db.from('order_lines').insert({
+          order_id: boOrder.id,
+          style_id: origLine.style_id,
+          color: origLine.color,
+          size: origLine.size,
+          qty_pieces: u.remaining,
+          qty_backordered: u.remaining,
+          unit_price: origLine.unit_price,
+          pcs_per_box: origLine.pcs_per_box,
+          warehouse_id: origLine.warehouse_id,
+          is_backordered: true
+        });
+      }
+      showToast(`✅ Partial Ship 완료! Back Order ${boOrderNum} 생성됨`);
+    }
+  } else {
+    showToast('✅ 전량 출고 완료!');
+  }
+
+  modal.style.display = 'none';
+  loadOrderStatus();
 }
 
 async function markShipped(orderId) {
