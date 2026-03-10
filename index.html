@@ -1810,17 +1810,22 @@ async function loadScInventory() {
   let allInv = [], from = 0;
   while (true) {
     const { data } = await db.from('inventory')
-      .select('id, qty_on_hand, qty_committed, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)')
+      .select('id, qty_on_hand, qty_committed, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)')
       .range(from, from + 999);
     if (!data || data.length === 0) break;
     allInv = allInv.concat(data);
     if (data.length < 1000) break;
     from += 1000;
   }
+  let _dk = 0;
   allInv.forEach(row => {
     if (!row.warehouses) return;
     const normColor = (row.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
-    const key = `${row.styles?.style_number||''}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+    const styleNum = row.styles?.style_number || row.style_number || '';
+    const key = `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+    // 6자 약어 fallback key (SKU 직접 입력 지원)
+    const colorAbbr6 = normColor.replace(/\s+/g,'').substring(0,6).toUpperCase();
+    const key6 = `${styleNum}|${colorAbbr6}|${(row.size||'').toUpperCase()}`;
     const qty = row.qty_on_hand || 0;
     const loc = row.location || '';
     const rcvDate = row.received_date || (row.created_at ? row.created_at.slice(0,10) : null);
@@ -1829,12 +1834,16 @@ async function loadScInventory() {
 
     if (wh === 'SC') {
       if (!scInventory[key]) scInventory[key] = entry; else scInventory[key].qty += qty;
+      if (key6 !== key) { if (!scInventory[key6]) scInventory[key6] = {qty, location: loc||'—'}; else scInventory[key6].qty += qty; }
     } else if (wh === 'SC-PCR') {
       if (!pcrInventory[key]) pcrInventory[key] = entry; else pcrInventory[key].qty += qty;
+      if (key6 !== key) { if (!pcrInventory[key6]) pcrInventory[key6] = {qty, location: loc||'—'}; else pcrInventory[key6].qty += qty; }
     } else if (wh === 'CA') {
       if (!caInventory[key]) caInventory[key] = entry; else caInventory[key].qty += qty;
+      if (key6 !== key) { if (!caInventory[key6]) caInventory[key6] = {qty, location: loc||'—'}; else caInventory[key6].qty += qty; }
     } else if (wh === 'CA-PCR') {
       if (!caPcrInventory[key]) caPcrInventory[key] = entry; else caPcrInventory[key].qty += qty;
+      if (key6 !== key) { if (!caPcrInventory[key6]) caPcrInventory[key6] = {qty, location: loc||'—'}; else caPcrInventory[key6].qty += qty; }
       const colorSizeKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
       if (colorSizeKey !== key) {
         if (!caPcrInventory[colorSizeKey]) caPcrInventory[colorSizeKey] = {qty, location: loc||'—'};
@@ -1849,6 +1858,13 @@ async function loadScInventory() {
       const existing = window.binInventory[wh][key].find(b => b.bin === loc);
       if (existing) { existing.qty += qty; }
       else { window.binInventory[wh][key].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
+      // key6 fallback (SKU 직접 입력용)
+      if (key6 !== key) {
+        if (!window.binInventory[wh][key6]) window.binInventory[wh][key6] = [];
+        const ex6 = window.binInventory[wh][key6].find(b => b.bin === loc);
+        if (ex6) { ex6.qty += qty; }
+        else { window.binInventory[wh][key6].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
+      }
 
       // PCR 계열은 color|size fallback key도 추가 저장 (style_id NULL인 row 대비)
       if (wh === 'SC-PCR' || wh === 'CA-PCR') {
@@ -6906,14 +6922,16 @@ function autoFillCustomer() {
 }
 
 async function loadCustomers() {
-  document.getElementById('customers-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const wrap = document.getElementById('customers-table-wrap');
+  if (!wrap) { console.error('[loadCustomers] customers-table-wrap NOT FOUND'); return; }
+  wrap.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data, error } = await db.from('customers').select('*').order('name');
   if (error) {
-    document.getElementById('customers-table-wrap').innerHTML = `<div class="empty" style="color:var(--red);">⚠️ 데이터 로드 실패: ${error.message}</div>`;
+    wrap.innerHTML = `<div class="empty" style="color:var(--red);">⚠️ 데이터 로드 실패: ${error.message}</div>`;
     return;
   }
   if (data === null) {
-    document.getElementById('customers-table-wrap').innerHTML = `<div class="empty" style="color:var(--orange);">⚠️ 응답이 null입니다.</div>`;
+    wrap.innerHTML = `<div class="empty" style="color:var(--orange);">⚠️ 응답이 null입니다.</div>`;
     return;
   }
   customers = data || [];
@@ -6921,7 +6939,7 @@ async function loadCustomers() {
   document.getElementById('customers-count').textContent = `${customers.length} customers`;
 
   if (customers.length === 0) {
-    document.getElementById('customers-table-wrap').innerHTML = '<div class="empty">거래처 없음. Add Customer로 추가하세요.</div>';
+    wrap.innerHTML = '<div class="empty">거래처 없음. Add Customer로 추가하세요.</div>';
     return;
   }
 
@@ -6936,7 +6954,7 @@ async function loadCustomers() {
       <td style="font-size:11px;color:var(--text3);">${c.notes || ''}</td>
     </tr>`).join('');
 
-  document.getElementById('customers-table-wrap').innerHTML = `
+  wrap.innerHTML = `
     <table class="tbl">
       <thead><tr>
         <th>Company</th><th>Contact</th><th>Phone</th><th>Email</th>
