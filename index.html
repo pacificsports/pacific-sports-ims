@@ -604,7 +604,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <div class="ff"><label>Customer PO #</label><input class="fi" id="inv-cust-po" placeholder="e.g. PO-12345"/></div>
                   <div class="ff">
                     <label>Warehouse <span style="color:var(--red)">*</span></label>
-                    <select class="fsel" id="inv-wh-sel" onchange="onWhChange()"></select>
+                    <select class="fsel" id="inv-wh-sel" onchange="syncWhDropdown()"></select>
                   </div>
                   <div class="ff"><label>Terms</label>
                     <select class="fsel" id="inv-cust-terms">
@@ -6288,6 +6288,20 @@ async function parsePoPdf(input) {
     parsedPoData = JSON.parse(jsonMatch[0]);
     parsedPoData.lines = parsedPoData.lines || [];
 
+    // Worker가 lines를 못 파싱했으면 로컬 파싱 시도
+    if (parsedPoData.lines.length === 0) {
+      console.warn('[parsePoPdf] Worker returned 0 lines, trying local parsePoText...');
+      const localResult = parsePoText(text);
+      if (localResult.lines.length > 0) {
+        parsedPoData.lines = localResult.lines;
+        parsedPoData.customer_name = parsedPoData.customer_name || localResult.customer_name;
+        parsedPoData.po_number = parsedPoData.po_number || localResult.po_number;
+        parsedPoData.terms = parsedPoData.terms || localResult.terms;
+        parsedPoData.due_date = parsedPoData.due_date || localResult.due_date;
+        parsedPoData._warning = '(로컬 파싱 사용됨 — 내용을 확인해주세요)';
+      }
+    }
+
     // 스타일 번호 앞 4자리로 정규화 (2388N → 2388, 1315S → 1315)
     parsedPoData.lines.forEach(line => {
       if (line.style_number) {
@@ -6494,6 +6508,30 @@ function parsePoText(text) {
     }
   }
 
+  // 시도 3: T-Shirt Tycoon 스타일 — "1 1368 $2.89 1,233 Charcoal Heather 3/13/26 $3,563.37" + 다음줄 "S-207, M-515, L-414, XL-97"
+  if (parsedLines.length === 0) {
+    const flatText = text;
+    // 라인별로 "style $price qty color date $cost" 찾고 그 다음줄에서 사이즈 파싱
+    const lineRx = /^(\d+)\s+(\d{3,5})\s+\$([\d.]+)\s+([\d,]+)\s+([A-Za-z][A-Za-z\s]+?)\s+\d{1,2}\/\d{1,2}\/\d{2,4}/gm;
+    let lm;
+    while ((lm = lineRx.exec(flatText)) !== null) {
+      const styleNum = lm[2];
+      const unitPrice = parseFloat(lm[3]);
+      const color = lm[5].trim();
+      // 이 매치 이후 200자 안에서 사이즈 찾기
+      const after = flatText.slice(lm.index, lm.index + 300);
+      const szMatches = [...after.matchAll(/((?:2|3|4|5)?XL|XXL|XXXL|[XSML]{1,3})\s*-\s*(\d+)/gi)];
+      if (szMatches.length > 0) {
+        szMatches.forEach(sm => {
+          const rawSize = sm[1].toUpperCase();
+          const size = SIZE_NORM[rawSize] || rawSize;
+          const qty = parseInt(sm[2]);
+          if (qty > 0) parsedLines.push({ style_number: styleNum, color, size, qty, unit_price: unitPrice });
+        });
+      }
+    }
+  }
+
   // 중복 제거 (같은 style+size+qty)
   const seen = new Set();
   result.lines = parsedLines.filter(l => {
@@ -6628,8 +6666,11 @@ function clearPoPreview() {
 
 function applyPoPreview() {
   if (!parsedPoData) return;
+  try {
 
-  // 폼이 숨겨져 있으면 먼저 표시
+  // Customer POs 패널로 이동 + 폼 표시
+  const custTab = document.querySelector('.ntab[onclick*="customerpos"]');
+  if (custTab) showPanel('customerpos', custTab);
   const entryForm = document.getElementById('inv-entry-form');
   if (entryForm) entryForm.style.display = 'block';
   const saveBtn = document.getElementById('po-save-btn');
@@ -6644,12 +6685,13 @@ function applyPoPreview() {
   d.due_date      = document.getElementById('po-edit-date')?.value || d.due_date;
 
   // 거래처 정보 채우기
-  document.getElementById('inv-cust').value = d.customer_name || '';
-  document.getElementById('inv-cust-po').value = d.po_number || '';
-  document.getElementById('inv-cust-terms').value = d.terms || 'N30';
-  document.getElementById('inv-bill-addr').value = d.bill_to_address || d.ship_to_address || '';
-  document.getElementById('inv-ship-addr').value = d.ship_to_address || '';
-  if (d.due_date) document.getElementById('inv-ship-date-inp').value = d.due_date;
+  const _setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  _setVal('inv-cust', d.customer_name || '');
+  _setVal('inv-cust-po', d.po_number || '');
+  _setVal('inv-cust-terms', d.terms || 'N30');
+  _setVal('inv-bill-addr', d.bill_to_address || d.ship_to_address || '');
+  _setVal('inv-ship-addr', d.ship_to_address || '');
+  if (d.due_date) _setVal('inv-ship-date-inp', d.due_date);
 
   // customers DB에서 매칭 시도
 const custName = (d.customer_name||'').toLowerCase().trim();
@@ -6709,8 +6751,10 @@ const qty = l.qty || 0;
       var altQty = pref === 'SC' ? caQty : scQty;
       autoWh = prefQty >= qty ? pref : altQty >= qty ? alt : prefQty > 0 ? pref : altQty > 0 ? alt : pref;
     }
+    let bins = {};
+    try { bins = getDefaultBins(String(l.style_number), l.color, l.size); } catch(e) {}
     return {
-      code: (l.style_number + l.color.replace(/\s+/g,'').substring(0,6) + l.size).toLowerCase(),
+      code: (l.style_number + (l.color||'').replace(/\s+/g,'').substring(0,6) + l.size).toLowerCase(),
       styleNum: String(l.style_number),
       color: l.color,
       size: l.size,
@@ -6724,7 +6768,7 @@ const qty = l.qty || 0;
       location: '',
       pcrQty: null,
       pcrLocation: '—',
-      bins: getDefaultBins(String(l.style_number), l.color, l.size)
+      bins
     };
   });
 
@@ -6744,6 +6788,7 @@ const qty = l.qty || 0;
 
   // 스크롤을 라인 테이블로
   document.getElementById('inv-lines-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch(e) { console.error('[applyPoPreview error]', e); alert('오류: ' + e.message); }
 }
 
 // CUSTOMERS
