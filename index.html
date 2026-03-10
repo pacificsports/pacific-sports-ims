@@ -5846,7 +5846,13 @@ async function loadReceivingHistory() {
 // ══════════════════════════════════
 async function loadStyles() {
   document.getElementById('styles-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-const { data } = await db.from('styles').select('*').order('style_number');
+  try {
+  const { data, error } = await db.from('styles').select('*').order('style_number');
+  console.log('[loadStyles] data:', data, 'error:', error);
+  if (error) {
+    document.getElementById('styles-table-wrap').innerHTML = `<div class="empty" style="color:var(--red);">⚠️ 데이터 로드 실패: ${error.message}<br><small style="color:#999">(F12 콘솔에서 자세한 오류 확인)</small></div>`;
+    return;
+  }
   const list = data || [];
 
   // 재고 합산 데이터 가져오기
@@ -5925,6 +5931,9 @@ const { data } = await db.from('styles').select('*').order('style_number');
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+  } catch(e) {
+    document.getElementById('styles-table-wrap').innerHTML = `<div class="empty" style="color:var(--red);">⚠️ 오류: ${e.message}</div>`;
+  }
 }
 
 function openAddStyle() {
@@ -6345,9 +6354,12 @@ async function parsePoPdf(input) {
 function normalizePoColor(color) {
   if (!color) return color;
   // "Charcoal Heather" → "Charcoal Htr", "Grey Heather" → "Grey Htr" 등
+  // Heather / Heathered / Hthr → Htr 로 통일
   return color
-    .replace(/\bHeather\b/gi, 'Htr')
     .replace(/\bHeathered\b/gi, 'Htr')
+    .replace(/\bHeather\b/gi, 'Htr')
+    .replace(/\bHthr\b/gi, 'Htr')
+    .replace(/\bHTR\b/g, 'Htr')   // 대문자 HTR → Htr
     .trim();
 }
 
@@ -6896,7 +6908,13 @@ function autoFillCustomer() {
 
 async function loadCustomers() {
   document.getElementById('customers-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  const { data } = await db.from('customers').select('*').order('name');
+  try {
+  const { data, error } = await db.from('customers').select('*').order('name');
+  console.log('[loadCustomers] data:', data, 'error:', error);
+  if (error) {
+    document.getElementById('customers-table-wrap').innerHTML = `<div class="empty" style="color:var(--red);">⚠️ 데이터 로드 실패: ${error.message}<br><small style="color:#999">(F12 콘솔에서 자세한 오류 확인)</small></div>`;
+    return;
+  }
   customers = data || [];
   updateCustomerSelects();
   document.getElementById('customers-count').textContent = `${customers.length} customers`;
@@ -6925,6 +6943,9 @@ async function loadCustomers() {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+  } catch(e) {
+    document.getElementById('customers-table-wrap').innerHTML = `<div class="empty" style="color:var(--red);">⚠️ 오류: ${e.message}</div>`;
+  }
 }
 
 function openAddCustomer() {
