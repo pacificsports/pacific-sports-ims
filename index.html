@@ -3436,7 +3436,11 @@ if (error) { alert('Error saving order: ' + error.message); return; }
       pcs_per_box: l.ppb,
       qty_boxes: Math.floor(l.qty / l.ppb),
       qty_loose: l.qty % l.ppb,
-      location: l.location || null,
+      location: (() => {
+        const allocObj = l.wh === 'CA' ? (l.allocCA||{}) : (l.allocSC||{});
+        const mainBins = Object.keys(allocObj).filter(k => !k.includes('PCR'));
+        return mainBins.length > 0 ? mainBins.join(', ') : (l.location || null);
+      })(),
       unit_price: l.price || 0
     };
     const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
@@ -4627,12 +4631,28 @@ async function printPickTicket(orderId, wh) {
   _ptWh = wh || 'SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
-  // wh에 해당하는 라인만 필터
+  // wh에 해당하는 라인 필터 (SC&CA 라인도 포함)
   const filteredLines = isSplit
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
+    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
     : lines;
 
-  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, filteredLines, false, wh);
+  // poLines alloc 정보로 bin location + PCR 수량 보강
+  const enrichedLines = filteredLines.map(l => {
+    const matchPo = poLines.find(p =>
+      String(p.styleNum) === String(l.styles?.style_number||'') &&
+      (p.color||'').toUpperCase() === (l.color||'').toUpperCase() &&
+      (p.size||'').toUpperCase() === (l.size||'').toUpperCase()
+    );
+    if (!matchPo) return l;
+    const allocObj = wh === 'CA' ? (matchPo.allocCA||{}) : (matchPo.allocSC||{});
+    const mainBins = Object.entries(allocObj).filter(([k]) => !k.includes('PCR'));
+    const pcrEntries = Object.entries(allocObj).filter(([k]) => k.includes('PCR'));
+    const mainLoc = mainBins.map(([k]) => k).join(', ') || l.location || '';
+    const pcrQty = pcrEntries.reduce((s,[,v]) => s+(v||0), 0);
+    return { ...l, location: mainLoc, _pcrQty: pcrQty };
+  });
+
+  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh);
   document.getElementById('modal-pt-preview').style.display = 'flex';
 }
 
@@ -4913,11 +4933,11 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride) {
       const ca = (a.color||'').localeCompare(b.color||'');
       return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
     });
-    const rows = sorted.map(l => {
+    const rows = sorted.flatMap(l => {
       const ppb = l.pcs_per_box || 72;
       const boxes = Math.floor((l.qty_pieces||0) / ppb);
       const loose = (l.qty_pieces||0) % ppb;
-      return `<tr>
+      const mainRow = `<tr>
         <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
         <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
@@ -4926,6 +4946,19 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride) {
         <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;${loose>0?'color:#7c3aed;':''}">${loose > 0 ? loose : '—'}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${(l.qty_pieces||0).toLocaleString()}</td>
       </tr>`;
+      const result = [mainRow];
+      if (l._pcrQty > 0) {
+        result.push(`<tr style="background:#fff7ed;">
+          <td style="padding:4px 8px 4px 20px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#a84212;">↳ ${l.styles?.style_number||''}</td>
+          <td style="padding:4px 8px;font-size:10px;color:#a84212;">${l.color||''}</td>
+          <td style="padding:4px 8px;font-size:10px;text-align:center;color:#a84212;">${l.size||''}</td>
+          <td style="padding:4px 8px;font-size:10px;text-align:center;color:#a84212;font-weight:700;">PCR Room</td>
+          <td style="padding:4px 8px;font-size:10px;text-align:center;">—</td>
+          <td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700;color:#7c3aed;">${l._pcrQty}</td>
+          <td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700;color:#a84212;">${l._pcrQty}</td>
+        </tr>`);
+      }
+      return result;
     }).join('');
     const totalPcs = sorted.reduce((s,l) => s+(l.qty_pieces||0), 0);
     const totalBoxes = sorted.reduce((s,l) => s+Math.floor((l.qty_pieces||0)/(l.pcs_per_box||72)), 0);
@@ -8759,6 +8792,21 @@ async function getInTransitHint(styleNum, color, size) {
     .eq('status', 'in_transit');
   return data || [];
 }
+
+function printInNewWindow(html) {
+  const w = window.open('', '_blank', 'width=900,height=700');
+  w.document.write(`<!DOCTYPE html><html><head><title>Print</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; background: #fff; }
+      @media print { body { margin: 0; } }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { padding: 6px 8px; }
+    </style>
+  </head><body>${html}</body></html>`);
+  w.document.close();
+  w.focus();
+  setTimeout(() => { w.print(); }, 400);
+}
 </script>
 
 <!-- ── Use Reserved Modal ── -->
@@ -8796,7 +8844,7 @@ async function getInTransitHint(styleNum, color, size) {
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pt-preview-content"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 취소</button>
-      <button class="btn" style="background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="document.getElementById('print-area').innerHTML=document.getElementById('pt-preview-content').innerHTML;window.print()">🖨️ Print Only</button>
+      <button class="btn" style="background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML)">🖨️ Print Only</button>
       <button class="btn btn-primary" onclick="closePtAndPrepare()">✅ Move to Preparing</button>
     </div>
   </div>
@@ -8812,7 +8860,7 @@ async function getInTransitHint(styleNum, color, size) {
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pl-preview-content"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="closeModal('modal-pl-preview')">취소</button>
-      <button class="btn" style="background:#0891b2;color:#fff;" onclick="document.getElementById('print-area').innerHTML=document.getElementById('pl-preview-content').innerHTML;window.print()">🖨️ Print Packing List</button>
+      <button class="btn" style="background:#0891b2;color:#fff;" onclick="printInNewWindow(document.getElementById('pl-preview-content').innerHTML)">🖨️ Print Packing List</button>
       <button class="btn btn-green" onclick="confirmPreparationComplete()">✅ Confirm — Move to Ready to Ship</button>
     </div>
   </div>
@@ -8830,7 +8878,7 @@ async function getInTransitHint(styleNum, color, size) {
       <div style="font-size:12px;color:#6b7280;">이메일 수신: <span id="invoice-review-email" style="font-weight:600;color:#111;"></span></div>
       <div style="display:flex;gap:8px;">
         <button class="btn" onclick="closeModal('modal-invoice-review')">취소</button>
-        <button class="btn" onclick="document.getElementById('print-area').innerHTML=document.getElementById('invoice-review-content').innerHTML;window.print()">🖨️ Print</button>
+        <button class="btn" onclick="printInNewWindow(document.getElementById('invoice-review-content').innerHTML)">🖨️ Print</button>
         <button class="btn btn-primary" onclick="sendInvoiceEmail()">📧 Send Invoice</button>
       </div>
     </div>
