@@ -7871,18 +7871,19 @@ async function execPcrTransfer(whGroup, ppb) {
   const { error: scErr } = await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - qty }).eq('id', scRow.id);
   console.log('SC 차감 결과:', scErr || 'OK');
 
-  // 2. PCR 창고에서 같은 color/size + location='PCR' row 조회
+  // 2. PCR 창고에서 같은 style_id + color/size + location='PCR' row 조회
+  const { data: scStyleRow } = await db.from('inventory').select('style_id').eq('id', scRow.id).maybeSingle();
   const { data: pcrRows, error: pcrFetchErr } = await db.from('inventory')
     .select('id, qty_on_hand, color, size')
     .eq('warehouse_id', pcrWhObj.id)
+    .eq('style_id', scStyleRow?.style_id)
     .eq('color', (l.color||'').toUpperCase())
     .eq('size', (l.size||'').toUpperCase())
     .eq('location', 'PCR');
 
   console.log('🔍 PCR rows 매칭:', pcrRows?.length, '개', pcrFetchErr || '');
 
-  if (pcrRows.length > 0) {
-    // 기존 qty에 이동분만 더하기 (다른 row 합산 없음)
+  if (pcrRows && pcrRows.length > 0) {
     const existingQty = pcrRows[0].qty_on_hand || 0;
     const newQty = existingQty + qty;
     const { error: pcrUpdErr } = await db.from('inventory').update({ qty_on_hand: newQty }).eq('id', pcrRows[0].id);
