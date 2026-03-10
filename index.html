@@ -2,7 +2,6 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pacific Sports — Inventory Management</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -633,7 +632,6 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <div class="ff" style="min-width:70px;"><label style="font-size:10px;">Unit $</label><input class="fi" id="quick-price" type="number" step="0.01" placeholder="4.50" onkeydown="if(event.key==='Enter')quickAddLine()"/></div>
                   <button class="btn btn-primary btn-sm" onclick="quickAddLine()" style="height:30px;white-space:nowrap;">+ Add Line</button>
                   <button class="btn btn-sm" onclick="openBinAllocModal()" style="height:30px;white-space:nowrap;">📦 Allocate Bins</button>
-                  <button class="btn btn-sm" style="height:30px;background:#7c3aed;color:#fff;font-size:10px;" onclick="debugInvKeys()">🔍 재고 진단</button>
                 </div>
                 <div id="parse-preview" style="display:none;"></div>
                 <div style="overflow-x:auto;">
@@ -1621,8 +1619,6 @@ const SUPABASE_KEY = 'sb_publishable_EB5rqma1wMHm6hF5tN398g_DMbAtAQA';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-
-
 let currentUser = null;
 let warehouses = [];
 let styles = [];
@@ -1801,34 +1797,6 @@ function getWhAddr(whCode) {
   };
   return addrs[whCode] || '';
 }  
-async function debugInvKeys() {
-  // DB에서 style 1368 재고 직접 조회해서 실제 color값 확인
-  const { data, error } = await db.from('inventory')
-    .select('style_number, color, size, qty_on_hand, warehouses(code), styles(style_number)')
-    .or('style_number.eq.1368,style_number.eq.1368')
-    .limit(20);
-  
-  const { data: data2 } = await db.from('inventory')
-    .select('style_number, color, size, qty_on_hand, warehouses(code), styles(style_number)')
-    .ilike('color', '%charcoal%')
-    .limit(20);
-
-  const rows = [...(data||[]), ...(data2||[])];
-  const seen = new Set();
-  const uniq = rows.filter(r => {
-    const k = `${r.style_number||r.styles?.style_number}|${r.color}|${r.size}`;
-    if (seen.has(k)) return false;
-    seen.add(k); return true;
-  });
-
-  const msg = uniq.length === 0
-    ? '❌ style 1368 또는 charcoal 재고를 DB에서 찾을 수 없음\n\nscInventory 키 샘플:\n' + Object.keys(scInventory).slice(0,5).join('\n')
-    : '✅ DB 실제 color값:\n' + uniq.map(r => `  WH:${r.warehouses?.code} style:${r.style_number||r.styles?.style_number} color:"${r.color}" size:${r.size} qty:${r.qty_on_hand}`).join('\n')
-      + '\n\nscInventory 키 샘플:\n' + Object.keys(scInventory).slice(0,8).join('\n');
-
-  alert(msg);
-}
-
 async function loadScInventory() {
   pcrInventory = {};
   scInventory = {};
@@ -1846,15 +1814,11 @@ async function loadScInventory() {
     if (data.length < 1000) break;
     from += 1000;
   }
-  let _dk = 0;
   allInv.forEach(row => {
     if (!row.warehouses) return;
     const normColor = (row.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
     const styleNum = row.styles?.style_number || row.style_number || '';
     const key = `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-    // 6자 약어 fallback key (SKU 직접 입력 지원)
-    const colorAbbr6 = normColor.replace(/\s+/g,'').substring(0,6).toUpperCase();
-    const key6 = `${styleNum}|${colorAbbr6}|${(row.size||'').toUpperCase()}`;
     const qty = row.qty_on_hand || 0;
     const loc = row.location || '';
     const rcvDate = row.received_date || (row.created_at ? row.created_at.slice(0,10) : null);
@@ -1863,16 +1827,12 @@ async function loadScInventory() {
 
     if (wh === 'SC') {
       if (!scInventory[key]) scInventory[key] = entry; else scInventory[key].qty += qty;
-      if (key6 !== key) { if (!scInventory[key6]) scInventory[key6] = {qty, location: loc||'—'}; else scInventory[key6].qty += qty; }
     } else if (wh === 'SC-PCR') {
       if (!pcrInventory[key]) pcrInventory[key] = entry; else pcrInventory[key].qty += qty;
-      if (key6 !== key) { if (!pcrInventory[key6]) pcrInventory[key6] = {qty, location: loc||'—'}; else pcrInventory[key6].qty += qty; }
     } else if (wh === 'CA') {
       if (!caInventory[key]) caInventory[key] = entry; else caInventory[key].qty += qty;
-      if (key6 !== key) { if (!caInventory[key6]) caInventory[key6] = {qty, location: loc||'—'}; else caInventory[key6].qty += qty; }
     } else if (wh === 'CA-PCR') {
       if (!caPcrInventory[key]) caPcrInventory[key] = entry; else caPcrInventory[key].qty += qty;
-      if (key6 !== key) { if (!caPcrInventory[key6]) caPcrInventory[key6] = {qty, location: loc||'—'}; else caPcrInventory[key6].qty += qty; }
       const colorSizeKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
       if (colorSizeKey !== key) {
         if (!caPcrInventory[colorSizeKey]) caPcrInventory[colorSizeKey] = {qty, location: loc||'—'};
@@ -1887,13 +1847,6 @@ async function loadScInventory() {
       const existing = window.binInventory[wh][key].find(b => b.bin === loc);
       if (existing) { existing.qty += qty; }
       else { window.binInventory[wh][key].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
-      // key6 fallback (SKU 직접 입력용)
-      if (key6 !== key) {
-        if (!window.binInventory[wh][key6]) window.binInventory[wh][key6] = [];
-        const ex6 = window.binInventory[wh][key6].find(b => b.bin === loc);
-        if (ex6) { ex6.qty += qty; }
-        else { window.binInventory[wh][key6].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
-      }
 
       // PCR 계열은 color|size fallback key도 추가 저장 (style_id NULL인 row 대비)
       if (wh === 'SC-PCR' || wh === 'CA-PCR') {
@@ -5895,21 +5848,17 @@ async function loadReceivingHistory() {
 // ══════════════════════════════════
 async function loadStyles() {
   document.getElementById('styles-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  const { data, error } = await db.from('styles').select('*').order('style_number');
-  if (error) {
-    document.getElementById('styles-table-wrap').innerHTML = `<div class="empty" style="color:var(--red);">⚠️ 데이터 로드 실패: ${error.message}</div>`;
-    return;
-  }
+const { data } = await db.from('styles').select('*').order('style_number');
   const list = data || [];
 
   // 재고 합산 데이터 가져오기
   let invAll = [];
   let iFrom = 0;
   while (true) {
-    const { data: iData, error: iErr } = await db.from('inventory')
+    const { data: iData } = await db.from('inventory')
       .select('style_id, qty_on_hand, warehouses(code)')
       .range(iFrom, iFrom + 999);
-    if (iErr || !iData || iData.length === 0) break;
+    if (!iData || iData.length === 0) break;
     invAll = invAll.concat(iData);
     if (iData.length < 1000) break;
     iFrom += 1000;
@@ -6398,12 +6347,10 @@ async function parsePoPdf(input) {
 function normalizePoColor(color) {
   if (!color) return color;
   // "Charcoal Heather" → "Charcoal Htr", "Grey Heather" → "Grey Htr" 등
-  // Heather / Heathered / Hthr → Htr 로 통일
   return color
     .replace(/\bHeathered\b/gi, 'Htr')
     .replace(/\bHeather\b/gi, 'Htr')
     .replace(/\bHthr\b/gi, 'Htr')
-    .replace(/\bHTR\b/g, 'Htr')   // 대문자 HTR → Htr
     .trim();
 }
 
@@ -6951,24 +6898,14 @@ function autoFillCustomer() {
 }
 
 async function loadCustomers() {
-  const wrap = document.getElementById('customers-table-wrap');
-  if (!wrap) { console.error('[loadCustomers] customers-table-wrap NOT FOUND'); return; }
-  wrap.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-  const { data, error } = await db.from('customers').select('*').order('name');
-  if (error) {
-    wrap.innerHTML = `<div class="empty" style="color:var(--red);">⚠️ 데이터 로드 실패: ${error.message}</div>`;
-    return;
-  }
-  if (data === null) {
-    wrap.innerHTML = `<div class="empty" style="color:var(--orange);">⚠️ 응답이 null입니다.</div>`;
-    return;
-  }
+  document.getElementById('customers-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { data } = await db.from('customers').select('*').order('name');
   customers = data || [];
   updateCustomerSelects();
   document.getElementById('customers-count').textContent = `${customers.length} customers`;
 
   if (customers.length === 0) {
-    wrap.innerHTML = '<div class="empty">거래처 없음. Add Customer로 추가하세요.</div>';
+    document.getElementById('customers-table-wrap').innerHTML = '<div class="empty">거래처 없음. Add Customer로 추가하세요.</div>';
     return;
   }
 
@@ -6983,7 +6920,7 @@ async function loadCustomers() {
       <td style="font-size:11px;color:var(--text3);">${c.notes || ''}</td>
     </tr>`).join('');
 
-  wrap.innerHTML = `
+  document.getElementById('customers-table-wrap').innerHTML = `
     <table class="tbl">
       <thead><tr>
         <th>Company</th><th>Contact</th><th>Phone</th><th>Email</th>
