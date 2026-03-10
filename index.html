@@ -633,6 +633,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <div class="ff" style="min-width:70px;"><label style="font-size:10px;">Unit $</label><input class="fi" id="quick-price" type="number" step="0.01" placeholder="4.50" onkeydown="if(event.key==='Enter')quickAddLine()"/></div>
                   <button class="btn btn-primary btn-sm" onclick="quickAddLine()" style="height:30px;white-space:nowrap;">+ Add Line</button>
                   <button class="btn btn-sm" onclick="openBinAllocModal()" style="height:30px;white-space:nowrap;">📦 Allocate Bins</button>
+                  <button class="btn btn-sm" style="height:30px;background:#7c3aed;color:#fff;font-size:10px;" onclick="debugInvKeys()">🔍 재고 진단</button>
                 </div>
                 <div id="parse-preview" style="display:none;"></div>
                 <div style="overflow-x:auto;">
@@ -1800,6 +1801,34 @@ function getWhAddr(whCode) {
   };
   return addrs[whCode] || '';
 }  
+async function debugInvKeys() {
+  // DB에서 style 1368 재고 직접 조회해서 실제 color값 확인
+  const { data, error } = await db.from('inventory')
+    .select('style_number, color, size, qty_on_hand, warehouses(code), styles(style_number)')
+    .or('style_number.eq.1368,style_number.eq.1368')
+    .limit(20);
+  
+  const { data: data2 } = await db.from('inventory')
+    .select('style_number, color, size, qty_on_hand, warehouses(code), styles(style_number)')
+    .ilike('color', '%charcoal%')
+    .limit(20);
+
+  const rows = [...(data||[]), ...(data2||[])];
+  const seen = new Set();
+  const uniq = rows.filter(r => {
+    const k = `${r.style_number||r.styles?.style_number}|${r.color}|${r.size}`;
+    if (seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+
+  const msg = uniq.length === 0
+    ? '❌ style 1368 또는 charcoal 재고를 DB에서 찾을 수 없음\n\nscInventory 키 샘플:\n' + Object.keys(scInventory).slice(0,5).join('\n')
+    : '✅ DB 실제 color값:\n' + uniq.map(r => `  WH:${r.warehouses?.code} style:${r.style_number||r.styles?.style_number} color:"${r.color}" size:${r.size} qty:${r.qty_on_hand}`).join('\n')
+      + '\n\nscInventory 키 샘플:\n' + Object.keys(scInventory).slice(0,8).join('\n');
+
+  alert(msg);
+}
+
 async function loadScInventory() {
   pcrInventory = {};
   scInventory = {};
