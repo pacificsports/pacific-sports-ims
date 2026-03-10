@@ -3290,6 +3290,79 @@ async function _doSaveInvoice() {
 
   const whCode = warehouses.find(w => w.id === effectiveWhId)?.code || '';
 
+  // ── PCR Transfer DB 반영 (Save 시점에 처리)
+  const allTransfers = poLines.flatMap(l => [
+    ...(l.pcrTransfersPending || []),
+    ...(l.caPcrTransfersPending || [])
+  ]);
+  const allBackTransfers = poLines.flatMap(l => [
+    ...(l.pcrBackTransfersPending || []),
+    ...(l.caPcrBackTransfersPending || [])
+  ]);
+  for (const t of allTransfers) {
+    const scWhObj  = warehouses.find(w => w.code === t.whGroup);
+    const pcrWhObj = warehouses.find(w => w.code === t.whGroup + '-PCR');
+    if (!scWhObj || !pcrWhObj) continue;
+    const { data: scRow } = await db.from('inventory')
+      .select('id, qty_on_hand, style_id')
+      .eq('warehouse_id', scWhObj.id)
+      .eq('location', t.fromBin)
+      .eq('color', (t.color||'').toUpperCase())
+      .eq('size', (t.size||'').toUpperCase())
+      .maybeSingle();
+    if (!scRow) continue;
+    await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - t.qty }).eq('id', scRow.id);
+    const { data: pcrRows } = await db.from('inventory')
+      .select('id, qty_on_hand')
+      .eq('warehouse_id', pcrWhObj.id)
+      .eq('style_id', scRow.style_id)
+      .eq('color', (t.color||'').toUpperCase())
+      .eq('size', (t.size||'').toUpperCase())
+      .eq('location', 'PCR');
+    if (pcrRows && pcrRows.length > 0) {
+      await db.from('inventory').update({ qty_on_hand: pcrRows[0].qty_on_hand + t.qty }).eq('id', pcrRows[0].id);
+    } else {
+      await db.from('inventory').insert({
+        warehouse_id: pcrWhObj.id, style_id: scRow.style_id || null,
+        color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
+        location: 'PCR', qty_on_hand: t.qty, qty_committed: 0,
+        received_date: new Date().toISOString().slice(0,10)
+      });
+    }
+  }
+  for (const t of allBackTransfers) {
+    const scWhObj  = warehouses.find(w => w.code === t.whGroup);
+    const pcrWhObj = warehouses.find(w => w.code === t.whGroup + '-PCR');
+    if (!scWhObj || !pcrWhObj) continue;
+    const { data: pcrAllRows } = await db.from('inventory')
+      .select('id, qty_on_hand')
+      .eq('warehouse_id', pcrWhObj.id)
+      .eq('color', (t.color||'').toUpperCase())
+      .eq('size', (t.size||'').toUpperCase())
+      .eq('location', 'PCR')
+      .order('qty_on_hand', { ascending: false });
+    if (!pcrAllRows || pcrAllRows.length === 0) continue;
+    await db.from('inventory').update({ qty_on_hand: pcrAllRows[0].qty_on_hand - t.qty }).eq('id', pcrAllRows[0].id);
+    const { data: scRow } = await db.from('inventory')
+      .select('id, qty_on_hand')
+      .eq('warehouse_id', scWhObj.id)
+      .eq('location', t.dest)
+      .eq('color', (t.color||'').toUpperCase())
+      .eq('size', (t.size||'').toUpperCase())
+      .maybeSingle();
+    if (scRow) {
+      await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand + t.qty }).eq('id', scRow.id);
+    } else {
+      const styleObj = styles.find(s => s.style_number === t.styleNum);
+      await db.from('inventory').insert({
+        warehouse_id: scWhObj.id, style_id: styleObj?.id || null,
+        color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
+        location: t.dest, qty_on_hand: t.qty, qty_committed: 0,
+        received_date: new Date().toISOString().slice(0,10)
+      });
+    }
+  }
+
   // ── 1. 라인별 재고 확인 (해당 창고 + SKU)
 
   const lineChecks = await Promise.all(poLines.map(async l => {
@@ -8145,9 +8218,14 @@ function applyAlloc() {
     poLines[lineIdx].caPcrTransfers = [..._pcrTransfers];
   }
 
-  // pending PCR transfers를 DB에 반영
-  const pendingTransfers = [..._pcrTransfers];
-  const pendingBackTransfers = [..._pcrBackTransfers];
+  // transfer 정보를 poLines에 저장 (DB 반영은 saveInvoice에서)
+  if (whGroup === 'SC') {
+    poLines[lineIdx].pcrTransfersPending = [..._pcrTransfers];
+    poLines[lineIdx].pcrBackTransfersPending = [..._pcrBackTransfers];
+  } else {
+    poLines[lineIdx].caPcrTransfersPending = [..._pcrTransfers];
+    poLines[lineIdx].caPcrBackTransfersPending = [..._pcrBackTransfers];
+  }
   _pcrTransfers = [];
   _pcrBackTransfers = [];
   _allocState = null;
@@ -8155,77 +8233,6 @@ function applyAlloc() {
   saveDraft();
   renderEntryTable();
   liveRenderDocs();
-
-  // DB 반영 (비동기, 백그라운드)
-  (async () => {
-    // SC → PCR transfers
-    for (const t of pendingTransfers) {
-      const scWhObj  = warehouses.find(w => w.code === t.whGroup);
-      const pcrWhObj = warehouses.find(w => w.code === t.whGroup + '-PCR');
-      if (!scWhObj || !pcrWhObj) continue;
-      const { data: scRow } = await db.from('inventory')
-        .select('id, qty_on_hand, style_id')
-        .eq('warehouse_id', scWhObj.id)
-        .eq('location', t.fromBin)
-        .eq('color', (t.color||'').toUpperCase())
-        .eq('size', (t.size||'').toUpperCase())
-        .maybeSingle();
-      if (!scRow) continue;
-      await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - t.qty }).eq('id', scRow.id);
-      const { data: pcrRows } = await db.from('inventory')
-        .select('id, qty_on_hand')
-        .eq('warehouse_id', pcrWhObj.id)
-        .eq('style_id', scRow.style_id)
-        .eq('color', (t.color||'').toUpperCase())
-        .eq('size', (t.size||'').toUpperCase())
-        .eq('location', 'PCR');
-      if (pcrRows && pcrRows.length > 0) {
-        await db.from('inventory').update({ qty_on_hand: pcrRows[0].qty_on_hand + t.qty }).eq('id', pcrRows[0].id);
-      } else {
-        await db.from('inventory').insert({
-          warehouse_id: pcrWhObj.id,
-          style_id: scRow.style_id || null,
-          color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
-          location: 'PCR', qty_on_hand: t.qty, qty_committed: 0,
-          received_date: new Date().toISOString().slice(0,10)
-        });
-      }
-    }
-    // PCR → SC back transfers
-    for (const t of pendingBackTransfers) {
-      const scWhObj  = warehouses.find(w => w.code === t.whGroup);
-      const pcrWhObj = warehouses.find(w => w.code === t.whGroup + '-PCR');
-      if (!scWhObj || !pcrWhObj) continue;
-      const { data: pcrAllRows } = await db.from('inventory')
-        .select('id, qty_on_hand, style_id')
-        .eq('warehouse_id', pcrWhObj.id)
-        .eq('color', (t.color||'').toUpperCase())
-        .eq('size', (t.size||'').toUpperCase())
-        .eq('location', 'PCR')
-        .order('qty_on_hand', { ascending: false });
-      if (!pcrAllRows || pcrAllRows.length === 0) continue;
-      await db.from('inventory').update({ qty_on_hand: pcrAllRows[0].qty_on_hand - t.qty }).eq('id', pcrAllRows[0].id);
-      const { data: scRow } = await db.from('inventory')
-        .select('id, qty_on_hand')
-        .eq('warehouse_id', scWhObj.id)
-        .eq('location', t.dest)
-        .eq('color', (t.color||'').toUpperCase())
-        .eq('size', (t.size||'').toUpperCase())
-        .maybeSingle();
-      if (scRow) {
-        await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand + t.qty }).eq('id', scRow.id);
-      } else {
-        const styleObj = styles.find(s => s.style_number === t.styleNum);
-        await db.from('inventory').insert({
-          warehouse_id: scWhObj.id,
-          style_id: styleObj?.id || null,
-          color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
-          location: t.dest, qty_on_hand: t.qty, qty_committed: 0,
-          received_date: new Date().toISOString().slice(0,10)
-        });
-      }
-    }
-  })();
 
   // 재고 로딩 중 배분 버튼 잠금
   _allocLoading = true;
@@ -8493,8 +8500,11 @@ function applyAllocBoth() {
   poLines[lineIdx].allocCA = Object.keys(caAlloc).length > 0 ? caAlloc : null;
 
   // pending PCR transfers를 DB에 반영
-  const pendingTransfers = [..._pcrTransfers];
-  const pendingBackTransfers = [..._pcrBackTransfers];
+  // transfer 정보를 poLines에 저장 (DB 반영은 saveInvoice에서)
+  poLines[lineIdx].pcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC');
+  poLines[lineIdx].pcrBackTransfersPending = _pcrBackTransfers.filter(t => t.whGroup === 'SC');
+  poLines[lineIdx].caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'CA');
+  poLines[lineIdx].caPcrBackTransfersPending = _pcrBackTransfers.filter(t => t.whGroup === 'CA');
   _pcrTransfers = [];
   _pcrBackTransfers = [];
 
@@ -8505,72 +8515,6 @@ function applyAllocBoth() {
   saveDraft();
   renderEntryTable();
   liveRenderDocs();
-
-  (async () => {
-    for (const t of pendingTransfers) {
-      const scWhObj  = warehouses.find(w => w.code === t.whGroup);
-      const pcrWhObj = warehouses.find(w => w.code === t.whGroup + '-PCR');
-      if (!scWhObj || !pcrWhObj) continue;
-      const { data: scRow } = await db.from('inventory')
-        .select('id, qty_on_hand, style_id')
-        .eq('warehouse_id', scWhObj.id)
-        .eq('location', t.fromBin)
-        .eq('color', (t.color||'').toUpperCase())
-        .eq('size', (t.size||'').toUpperCase())
-        .maybeSingle();
-      if (!scRow) continue;
-      await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - t.qty }).eq('id', scRow.id);
-      const { data: pcrRows } = await db.from('inventory')
-        .select('id, qty_on_hand')
-        .eq('warehouse_id', pcrWhObj.id)
-        .eq('style_id', scRow.style_id)
-        .eq('color', (t.color||'').toUpperCase())
-        .eq('size', (t.size||'').toUpperCase())
-        .eq('location', 'PCR');
-      if (pcrRows && pcrRows.length > 0) {
-        await db.from('inventory').update({ qty_on_hand: pcrRows[0].qty_on_hand + t.qty }).eq('id', pcrRows[0].id);
-      } else {
-        await db.from('inventory').insert({
-          warehouse_id: pcrWhObj.id, style_id: scRow.style_id || null,
-          color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
-          location: 'PCR', qty_on_hand: t.qty, qty_committed: 0,
-          received_date: new Date().toISOString().slice(0,10)
-        });
-      }
-    }
-    for (const t of pendingBackTransfers) {
-      const scWhObj  = warehouses.find(w => w.code === t.whGroup);
-      const pcrWhObj = warehouses.find(w => w.code === t.whGroup + '-PCR');
-      if (!scWhObj || !pcrWhObj) continue;
-      const { data: pcrAllRows } = await db.from('inventory')
-        .select('id, qty_on_hand, style_id')
-        .eq('warehouse_id', pcrWhObj.id)
-        .eq('color', (t.color||'').toUpperCase())
-        .eq('size', (t.size||'').toUpperCase())
-        .eq('location', 'PCR')
-        .order('qty_on_hand', { ascending: false });
-      if (!pcrAllRows || pcrAllRows.length === 0) continue;
-      await db.from('inventory').update({ qty_on_hand: pcrAllRows[0].qty_on_hand - t.qty }).eq('id', pcrAllRows[0].id);
-      const { data: scRow } = await db.from('inventory')
-        .select('id, qty_on_hand')
-        .eq('warehouse_id', scWhObj.id)
-        .eq('location', t.dest)
-        .eq('color', (t.color||'').toUpperCase())
-        .eq('size', (t.size||'').toUpperCase())
-        .maybeSingle();
-      if (scRow) {
-        await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand + t.qty }).eq('id', scRow.id);
-      } else {
-        const styleObj = styles.find(s => s.style_number === t.styleNum);
-        await db.from('inventory').insert({
-          warehouse_id: scWhObj.id, style_id: styleObj?.id || null,
-          color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
-          location: t.dest, qty_on_hand: t.qty, qty_committed: 0,
-          received_date: new Date().toISOString().slice(0,10)
-        });
-      }
-    }
-  })();
 
   _allocLoading = true;
   document.querySelectorAll('[onclick*="openAllocModal"]').forEach(b => b.style.pointerEvents = 'none');
