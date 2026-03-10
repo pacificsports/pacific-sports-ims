@@ -4649,10 +4649,15 @@ async function printPickTicket(orderId, wh) {
     const pcrEntries = Object.entries(allocObj).filter(([k]) => k.includes('PCR'));
     const mainLoc = mainBins.map(([k]) => k).join(', ') || l.location || '';
     const pcrQty = pcrEntries.reduce((s,[,v]) => s+(v||0), 0);
-    return { ...l, location: mainLoc, _pcrQty: pcrQty };
+    // PCR Transfer 지시 (어느 bin → PCR Room으로 이동)
+    const transfers = wh === 'CA' ? (matchPo.caPcrTransfers||[]) : (matchPo.pcrTransfers||[]);
+    return { ...l, location: mainLoc, _pcrQty: pcrQty, _pcrTransfers: transfers };
   });
 
-  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh);
+  // 전체 PCR Transfer 목록 (모든 라인 합산)
+  const allPcrTransfers = enrichedLines.flatMap(l => (l._pcrTransfers||[]).map(t => ({ ...t, color: l.color, size: l.size, styleNum: l.styles?.style_number||'' })));
+
+  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers);
   document.getElementById('modal-pt-preview').style.display = 'flex';
 }
 
@@ -5016,6 +5021,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride) {
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'N30'}</div></div>
     </div>
     ${body}
+    ${(pcrTransfers||[]).length > 0 ? `<div style='margin-top:24px;border-top:2px dashed #a84212;padding-top:16px;'><div style='font-size:13px;font-weight:800;color:#a84212;margin-bottom:10px;'>✂️ PCR ROOM TRANSFER INSTRUCTIONS</div><table style='width:100%;border-collapse:collapse;'><thead><tr style='background:#fff7ed;'><th style='padding:6px 8px;text-align:left;font-size:10px;color:#a84212;'>FROM BIN</th><th style='padding:6px 8px;text-align:left;font-size:10px;color:#a84212;'>STYLE</th><th style='padding:6px 8px;text-align:center;font-size:10px;color:#a84212;'>COLOR</th><th style='padding:6px 8px;text-align:center;font-size:10px;color:#a84212;'>SIZE</th><th style='padding:6px 8px;text-align:center;font-size:10px;color:#a84212;'>BOXES</th><th style='padding:6px 8px;text-align:center;font-size:10px;color:#a84212;'>PCS</th><th style='padding:6px 8px;text-align:left;font-size:10px;color:#a84212;'>TO</th></tr></thead><tbody>${(pcrTransfers||[]).map(t => `<tr style='border-bottom:1px solid #fed7aa;'><td style='padding:6px 8px;font-family:IBM Plex Mono,monospace;font-weight:700;'>${t.fromBin||t.bin||'—'}</td><td style='padding:6px 8px;font-family:IBM Plex Mono,monospace;'>${t.styleNum||''}</td><td style='padding:6px 8px;text-align:center;'>${t.color||''}</td><td style='padding:6px 8px;text-align:center;'>${t.size||''}</td><td style='padding:6px 8px;text-align:center;font-weight:700;'>${t.boxes||'—'}</td><td style='padding:6px 8px;text-align:center;font-weight:700;color:#a84212;'>${t.qty||'—'} pcs</td><td style='padding:6px 8px;font-weight:700;color:#7c3aed;'>→ PCR Room</td></tr>`).join('')}</tbody></table></div>` : ''}
   </div>`;
 }
 
