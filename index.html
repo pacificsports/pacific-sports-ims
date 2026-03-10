@@ -1862,13 +1862,16 @@ async function loadScInventory() {
     }
   });
 
-  // FIFO: 입고일 오름차순 정렬
+  // FIFO: 입고일 오름차순 정렬, 날짜 같으면 location 이름순
   Object.keys(window.binInventory).forEach(wh => {
     Object.keys(window.binInventory[wh]).forEach(key => {
       window.binInventory[wh][key].sort((a, b) => {
+        if (!a.received_date && !b.received_date) return (a.bin||'').localeCompare(b.bin||'');
         if (!a.received_date) return 1;
         if (!b.received_date) return -1;
-        return new Date(a.received_date) - new Date(b.received_date);
+        const dateDiff = new Date(a.received_date) - new Date(b.received_date);
+        if (dateDiff !== 0) return dateDiff;
+        return (a.bin||'').localeCompare(b.bin||'');
       });
     });
   });
@@ -7826,12 +7829,21 @@ async function execPcrBackTransfer(whGroup, ppb) {
 
   await loadScInventory();
   await new Promise(r => setTimeout(r, 100));
+  const savedBackBin = bin;
+  const savedBackWh = whGroup;
   if (_allocState.whGroup === 'SC&CA') {
     openAllocModalBoth(_allocState.lineIdx);
   } else {
     openAllocModal(_allocState.lineIdx, whGroup);
   }
-}
+  // 렌더링 후 이전 선택 bin highlight 복원
+  setTimeout(() => {
+    const section = document.getElementById('pcr-back-wrap-' + savedBackWh);
+    if (section) {
+      const opt = section.querySelector(`.pcr-back-bin-opt[data-bin="${savedBackBin}"]`);
+      if (opt) opt.style.background = '#f0fdf4';
+    }
+  }, 50);
 
 async function execPcrTransfer(whGroup, ppb) {
   const bin  = _pcrSelectedBin;
@@ -7900,12 +7912,22 @@ async function execPcrTransfer(whGroup, ppb) {
   if (pcrBin) { pcrBin.qty += qty; }
   else { window.binInventory[pcrWh2][k].push({ bin: 'PCR', qty, committed: 0, received_date: new Date().toISOString().slice(0,10) }); }
 
-  // 모달 새로고침
+  // 모달 새로고침 후 선택 상태 복원
+  const savedBin = bin;
+  const savedWh = whGroup;
   if (isBoth) {
     openAllocModalBoth(_allocState.lineIdx);
   } else {
     openAllocModal(_allocState.lineIdx, whGroup);
   }
+  // 렌더링 후 이전 선택 bin highlight 복원
+  setTimeout(() => {
+    const wrap = document.getElementById('pcr-transfer-wrap-' + savedWh);
+    if (wrap) {
+      const opt = wrap.querySelector(`.pcr-bin-opt[data-bin="${savedBin}"]`);
+      if (opt) opt.style.background = '#fff3e0';
+    }
+  }, 50);
 }
 
 function renderPcrTransfers() {
