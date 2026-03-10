@@ -7768,42 +7768,50 @@ async function execPcrBackTransfer(whGroup, ppb) {
   const pcrWhObj = warehouses.find(w => w.code === pcrWh);
   if (!scWhObj || !pcrWhObj) { alert('창고 정보를 찾을 수 없습니다.'); return; }
 
-  // PCR row 조회 - location='PCR' + id 기반으로만 업데이트
-  const { data: pcrAllRows } = await db.from('inventory')
-    .select('id, qty_on_hand')
-    .eq('warehouse_id', pcrWhObj.id)
-    .eq('color', (l.color||'').toUpperCase())
-    .eq('size', (l.size||'').toUpperCase())
-    .eq('location', 'PCR')
-    .order('qty_on_hand', { ascending: false });
+  // binInventory 메모리 기준으로 PCR 재고 확인
+  const k = `${l.styleNum||''}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+  const pcrBinData = window.binInventory[pcrWh]?.[k]?.find(b => b.bin === 'PCR');
+  const pcrAvail = pcrBinData?.qty || 0;
+  if (pcrAvail < qty) { alert(`PCR 재고 부족! 현재 ${pcrAvail} pcs`); if (btn) { btn.textContent = '↩️ 되돌리기'; btn.disabled = false; } return; }
 
-  if (!pcrAllRows || pcrAllRows.length === 0) { alert('PCR 재고를 찾을 수 없습니다.'); return; }
-  const pcrRow = pcrAllRows[0];
-  if (pcrRow.qty_on_hand < qty) { alert(`PCR 재고 부족! 현재 ${pcrRow.qty_on_hand} pcs`); return; }
-  await db.from('inventory').update({ qty_on_hand: pcrRow.qty_on_hand - qty }).eq('id', pcrRow.id);
+  // binInventory 메모리 업데이트 (화면 즉시 반영)
+  if (pcrBinData) pcrBinData.qty -= qty;
+  const scBinData = window.binInventory[whGroup]?.[k]?.find(b => b.bin === dest);
+  if (scBinData) scBinData.qty += qty;
 
-  // SC bin에 추가
-  const { data: scRow } = await db.from('inventory')
-    .select('id, qty_on_hand')
-    .eq('warehouse_id', scWhObj.id)
-    .eq('location', dest)
-    .eq('color', (l.color||'').toUpperCase())
-    .eq('size', (l.size||'').toUpperCase())
-    .maybeSingle();
-
-  if (scRow) {
-    await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand + qty }).eq('id', scRow.id);
-  } else {
-    const styleObj = styles.find(s => s.style_number === l.styleNum);
-    await db.from('inventory').insert({
-      warehouse_id: scWhObj.id,
-      style_id: styleObj?.id || null,
-      color: l.color, size: l.size,
-      location: dest,
-      qty_on_hand: qty, qty_committed: 0,
-      received_date: new Date().toISOString().slice(0,10)
-    });
-  }
+  // DB 반영 (비동기 백그라운드)
+  (async () => {
+    const { data: pcrAllRows } = await db.from('inventory')
+      .select('id, qty_on_hand')
+      .eq('warehouse_id', pcrWhObj.id)
+      .eq('color', (l.color||'').toUpperCase())
+      .eq('size', (l.size||'').toUpperCase())
+      .eq('location', 'PCR')
+      .order('qty_on_hand', { ascending: false });
+    if (pcrAllRows && pcrAllRows.length > 0) {
+      await db.from('inventory').update({ qty_on_hand: pcrAllRows[0].qty_on_hand - qty }).eq('id', pcrAllRows[0].id);
+    }
+    const { data: scRow } = await db.from('inventory')
+      .select('id, qty_on_hand')
+      .eq('warehouse_id', scWhObj.id)
+      .eq('location', dest)
+      .eq('color', (l.color||'').toUpperCase())
+      .eq('size', (l.size||'').toUpperCase())
+      .maybeSingle();
+    if (scRow) {
+      await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand + qty }).eq('id', scRow.id);
+    } else {
+      const styleObj = styles.find(s => s.style_number === l.styleNum);
+      await db.from('inventory').insert({
+        warehouse_id: scWhObj.id,
+        style_id: styleObj?.id || null,
+        color: (l.color||'').toUpperCase(), size: (l.size||'').toUpperCase(),
+        location: dest,
+        qty_on_hand: qty, qty_committed: 0,
+        received_date: new Date().toISOString().slice(0,10)
+      });
+    }
+  })();
 
   _pcrBackSelectedBin = null;
   showToast(`↩️ ${bin}(PCR) → ${dest}(SC): ${boxes}박스 (${qty} pcs) 되돌리기 완료`);
@@ -7836,14 +7844,13 @@ async function execPcrBackTransfer(whGroup, ppb) {
   } else {
     openAllocModal(_allocState.lineIdx, whGroup);
   }
-  // 렌더링 후 이전 선택 bin highlight 복원
   setTimeout(() => {
     const section = document.getElementById('pcr-back-wrap-' + savedBackWh);
     if (section) {
       const opt = section.querySelector(`.pcr-back-bin-opt[data-bin="${savedBackBin}"]`);
-      if (opt) opt.style.background = '#f0fdf4';
+      if (opt) { opt.style.background = '#f0fdf4'; opt.style.border = '2px solid #0e7c3a'; }
     }
-  }, 50);
+  }, 300);
 }
 
 async function execPcrTransfer(whGroup, ppb) {
@@ -7913,22 +7920,28 @@ async function execPcrTransfer(whGroup, ppb) {
   if (pcrBin) { pcrBin.qty += qty; }
   else { window.binInventory[pcrWh2][k].push({ bin: 'PCR', qty, committed: 0, received_date: new Date().toISOString().slice(0,10) }); }
 
-  // 모달 새로고침 후 선택 상태 복원
+  // 모달 다시 그리기 (선택 상태 복원 포함)
   const savedBin = bin;
   const savedWh = whGroup;
   if (isBoth) {
     openAllocModalBoth(_allocState.lineIdx);
+    setTimeout(() => {
+      const wrap = document.getElementById('pcr-transfer-wrap-SC') || document.getElementById('pcr-transfer-wrap-CA');
+      if (wrap) {
+        const opt = wrap.querySelector(`.pcr-bin-opt[data-bin="${savedBin}"]`);
+        if (opt) { opt.style.background = '#fff3e0'; opt.style.border = '2px solid #a84212'; }
+      }
+    }, 300);
   } else {
     openAllocModal(_allocState.lineIdx, whGroup);
+    setTimeout(() => {
+      const wrap = document.getElementById('pcr-transfer-wrap-' + savedWh);
+      if (wrap) {
+        const opt = wrap.querySelector(`.pcr-bin-opt[data-bin="${savedBin}"]`);
+        if (opt) { opt.style.background = '#fff3e0'; opt.style.border = '2px solid #a84212'; }
+      }
+    }, 300);
   }
-  // 렌더링 후 이전 선택 bin highlight 복원
-  setTimeout(() => {
-    const wrap = document.getElementById('pcr-transfer-wrap-' + savedWh);
-    if (wrap) {
-      const opt = wrap.querySelector(`.pcr-bin-opt[data-bin="${savedBin}"]`);
-      if (opt) opt.style.background = '#fff3e0';
-    }
-  }, 50);
 }
 
 function renderPcrTransfers() {
