@@ -4275,7 +4275,7 @@ async function loadOrderStatus() {
   const statusMatch = (card, statuses) => statuses.includes(card._status);
 
   const cols = {
-    entered:   sortByUrgency(allCards.filter(c => statusMatch(c, ['po_entered','open','credit_hold']))),
+    entered:   sortByUrgency(allCards.filter(c => statusMatch(c, ['po_entered','open','credit_hold','rejected']))),
     preparing: sortByUrgency(allCards.filter(c => statusMatch(c, ['preparing']))),
     ready:     sortByUrgency(allCards.filter(c => statusMatch(c, ['ready_to_ship']))),
     shipped:   allCards.filter(c => statusMatch(c, ['shipped'])),
@@ -4322,12 +4322,7 @@ async function loadOrderStatus() {
       // 테두리: SC=진초록, CA=진파랑 (분리 오더만), 일반 오더는 기존 방식
       const palette = isSplit ? poColorMap[o.id] : null;
       const whBorderColor = wh === 'CA' ? CA_BORDER : SC_BORDER;
-      const borderColor = isSplit
-        ? whBorderColor
-        : o._status === 'backordered' ? '#dc2626'
-        : o._status === 'credit_hold' ? '#ea580c'
-        : o.priority === 'urgent' ? '#dc2626'
-        : whBorderColor;
+      const borderColor = whBorderColor;
 
       // 배경: 같은 PO는 같은 색
       const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
@@ -4401,7 +4396,9 @@ async function loadOrderStatus() {
         </div>
         <div style="font-size:10px;color:#9ca3af;margin-top:3px;">${hoursLabel}</div>
         ${isBack ? '<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">⚠️ Back Order</div>' : ''}
-        ${isCreditHold ? '<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold</div>' : ''}
+        ${isCreditHold ? `<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold${o.credit_hold_count > 1 ? ` (${o.credit_hold_count})` : ''}</div>` : ''}
+        ${o._status === 'open' && o.credit_approved_at ? '<div style="font-size:10px;color:#15803d;font-weight:600;margin-top:4px;">🟢 Credit Released</div>' : ''}
+        ${o._status === 'rejected' ? `<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">🔴 Rejected</div><button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#fff7ed;color:#c2410c;border-color:#fb923c;" onclick="event.stopPropagation();resubmitCreditHold('${o.id}','${o.order_number}','${o.customer_name}','${o.customer_po||''}')">🔄 Resubmit for Approval</button>` : ''}
         ${col === 'entered' && !isCreditHold ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();printPickTicket('${o.id}','${wh}')">🖨️ Print Pick Ticket</button>` : ''}
         ${col === 'preparing' ? `
           <button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">✅ Preparation Complete</button>
@@ -4678,6 +4675,37 @@ let _invoiceOrderId = null; // Invoice review 오더 ID
 let _invoiceWh = null;
 
 // ── 롤백: 이전 단계로 되돌리기 (Shipped 이전까지만)
+async function resubmitCreditHold(orderId, orderNumber, customerName, customerPo) {
+  if (!confirm(`${customerName} (${customerPo || orderNumber})\n\nCredit Hold 승인 요청을 다시 보낼까요?`)) return;
+  const { data: cur } = await db.from('orders').select('credit_hold_count').eq('id', orderId).single();
+  const newCount = (cur?.credit_hold_count || 1) + 1;
+  const { error } = await db.from('orders')
+    .update({ status: 'credit_hold', credit_rejected_at: null, credit_hold_count: newCount })
+    .eq('id', orderId);
+  if (error) { alert('오류: ' + error.message); return; }
+  // 이메일 재발송
+  const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
+  if (order) {
+    try {
+      await fetch('https://credit-hold-email.hjbae.workers.dev/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_id: order.id,
+          order_number: order.order_number,
+          customer_name: order.customer_name,
+          customer_po: order.customer_po,
+          total_amount: order.total_amount,
+          outstanding: 0,
+          credit_limit: 0
+        })
+      });
+    } catch(e) { console.warn('resubmit email error:', e); }
+  }
+  showToast('✅ 승인 요청 재발송됨');
+  loadOrderStatus();
+}
+
 async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
   if (!confirm(`${fromStatus === 'preparing' ? 'Preparing → PO Entered' : 'Ready to Ship → Preparing'} 로 되돌릴까요?`)) return;
   await updateWhStatus(orderId, wh, toStatus);
