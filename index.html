@@ -2120,7 +2120,68 @@ async function openInvoice(orderId, skipPushState = false) {
   document.getElementById('inv-entry-form').style.display = 'none';
   document.getElementById('po-save-btn').style.display = 'none';
 
-  setTimeout(() => { switchDocTab('invoice'); renderAllDocs(); }, 50);
+  setTimeout(() => { switchDocTab('invoice'); renderInvoiceOnly(); }, 50);
+}
+
+function renderInvoiceOnly() {
+  if (!currentInvoiceData) return;
+  const { order } = currentInvoiceData;
+  if (!order) return;
+  const addrHtml = a => (a || '').replace(/\n/g, '<br>');
+  const dateStr = new Date().toLocaleDateString();
+  const fromAddr = '1605 South Guignard Parkway\nSumter SC 29150';
+  const billAddr = order.bill_addr || '';
+  const shipAddr = order.ship_addr || billAddr;
+  const s = (id, val, prop='textContent') => { const el = document.getElementById(id); if (el) el[prop] = val; };
+  s('inv-from-addr', addrHtml(fromAddr), 'innerHTML');
+  s('inv-number', order.order_number);
+  s('inv-date', dateStr);
+  s('inv-bill-to', '<strong>' + order.customer_name + '</strong><br>' + addrHtml(billAddr), 'innerHTML');
+  s('inv-ship-to', addrHtml(shipAddr) || order.customer_name, 'innerHTML');
+  s('inv-po', order.customer_po || '—');
+  s('inv-terms', order.terms || 'N30');
+  s('inv-ship-date', order.ship_date || '—');
+  s('inv-fob', (order.warehouses && order.warehouses.name) || '—');
+
+  const lines = [...poLines].sort((a, b) => {
+    if (a.color !== b.color) return a.color.localeCompare(b.color);
+    return sizeOrder(a.size) - sizeOrder(b.size);
+  });
+
+  function buildRows(arr) {
+    let pcs = 0, amt = 0;
+    const rows = arr.map(l => {
+      const a = l.qty * (l.price || 0);
+      pcs += l.qty; amt += a;
+      return '<tr>' +
+        '<td style="text-align:center;font-weight:700">' + l.qty.toLocaleString() + '</td>' +
+        '<td style="font-family:IBM Plex Mono,monospace;font-weight:700">' + l.styleNum + '</td>' +
+        '<td>' + (l.description||'') + '</td>' +
+        '<td>' + (l.color||'') + '</td>' +
+        '<td style="text-align:center">' + (l.size||'') + '</td>' +
+        '<td style="text-align:right">$' + (l.price||0).toFixed(2) + '</td>' +
+        '<td style="text-align:right;font-weight:700">$' + a.toFixed(2) + '</td>' +
+        '</tr>';
+    });
+    return { rows: rows.join(''), pcs, amt };
+  }
+
+  const scLines = lines.filter(l => (l.wh||'SC') !== 'CA');
+  const caLines = lines.filter(l => l.wh === 'CA');
+  const isSplit = caLines.length > 0 && scLines.length > 0;
+
+  if (isSplit) {
+    const sc = buildRows(scLines);
+    const ca = buildRows(caLines);
+    s('inv-lines', '<tr style="background:#f0fdf4"><td colspan="7" style="padding:4px 8px;font-weight:700;color:#15803d;font-size:11px;">SC — Sumter</td></tr>' + sc.rows + '<tr style="background:#eff6ff"><td colspan="7" style="padding:4px 8px;font-weight:700;color:#1d4ed8;font-size:11px;">CA — Eastvale</td></tr>' + ca.rows, 'innerHTML');
+    s('inv-total-pcs', (sc.pcs + ca.pcs).toLocaleString());
+    s('inv-total-amt', '$' + (sc.amt + ca.amt).toFixed(2));
+  } else {
+    const all = buildRows(lines);
+    s('inv-lines', all.rows, 'innerHTML');
+    s('inv-total-pcs', all.pcs.toLocaleString());
+    s('inv-total-amt', '$' + all.amt.toFixed(2));
+  }
 }
 
 function triggerPdfUpload() {
