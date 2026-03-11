@@ -2056,7 +2056,10 @@ async function openInvoice(orderId, skipPushState = false) {
     ppb: l.pcs_per_box || calcPpb(l.styles?.description || '', l.size),
     cases: l.qty_boxes || Math.floor(l.qty_pieces / (l.pcs_per_box || 72)),
     loose: l.qty_loose || l.qty_pieces % (l.pcs_per_box || 72),
-    location: l.location || ''
+    location: l.location || '',
+    wh: l.wh || 'SC',
+    allocSC: (l.wh !== 'CA' && l.alloc_detail) ? Object.fromEntries(Object.entries(l.alloc_detail).map(([k,v]) => [k, v.pcs])) : {},
+    allocCA: (l.wh === 'CA' && l.alloc_detail) ? Object.fromEntries(Object.entries(l.alloc_detail).map(([k,v]) => [k, v.pcs])) : {},
   }));
 
   currentInvoiceData = { order };
@@ -3482,30 +3485,76 @@ async function _doSaveInvoice() {
     return s + qty * (l.price || 0);
   }, 0);
 
-  const orderNum = `PO-${year}-${String(seq).padStart(4, '0')}`;
-  const { data: order, error } = await db.from('orders').insert({
-    order_number: orderNum,
-    customer_name: cust,
-    customer_po: po,
-    customer_id: custSelId || null,
-    warehouse_id: effectiveWhId,
-    wh_code: document.getElementById('inv-wh-sel')?.selectedOptions[0]?.dataset?.code || 'SC',
-    is_split_warehouse: isSplitWh,
-    ship_date: shipDate || null,
-    status: orderStatus,
-    total_pcs: totalPcs,
-    total_amount: totalAmt,
-    sc_total_pcs: scTotalPcs,
-    ca_total_pcs: caTotalPcs,
-    sc_total_amount: scTotalAmt,
-    ca_total_amount: caTotalAmt,
-    bill_addr: document.getElementById('inv-bill-addr')?.value || '',
-    ship_addr: document.getElementById('inv-ship-addr')?.value || '',
-    terms: document.getElementById('inv-cust-terms')?.value || 'N30',
-    priority: document.getElementById('inv-priority')?.value || 'normal',
-    created_by: currentUser.email
-  }).select().single();
-if (error) { alert('Error saving order: ' + error.message); return; }
+  // ── Edit 모드 감지 (currentInvoiceData에 기존 order id가 있으면 수정)
+  const existingOrderId = currentInvoiceData?.order?.id || null;
+  const isEditMode = !!existingOrderId;
+
+  let order, error;
+  if (isEditMode) {
+    // 기존 오더 업데이트 (created_at, order_number 유지)
+    const { data: updatedOrder, error: updateErr } = await db.from('orders').update({
+      customer_name: cust,
+      customer_po: po,
+      customer_id: custSelId || null,
+      warehouse_id: effectiveWhId,
+      wh_code: document.getElementById('inv-wh-sel')?.selectedOptions[0]?.dataset?.code || 'SC',
+      is_split_warehouse: isSplitWh,
+      ship_date: shipDate || null,
+      total_pcs: totalPcs,
+      total_amount: totalAmt,
+      sc_total_pcs: scTotalPcs,
+      ca_total_pcs: caTotalPcs,
+      sc_total_amount: scTotalAmt,
+      ca_total_amount: caTotalAmt,
+      bill_addr: document.getElementById('inv-bill-addr')?.value || '',
+      ship_addr: document.getElementById('inv-ship-addr')?.value || '',
+      terms: document.getElementById('inv-cust-terms')?.value || 'N30',
+      priority: document.getElementById('inv-priority')?.value || 'normal',
+      updated_at: new Date().toISOString()
+    }).eq('id', existingOrderId).select().single();
+    order = updatedOrder; error = updateErr;
+    if (error) { alert('Error updating order: ' + error.message); return; }
+    // 기존 order_lines + qty_committed 예약 해제 후 삭제
+    const { data: oldLines } = await db.from('order_lines').select('*').eq('order_id', existingOrderId);
+    for (const ol of (oldLines || [])) {
+      if (ol.inventory_id) {
+        await db.from('inventory').update({ qty_committed: db.rpc ? undefined : undefined }).eq('id', ol.inventory_id);
+        // qty_committed 차감
+        const { data: invRow } = await db.from('inventory').select('qty_committed').eq('id', ol.inventory_id).single();
+        if (invRow) {
+          await db.from('inventory').update({ qty_committed: Math.max(0, (invRow.qty_committed||0) - (ol.reserved_qty||0)) }).eq('id', ol.inventory_id);
+        }
+      }
+    }
+    await db.from('order_lines').delete().eq('order_id', existingOrderId);
+  } else {
+    // 새 오더 insert
+    const orderNum = `PO-${year}-${String(seq).padStart(4, '0')}`;
+    const { data: newOrder, error: insertErr } = await db.from('orders').insert({
+      order_number: orderNum,
+      customer_name: cust,
+      customer_po: po,
+      customer_id: custSelId || null,
+      warehouse_id: effectiveWhId,
+      wh_code: document.getElementById('inv-wh-sel')?.selectedOptions[0]?.dataset?.code || 'SC',
+      is_split_warehouse: isSplitWh,
+      ship_date: shipDate || null,
+      status: orderStatus,
+      total_pcs: totalPcs,
+      total_amount: totalAmt,
+      sc_total_pcs: scTotalPcs,
+      ca_total_pcs: caTotalPcs,
+      sc_total_amount: scTotalAmt,
+      ca_total_amount: caTotalAmt,
+      bill_addr: document.getElementById('inv-bill-addr')?.value || '',
+      ship_addr: document.getElementById('inv-ship-addr')?.value || '',
+      terms: document.getElementById('inv-cust-terms')?.value || 'N30',
+      priority: document.getElementById('inv-priority')?.value || 'normal',
+      created_by: currentUser.email
+    }).select().single();
+    order = newOrder; error = insertErr;
+    if (error) { alert('Error saving order: ' + error.message); return; }
+  }
   if (_creditHold) {
     try {
       await fetch('https://credit-hold-email.hjbae.workers.dev/send', {
@@ -3528,6 +3577,15 @@ if (error) { alert('Error saving order: ' + error.message); return; }
     const s = styles.find(x => x.style_number === l.styleNum);
     const lineWhId = l.wh === 'CA' ? (caWhId || whId) : (scWhId || whId);
 
+    // alloc_detail: bin별 수량 상세 { "K3B-23": {boxes, partial, pcs} }
+    const _allocObj = l.wh === 'CA' ? (l.allocCA||{}) : (l.allocSC||{});
+    const _allocDetail = {};
+    for (const [bin, pcs] of Object.entries(_allocObj)) {
+      if (!pcs) continue;
+      const ppb = l.ppb || 1;
+      _allocDetail[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
+    }
+    const _mainBins = Object.keys(_allocObj).filter(k => !k.includes('PCR'));
     const insertPayload = {
       order_id: order.id,
       style_id: s?.id || null,
@@ -3541,11 +3599,8 @@ if (error) { alert('Error saving order: ' + error.message); return; }
       pcs_per_box: l.ppb,
       qty_boxes: Math.floor(l.qty / l.ppb),
       qty_loose: l.qty % l.ppb,
-      location: (() => {
-        const allocObj = l.wh === 'CA' ? (l.allocCA||{}) : (l.allocSC||{});
-        const mainBins = Object.keys(allocObj).filter(k => !k.includes('PCR'));
-        return mainBins.length > 0 ? mainBins.join(', ') : (l.location || null);
-      })(),
+      location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
+      alloc_detail: Object.keys(_allocDetail).length > 0 ? _allocDetail : null,
       unit_price: l.price || 0
     };
     const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
@@ -5078,56 +5133,117 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers) {
       const ca = (a.color||'').localeCompare(b.color||'');
       return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
     });
+
+    // PCR transfer 목록 (alloc_detail에서 PCR 키 추출)
+    const pcrRows = [];
+
     const rows = sorted.flatMap(l => {
       const ppb = l.pcs_per_box || 72;
-      const boxes = Math.floor((l.qty_pieces||0) / ppb);
-      const loose = (l.qty_pieces||0) % ppb;
-      const mainRow = `<tr>
-        <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
-        <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
-        <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
-        <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.location||'—'}</td>
-        <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : '—'}</td>
-        <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;${loose>0?'color:#7c3aed;':''}">${loose > 0 ? loose : '—'}</td>
-        <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${(l.qty_pieces||0).toLocaleString()}</td>
-      </tr>`;
-      const result = [mainRow];
-      if (l._pcrQty > 0) {
-        result.push(`<tr style="background:#fff7ed;">
-          <td style="padding:4px 8px 4px 20px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#a84212;">↳ ${l.styles?.style_number||''}</td>
-          <td style="padding:4px 8px;font-size:10px;color:#a84212;">${l.color||''}</td>
-          <td style="padding:4px 8px;font-size:10px;text-align:center;color:#a84212;">${l.size||''}</td>
-          <td style="padding:4px 8px;font-size:10px;text-align:center;color:#a84212;font-weight:700;">PCR Room</td>
-          <td style="padding:4px 8px;font-size:10px;text-align:center;">—</td>
-          <td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700;color:#7c3aed;">${l._pcrQty}</td>
-          <td style="padding:4px 8px;font-size:10px;text-align:center;font-weight:700;color:#a84212;">${l._pcrQty}</td>
-        </tr>`);
+      const alloc = l.alloc_detail || {};
+      const allocEntries = Object.entries(alloc);
+      const styleNum = l.styles?.style_number || '';
+      const color = l.color || '';
+      const size = l.size || '';
+
+      if (allocEntries.length === 0) {
+        // alloc_detail 없을 때 — 기존 방식
+        const boxes = Math.floor((l.qty_pieces||0) / ppb);
+        const partial = (l.qty_pieces||0) % ppb;
+        return [`<tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#555;">—</td>
+          <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${styleNum}</td>
+          <td style="padding:6px 8px;font-size:11px;">${color}</td>
+          <td style="padding:6px 8px;font-size:11px;text-align:center;">${size}</td>
+          <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : '—'}</td>
+          <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;${partial>0?'color:#7c3aed;':''}">${partial > 0 ? partial + ' pcs' : '—'}</td>
+        </tr>`];
       }
-      return result;
+
+      // alloc_detail 있을 때 — bin별 행
+      const binRows = [];
+      let firstRow = true;
+      for (const [bin, detail] of allocEntries) {
+        const isPCR = bin.toUpperCase().includes('PCR');
+        const boxes = detail.boxes || 0;
+        const partial = detail.partial || 0;
+        if (isPCR) {
+          // PCR 섹션에 추가
+          pcrRows.push({ bin, styleNum, color, size, boxes, partial });
+          // 메인 테이블에도 PCR 표시
+          binRows.push(`<tr style="background:#fff7ed;border-bottom:1px solid #fed7aa;">
+            <td style="padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#c2410c;">PCR ⚠</td>
+            <td style="padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${firstRow ? styleNum : ''}</td>
+            <td style="padding:5px 8px;font-size:11px;">${firstRow ? color : ''}</td>
+            <td style="padding:5px 8px;font-size:11px;text-align:center;">${firstRow ? size : ''}</td>
+            <td style="padding:5px 8px;font-size:11px;text-align:center;font-weight:700;color:#c2410c;">${boxes > 0 ? boxes : '—'}</td>
+            <td style="padding:5px 8px;font-size:11px;text-align:center;font-weight:700;${partial>0?'color:#7c3aed;':''}">${partial > 0 ? partial + ' pcs' : '—'}</td>
+          </tr>`);
+        } else {
+          binRows.push(`<tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${bin}</td>
+            <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${firstRow ? styleNum : ''}</td>
+            <td style="padding:6px 8px;font-size:11px;">${firstRow ? color : ''}</td>
+            <td style="padding:6px 8px;font-size:11px;text-align:center;">${firstRow ? size : ''}</td>
+            <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : '—'}</td>
+            <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;${partial>0?'color:#7c3aed;':''}">${partial > 0 ? partial + ' pcs' : '—'}</td>
+          </tr>`);
+        }
+        firstRow = false;
+      }
+      return binRows;
     }).join('');
-    const totalPcs = sorted.reduce((s,l) => s+(l.qty_pieces||0), 0);
-    const totalBoxes = sorted.reduce((s,l) => s+Math.floor((l.qty_pieces||0)/(l.pcs_per_box||72)), 0);
+
+    const totalBoxes = sorted.reduce((s,l) => {
+      const alloc = l.alloc_detail || {};
+      const allocTotal = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR')).reduce((a,[,v]) => a+(v.boxes||0), 0);
+      return s + (allocTotal > 0 ? allocTotal : Math.floor((l.qty_pieces||0)/(l.pcs_per_box||72)));
+    }, 0);
+
+    const pcrSection = pcrRows.length > 0 ? `
+      <div style="margin-top:20px;border-top:2px dashed #c2410c;padding-top:14px;">
+        <div style="font-size:12px;font-weight:800;color:#c2410c;margin-bottom:8px;letter-spacing:0.5px;">▶ PCR ROOM TRANSFER — 먼저 처리하세요</div>
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="background:#fff7ed;">
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#c2410c;text-transform:uppercase;">From Bin</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#c2410c;text-transform:uppercase;">Style</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#c2410c;text-transform:uppercase;">Color</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#c2410c;text-transform:uppercase;">Size</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#c2410c;text-transform:uppercase;">Boxes</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#c2410c;text-transform:uppercase;">Partial</th>
+          </tr></thead>
+          <tbody>
+            ${pcrRows.map(t => `<tr style="border-bottom:1px solid #fed7aa;">
+              <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#c2410c;">${t.bin}</td>
+              <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;">${t.styleNum}</td>
+              <td style="padding:6px 8px;">${t.color}</td>
+              <td style="padding:6px 8px;text-align:center;">${t.size}</td>
+              <td style="padding:6px 8px;text-align:center;font-weight:700;">${t.boxes > 0 ? t.boxes : '—'}</td>
+              <td style="padding:6px 8px;text-align:center;font-weight:700;${t.partial>0?'color:#7c3aed;':''}">${t.partial > 0 ? t.partial + ' pcs' : '—'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : '';
+
     return `
       <div style="margin-bottom:${isSplit?'32px':'0'};">
         ${isSplit ? `<div style="font-size:13px;font-weight:700;color:${whColor};padding:6px 10px;background:${whColor}15;border-radius:6px;margin-bottom:10px;">${whLabel}</div>` : ''}
         <table style="width:100%;border-collapse:collapse;font-size:11px;">
           <thead><tr style="background:#f3f4f6;">
+            <th style="padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;">BIN</th>
             <th style="padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Style</th>
             <th style="padding:6px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Color</th>
             <th style="padding:6px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Size</th>
-            <th style="padding:6px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Bin/Loc</th>
             <th style="padding:6px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Boxes</th>
-            <th style="padding:6px 8px;text-align:center;font-size:10px;text-transform:uppercase;color:#7c3aed;">Loose</th>
-            <th style="padding:6px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Total Pcs</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;text-transform:uppercase;color:#7c3aed;">Partial</th>
           </tr></thead>
           <tbody>${rows}</tbody>
           <tfoot><tr style="background:#f8fafc;font-weight:700;">
             <td colspan="4" style="padding:8px;text-align:right;">Total:</td>
             <td style="padding:8px;text-align:center;">${totalBoxes} boxes</td>
             <td></td>
-            <td style="padding:8px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
           </tr></tfoot>
         </table>
+        ${pcrSection}
       </div>`;
   };
 
@@ -5161,9 +5277,9 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers) {
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'N30'}</div></div>
     </div>
     ${body}
-    ${(pcrTransfers||[]).length > 0 ? `<div style='margin-top:24px;border-top:2px dashed #a84212;padding-top:16px;'><div style='font-size:13px;font-weight:800;color:#a84212;margin-bottom:10px;'>✂️ PCR ROOM TRANSFER INSTRUCTIONS</div><table style='width:100%;border-collapse:collapse;'><thead><tr style='background:#fff7ed;'><th style='padding:6px 8px;text-align:left;font-size:10px;color:#a84212;'>FROM BIN</th><th style='padding:6px 8px;text-align:left;font-size:10px;color:#a84212;'>STYLE</th><th style='padding:6px 8px;text-align:center;font-size:10px;color:#a84212;'>COLOR</th><th style='padding:6px 8px;text-align:center;font-size:10px;color:#a84212;'>SIZE</th><th style='padding:6px 8px;text-align:center;font-size:10px;color:#a84212;'>BOXES</th><th style='padding:6px 8px;text-align:center;font-size:10px;color:#a84212;'>PCS</th><th style='padding:6px 8px;text-align:left;font-size:10px;color:#a84212;'>TO</th></tr></thead><tbody>${(pcrTransfers||[]).map(t => `<tr style='border-bottom:1px solid #fed7aa;'><td style='padding:6px 8px;font-family:IBM Plex Mono,monospace;font-weight:700;'>${t.fromBin||t.bin||'—'}</td><td style='padding:6px 8px;font-family:IBM Plex Mono,monospace;'>${t.styleNum||''}</td><td style='padding:6px 8px;text-align:center;'>${t.color||''}</td><td style='padding:6px 8px;text-align:center;'>${t.size||''}</td><td style='padding:6px 8px;text-align:center;font-weight:700;'>${t.boxes||'—'}</td><td style='padding:6px 8px;text-align:center;font-weight:700;color:#a84212;'>${t.qty||'—'} pcs</td><td style='padding:6px 8px;font-weight:700;color:#7c3aed;'>→ PCR Room</td></tr>`).join('')}</tbody></table></div>` : ''}
   </div>`;
 }
+
 
 // ═══════════════════════════════════════════════════════
 // Packing List HTML 빌더
