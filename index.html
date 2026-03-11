@@ -2001,6 +2001,8 @@ function _openNewInvoiceInner(skipPushState = false) {
   document.getElementById('inv-entry-form').style.display = 'block';
   document.getElementById('po-save-btn').style.display = 'inline-flex';
   document.getElementById('po-doc-title').textContent = 'New Customer PO';
+  const editBtn = document.getElementById('po-edit-btn');
+  if (editBtn) editBtn.style.display = 'none';
   updateStatusButtons(null);
 
   fillWhDropdown();
@@ -2063,12 +2065,56 @@ async function openInvoice(orderId, skipPushState = false) {
   }));
 
   currentInvoiceData = { order };
+
+  // 폼 필드 채우기
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+  setVal('inv-cust', order.customer_name);
+  setVal('inv-cust-po', order.customer_po);
+  setVal('inv-ship-date-inp', order.ship_date);
+  setVal('inv-bill-addr', order.bill_addr);
+  setVal('inv-ship-addr', order.ship_addr);
+  setVal('inv-cust-terms', order.terms || 'N30');
+  // warehouse 선택
+  const whSel = document.getElementById('inv-wh-sel');
+  if (whSel && order.wh_code) {
+    const matchOpt = Array.from(whSel.options).find(o => o.dataset?.code === order.wh_code || o.value === order.warehouse_id);
+    if (matchOpt) whSel.value = matchOpt.value;
+  }
+  // customer 선택
+  if (order.customer_id) {
+    const custSel = document.getElementById('inv-cust-sel');
+    if (custSel) custSel.value = order.customer_id;
+  }
+
   document.getElementById('po-doc-title').textContent = order.order_number + ' — ' + order.customer_name;
   const prioritySel = document.getElementById('inv-priority');
   if (prioritySel) prioritySel.value = order.priority || 'normal';
   const urgentChk = document.getElementById('inv-urgent-chk');
   if (urgentChk) { urgentChk.checked = order.priority === 'urgent'; onUrgentChange(urgentChk); }
   updateStatusButtons(order.status);
+
+  // Edit 버튼 추가 (없으면)
+  if (!document.getElementById('po-edit-btn')) {
+    const editBtn = document.createElement('button');
+    editBtn.id = 'po-edit-btn';
+    editBtn.className = 'btn';
+    editBtn.style.cssText = 'background:#f59e0b;color:#fff;border-color:#f59e0b;';
+    editBtn.textContent = '✏️ Edit PO';
+    editBtn.onclick = () => {
+      document.getElementById('inv-entry-form').style.display = 'block';
+      document.getElementById('po-save-btn').style.display = 'inline-flex';
+      editBtn.style.display = 'none';
+      renderEntryTable();
+    };
+    const saveBtn = document.getElementById('po-save-btn');
+    saveBtn.parentNode.insertBefore(editBtn, saveBtn);
+  } else {
+    document.getElementById('po-edit-btn').style.display = 'inline-flex';
+  }
+  // 읽기 전용 모드: 폼/Save 버튼 숨기기
+  document.getElementById('inv-entry-form').style.display = 'none';
+  document.getElementById('po-save-btn').style.display = 'none';
+
   renderAllDocs();
   switchDocTab('invoice');
 }
