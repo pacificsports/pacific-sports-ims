@@ -3622,12 +3622,21 @@ async function _doSaveInvoice() {
     // 기존 order_lines + qty_committed 예약 해제 후 삭제
     const { data: oldLines } = await db.from('order_lines').select('*').eq('order_id', existingOrderId);
     for (const ol of (oldLines || [])) {
-      if (ol.inventory_id) {
-        await db.from('inventory').update({ qty_committed: db.rpc ? undefined : undefined }).eq('id', ol.inventory_id);
-        // qty_committed 차감
-        const { data: invRow } = await db.from('inventory').select('qty_committed').eq('id', ol.inventory_id).single();
-        if (invRow) {
-          await db.from('inventory').update({ qty_committed: Math.max(0, (invRow.qty_committed||0) - (ol.reserved_qty||0)) }).eq('id', ol.inventory_id);
+      const releaseQty = ol.reserved_qty || ol.qty_pieces || 0;
+      if (releaseQty > 0 && ol.warehouse_id) {
+        const { data: invRows } = await db.from('inventory')
+          .select('id, qty_committed')
+          .eq('color', (ol.color||'').toUpperCase())
+          .eq('size', (ol.size||'').toUpperCase())
+          .eq('warehouse_id', ol.warehouse_id);
+        let toRelease = releaseQty;
+        for (const inv of (invRows||[])) {
+          if (toRelease <= 0) break;
+          const rel = Math.min(toRelease, inv.qty_committed||0);
+          if (rel > 0) {
+            await db.from('inventory').update({ qty_committed: Math.max(0, (inv.qty_committed||0) - rel) }).eq('id', inv.id);
+            toRelease -= rel;
+          }
         }
       }
     }
