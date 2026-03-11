@@ -1753,16 +1753,29 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
     }
   }
 
+  // Order Status Realtime 구독 해제 (다른 탭으로 이동 시)
+  if (name !== 'orderstatus' && window._osRealtimeChannel) {
+    db.removeChannel(window._osRealtimeChannel);
+    window._osRealtimeChannel = null;
+  }
+
   if (name === 'dashboard') loadDashboard();
   if (name === 'inventory') loadInventory();
   if (name === 'customerpos') loadCustomerPOs(subview);
   if (name === 'orderstatus') {
     loadOrderStatus();
     clearInterval(window._osAutoRefresh);
-    window._osAutoRefresh = setInterval(() => {
-      if (document.querySelector('#orderstatus-view') && document.querySelector('#orderstatus-view').style.display !== 'none') loadOrderStatus();
-      else clearInterval(window._osAutoRefresh);
-    }, 30000);
+    // 기존 구독 해제
+    if (window._osRealtimeChannel) {
+      db.removeChannel(window._osRealtimeChannel);
+      window._osRealtimeChannel = null;
+    }
+    // Realtime 구독 — orders 테이블 변경 시 즉시 새로고침
+    window._osRealtimeChannel = db.channel('orders-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        loadOrderStatus();
+      })
+      .subscribe();
   }
   if (name === 'invoice') loadInvoices();
   if (name === 'picktickets') loadPickTickets();
