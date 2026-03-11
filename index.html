@@ -1619,7 +1619,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 const SUPABASE_URL = 'https://ypjnhhtfwyrwcjakjcgc.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_EB5rqma1wMHm6hF5tN398g_DMbAtAQA';
 const { createClient } = supabase;
-const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+const db = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  realtime: { params: { eventsPerSecond: 10 } }
+});
 
 let currentUser = null;
 let warehouses = [];
@@ -1772,10 +1774,13 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
     }
     // Realtime 구독 — orders 테이블 변경 시 즉시 새로고침
     window._osRealtimeChannel = db.channel('orders-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        console.log('[Realtime] orders changed:', payload);
         loadOrderStatus();
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[Realtime] subscription status:', status);
+      });
   }
   if (name === 'invoice') loadInvoices();
   if (name === 'picktickets') loadPickTickets();
