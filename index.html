@@ -1996,6 +1996,7 @@ function openNewInvoice() {
 function _openNewInvoiceInner(skipPushState = false) {
   if (!skipPushState) history.pushState(null, '', '#customerpos/new');
   currentInvoiceData = null;
+  window._poViewReadOnly = false;
   showPoEntryView();
 
   document.getElementById('inv-entry-form').style.display = 'block';
@@ -2093,6 +2094,9 @@ async function openInvoice(orderId, skipPushState = false) {
   if (urgentChk) { urgentChk.checked = order.priority === 'urgent'; onUrgentChange(urgentChk); }
   updateStatusButtons(order.status);
 
+  // 읽기전용 모드 플래그 설정
+  window._poViewReadOnly = true;
+
   // Edit 버튼 추가 (없으면)
   if (!document.getElementById('po-edit-btn')) {
     const editBtn = document.createElement('button');
@@ -2101,6 +2105,7 @@ async function openInvoice(orderId, skipPushState = false) {
     editBtn.style.cssText = 'background:#f59e0b;color:#fff;border-color:#f59e0b;';
     editBtn.textContent = '✏️ Edit PO';
     editBtn.onclick = () => {
+      window._poViewReadOnly = false;
       document.getElementById('inv-entry-form').style.display = 'block';
       document.getElementById('po-save-btn').style.display = 'inline-flex';
       editBtn.style.display = 'none';
@@ -2115,8 +2120,7 @@ async function openInvoice(orderId, skipPushState = false) {
   document.getElementById('inv-entry-form').style.display = 'none';
   document.getElementById('po-save-btn').style.display = 'none';
 
-  renderAllDocs();
-  switchDocTab('invoice');
+  setTimeout(() => { switchDocTab('invoice'); renderAllDocs(); }, 50);
 }
 
 function triggerPdfUpload() {
@@ -2794,10 +2798,9 @@ function liveRenderDocs() {
 function renderAllDocs() {
   if (!currentInvoiceData) return;
   if (!document.getElementById('inv-from-addr')) return;
-  // Customer PO 탭 입력 중에는 렌더 안 함 (단, 읽기전용 뷰어 모드는 허용)
+  // Customer PO 탭 입력 중에는 렌더 안 함 (읽기전용 뷰어 모드는 허용)
   const entryView = document.getElementById('po-entry-view');
-  const isReadOnly = entryView && entryView.style.display !== 'none' && document.getElementById('inv-entry-form')?.style.display === 'none';
-  if (entryView && entryView.style.display !== 'none' && !isReadOnly) return;
+  if (entryView && entryView.style.display !== 'none' && !window._poViewReadOnly) return;
   try {
   const { order } = currentInvoiceData;
 const lines = [...poLines].sort((a, b) => {
@@ -2813,15 +2816,16 @@ const lines = [...poLines].sort((a, b) => {
   const wh = order.wh_code || order.warehouses?.code || 'SC';
 
   // ═══ INVOICE ═══
-  document.getElementById('inv-from-addr').innerHTML = addrHtml(fromAddr);
-  document.getElementById('inv-number').textContent = order.order_number;
-  document.getElementById('inv-date').textContent = dateStr;
-  document.getElementById('inv-bill-to').innerHTML = `<strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}`;
-  document.getElementById('inv-ship-to').innerHTML = addrHtml(shipAddr) || order.customer_name;
-  document.getElementById('inv-po').textContent = order.customer_po || '—';
-  document.getElementById('inv-terms').textContent = order.terms || 'N30';
-  document.getElementById('inv-ship-date').textContent = order.ship_date || '—';
-  document.getElementById('inv-fob').textContent = fob;
+  const setEl = (id, val, prop='textContent') => { const el = document.getElementById(id); if (el) el[prop] = val; };
+  setEl('inv-from-addr', addrHtml(fromAddr), 'innerHTML');
+  setEl('inv-number', order.order_number);
+  setEl('inv-date', dateStr);
+  setEl('inv-bill-to', `<strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}`, 'innerHTML');
+  setEl('inv-ship-to', addrHtml(shipAddr) || order.customer_name, 'innerHTML');
+  setEl('inv-po', order.customer_po || '—');
+  setEl('inv-terms', order.terms || 'N30');
+  setEl('inv-ship-date', order.ship_date || '—');
+  setEl('inv-fob', fob);
 
 // 사이즈 정렬
   lines.sort((a, b) => {
