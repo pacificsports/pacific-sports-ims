@@ -775,32 +775,31 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div class="kpi-label">🔴 Back Orders</div><div class="kpi-val" id="os-kpi-backorder">—</div></div>
       </div>
 
-      <!-- 칸반 보드 -->
-      <div id="os-kanban" style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;align-items:start;">
-        <div>
-          <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#f3f4f6;border-radius:6px;">📥 PO Entered</div>
-          <div id="os-col-entered" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
+      <!-- 타임라인 보드 -->
+      <div id="os-kanban" style="overflow-x:auto;">
+        <div style="min-width:1100px;">
+          <!-- 헤더 -->
+          <div style="display:grid;grid-template-columns:200px repeat(5,1fr) 160px;gap:8px;margin-bottom:8px;">
+            <div style="font-size:11px;font-weight:700;color:#6b7280;padding:6px 10px;"></div>
+            <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;padding:6px 10px;background:#f3f4f6;border-radius:6px;text-align:center;">📥 PO Entered</div>
+            <div style="font-size:11px;font-weight:700;color:#d97706;text-transform:uppercase;padding:6px 10px;background:#fffbeb;border-radius:6px;text-align:center;">📦 Preparing</div>
+            <div style="font-size:11px;font-weight:700;color:#0891b2;text-transform:uppercase;padding:6px 10px;background:#ecfeff;border-radius:6px;text-align:center;">✅ Ready to Ship</div>
+            <div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;padding:6px 10px;background:#f0fdf4;border-radius:6px;text-align:center;">🚚 Shipped</div>
+            <div style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;padding:6px 10px;background:#f5f3ff;border-radius:6px;text-align:center;">🧾 Invoiced</div>
+            <div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;padding:6px 10px;background:#fef2f2;border-radius:6px;text-align:center;">🔴 Back Orders</div>
+          </div>
+          <!-- 오더 rows -->
+          <div id="os-rows-container"></div>
         </div>
-        <div>
-          <div style="font-size:11px;font-weight:700;color:#d97706;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#fffbeb;border-radius:6px;">📦 Preparing</div>
-          <div id="os-col-preparing" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
-        </div>
-        <div>
-          <div style="font-size:11px;font-weight:700;color:#0891b2;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#ecfeff;border-radius:6px;">✅ Ready to Ship</div>
-          <div id="os-col-ready" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
-        </div>
-        <div>
-          <div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#f0fdf4;border-radius:6px;">🚚 Shipped</div>
-          <div id="os-col-shipped" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
-        </div>
-        <div>
-          <div style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#f5f3ff;border-radius:6px;">🧾 Invoiced</div>
-          <div id="os-col-invoiced" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
-        </div>
-        <div>
-          <div style="font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;margin-bottom:8px;padding:6px 10px;background:#fef2f2;border-radius:6px;">🔴 Back Orders</div>
-          <div id="os-col-backorder" style="display:flex;flex-direction:column;gap:8px;min-height:100px;"></div>
-        </div>
+      </div>
+      <!-- 기존 col div 유지 (JS 호환용, 숨김) -->
+      <div style="display:none;">
+        <div id="os-col-entered"></div>
+        <div id="os-col-preparing"></div>
+        <div id="os-col-ready"></div>
+        <div id="os-col-shipped"></div>
+        <div id="os-col-invoiced"></div>
+        <div id="os-col-backorder"></div>
       </div>
 
       <!-- Partial Ship 모달 -->
@@ -4613,130 +4612,169 @@ async function loadOrderStatus() {
   const SC_BORDER = '#16a34a';
   const CA_BORDER = '#ea580c';
 
-  Object.entries(cols).forEach(([col, list]) => {
-    const el = document.getElementById(`os-col-${col}`);
-    if (list.length === 0) {
-      el.innerHTML = '<div style="font-size:11px;color:#9ca3af;text-align:center;padding:16px;">없음</div>';
-      return;
-    }
-    el.innerHTML = list.map(o => {
-      const wh = o._wh;
-      const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
+  // ── Row 기반 타임라인 렌더링
+  const COLS = ['entered','preparing','ready','shipped','invoiced','backorder'];
 
-      // 테두리: SC=진초록, CA=진파랑 (분리 오더만), 일반 오더는 기존 방식
-      const palette = isSplit ? poColorMap[o.id] : null;
-      const whBorderColor = wh === 'CA' ? CA_BORDER : SC_BORDER;
-      const borderColor = whBorderColor;
+  // 카드 HTML 생성 함수
+  function makeCardHtml(o, col) {
+    const wh = o._wh;
+    const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
+    const whBorderColor = wh === 'CA' ? CA_BORDER : SC_BORDER;
+    const borderColor = whBorderColor;
+    const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
+    const isOverdue = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 48;
+    const isWarning = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 24 && hoursElapsed <= 48;
+    const cardBg = isSplit ? poColorMap[o.id] : '#fff';
+    const isBack = o._status === 'backordered';
+    const isCreditHold = o._status === 'credit_hold';
+    const isUrgent = o.priority === 'urgent';
+    const _h = Math.floor(hoursElapsed);
+    const _d = Math.floor(_h / 24);
+    const _rem = _h % 24;
+    const hoursLabel = _d > 0 ? `${_d}d ${_rem}h ago` : `${_h}h ago`;
+    const whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+    const displayPcs = o.total_pcs || 0;
+    const scPcs = o.sc_total_pcs || 0;
+    const caPcs = o.ca_total_pcs || 0;
+    const displayAmt = isSplit ? (wh === 'CA' ? (o.ca_total_amount||0) : (o.sc_total_amount||0)) : (o.total_amount||0);
+    const pcsLabel = isSplit
+      ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#6b7280;">(SC: ${scPcs.toLocaleString()} / CA: ${caPcs.toLocaleString()})</span>`
+      : `${displayPcs.toLocaleString()} pcs`;
 
-      // 배경: 같은 PO는 같은 색
-      const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
-      const isOverdue = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 48;
-      const isWarning = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 24 && hoursElapsed <= 48;
-      const cardBg = isSplit ? poColorMap[o.id] : '#fff';
+    const overdueBanner = isOverdue
+      ? `<div style="margin:-10px -12px 8px -12px;padding:6px 12px;border-radius:6px 6px 0 0;animation:overdue-blink 1s ease-in-out infinite;display:flex;align-items:center;gap:6px;">
+           <span style="font-size:13px;">🚨</span>
+           <span style="font-size:11px;font-weight:900;color:#fff;letter-spacing:0.5px;text-transform:uppercase;animation:overdue-pulse 1s ease-in-out infinite;">${hoursLabel} 경과 — 즉시 처리 필요!</span>
+         </div>`
+      : isWarning
+      ? `<div style="margin:-10px -12px 8px -12px;padding:5px 12px;background:#fde68a;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:6px;">
+           <span style="font-size:13px;">⏰</span>
+           <span style="font-size:11px;font-weight:900;color:#1c1917;letter-spacing:0.3px;text-shadow:0 1px 0 rgba(255,255,255,0.4);">${hoursLabel} 경과 — 처리 필요</span>
+         </div>`
+      : '';
 
-      const isBack = o._status === 'backordered';
-      const isCreditHold = o._status === 'credit_hold';
-      const isUrgent = o.priority === 'urgent';
+    const ptc = poTagColorMap[o.customer_po];
+    const poTag = ptc
+      ? `<div style="font-size:11px;font-weight:800;font-family:'IBM Plex Mono',monospace;padding:2px 6px;border-radius:6px;background:${ptc.bg};color:${ptc.text};">PO# ${o.customer_po||'—'}</div>`
+      : `<div style="font-size:12px;font-weight:800;color:#111827;font-family:'IBM Plex Mono',monospace;">PO# ${o.customer_po||'—'}</div>`;
 
-      // 왼쪽 stripe: SC=초록, CA=주황
-      const stripeColor = wh === 'CA' ? CA_BORDER : SC_BORDER;
-      const leftStripe = '';
-      const _h = Math.floor(hoursElapsed);
-      const _d = Math.floor(_h / 24);
-      const _rem = _h % 24;
-      const hoursLabel = _d > 0 ? `${_d}d ${_rem}h ago` : `${_h}h ago`;
+    const printBtns = col === 'entered' && !isCreditHold && o._status !== 'rejected' ? (() => {
+      const whPre = wh === 'CA' ? 'ca_' : 'sc_';
+      const whPrinted = o[whPre + 'warehouse_printed_at'];
+      const pcPrinted = o[whPre + 'pcroom_printed_at'];
+      return `
+        <div style="display:flex;gap:4px;margin-top:8px;">
+          <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${whPrinted?'#f0fdf4':'#fff'};color:${whPrinted?'#15803d':'#374151'};border-color:${whPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${whPrinted?'✅ WH 프린트됨':'🏭 WH Ticket'}</button>
+          <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${pcPrinted?'#f0fdf4':'#fff'};color:${pcPrinted?'#15803d':'#374151'};border-color:${pcPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">${pcPrinted?'✅ PC Room 프린트됨':'💻 PC Room Ticket'}</button>
+        </div>
+        ${whPrinted||pcPrinted ? '<div style="font-size:9px;color:#6b7280;margin-top:3px;text-align:center;">'+[whPrinted?'🏭 '+new Date(whPrinted).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'🏭 미프린트',pcPrinted?'💻 '+new Date(pcPrinted).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'💻 미프린트'].join(' · ')+'</div>' : ''}
+      `;
+    })() : '';
 
-      // WH 배지: SC=진초록, CA=진주황
-      const whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+    return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:2px solid ${borderColor};border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;overflow:hidden;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.15)'" onmouseout="this.style.boxShadow='none'">
+      ${overdueBanner}
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
+        <div>
+          <div style="font-size:10px;color:#6b7280;">${o.customer_name}</div>
+          <div style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
+          <div style="display:flex;gap:4px;align-items:center;">
+            ${isUrgent?'<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 URGENT</span>':''}
+            ${whBadge}
+          </div>
+          ${poTag}
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:10px;color:#6b7280;">
+        <span>📅 Rcvd: ${o.created_at?new Date(o.created_at).toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}):'—'}</span>
+        <span style="color:${isOverdue?'#dc2626':isWarning?'#b45309':'#6b7280'};font-weight:${isOverdue||isWarning?'700':'400'};">🚚 ${o.ship_date?new Date(o.ship_date+'T00:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}):isUrgent?'<span style="color:#dc2626;font-weight:700;">Today</span>':(() => { const d=new Date(o.created_at); d.setDate(d.getDate()+2); return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}); })()}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;align-items:baseline;">
+        <span style="color:#374151;font-weight:600;">${pcsLabel}</span>
+        <span style="color:var(--primary);font-weight:700;white-space:nowrap;margin-left:6px;">$${displayAmt.toLocaleString()}</span>
+      </div>
+      <div style="font-size:10px;color:#9ca3af;margin-top:3px;">${hoursLabel}</div>
+      ${isBack?'<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">⚠️ Back Order</div>':''}
+      ${isCreditHold?`<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold${o.credit_hold_count>1?` (${o.credit_hold_count})`:''}</div>`:''}
+      ${o._status==='open'&&o.credit_approved_at?'<div style="font-size:10px;color:#15803d;font-weight:600;margin-top:4px;">🟢 Credit Released</div>':''}
+      ${o._status==='rejected'?`<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">🔴 Rejected</div><button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#fff7ed;color:#c2410c;border-color:#fb923c;" onclick="event.stopPropagation();resubmitCreditHold('${o.id}','${o.order_number}','${o.customer_name}','${o.customer_po||''}')">🔄 Resubmit for Approval</button>`:''}
+      ${printBtns}
+      ${col==='preparing'?`
+        <button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">✅ Preparation Complete</button>
+        <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','preparing','po_entered')">↩ Back to PO Entered</button>`:''}
+      ${col==='ready'?`
+        <button class="btn btn-sm btn-green" style="width:100%;margin-top:8px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>
+        <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','ready_to_ship','preparing')">↩ Back to Preparing</button>`:''}
+      ${col==='shipped'?`<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>`:''}
+      ${col==='backorder'?`
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
+          <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();startBackOrder('${o.id}','SC')">▶ Start Order — SC</button>
+          <button class="btn btn-sm" style="width:100%;font-size:10px;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();startBackOrder('${o.id}','CA')">▶ Start Order — CA</button>
+          <button class="btn btn-sm" style="width:100%;font-size:10px;background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();cancelBackOrder('${o.id}','${o.order_number}')">✕ Cancel Back Order</button>
+        </div>`:''}
+    </div>`;
+  }
 
-      const displayPcs = o.total_pcs || 0;
-      const scPcs = o.sc_total_pcs || 0;
-      const caPcs = o.ca_total_pcs || 0;
-      const displayAmt = isSplit
-        ? (wh === 'CA' ? (o.ca_total_amount || 0) : (o.sc_total_amount || 0))
-        : (o.total_amount || 0);
-      const pcsLabel = isSplit
-        ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#6b7280;">(SC: ${scPcs.toLocaleString()} / CA: ${caPcs.toLocaleString()})</span>`
-        : `${displayPcs.toLocaleString()} pcs`;
+  // 각 card를 어느 col에 넣을지 매핑
+  function getColForCard(card) {
+    if (['po_entered','open','credit_hold','rejected'].includes(card._status)) return 'entered';
+    if (card._status === 'preparing') return 'preparing';
+    if (card._status === 'ready_to_ship') return 'ready';
+    if (card._status === 'shipped') return 'shipped';
+    if (card._status === 'invoiced') return 'invoiced';
+    if (['backordered','partial'].includes(card._status)) return 'backorder';
+    return 'entered';
+  }
 
-      // overdue/warning 배너 (배경색 변경 없이 카드 상단 띠로만 표시)
-      const overdueBanner = isOverdue
-        ? `<div style="margin:-10px -12px 8px -12px;padding:6px 12px;border-radius:6px 6px 0 0;animation:overdue-blink 1s ease-in-out infinite;display:flex;align-items:center;gap:6px;">
-             <span style="font-size:13px;">🚨</span>
-             <span style="font-size:11px;font-weight:900;color:#fff;letter-spacing:0.5px;text-transform:uppercase;animation:overdue-pulse 1s ease-in-out infinite;">${hoursLabel} 경과 — 즉시 처리 필요!</span>
-           </div>`
-        : isWarning
-        ? `<div style="margin:-10px -12px 8px -12px;padding:5px 12px;background:#fde68a;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:6px;">
-             <span style="font-size:13px;">⏰</span>
-             <span style="font-size:11px;font-weight:900;color:#1c1917;letter-spacing:0.3px;text-shadow:0 1px 0 rgba(255,255,255,0.4);">${hoursLabel} 경과 — 처리 필요</span>
-           </div>`
-        : '';
-
-      return `<div onclick="openPODetail('${o.id}')" style="background:${cardBg};border:2px solid ${borderColor};${leftStripe}border-radius:8px;padding:10px 12px;cursor:pointer;transition:box-shadow 0.15s;overflow:hidden;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.15)'" onmouseout="this.style.boxShadow='none'">
-        ${overdueBanner}
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
+  // row 기반 렌더링
+  const container = document.getElementById('os-rows-container');
+  if (container) {
+    // 오더별 row 생성 (allCards 기준 — SC/CA 각각 별도 row)
+    const rowsHtml = allCards.filter(c => !['backordered','partial'].includes(c._status)).map(card => {
+      const cardCol = getColForCard(card);
+      const cells = COLS.filter(c => c !== 'backorder').map(col => {
+        const isEmpty = col !== cardCol;
+        return `<div style="min-height:60px;">${isEmpty ? '' : makeCardHtml(card, col)}</div>`;
+      });
+      return `<div style="display:grid;grid-template-columns:200px repeat(5,1fr);gap:8px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;padding:0 8px;">
           <div>
-            <div style="font-size:10px;color:#6b7280;">${o.customer_name}</div>
-            <div style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</div>
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
-            <div style="display:flex;gap:4px;align-items:center;">
-              ${isUrgent ? '<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 URGENT</span>' : ''}
-              ${whBadge}
-            </div>
-            ${(() => { const ptc = poTagColorMap[o.customer_po]; return ptc ? `<div style="font-size:12px;font-weight:800;font-family:'IBM Plex Mono',monospace;letter-spacing:-0.3px;padding:2px 7px;border-radius:6px;background:${ptc.bg};color:${ptc.text};">PO# ${o.customer_po || '—'}</div>` : `<div style="font-size:13px;font-weight:800;color:#111827;font-family:'IBM Plex Mono',monospace;letter-spacing:-0.3px;">PO# ${o.customer_po || '—'}</div>`; })()}
+            <div style="font-size:10px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${card.order_number}</div>
+            <div style="font-size:10px;color:#6b7280;">${card.customer_name}</div>
+            <div style="margin-top:2px;">${card._wh==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</div>
           </div>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:10px;color:#6b7280;">
-          <span>📅 Rcvd: ${o.created_at ? new Date(o.created_at).toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}) : '—'}</span>
-          <span style="color:${isOverdue ? '#dc2626' : isWarning ? '#b45309' : '#6b7280'};font-weight:${isOverdue||isWarning ? '700':'400'};">🚚 ${
-            o.ship_date
-              ? new Date(o.ship_date+'T00:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'})
-              : isUrgent
-              ? '<span style="color:#dc2626;font-weight:700;">Today</span>'
-              : (() => { const d = new Date(o.created_at); d.setDate(d.getDate()+2); return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'2-digit'}); })()
-          }</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;align-items:baseline;">
-          <span style="color:#374151;font-weight:600;">${pcsLabel}</span>
-          <span style="color:var(--primary);font-weight:700;white-space:nowrap;margin-left:6px;">$${displayAmt.toLocaleString()}</span>
-        </div>
-        <div style="font-size:10px;color:#9ca3af;margin-top:3px;">${hoursLabel}</div>
-        ${isBack ? '<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">⚠️ Back Order</div>' : ''}
-        ${isCreditHold ? `<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold${o.credit_hold_count > 1 ? ` (${o.credit_hold_count})` : ''}</div>` : ''}
-        ${o._status === 'open' && o.credit_approved_at ? '<div style="font-size:10px;color:#15803d;font-weight:600;margin-top:4px;">🟢 Credit Released</div>' : ''}
-        ${o._status === 'rejected' ? `<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">🔴 Rejected</div><button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#fff7ed;color:#c2410c;border-color:#fb923c;" onclick="event.stopPropagation();resubmitCreditHold('${o.id}','${o.order_number}','${o.customer_name}','${o.customer_po||''}')">🔄 Resubmit for Approval</button>` : ''}
-        ${col === 'entered' && !isCreditHold && o._status !== 'rejected' ? `
-          ${(() => {
-            const whPre = wh === 'CA' ? 'ca_' : 'sc_';
-            const whPrinted = o[whPre + 'warehouse_printed_at'];
-            const pcPrinted = o[whPre + 'pcroom_printed_at'];
-            return `
-          <div style="display:flex;gap:4px;margin-top:8px;">
-            <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${whPrinted ? '#f0fdf4' : '#fff'};color:${whPrinted ? '#15803d' : '#374151'};border-color:${whPrinted ? '#86efac' : '#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${whPrinted ? '✅ WH 프린트됨' : '🏭 WH Ticket'}</button>
-            <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${pcPrinted ? '#f0fdf4' : '#fff'};color:${pcPrinted ? '#15803d' : '#374151'};border-color:${pcPrinted ? '#86efac' : '#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">${pcPrinted ? '✅ PC Room 프린트됨' : '💻 PC Room Ticket'}</button>
-          </div>
-          ${whPrinted || pcPrinted ? '<div style="font-size:9px;color:#6b7280;margin-top:3px;text-align:center;">' + [whPrinted ? '🏭 ' + new Date(whPrinted).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '🏭 미프린트', pcPrinted ? '💻 ' + new Date(pcPrinted).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '💻 미프린트'].join(' · ') + '</div>' : ''}
-          `;
-          })()}
-
-        ` : ''}
-        ${col === 'preparing' ? `
-          <button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">✅ Preparation Complete</button>
-          <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','preparing','po_entered')">↩ Back to PO Entered</button>` : ''}
-        ${col === 'ready' ? `
-          <button class="btn btn-sm btn-green" style="width:100%;margin-top:8px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>
-          <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','ready_to_ship','preparing')">↩ Back to Preparing</button>` : ''}
-        ${col === 'shipped' ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>` : ''}
-        ${col === 'backorder' ? `
-          <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
-            <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();startBackOrder('${o.id}','SC')">▶ Start Order — SC</button>
-            <button class="btn btn-sm" style="width:100%;font-size:10px;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();startBackOrder('${o.id}','CA')">▶ Start Order — CA</button>
-            <button class="btn btn-sm" style="width:100%;font-size:10px;background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();cancelBackOrder('${o.id}','${o.order_number}')">✕ Cancel Back Order</button>
-          </div>` : ''}
+        ${cells.join('')}
       </div>`;
     }).join('');
-  });
+
+    // backorder는 별도 섹션
+    const backCards = allCards.filter(c => ['backordered','partial'].includes(c._status));
+    const backHtml = backCards.length > 0 ? `
+      <div style="margin-top:16px;border-top:2px solid #fef2f2;padding-top:12px;">
+        <div style="font-size:11px;font-weight:700;color:#dc2626;margin-bottom:8px;">🔴 BACK ORDERS</div>
+        ${backCards.map(card => `
+          <div style="display:grid;grid-template-columns:200px repeat(5,1fr) 160px;gap:8px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;padding:0 8px;">
+              <div>
+                <div style="font-size:10px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${card.order_number}</div>
+                <div style="font-size:10px;color:#6b7280;">${card.customer_name}</div>
+                <div style="margin-top:2px;">${card._wh==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</div>
+              </div>
+            </div>
+            <div></div><div></div><div></div><div></div><div></div>
+            <div>${makeCardHtml(card, 'backorder')}</div>
+          </div>`).join('')}
+      </div>` : '';
+
+    container.innerHTML = rowsHtml + backHtml;
+  }
+}
+
+function osFilterStatus(status) {
+  document.getElementById('po-filter-status').value = status;
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
 }
 
 function osFilterStatus(status) {
