@@ -2046,10 +2046,14 @@ async function openInvoice(orderId, skipPushState = false) {
   document.getElementById('inv-entry-form').style.display = 'none';
   document.getElementById('po-save-btn').style.display = 'none';
 
+  // inventory가 없으면 먼저 로드 (Edit PO 진입 시 재고 정상 표시를 위해)
+  if (Object.keys(scInventory).length === 0 || Object.keys(window.binInventory?.['SC'] || {}).length === 0) {
+    await loadScInventory();
+  }
+
   const [{ data: order }, { data: lines }] = await Promise.all([
     db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single(),
-    db.from('order_lines').select('*, styles(style_number,description,category)').eq('order_id', orderId),
-    Object.keys(scInventory).length === 0 ? loadScInventory() : Promise.resolve()
+    db.from('order_lines').select('*, styles(style_number,description,category)').eq('order_id', orderId)
   ]);
 
   poLines = (lines || []).map(l => ({
