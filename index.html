@@ -4668,7 +4668,7 @@ async function loadOrderStatus() {
         : isWarning
         ? `<div style="margin:-10px -12px 8px -12px;padding:5px 12px;background:#fbbf24;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:6px;">
              <span style="font-size:13px;">🏃</span>
-             <span style="font-size:10px;font-weight:800;color:#78350f;letter-spacing:0.3px;">${hoursLabel} 경과 — 처리 필요</span>
+             <span style="font-size:11px;font-weight:900;color:#1c1917;letter-spacing:0.3px;text-shadow:0 1px 0 rgba(255,255,255,0.4);">${hoursLabel} 경과 — 처리 필요</span>
            </div>`
         : '';
 
@@ -4707,12 +4707,19 @@ async function loadOrderStatus() {
         ${o._status === 'open' && o.credit_approved_at ? '<div style="font-size:10px;color:#15803d;font-weight:600;margin-top:4px;">🟢 Credit Released</div>' : ''}
         ${o._status === 'rejected' ? `<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">🔴 Rejected</div><button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#fff7ed;color:#c2410c;border-color:#fb923c;" onclick="event.stopPropagation();resubmitCreditHold('${o.id}','${o.order_number}','${o.customer_name}','${o.customer_po||''}')">🔄 Resubmit for Approval</button>` : ''}
         ${col === 'entered' && !isCreditHold && o._status !== 'rejected' ? `
+          ${(() => {
+            const whPre = wh === 'CA' ? 'ca_' : 'sc_';
+            const whPrinted = o[whPre + 'warehouse_printed_at'];
+            const pcPrinted = o[whPre + 'pcroom_printed_at'];
+            return `
           <div style="display:flex;gap:4px;margin-top:8px;">
-            <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${o.warehouse_printed_at ? '#f0fdf4' : '#fff'};color:${o.warehouse_printed_at ? '#15803d' : '#374151'};border-color:${o.warehouse_printed_at ? '#86efac' : '#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${o.warehouse_printed_at ? '✅ WH 프린트됨' : '🏭 WH Ticket'}</button>
-            <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${o.pcroom_printed_at ? '#f0fdf4' : '#fff'};color:${o.pcroom_printed_at ? '#15803d' : '#374151'};border-color:${o.pcroom_printed_at ? '#86efac' : '#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">${o.pcroom_printed_at ? '✅ PC Room 프린트됨' : '💻 PC Room Ticket'}</button>
+            <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${whPrinted ? '#f0fdf4' : '#fff'};color:${whPrinted ? '#15803d' : '#374151'};border-color:${whPrinted ? '#86efac' : '#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${whPrinted ? '✅ WH 프린트됨' : '🏭 WH Ticket'}</button>
+            <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${pcPrinted ? '#f0fdf4' : '#fff'};color:${pcPrinted ? '#15803d' : '#374151'};border-color:${pcPrinted ? '#86efac' : '#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">${pcPrinted ? '✅ PC Room 프린트됨' : '💻 PC Room Ticket'}</button>
           </div>
-          ${o.warehouse_printed_at || o.pcroom_printed_at ? `<div style="font-size:9px;color:#6b7280;margin-top:3px;text-align:center;">${[o.warehouse_printed_at ? '🏭 ' + new Date(o.warehouse_printed_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '🏭 미프린트', o.pcroom_printed_at ? '💻 ' + new Date(o.pcroom_printed_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '💻 미프린트'].join(' · ')}</div>` : ''}
-          ${o.warehouse_printed_at && o.pcroom_printed_at ? `<button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:9px;background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;" onclick="event.stopPropagation();moveToPreparing('${o.id}','${wh}')">📦 Move to Preparing</button>` : ''}
+          ${whPrinted || pcPrinted ? '<div style="font-size:9px;color:#6b7280;margin-top:3px;text-align:center;">' + [whPrinted ? '🏭 ' + new Date(whPrinted).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '🏭 미프린트', pcPrinted ? '💻 ' + new Date(pcPrinted).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '💻 미프린트'].join(' · ') + '</div>' : ''}
+          `;
+          })()}
+
         ` : ''}
         ${col === 'preparing' ? `
           <button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">✅ Preparation Complete</button>
@@ -5047,12 +5054,28 @@ async function updateWhStatus(orderId, wh, newStatus) {
 // ── 1단계: Pick Ticket 프린트 → Preparing
 // ── WH / PC Room 타입별 픽티켓 프린트
 async function printPickTicketType(orderId, wh, ticketType) {
-  // DB에 프린트 시간 기록
-  const field = ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at';
+  // wh별 컬럼 결정 (SC/CA 각각)
+  const whPre = wh === 'CA' ? 'ca_' : 'sc_';
+  const field = whPre + (ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at');
   await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
 
   // 실제 픽티켓 열기
   await printPickTicket(orderId, wh, ticketType);
+
+  // 해당 WH 양쪽 다 프린트됐으면 자동으로 Preparing으로 이동
+  const { data: updated } = await db.from('orders').select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, status, wh_code, is_split_warehouse').eq('id', orderId).single();
+  if (!updated) { loadOrderStatus(); return; }
+
+  const isSplit = updated.wh_code === 'SC&CA' || updated.is_split_warehouse;
+  const scDone = updated.sc_warehouse_printed_at && updated.sc_pcroom_printed_at;
+  const caDone = updated.ca_warehouse_printed_at && updated.ca_pcroom_printed_at;
+  const thisDone = wh === 'CA' ? caDone : scDone;
+
+  if (thisDone && updated.status === 'po_entered') {
+    await updateWhStatus(orderId, wh, 'preparing');
+    showToast(`📦 ${wh} 양쪽 프린트 완료 — Preparing으로 이동!`);
+  }
+
   loadOrderStatus();
 }
 
