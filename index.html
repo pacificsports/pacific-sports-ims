@@ -448,6 +448,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <select class="fsel" id="po-filter-status" onchange="filterCustomerPOs()" style="height:30px;font-size:11px;">
           <option value="">All Status</option>
           <option value="po_entered">PO Entered</option>
+          <option value="credit_hold">Credit Hold</option>
           <option value="preparing">Preparing</option>
           <option value="ready_to_ship">Ready to Ship</option>
           <option value="shipped">Shipped</option>
@@ -1979,7 +1980,7 @@ function backToPoList() {
   const rov = document.getElementById('po-readonly-view'); if (rov) rov.style.display = 'none';
   window._poViewReadOnly = false;
   document.getElementById('po-toolbar')?.style && (document.getElementById('po-toolbar').style.display = '');
-  document.getElementById('po-kpi-grid')?.style && (document.getElementById('po-kpi-grid').style.display = '');
+  document.getElementById('po-kpi-grid')?.style && (document.getElementById('po-kpi-grid').style.display = 'grid');
   document.getElementById('po-list-card')?.style && (document.getElementById('po-list-card').style.display = '');
   loadCustomerPOs();
 }
@@ -3599,6 +3600,10 @@ async function _doSaveInvoice() {
   const totalPcs = poLines.reduce((s, l) => s + l.qty, 0);
   const totalAmt = poLines.reduce((s, l) => s + l.qty * (l.price || 0), 0);
 
+  // ── Edit 모드 감지 (currentInvoiceData에 기존 order id가 있으면 수정)
+  const existingOrderId = currentInvoiceData?.order?.id || null;
+  const isEditMode = !!existingOrderId;
+
   // ── 2. Order 저장
   // PO 번호 자동생성 — PO-2026-0001 형식 (신규 시만)
   const year = new Date().getFullYear();
@@ -3638,10 +3643,6 @@ async function _doSaveInvoice() {
     const qty = l.wh === 'SC' ? 0 : l.wh === 'SC&CA' ? caQty : l.qty;
     return s + qty * (l.price || 0);
   }, 0);
-
-  // ── Edit 모드 감지 (currentInvoiceData에 기존 order id가 있으면 수정)
-  const existingOrderId = currentInvoiceData?.order?.id || null;
-  const isEditMode = !!existingOrderId;
 
   // Edit 모드면 기존 order_number 재사용, 신규면 새 번호 생성
   let orderNum;
