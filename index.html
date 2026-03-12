@@ -2056,6 +2056,7 @@ async function openInvoice(orderId, skipPushState = false) {
     description: l.styles?.description || '',
     color: l.color,
     size: l.size,
+    code: (l.styles?.style_number || '') + (l.color || '').replace(/\s+/g,'').toUpperCase() + (l.size || '').replace(/\s+/g,'').toUpperCase(),
     qty: l.qty_pieces,
     price: l.unit_price || 0,
     ppb: l.pcs_per_box || calcPpb(l.styles?.description || '', l.size),
@@ -2063,8 +2064,10 @@ async function openInvoice(orderId, skipPushState = false) {
     loose: l.qty_loose || l.qty_pieces % (l.pcs_per_box || 72),
     location: l.location || '',
     wh: l.wh || 'SC',
-    allocSC: (l.wh !== 'CA' && l.alloc_detail) ? Object.fromEntries(Object.entries(l.alloc_detail).map(([k,v]) => [k, v.pcs])) : {},
-    allocCA: (l.wh === 'CA' && l.alloc_detail) ? Object.fromEntries(Object.entries(l.alloc_detail).map(([k,v]) => [k, v.pcs])) : {},
+    allocSC: (l.wh !== 'CA' && l.alloc_detail) ? Object.fromEntries(Object.entries(l.alloc_detail).map(([k,v]) => [k, v.pcs||v])) : {},
+    allocCA: l.alloc_ca_detail
+      ? Object.fromEntries(Object.entries(l.alloc_ca_detail).map(([k,v]) => [k, v.pcs||v]))
+      : (l.wh === 'CA' && l.alloc_detail) ? Object.fromEntries(Object.entries(l.alloc_detail).map(([k,v]) => [k, v.pcs||v])) : {},
   }));
 
   currentInvoiceData = { order };
@@ -3743,15 +3746,25 @@ async function _doSaveInvoice() {
     const s = styles.find(x => x.style_number === l.styleNum);
     const lineWhId = l.wh === 'CA' ? (caWhId || whId) : (scWhId || whId);
 
-    // alloc_detail: bin별 수량 상세 { "K3B-23": {boxes, partial, pcs} }
-    const _allocObj = l.wh === 'CA' ? (l.allocCA||{}) : (l.allocSC||{});
+    // alloc_detail: SC빈 상세, alloc_ca_detail: CA빈 상세 (SC&CA 라인 분리 저장)
+    const _allocObjSC = l.allocSC || {};
+    const _allocObjCA = l.allocCA || {};
+    const _allocObjMain = l.wh === 'CA' ? _allocObjCA : _allocObjSC;
     const _allocDetail = {};
-    for (const [bin, pcs] of Object.entries(_allocObj)) {
+    for (const [bin, pcs] of Object.entries(_allocObjMain)) {
       if (!pcs) continue;
       const ppb = l.ppb || 1;
       _allocDetail[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
     }
-    const _mainBins = Object.keys(_allocObj).filter(k => !k.includes('PCR'));
+    const _allocDetailCA = {};
+    if (l.wh === 'SC&CA') {
+      for (const [bin, pcs] of Object.entries(_allocObjCA)) {
+        if (!pcs) continue;
+        const ppb = l.ppb || 1;
+        _allocDetailCA[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
+      }
+    }
+    const _mainBins = Object.keys(_allocObjMain).filter(k => !k.includes('PCR'));
     const insertPayload = {
       order_id: order.id,
       style_id: s?.id || null,
@@ -3767,6 +3780,7 @@ async function _doSaveInvoice() {
       qty_loose: l.qty % l.ppb,
       location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
       alloc_detail: Object.keys(_allocDetail).length > 0 ? _allocDetail : null,
+      alloc_ca_detail: Object.keys(_allocDetailCA).length > 0 ? _allocDetailCA : null,
       unit_price: l.price || 0
     };
     const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
