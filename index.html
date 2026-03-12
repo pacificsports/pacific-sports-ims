@@ -8235,9 +8235,7 @@ async function execPcrBackTransfer(whGroup, ppb) {
   const pcrAvail = (pcrBinData?.qty || 0) - pendingDeduct;
   if (pcrAvail < qty) { alert(`PCR 재고 부족! 가용 재고: ${pcrAvail} pcs`); return; }
 
-  // pending 목록에 추가 + 반대 transfer 상쇄
-  _pcrBackTransfers.push({ fromBin: 'PCR', whGroup, qty, boxes, dest, styleNum: l.styleNum||'', color: l.color, size: l.size });
-  // 이미 pending된 forward transfer에서 같은 bin/qty 상쇄 제거
+  // forward transfer와 back transfer 서로 상쇄 — 누적 방지
   let toCancel = qty;
   _pcrTransfers = _pcrTransfers.filter(t => {
     if (t.whGroup === whGroup && t.fromBin === dest && toCancel > 0) {
@@ -8246,6 +8244,19 @@ async function execPcrBackTransfer(whGroup, ppb) {
     }
     return true;
   });
+  // back transfer도 이전 것과 상쇄
+  let toCancelBack = qty;
+  _pcrBackTransfers = _pcrBackTransfers.filter(t => {
+    if (t.whGroup === whGroup && t.dest === dest && toCancelBack > 0) {
+      if (t.qty <= toCancelBack) { toCancelBack -= t.qty; return false; }
+      else { t.qty -= toCancelBack; toCancelBack = 0; return true; }
+    }
+    return true;
+  });
+  if (toCancel > 0) {
+    // 상쇄 후 남은 수량만 pending에 추가
+    _pcrBackTransfers.push({ fromBin: 'PCR', whGroup, qty: toCancel, boxes: Math.ceil(toCancel/ppb), dest, styleNum: l.styleNum||'', color: l.color, size: l.size });
+  }
 
   showToast(`↩️ PCR → ${dest}: ${boxes}박스 (${qty} pcs) — 적용 버튼으로 확정`);
 
@@ -8756,6 +8767,9 @@ function openAllocModalBoth(lineIdx) {
   }
 
   _allocState = { lineIdx, whGroup: 'SC&CA' };
+  // 모달 재오픈 시 pending 리셋 (binInventory에 이미 반영됨)
+  _pcrTransfers = [];
+  _pcrBackTransfers = [];
 
   // 거래처 preference 읽기
   const prefWh = window._custPrefWh || 'SC';
