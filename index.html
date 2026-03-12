@@ -4730,21 +4730,24 @@ async function loadOrderStatus() {
   // row 기반 렌더링
   const container = document.getElementById('os-rows-container');
   if (container) {
-    // 오더별 row 생성 (allCards 기준 — SC/CA 각각 별도 row)
-    const rowsHtml = allCards.filter(c => !['backordered','partial'].includes(c._status)).map(card => {
+    // 정렬: urgent 먼저, 그 다음 created_at 오래된 순
+    const mainCards = allCards
+      .filter(c => !['backordered','partial'].includes(c._status))
+      .sort((a, b) => {
+        const aUrgent = a.priority === 'urgent' ? 0 : 1;
+        const bUrgent = b.priority === 'urgent' ? 0 : 1;
+        if (aUrgent !== bUrgent) return aUrgent - bUrgent;
+        return new Date(a.created_at) - new Date(b.created_at);
+      });
+
+    const rowsHtml = mainCards.map(card => {
       const cardCol = getColForCard(card);
-      const cells = COLS.filter(c => c !== 'backorder').map(col => {
+      const mainCols = ['entered','preparing','ready','shipped','invoiced'];
+      const cells = mainCols.map(col => {
         const isEmpty = col !== cardCol;
         return `<div style="min-height:60px;">${isEmpty ? '' : makeCardHtml(card, col)}</div>`;
       });
-      return `<div style="display:grid;grid-template-columns:200px repeat(5,1fr);gap:8px;margin-bottom:8px;">
-        <div style="display:flex;align-items:center;padding:0 8px;">
-          <div>
-            <div style="font-size:10px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${card.order_number}</div>
-            <div style="font-size:10px;color:#6b7280;">${card.customer_name}</div>
-            <div style="margin-top:2px;">${card._wh==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</div>
-          </div>
-        </div>
+      return `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:8px;">
         ${cells.join('')}
       </div>`;
     }).join('');
@@ -4755,16 +4758,9 @@ async function loadOrderStatus() {
       <div style="margin-top:16px;border-top:2px solid #fef2f2;padding-top:12px;">
         <div style="font-size:11px;font-weight:700;color:#dc2626;margin-bottom:8px;">🔴 BACK ORDERS</div>
         ${backCards.map(card => `
-          <div style="display:grid;grid-template-columns:200px repeat(5,1fr) 160px;gap:8px;margin-bottom:8px;">
-            <div style="display:flex;align-items:center;padding:0 8px;">
-              <div>
-                <div style="font-size:10px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${card.order_number}</div>
-                <div style="font-size:10px;color:#6b7280;">${card.customer_name}</div>
-                <div style="margin-top:2px;">${card._wh==='CA'?'<span class="loc-ca">CA</span>':'<span class="loc-sc">SC</span>'}</div>
-              </div>
-            </div>
-            <div></div><div></div><div></div><div></div><div></div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:8px;">
             <div>${makeCardHtml(card, 'backorder')}</div>
+            <div></div><div></div><div></div><div></div>
           </div>`).join('')}
       </div>` : '';
 
