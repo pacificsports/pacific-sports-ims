@@ -2048,7 +2048,8 @@ async function openInvoice(orderId, skipPushState = false) {
 
   const [{ data: order }, { data: lines }] = await Promise.all([
     db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single(),
-    db.from('order_lines').select('*, styles(style_number,description,category)').eq('order_id', orderId)
+    db.from('order_lines').select('*, styles(style_number,description,category)').eq('order_id', orderId),
+    Object.keys(scInventory).length === 0 ? loadScInventory() : Promise.resolve()
   ]);
 
   poLines = (lines || []).map(l => ({
@@ -4221,6 +4222,7 @@ async function loadCustomerPOs(subview = null) {
     return;
   } else if (subview && subview.startsWith('detail:')) {
     const invId = subview.split(':')[1];
+    await loadScInventory();
     setTimeout(() => openInvoice(invId, true), 200); // true = skipPushState
     return;
   }
