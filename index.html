@@ -4706,7 +4706,14 @@ async function loadOrderStatus() {
         ${isCreditHold ? `<div style="font-size:10px;color:#ea580c;font-weight:600;margin-top:4px;">🚫 Credit Hold${o.credit_hold_count > 1 ? ` (${o.credit_hold_count})` : ''}</div>` : ''}
         ${o._status === 'open' && o.credit_approved_at ? '<div style="font-size:10px;color:#15803d;font-weight:600;margin-top:4px;">🟢 Credit Released</div>' : ''}
         ${o._status === 'rejected' ? `<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">🔴 Rejected</div><button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#fff7ed;color:#c2410c;border-color:#fb923c;" onclick="event.stopPropagation();resubmitCreditHold('${o.id}','${o.order_number}','${o.customer_name}','${o.customer_po||''}')">🔄 Resubmit for Approval</button>` : ''}
-        ${col === 'entered' && !isCreditHold && o._status !== 'rejected' ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();printPickTicket('${o.id}','${wh}')">🖨️ Print Pick Ticket</button>` : ''}
+        ${col === 'entered' && !isCreditHold && o._status !== 'rejected' ? `
+          <div style="display:flex;gap:4px;margin-top:8px;">
+            <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${o.warehouse_printed_at ? '#f0fdf4' : '#fff'};color:${o.warehouse_printed_at ? '#15803d' : '#374151'};border-color:${o.warehouse_printed_at ? '#86efac' : '#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${o.warehouse_printed_at ? '✅ WH 프린트됨' : '🏭 WH Ticket'}</button>
+            <button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${o.pcroom_printed_at ? '#f0fdf4' : '#fff'};color:${o.pcroom_printed_at ? '#15803d' : '#374151'};border-color:${o.pcroom_printed_at ? '#86efac' : '#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">${o.pcroom_printed_at ? '✅ PC Room 프린트됨' : '💻 PC Room Ticket'}</button>
+          </div>
+          ${o.warehouse_printed_at || o.pcroom_printed_at ? `<div style="font-size:9px;color:#6b7280;margin-top:3px;text-align:center;">${[o.warehouse_printed_at ? '🏭 ' + new Date(o.warehouse_printed_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '🏭 미프린트', o.pcroom_printed_at ? '💻 ' + new Date(o.pcroom_printed_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '💻 미프린트'].join(' · ')}</div>` : ''}
+          ${o.warehouse_printed_at && o.pcroom_printed_at ? `<button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:9px;background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;" onclick="event.stopPropagation();moveToPreparing('${o.id}','${wh}')">📦 Move to Preparing</button>` : ''}
+        ` : ''}
         ${col === 'preparing' ? `
           <button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">✅ Preparation Complete</button>
           <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','preparing','po_entered')">↩ Back to PO Entered</button>` : ''}
@@ -5038,13 +5045,38 @@ async function updateWhStatus(orderId, wh, newStatus) {
 }
 
 // ── 1단계: Pick Ticket 프린트 → Preparing
-async function printPickTicket(orderId, wh) {
+// ── WH / PC Room 타입별 픽티켓 프린트
+async function printPickTicketType(orderId, wh, ticketType) {
+  // DB에 프린트 시간 기록
+  const field = ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at';
+  await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
+
+  // 실제 픽티켓 열기
+  await printPickTicket(orderId, wh, ticketType);
+  loadOrderStatus();
+}
+
+// ── 두 군데 다 프린트 완료 후 Preparing으로 이동
+async function moveToPreparing(orderId, wh) {
+  const { data: order } = await db.from('orders').select('warehouse_printed_at, pcroom_printed_at').eq('id', orderId).single();
+  if (!order?.warehouse_printed_at || !order?.pcroom_printed_at) {
+    alert('⚠️ WH Ticket과 PC Room Ticket 모두 프린트되어야 Preparing으로 이동할 수 있습니다.');
+    return;
+  }
+  await updateWhStatus(orderId, wh, 'preparing');
+  loadOrderStatus();
+}
+
+async function printPickTicket(orderId, wh, ticketType) {
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', orderId);
   if (!order || !lines) return;
 
   _ptOrderId = orderId;
   _ptWh = wh || 'SC';
+  _ptTicketType = ticketType || 'warehouse';
+  const titleEl = document.getElementById('pt-modal-title');
+  if (titleEl) titleEl.textContent = ticketType === 'pcroom' ? '💻 PC Room Pick Ticket' : '🏭 Warehouse Pick Ticket';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
   // wh에 해당하는 라인 필터 (SC&CA 라인도 포함)
@@ -5073,11 +5105,12 @@ async function printPickTicket(orderId, wh) {
   // 전체 PCR Transfer 목록 (모든 라인 합산)
   const allPcrTransfers = enrichedLines.flatMap(l => (l._pcrTransfers||[]).map(t => ({ ...t, color: l.color, size: l.size, styleNum: l.styles?.style_number||'' })));
 
-  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers);
+  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, ticketType);
   document.getElementById('modal-pt-preview').style.display = 'flex';
 }
 
 let _ptWh = 'SC';
+let _ptTicketType = 'warehouse';
 
 async function closePtAndPrepare() {
   closeModal('modal-pt-preview');
@@ -5348,9 +5381,12 @@ async function startBackOrder(orderId, wh) {
 // ═══════════════════════════════════════════════════════
 // Pick Ticket HTML 빌더
 // ═══════════════════════════════════════════════════════
-function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers) {
+function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ticketType) {
   const fromAddr = '1605 South Guignard Parkway<br>Sumter SC 29150';
   const dateStr = new Date().toLocaleDateString();
+  const ticketTypeLabel = ticketType === 'pcroom' ? '💻 PC ROOM' : '🏭 WAREHOUSE';
+  const ticketTypeBg = ticketType === 'pcroom' ? '#eff6ff' : '#f0fdf4';
+  const ticketTypeColor = ticketType === 'pcroom' ? '#1d4ed8' : '#15803d';
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
   const renderPtSection = (sectionLines, whLabel, whColor) => {
@@ -5492,7 +5528,8 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers) {
       </div>
       <div style="text-align:right;">
         <div style="font-size:22px;font-weight:800;color:#064e22;">PICK TICKET</div>
-        <div style="font-size:11px;color:#555;">Ref: <strong>${order.order_number}</strong></div>
+        <div style="display:inline-block;margin-top:4px;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:800;background:${ticketTypeBg};color:${ticketTypeColor};">${ticketTypeLabel}</div>
+        <div style="font-size:11px;color:#555;margin-top:2px;">Ref: <strong>${order.order_number}</strong></div>
         <div style="font-size:11px;color:#555;">Date: ${dateStr}</div>
       </div>
     </div>
@@ -9536,14 +9573,13 @@ function printInNewWindow(html) {
 <div class="modal-overlay" id="modal-pt-preview" style="display:none;z-index:99999;">
   <div class="modal-box" style="max-width:860px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
     <div class="modal-head" style="background:#064e22;flex-shrink:0;">
-      <span style="color:#fff;font-weight:700;font-size:14px;">🖨️ Pick Ticket Preview</span>
+      <span style="color:#fff;font-weight:700;font-size:14px;" id="pt-modal-title">🖨️ Pick Ticket Preview</span>
       <button class="modal-close" style="color:#fff;" onclick="closeModal('modal-pt-preview')">×</button>
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pt-preview-content"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
-      <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 취소</button>
-      <button class="btn" style="background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML)">🖨️ Print Only</button>
-      <button class="btn btn-primary" onclick="closePtAndPrepare()">✅ Move to Preparing</button>
+      <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 닫기</button>
+      <button class="btn btn-primary" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Print</button>
     </div>
   </div>
 </div>
