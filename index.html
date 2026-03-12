@@ -8235,8 +8235,17 @@ async function execPcrBackTransfer(whGroup, ppb) {
   const pcrAvail = (pcrBinData?.qty || 0) - pendingDeduct;
   if (pcrAvail < qty) { alert(`PCR 재고 부족! 가용 재고: ${pcrAvail} pcs`); return; }
 
-  // pending 목록에 추가 (DB 건드리지 않음)
+  // pending 목록에 추가 + 반대 transfer 상쇄
   _pcrBackTransfers.push({ fromBin: 'PCR', whGroup, qty, boxes, dest, styleNum: l.styleNum||'', color: l.color, size: l.size });
+  // 이미 pending된 forward transfer에서 같은 bin/qty 상쇄 제거
+  let toCancel = qty;
+  _pcrTransfers = _pcrTransfers.filter(t => {
+    if (t.whGroup === whGroup && t.fromBin === dest && toCancel > 0) {
+      if (t.qty <= toCancel) { toCancel -= t.qty; return false; }
+      else { t.qty -= toCancel; toCancel = 0; return true; }
+    }
+    return true;
+  });
 
   showToast(`↩️ PCR → ${dest}: ${boxes}박스 (${qty} pcs) — 적용 버튼으로 확정`);
 
