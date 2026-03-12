@@ -8143,6 +8143,7 @@ function selectPcrBin(el, ppb, wh) {
   const wrap = document.getElementById('pcr-transfer-wrap-' + wh);
   const label = document.getElementById('pcr-selected-bin-label-' + wh);
   const btn = document.getElementById('pcr-transfer-btn-' + wh);
+  console.log('[selectPcrBin] wh=', wh, 'btn=', btn, 'wrap=', wrap);
 
   // 이미 선택된 bin 다시 클릭 → 선택 해제
   if (_pcrSelectedBin === el.dataset.bin && _pcrSelectedWh === wh) {
@@ -8155,8 +8156,14 @@ function selectPcrBin(el, ppb, wh) {
     return;
   }
 
-  // 같은 창고 섹션 내 선택 표시만 초기화
-  if (wrap) wrap.querySelectorAll('.pcr-bin-opt').forEach(o => { o.style.background = '#fff'; o.style.border = '1px solid #e5e7eb'; });
+  // 모든 pcr-bin-opt 선택 초기화 (SC/CA 양쪽)
+  document.querySelectorAll('.pcr-bin-opt').forEach(o => { o.style.background = '#fff'; o.style.border = '1px solid #e5e7eb'; });
+  // 반대 WH 버튼/label도 초기화
+  const otherWh = wh === 'SC' ? 'CA' : 'SC';
+  const otherBtn = document.getElementById('pcr-transfer-btn-' + otherWh);
+  const otherLabel = document.getElementById('pcr-selected-bin-label-' + otherWh);
+  if (otherBtn) { otherBtn.disabled = true; otherBtn.style.cursor = ''; otherBtn.style.background = '#ccc'; }
+  if (otherLabel) otherLabel.innerHTML = `<span style="font-size:12px;color:#888;font-style:italic;">← Bin 선택</span>`;
   el.style.background = '#fff3e0';
   el.style.border = '2px solid #a84212';
   _pcrSelectedBin = el.dataset.bin;
@@ -8808,15 +8815,15 @@ function openAllocModalBoth(lineIdx) {
     bothGrid.insertBefore(caWrap, scWrap); // CA 왼쪽, SC 오른쪽
   }
 
-  // SC _allocState 임시 설정 후 SC html 빌드
-  _allocState = { lineIdx, whGroup: 'SC' };
-  const scHtml = buildAllocHtml(lineIdx, 'SC');
-  scWrap.innerHTML = scHtml;
-
-  // CA html 빌드
+  // CA html 먼저 빌드 (DOM 오염 방지)
   _allocState = { lineIdx, whGroup: 'CA' };
   const caHtml = buildAllocHtml(lineIdx, 'CA');
   caWrap.innerHTML = caHtml;
+
+  // SC html 빌드
+  _allocState = { lineIdx, whGroup: 'SC' };
+  const scHtml = buildAllocHtml(lineIdx, 'SC');
+  scWrap.innerHTML = scHtml;
 
   // _allocState를 SC&CA로 복원
   _allocState = { lineIdx, whGroup: 'SC&CA' };
