@@ -299,6 +299,14 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 .modal-close{background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3);line-height:1;}
 .modal-body{padding:16px;}
 .modal-foot{padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;}
+
+.credit-hold-flash{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;z-index:99999;pointer-events:none;animation:chFlash 2.2s ease forwards;}
+.credit-hold-flash-box{background:#7f1d1d;color:#fff;border-radius:16px;padding:32px 48px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5);animation:chBox 2.2s ease forwards;}
+.credit-hold-flash-icon{font-size:48px;margin-bottom:12px;}
+.credit-hold-flash-title{font-size:24px;font-weight:800;letter-spacing:1px;margin-bottom:8px;}
+.credit-hold-flash-sub{font-size:14px;opacity:0.85;}
+@keyframes chFlash{0%{background:rgba(0,0,0,0);}15%{background:rgba(0,0,0,0.6);}80%{background:rgba(0,0,0,0.6);}100%{background:rgba(0,0,0,0);}}
+@keyframes chBox{0%{transform:scale(0.8);opacity:0;}15%{transform:scale(1);opacity:1;}80%{transform:scale(1);opacity:1;}100%{transform:scale(0.8);opacity:0;}}
 </style>
 </head>
 <body>
@@ -3579,7 +3587,8 @@ async function _doSaveInvoice() {
       if (outstanding + newTotal > custObj.credit_limit) {
         _creditHold = true;
         _creditInfo = { outstanding, newTotal, credit_limit: custObj.credit_limit };
-        alert('⚠️ Credit Limit 초과!\n\n한도: $' + custObj.credit_limit.toLocaleString() + '\n미결제 잔액: $' + outstanding.toLocaleString() + '\n이번 주문: $' + newTotal.toLocaleString() + '\n\n주문이 Credit Hold 상태로 저장됩니다.');
+        const _overAmt = (outstanding + newTotal) - custObj.credit_limit;
+        setTimeout(() => showCreditHoldFlash(_overAmt), 100);
       }
     }
   }
@@ -4002,6 +4011,7 @@ async function _doSaveInvoice() {
     await openInvoice(order.id, true);
   } else {
     playNewOrderChime();
+    loadOrderStatus();
     backToPoList();
   }
 }
@@ -10256,6 +10266,19 @@ function printInNewWindow(html) {
   // 로그인 페이지 클릭하면 포커스
   document.getElementById('login-page')?.addEventListener('click', () => field.focus());
 })();
+
+
+function showCreditHoldFlash(overAmt) {
+  const el = document.createElement('div');
+  el.className = 'credit-hold-flash';
+  el.innerHTML = `<div class="credit-hold-flash-box">
+    <div class="credit-hold-flash-icon">🚫</div>
+    <div class="credit-hold-flash-title">CREDIT HOLD</div>
+    <div class="credit-hold-flash-sub">Credit limit 초과 $${overAmt.toLocaleString()}<br>오더는 Credit Hold 상태로 저장됩니다.</div>
+  </div>`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2200);
+}
 
 </script>
 
