@@ -4924,49 +4924,28 @@ function osFilterStatus(status) {
 let _cancelOrderId = null, _cancelOrderNum = null;
 let _deleteOrderId = null, _deleteOrderNum = null;
 
-function cancelOrderConfirm(orderId, orderNum, customerName) {
-  _cancelOrderId = orderId;
-  _cancelOrderNum = orderNum;
-  document.getElementById('cancel-order-info').innerHTML = '<b>'+orderNum+'</b> — '+customerName;
-  document.getElementById('cancel-reason').value = '';
-  document.getElementById('cancel-notes').value = '';
-  document.getElementById('cancel-order-modal').style.display = 'flex';
-}
-
-async function submitCancelOrder() {
-  const reason = document.getElementById('cancel-reason').value;
-  if (!reason) { alert('취소 사유를 선택해주세요.'); return; }
-  const notes = document.getElementById('cancel-notes').value;
-  await restoreOrderInventory(_cancelOrderId);
+async function cancelOrderConfirm(orderId, orderNum, customerName) {
+  const reason = prompt('취소 사유를 입력하세요:\n\n' + orderNum + ' — ' + customerName + '\n\n(Customer Request / Out of Stock / Duplicate Order / Other)');
+  if (!reason) return;
+  if (!confirm(orderNum + ' 을 취소하시겠습니까?\n재고가 복구됩니다.')) return;
+  await restoreOrderInventory(orderId);
   await db.from('orders').update({
-    status: 'cancelled', cancel_reason: reason, cancel_notes: notes,
+    status: 'cancelled', cancel_reason: reason, cancel_notes: '',
     cancelled_at: new Date().toISOString()
-  }).eq('id', _cancelOrderId);
-  document.getElementById('cancel-order-modal').style.display = 'none';
-  showToast('✕ '+_cancelOrderNum+' 취소 완료 — 재고 복구됨');
+  }).eq('id', orderId);
+  showToast('✕ ' + orderNum + ' 취소 완료 — 재고 복구됨');
   loadCustomerPOs(); loadOrderStatus();
 }
 
-function deleteOrderConfirm(orderId, orderNum, customerName) {
-  _deleteOrderId = orderId;
-  _deleteOrderNum = orderNum;
-  document.getElementById('delete-order-info').innerHTML =
-    '<b>'+orderNum+'</b> — '+customerName+'<br><span style="font-size:11px;color:#6b7280;">이 오더를 완전히 삭제합니다.</span>';
-  document.getElementById('delete-confirm-input').value = '';
-  document.getElementById('delete-order-modal').style.display = 'flex';
-}
-
-async function submitDeleteOrder() {
-  const input = document.getElementById('delete-confirm-input').value.trim();
-  if (input !== _deleteOrderNum) {
-    alert(_deleteOrderNum+'을 정확히 입력해주세요.');
-    return;
-  }
-  await restoreOrderInventory(_deleteOrderId);
-  await db.from('order_lines').delete().eq('order_id', _deleteOrderId);
-  await db.from('orders').delete().eq('id', _deleteOrderId);
-  document.getElementById('delete-order-modal').style.display = 'none';
-  showToast('🗑 '+_deleteOrderNum+' 영구 삭제 완료');
+async function deleteOrderConfirm(orderId, orderNum, customerName) {
+  const input = prompt('영구 삭제하려면 오더번호를 입력하세요:\n\n' + orderNum + ' — ' + customerName);
+  if (!input) return;
+  if (input.trim() !== orderNum) { alert('오더번호가 맞지 않습니다.'); return; }
+  if (!confirm('⛔ ' + orderNum + ' 을 완전히 삭제합니다. 복구 불가능합니다.\n계속하시겠습니까?')) return;
+  await restoreOrderInventory(orderId);
+  await db.from('order_lines').delete().eq('order_id', orderId);
+  await db.from('orders').delete().eq('id', orderId);
+  showToast('🗑 ' + orderNum + ' 영구 삭제 완료');
   loadCustomerPOs(); loadOrderStatus();
 }
 
