@@ -1956,16 +1956,9 @@ async function loadScInventory() {
   window.binInventory = { 'SC':{}, 'SC-PCR':{}, 'CA':{}, 'CA-PCR':{} };
 
   let allInv = [], from = 0;
-  while (true) {
-    const { data } = await db.from('inventory')
-      .select('id, qty_on_hand, qty_committed, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)')
-      .range(from, from + 999);
-    if (!data || data.length === 0) break;
-    allInv = allInv.concat(data);
-    if (data.length < 1000) break;
-    from += 1000;
-    if (from > 10000) break; // safety limit
-  }
+  const { data: _invChunk } = await db.from('inventory')
+    .select('id, qty_on_hand, qty_committed, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)');
+  allInv = _invChunk || [];
   allInv.forEach(row => {
     if (!row.warehouses) return;
     const normColor = (row.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
@@ -4042,7 +4035,7 @@ async function fetchAllRows(table, selectStr) {
     all = all.concat(data);
     if (data.length < 1000) break;
     from += 1000;
-    if (from > 10000) break; // safety limit
+    if (from > 50000) break; // safety limit
   }
   return all;
 }
@@ -4175,17 +4168,10 @@ async function loadInventory() {
   let allData = [];
   let from = 0;
   const batchSize = 1000;
-  while (true) {
-    const { data, error } = await db.from('inventory')
-      .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box)')
-      .order('created_at', {ascending:false})
-      .range(from, from + batchSize - 1);
-    if (error || !data || data.length === 0) break;
-    allData = allData.concat(data);
-    if (data.length < batchSize) break;
-    from += batchSize;
-    if (from > 20000) break; // safety limit
-  }
+  const { data: _invData, error: _invErr } = await db.from('inventory')
+    .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box)')
+    .order('created_at', {ascending:false});
+  allData = _invData || [];
   allInventory = allData;
   renderInventoryTable(allInventory);
 }
@@ -7416,18 +7402,8 @@ const { data } = await db.from('styles').select('*').order('style_number');
   const list = data || [];
 
   // 재고 합산 데이터 가져오기
-  let invAll = [];
-  let iFrom = 0;
-  while (true) {
-    const { data: iData } = await db.from('inventory')
-      .select('style_id, qty_on_hand, warehouses(code)')
-      .range(iFrom, iFrom + 999);
-    if (!iData || iData.length === 0) break;
-    invAll = invAll.concat(iData);
-    if (iData.length < 1000) break;
-    iFrom += 1000;
-    if (iFrom > 10000) break; // safety limit
-  }
+  const { data: invAll } = await db.from('inventory')
+    .select('style_id, qty_on_hand, warehouses(code)');
   const styleStock = {};
   invAll.forEach(i => {
     if (!i.style_id) return;
