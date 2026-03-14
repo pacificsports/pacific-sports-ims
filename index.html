@@ -1964,6 +1964,7 @@ async function loadScInventory() {
     allInv = allInv.concat(data);
     if (data.length < 1000) break;
     from += 1000;
+    if (from > 10000) break; // safety limit
   }
   allInv.forEach(row => {
     if (!row.warehouses) return;
@@ -3951,8 +3952,8 @@ async function _doSaveInvoice() {
     } catch(e) { console.warn('PT insert error:', e); }
   }
 
-  // ── PO Confirm 이메일 발송 (신규 저장 시만)
-  if (!isEditMode) {
+  // ── PO Confirm 이메일 발송 (신규 저장 시만, credit hold 제외)
+  if (!isEditMode && !_creditHold) {
     try {
       const custObj = customers.find(c => c.id === custSelId);
       const custEmail = custObj?.email;
@@ -4013,6 +4014,7 @@ async function _doSaveInvoice() {
   } else {
     playNewOrderChime();
     loadOrderStatus();
+    loadCustomerPOs();
     backToPoList();
   }
 }
@@ -4040,6 +4042,7 @@ async function fetchAllRows(table, selectStr) {
     all = all.concat(data);
     if (data.length < 1000) break;
     from += 1000;
+    if (from > 10000) break; // safety limit
   }
   return all;
 }
@@ -4181,6 +4184,7 @@ async function loadInventory() {
     allData = allData.concat(data);
     if (data.length < batchSize) break;
     from += batchSize;
+    if (from > 20000) break; // safety limit
   }
   allInventory = allData;
   renderInventoryTable(allInventory);
@@ -7422,6 +7426,7 @@ const { data } = await db.from('styles').select('*').order('style_number');
     invAll = invAll.concat(iData);
     if (iData.length < 1000) break;
     iFrom += 1000;
+    if (iFrom > 10000) break; // safety limit
   }
   const styleStock = {};
   invAll.forEach(i => {
