@@ -3580,6 +3580,7 @@ async function _doSaveInvoice() {
         _creditInfo = { outstanding, newTotal, credit_limit: custObj.credit_limit };
         const _overAmt = (outstanding + newTotal) - custObj.credit_limit;
         setTimeout(() => showCreditHoldFlash(_overAmt), 100);
+        playNewOrderChime(); // credit hold도 즉시 소리
       }
     }
   }
@@ -5738,7 +5739,7 @@ async function printPickTicketType(orderId, wh, ticketType) {
   await printPickTicket(orderId, wh, ticketType);
 
   // 해당 WH 양쪽 다 프린트됐으면 자동으로 Preparing으로 이동
-  const { data: updated } = await db.from('orders').select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, status, wh_code, is_split_warehouse').eq('id', orderId).single();
+  const { data: updated } = await db.from('orders').select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, status, sc_status, ca_status, wh_code, is_split_warehouse').eq('id', orderId).single();
   if (!updated) { loadOrderStatus(); return; }
 
   const isSplit = updated.wh_code === 'SC&CA' || updated.is_split_warehouse;
@@ -5747,7 +5748,7 @@ async function printPickTicketType(orderId, wh, ticketType) {
   const thisDone = wh === 'CA' ? caDone : scDone;
 
   const whStatus = wh === 'CA' ? (updated.ca_status || updated.status) : (updated.sc_status || updated.status);
-  if (thisDone && ['po_entered','open'].includes(whStatus)) {
+  if (thisDone && ['po_entered','open','credit_hold'].includes(whStatus)) {
     await updateWhStatus(orderId, wh, 'preparing');
     showToast(`📦 ${wh} 양쪽 프린트 완료 — Preparing으로 이동!`);
   }
@@ -5783,21 +5784,28 @@ async function printPickTicket(orderId, wh, ticketType) {
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
     : lines;
 
-  // poLines alloc 정보로 bin location + PCR 수량 보강
+  // alloc_detail에서 직접 bin location + PCR 수량 보강
   const enrichedLines = filteredLines.map(l => {
-    const matchPo = poLines.find(p =>
+    // DB의 alloc_detail 사용 (Order Status 프린트 시 poLines 없으므로)
+    const allocObj = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+
+    const mainBins = Object.entries(allocObj).filter(([k]) => !k.toUpperCase().includes('PCR'));
+    const pcrEntries = Object.entries(allocObj).filter(([k]) => k.toUpperCase().includes('PCR'));
+    const mainLoc = mainBins.map(([k]) => k).join(', ') || l.location || '';
+    const pcrQty = pcrEntries.reduce((s,[,v]) => s+((typeof v==='object'?v.pcs:v)||0), 0);
+
+    // poLines에서 추가 정보 보강 (오더 입력 중일 때)
+    const matchPo = (poLines||[]).find(p =>
       String(p.styleNum) === String(l.styles?.style_number||'') &&
       (p.color||'').toUpperCase() === (l.color||'').toUpperCase() &&
       (p.size||'').toUpperCase() === (l.size||'').toUpperCase()
     );
-    if (!matchPo) return l;
-    const allocObj = wh === 'CA' ? (matchPo.allocCA||{}) : (matchPo.allocSC||{});
-    const mainBins = Object.entries(allocObj).filter(([k]) => !k.includes('PCR'));
-    const pcrEntries = Object.entries(allocObj).filter(([k]) => k.includes('PCR'));
-    const mainLoc = mainBins.map(([k]) => k).join(', ') || l.location || '';
-    const pcrQty = pcrEntries.reduce((s,[,v]) => s+(v||0), 0);
-    // PCR Transfer 지시 (어느 bin → PCR Room으로 이동)
-    const transfers = wh === 'CA' ? (matchPo.caPcrTransfers||[]) : (matchPo.pcrTransfers||[]);
+    const transfers = matchPo
+      ? (wh === 'CA' ? (matchPo.caPcrTransfers||[]) : (matchPo.pcrTransfers||[]))
+      : [];
+
     return { ...l, location: mainLoc, _pcrQty: pcrQty, _pcrTransfers: transfers };
   });
 
@@ -6418,7 +6426,15 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
         let remaining = s.qty;
         while (remaining > 0) {
           const space = boxQty - currentTotal;
-          const take = Math.min(remaining, space);
+          // 현재 박스에 이 사이즈 전체가 들어가는지 확인
+          // 들어가지 않고 현재 박스에 다른 사이즈가 이미 있으면 새 박스로
+          if (remaining > space && currentTotal > 0) {
+            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items] });
+            currentBox = { items: [] };
+            currentTotal = 0;
+          }
+          const space2 = boxQty - currentTotal;
+          const take = Math.min(remaining, space2);
           if (take > 0) {
             currentBox.items.push({ size: s.size, qty: take });
             currentTotal += take;
@@ -6472,13 +6488,22 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
               const alloc = l.alloc_detail || {};
               const pcrEntries = Object.entries(alloc).filter(([k]) => k.toUpperCase().includes('PCR'));
               if (!pcrEntries.length) return [`<tr><td colspan="5" style="padding:6px 8px;font-size:11px;color:#9ca3af;">—</td></tr>`];
-              return pcrEntries.map(([bin, detail], i) => `<tr style="border-bottom:1px solid #fee2e2;">
-                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${bin}</td>
+              const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+              return pcrEntries.map(([binKey, detail], i) => {
+                const pcs = typeof detail === 'object' ? (detail.pcs||0) : (detail||0);
+                const boxes = Math.floor(pcs / ppb);
+                const partial = pcs % ppb;
+                // binKey 형식: "SC-PCR|PCR" → "PCR" 표시
+                const binLabel = binKey.includes('|') ? binKey.split('|').pop() : binKey;
+                const whLabel = binKey.includes('SC-PCR') ? 'SC-PCR' : binKey.includes('CA-PCR') ? 'CA-PCR' : '';
+                return `<tr style="border-bottom:1px solid #fee2e2;">
+                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${whLabel} → ${binLabel}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${i===0 ? l.styles?.style_number||'' : ''}</td>
                 <td style="padding:6px 8px;font-size:11px;">${i===0 ? l.color||'' : ''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${i===0 ? l.size||'' : ''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${detail.boxes > 0 ? detail.boxes : '—'}</td>
-              </tr>`);
+                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes+'박스' : ''}${partial > 0 ? (boxes>0?' + ':'')+partial+'pcs' : ''}${boxes===0&&partial===0?'—':''}</td>
+              </tr>`;
+              });
             }).join('')}
           </tbody>
         </table>
