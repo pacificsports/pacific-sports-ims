@@ -1953,16 +1953,8 @@ async function loadScInventory() {
   caPcrInventory = {};
   window.binInventory = { 'SC':{}, 'SC-PCR':{}, 'CA':{}, 'CA-PCR':{} };
 
-  let allInv = [], from = 0;
-  while (true) {
-    const { data: _invChunk } = await db.from('inventory')
-      .select('id, qty_on_hand, qty_committed, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)')
-      .range(from, from + 999);
-    if (!_invChunk || _invChunk.length === 0) break;
-    allInv = allInv.concat(_invChunk);
-    if (_invChunk.length < 1000) break;
-    from += 1000;
-  }
+  const { data: allInv } = await db.from('inventory')
+    .select('id, qty_on_hand, qty_committed, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)');
   allInv.forEach(row => {
     if (!row.warehouses) return;
     const normColor = (row.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
@@ -8923,7 +8915,14 @@ function buildAllocHtml(lineIdx, whGroup) {
     const savedAlloc = (isSC ? l.allocSC : l.allocCA) || {};
     const liveAlloc = {};
     mainBins.forEach(b => {
-      const inputEl = document.getElementById(`alloc-box-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}`);
+      const binId = b.bin.replace(/[^a-zA-Z0-9]/g,'_');
+      // SC&CA 동시 모달에서는 올바른 wrap 안에서만 찾기
+      const caWrap = document.getElementById('alloc-both-ca-wrap');
+      const scWrap = document.getElementById('alloc-both-sc-wrap');
+      const wrap = isSC ? scWrap : caWrap;
+      const inputEl = wrap
+        ? wrap.querySelector(`[id="alloc-box-${binId}"]`)
+        : document.getElementById(`alloc-box-${binId}`);
       liveAlloc[b.bin] = inputEl ? (parseInt(inputEl.value)||0) : (savedAlloc[b.bin]||0);
     });
 
@@ -9745,10 +9744,22 @@ function cancelAllocBothModal() {
   });
   _pcrTransfers = [];
   _pcrBackTransfers = [];
+  // 백업에서 복원
+  if (_allocBothBackup && _allocState) {
+    const idx = _allocState.lineIdx;
+    poLines[idx].allocSC = _allocBothBackup.allocSC;
+    poLines[idx].allocCA = _allocBothBackup.allocCA;
+    poLines[idx].pcrTransfersPending = _allocBothBackup.pcrTransfersPending;
+    poLines[idx].pcrBackTransfersPending = _allocBothBackup.pcrBackTransfersPending;
+    poLines[idx].caPcrTransfersPending = _allocBothBackup.caPcrTransfersPending;
+    poLines[idx].caPcrBackTransfersPending = _allocBothBackup.caPcrBackTransfersPending;
+  }
+  _allocBothBackup = null;
   _allocState = null;
   closeModal('modal-alloc-both');
   const scWrap = document.getElementById('alloc-both-sc-wrap'); if (scWrap) scWrap.innerHTML = '';
   const caWrap = document.getElementById('alloc-both-ca-wrap'); if (caWrap) caWrap.innerHTML = '';
+  renderEntryTable();
 }
 
 function applyAlloc() {
@@ -9920,6 +9931,7 @@ function renderTransitTable(elId, rows) {
 
 // ── SC & CA 통합 Bin 배분 모달
 let _allocBothOpening = false;
+let _allocBothBackup = null;
 function openAllocModalBoth(lineIdx) {
   if (_allocBothOpening) return;
   _allocBothOpening = true;
@@ -9942,6 +9954,15 @@ function openAllocModalBoth(lineIdx) {
   _pcrBackTransfers = [];
   _pcrSelectedBin = null; _pcrSelectedWh = null;
   _pcrBackSelectedBin = null; _pcrBackSelectedWh = null;
+  // 취소 시 복원을 위한 백업
+  _allocBothBackup = {
+    allocSC: JSON.parse(JSON.stringify(poLines[lineIdx].allocSC || {})),
+    allocCA: JSON.parse(JSON.stringify(poLines[lineIdx].allocCA || {})),
+    pcrTransfersPending: [...(poLines[lineIdx].pcrTransfersPending || [])],
+    pcrBackTransfersPending: [...(poLines[lineIdx].pcrBackTransfersPending || [])],
+    caPcrTransfersPending: [...(poLines[lineIdx].caPcrTransfersPending || [])],
+    caPcrBackTransfersPending: [...(poLines[lineIdx].caPcrBackTransfersPending || [])],
+  };
 
   // 거래처 preference 읽기
   const prefWh = window._custPrefWh || 'SC';
