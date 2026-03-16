@@ -3882,6 +3882,13 @@ async function _doSaveInvoice() {
         _allocDetailCA[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
       }
     }
+    // PCR Transfer 정보를 alloc_detail에 추가 (픽티켓 표시용)
+    const _pcrTransferList = l.wh === 'CA' ? (l.caPcrTransfersPending || []) : (l.pcrTransfersPending || []);
+    for (const t of _pcrTransferList) {
+      const transferKey = `${t.whGroup}-TRANSFER|${t.fromBin}`;
+      _allocDetail[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
+    }
+
     const _mainBins = Object.keys(_allocObjMain).filter(k => !k.includes('PCR'));
     const insertPayload = {
       order_id: order.id,
@@ -4004,6 +4011,8 @@ async function _doSaveInvoice() {
   if (isEditMode) {
     await openInvoice(order.id, true);
   } else {
+    // 방금 저장한 오더를 미리 알려서 loadOrderStatus에서 중복 소리 방지
+    if (_knownOrderIds && order?.id) _knownOrderIds.add(order.id);
     loadOrderStatus();
     loadCustomerPOs();
     backToPoList();
@@ -6401,20 +6410,22 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
   const dateStr = new Date().toLocaleDateString();
   const sizeOrd = s => (['2T','3T','4T','5T','XS','YS','YM','YL','XS','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'].indexOf(s)+1)||99;
 
-  // ── Box Allocation 계산 함수 (Style+Color 단위)
+  // ── Box Allocation 계산 함수 (Style+Color+PPB 단위)
   function calcBoxAllocation(pcrLines) {
-    // Style+Color 그룹으로 묶기
+    // Style+Color+PPB 그룹으로 묶기 (ppb가 다른 사이즈는 같은 박스에 섞지 않음)
     const groups = {};
     pcrLines.forEach(l => {
-      const key = `${l.styles?.style_number||''}|||${l.color||''}`;
-      if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: l.styles?.box_qty || 72 };
+      const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+      const key = `${l.styles?.style_number||''}|||${l.color||''}|||${ppb}`;
+      if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
       groups[key].sizes.push({ size: l.size||'', qty: l._pcrQty || 0 });
     });
 
     const result = []; // { styleNum, color, boxes: [{boxNum, items:[{size,qty}]}] }
     let globalBoxNum = 1;
 
-    Object.values(groups).forEach(g => {
+    // ppb 큰 것 먼저 처리 (72 → 48 순서)
+    Object.values(groups).sort((a,b) => b.boxQty - a.boxQty).forEach(g => {
       const boxQty = g.boxQty;
       const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size) - sizeOrd(b.size));
       if (!sizes.length) return;
@@ -6460,8 +6471,11 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
   const renderPickTicket = (sectionLines, whLabel, whColor) => {
     if (!sectionLines.length) return '';
 
-    // 1. PCR Transfer 라인
-    const pcrLines = sectionLines.filter(l => l._pcrQty > 0);
+    // 1. PCR Transfer 라인 - alloc_detail에 TRANSFER key 있는 것만
+    const pcrLines = sectionLines.filter(l => {
+      const alloc = l.alloc_detail || {};
+      return Object.keys(alloc).some(k => k.includes('TRANSFER|'));
+    });
     // 2. WH Full Box 라인 (bin 있고 PCR 아닌 것)
     const whLines = sectionLines.filter(l => {
       const alloc = l.alloc_detail || {};
@@ -6487,26 +6501,21 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
           <tbody>
             ${pcrLines.flatMap(l => {
               const alloc = l.alloc_detail || {};
-              // SC bin에서 PCR로 이동하는 항목: non-PCR bin 항목들
-              const scBinEntries = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR'));
-              const pcrEntries = Object.entries(alloc).filter(([k]) => k.toUpperCase().includes('PCR'));
-              const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
-              // SC bin별로 row 생성 (어느 bin에서 가져와서 PCR로 옮겨야 하는지)
-              if (!scBinEntries.length && !pcrEntries.length) return [`<tr><td colspan="5" style="padding:6px 8px;font-size:11px;color:#9ca3af;">—</td></tr>`];
-              // pcs 계산: PCR entry의 pcs 사용
-              const totalPcrPcs = pcrEntries.reduce((s,[,v]) => s + (typeof v==='object'?(v.pcs||0):(v||0)), 0);
-              const totalBoxes = Math.floor(totalPcrPcs / ppb);
-              const partialPcs = totalPcrPcs % ppb;
-              // SC bin 항목이 있으면 bin별로, 없으면 location 사용
-              const binRows = scBinEntries.length > 0 ? scBinEntries : [[l.location||'—', {}]];
-              return binRows.map(([bin, detail], i) => {
-                const binBoxes = typeof detail === 'object' ? (detail.boxes||0) : 0;
+              // TRANSFER key: "SC-TRANSFER|1M-21" 형식
+              const transferEntries = Object.entries(alloc).filter(([k]) => k.includes('TRANSFER|'));
+              if (!transferEntries.length) return [];
+              return transferEntries.map(([key, detail]) => {
+                const fromBin = key.split('|')[1] || '—';
+                const boxes = typeof detail === 'object' ? (detail.boxes||0) : 0;
+                const pcs = typeof detail === 'object' ? (detail.pcs||0) : 0;
+                const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+                const partialPcs = pcs % ppb;
                 return `<tr style="border-bottom:1px solid #fee2e2;">
-                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${bin}</td>
+                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${fromBin}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
                 <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${i===0 ? (totalBoxes > 0 ? totalBoxes+'박스' : '') + (partialPcs > 0 ? (totalBoxes>0?' + ':'')+partialPcs+'pcs' : '') || '—' : ''}</td>
+                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : (pcs > 0 ? pcs+'pcs' : '—')}</td>
               </tr>`;
               });
             }).join('')}
