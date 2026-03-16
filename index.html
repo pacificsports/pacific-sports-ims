@@ -3529,6 +3529,8 @@ let _savingInProgress = false;
 async function saveInvoice() {
   if (_savingInProgress) return;
   _savingInProgress = true;
+  // 저장 시작 즉시 소리 재생
+  playNewOrderChime();
   try {
     await _doSaveInvoice();
   } finally {
@@ -4002,7 +4004,6 @@ async function _doSaveInvoice() {
   if (isEditMode) {
     await openInvoice(order.id, true);
   } else {
-    playNewOrderChime();
     loadOrderStatus();
     loadCustomerPOs();
     backToPoList();
@@ -6486,22 +6487,26 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
           <tbody>
             ${pcrLines.flatMap(l => {
               const alloc = l.alloc_detail || {};
+              // SC bin에서 PCR로 이동하는 항목: non-PCR bin 항목들
+              const scBinEntries = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR'));
               const pcrEntries = Object.entries(alloc).filter(([k]) => k.toUpperCase().includes('PCR'));
-              if (!pcrEntries.length) return [`<tr><td colspan="5" style="padding:6px 8px;font-size:11px;color:#9ca3af;">—</td></tr>`];
               const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
-              return pcrEntries.map(([binKey, detail], i) => {
-                const pcs = typeof detail === 'object' ? (detail.pcs||0) : (detail||0);
-                const boxes = Math.floor(pcs / ppb);
-                const partial = pcs % ppb;
-                // binKey 형식: "SC-PCR|PCR" → "PCR" 표시
-                const binLabel = binKey.includes('|') ? binKey.split('|').pop() : binKey;
-                const whLabel = binKey.includes('SC-PCR') ? 'SC-PCR' : binKey.includes('CA-PCR') ? 'CA-PCR' : '';
+              // SC bin별로 row 생성 (어느 bin에서 가져와서 PCR로 옮겨야 하는지)
+              if (!scBinEntries.length && !pcrEntries.length) return [`<tr><td colspan="5" style="padding:6px 8px;font-size:11px;color:#9ca3af;">—</td></tr>`];
+              // pcs 계산: PCR entry의 pcs 사용
+              const totalPcrPcs = pcrEntries.reduce((s,[,v]) => s + (typeof v==='object'?(v.pcs||0):(v||0)), 0);
+              const totalBoxes = Math.floor(totalPcrPcs / ppb);
+              const partialPcs = totalPcrPcs % ppb;
+              // SC bin 항목이 있으면 bin별로, 없으면 location 사용
+              const binRows = scBinEntries.length > 0 ? scBinEntries : [[l.location||'—', {}]];
+              return binRows.map(([bin, detail], i) => {
+                const binBoxes = typeof detail === 'object' ? (detail.boxes||0) : 0;
                 return `<tr style="border-bottom:1px solid #fee2e2;">
-                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${whLabel} → ${binLabel}</td>
-                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${i===0 ? l.styles?.style_number||'' : ''}</td>
-                <td style="padding:6px 8px;font-size:11px;">${i===0 ? l.color||'' : ''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;">${i===0 ? l.size||'' : ''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes+'박스' : ''}${partial > 0 ? (boxes>0?' + ':'')+partial+'pcs' : ''}${boxes===0&&partial===0?'—':''}</td>
+                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${bin}</td>
+                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
+                <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
+                <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
+                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${i===0 ? (totalBoxes > 0 ? totalBoxes+'박스' : '') + (partialPcs > 0 ? (totalBoxes>0?' + ':'')+partialPcs+'pcs' : '') || '—' : ''}</td>
               </tr>`;
               });
             }).join('')}
@@ -6528,12 +6533,12 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
               const alloc = l.alloc_detail || {};
               const binEntries = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR'));
               if (!binEntries.length) return [];
-              return binEntries.map(([bin, detail], i) => `<tr style="border-bottom:1px solid #dcfce7;">
+              return binEntries.map(([bin, detail]) => `<tr style="border-bottom:1px solid #dcfce7;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${bin}</td>
-                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${i===0 ? l.styles?.style_number||'' : ''}</td>
-                <td style="padding:6px 8px;font-size:11px;">${i===0 ? l.color||'' : ''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;">${i===0 ? l.size||'' : ''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${detail.boxes > 0 ? detail.boxes : '—'}</td>
+                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
+                <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
+                <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
+                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${typeof detail==='object'&&detail.boxes > 0 ? detail.boxes : (typeof detail==='number'?Math.floor(detail/72)||'—':'—')}</td>
               </tr>`);
             }).join('')}
           </tbody>
