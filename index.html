@@ -3849,21 +3849,20 @@ async function _doSaveInvoice() {
     if (error) { alert('Error saving order: ' + error.message); return; }
   }
   if (_creditHold) {
-    try {
-      await fetch('https://credit-hold-email.hjbae.workers.dev/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          order_id: order.id,
-          order_number: order.order_number,
-          customer_name: cust,
-          customer_po: po,
-          total_amount: totalAmt,
-          outstanding: _creditInfo.outstanding,
-          credit_limit: _creditInfo.credit_limit
-        })
-      });
-    } catch(e) { console.warn('Credit hold email error:', e); }
+    // 백그라운드로 이메일 발송 (await 제거 - 느린 이메일 때문에 저장 지연 방지)
+    fetch('https://credit-hold-email.hjbae.workers.dev/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        order_id: order.id,
+        order_number: order.order_number,
+        customer_name: cust,
+        customer_po: po,
+        total_amount: totalAmt,
+        outstanding: _creditInfo.outstanding,
+        credit_limit: _creditInfo.credit_limit
+      })
+    }).catch(e => console.warn('Credit hold email error:', e));
   }
   // ── 3. Order Lines 저장 + qty_committed 예약 (재고 차감은 Shipped 단계에서)
   for (const l of lineChecks) {
@@ -3978,7 +3977,8 @@ async function _doSaveInvoice() {
         };
       });
       const hasAnyBackorder = emailLines.some(l => l.back_qty > 0);
-      await fetch('https://po-confirm-email.hjbae.workers.dev/send', {
+      // 백그라운드로 이메일 발송 (await 제거 - 느린 이메일 때문에 저장 지연 방지)
+      fetch('https://po-confirm-email.hjbae.workers.dev/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3993,7 +3993,7 @@ async function _doSaveInvoice() {
           has_backorder: hasAnyBackorder,
           lines: emailLines
         })
-      });
+      }).catch(e => console.warn('PO confirm email error:', e));
     }
   } catch(e) { console.warn('PO confirm email error:', e); }
   } // end if (!isEditMode) for email
