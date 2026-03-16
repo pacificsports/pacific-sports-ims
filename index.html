@@ -5801,8 +5801,9 @@ async function printPickTicket(orderId, wh, ticketType) {
       ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
       : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
 
-    const mainBins = Object.entries(allocObj).filter(([k]) => !k.toUpperCase().includes('PCR'));
-    const pcrEntries = Object.entries(allocObj).filter(([k]) => k.toUpperCase().includes('PCR'));
+    const mainBins = Object.entries(allocObj).filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'));
+    // SC-PCR|PCR 또는 CA-PCR|PCR 만 (TRANSFER key 제외)
+    const pcrEntries = Object.entries(allocObj).filter(([k]) => k.includes('PCR|PCR'));
     const mainLoc = mainBins.map(([k]) => k).join(', ') || l.location || '';
     const pcrQty = pcrEntries.reduce((s,[,v]) => s+((typeof v==='object'?v.pcs:v)||0), 0);
 
@@ -6471,10 +6472,12 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
   const renderPickTicket = (sectionLines, whLabel, whColor) => {
     if (!sectionLines.length) return '';
 
-    // 1. PCR Transfer 라인 - alloc_detail에 TRANSFER key 있는 것만
+    // 1. PCR Transfer 라인 - SC-PCR|PCR pcs > 0 이거나 TRANSFER key 있는 것
     const pcrLines = sectionLines.filter(l => {
       const alloc = l.alloc_detail || {};
-      return Object.keys(alloc).some(k => k.includes('TRANSFER|'));
+      const hasPcr = Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && (typeof v==='object'?v.pcs:v) > 0);
+      const hasTransfer = Object.keys(alloc).some(k => k.includes('TRANSFER|'));
+      return hasPcr || hasTransfer;
     });
     // 2. WH Full Box 라인 (bin 있고 PCR 아닌 것)
     const whLines = sectionLines.filter(l => {
@@ -6501,23 +6504,38 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
           <tbody>
             ${pcrLines.flatMap(l => {
               const alloc = l.alloc_detail || {};
-              // TRANSFER key: "SC-TRANSFER|1M-21" 형식
+              const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+              const rows = [];
+              // TRANSFER key: warehouse bin → PCR Room (박스 이동)
               const transferEntries = Object.entries(alloc).filter(([k]) => k.includes('TRANSFER|'));
-              if (!transferEntries.length) return [];
-              return transferEntries.map(([key, detail]) => {
+              transferEntries.forEach(([key, detail]) => {
                 const fromBin = key.split('|')[1] || '—';
                 const boxes = typeof detail === 'object' ? (detail.boxes||0) : 0;
-                const pcs = typeof detail === 'object' ? (detail.pcs||0) : 0;
-                const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
-                const partialPcs = pcs % ppb;
-                return `<tr style="border-bottom:1px solid #fee2e2;">
+                rows.push(`<tr style="border-bottom:1px solid #fee2e2;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${fromBin}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
                 <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : (pcs > 0 ? pcs+'pcs' : '—')}</td>
-              </tr>`;
+                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : '—'}</td>
+              </tr>`);
               });
+              // SC-PCR|PCR: partial pcs만 있는 경우 (transfer 없이 PCR에 직접)
+              if (!transferEntries.length) {
+                const pcrEntry = Object.entries(alloc).find(([k]) => k.includes('PCR|PCR'));
+                if (pcrEntry) {
+                  const pcs = typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0);
+                  if (pcs > 0) {
+                    rows.push(`<tr style="border-bottom:1px solid #fee2e2;">
+                    <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">PCR ROOM</td>
+                    <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
+                    <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
+                    <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
+                    <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${pcs}pcs</td>
+                  </tr>`);
+                  }
+                }
+              }
+              return rows;
             }).join('')}
           </tbody>
         </table>
@@ -6540,7 +6558,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
           <tbody>
             ${whLines.flatMap(l => {
               const alloc = l.alloc_detail || {};
-              const binEntries = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR'));
+              const binEntries = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'));
               if (!binEntries.length) return [];
               return binEntries.map(([bin, detail]) => `<tr style="border-bottom:1px solid #dcfce7;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${bin}</td>
