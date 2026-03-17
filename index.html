@@ -1979,6 +1979,12 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
     window._osRealtimeChannel = db.channel('orders-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         console.log('[Realtime] orders changed:', payload);
+        // INSERT 이벤트 = 새 오더 → 소리 재생 (자기 자신이 저장한 오더 제외)
+        if (payload.eventType === 'INSERT' && payload.new?.id) {
+          if (!_knownOrderIds || !_knownOrderIds.has(payload.new.id)) {
+            playNewOrderChime();
+          }
+        }
         loadOrderStatus();
       })
       .subscribe((status) => {
@@ -6794,17 +6800,36 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
     if (!sectionLines.length) return '';
 
     // 1. PCR Transfer 라인 - TRANSFER key 있는 것만 (warehouse bin → PCR 이동)
+    // PCR Transfer 섹션: TRANSFER key 있는 라인
     const pcrLines = sectionLines.filter(l => {
       const alloc = l.alloc_detail || {};
       return Object.keys(alloc).some(k => k.includes('TRANSFER|'));
     });
-    // 2. WH Full Box 라인 (bin 있고 PCR 아닌 것)
+    // 2. WH Full Box 라인 (bin 있고 PCR/TRANSFER 아닌 것)
     const whLines = sectionLines.filter(l => {
       const alloc = l.alloc_detail || {};
-      return Object.keys(alloc).some(k => !k.toUpperCase().includes('PCR'));
+      // Transfer된 bin 목록
+      const transferredBins = new Set(Object.keys(alloc).filter(k => k.includes('TRANSFER|')).map(k => k.split('|')[1]));
+      // Transfer 아닌 실제 full box bin이 있는 라인만
+      return Object.entries(alloc).some(([k,v]) => {
+        if (k.toUpperCase().includes('PCR') || k.includes('TRANSFER|')) return false;
+        // Transfer된 bin인데 transfer qty보다 더 많은 pcs가 있으면 full box 있음
+        const pcs = typeof v === 'object' ? (v.pcs||0) : (v||0);
+        if (transferredBins.has(k)) {
+          const transferPcs = Object.entries(alloc)
+            .filter(([tk]) => tk === 'SC-TRANSFER|'+k || tk === 'CA-TRANSFER|'+k)
+            .reduce((s,[,tv]) => s+(typeof tv==='object'?tv.pcs:tv||0), 0);
+          return pcs > transferPcs;
+        }
+        return pcs > 0;
+      });
     });
-    // 3. PC Room Partial (pcrLines와 동일하지만 box allocation으로)
-    const boxAlloc = calcBoxAllocation(pcrLines);
+    // 3. PC Room Partial: SC-PCR|PCR pcs > 0 인 라인 (TRANSFER 여부 무관)
+    const partialLines = sectionLines.filter(l => {
+      const alloc = l.alloc_detail || {};
+      return Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && (typeof v==='object'?v.pcs:v) > 0);
+    });
+    const boxAlloc = calcBoxAllocation(partialLines);
 
     // ── SECTION 1: PCR TRANSFER
     const pcrTransferHtml = pcrLines.length ? `
