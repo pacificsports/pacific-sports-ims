@@ -360,6 +360,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
   <div class="navtabs">
     <div class="ntab active" onclick="showPanel('dashboard',this)">📊 Dashboard</div>
     <div class="ntab" onclick="showPanel('orderstatus',this)">🚦 Order Status</div>
+    <div class="ntab" onclick="showPanel('backorders',this)">🔴 Back Orders <span class="badge" id="backorders-badge" style="background:#dc2626;">0</span></div>
     <div class="ntab" onclick="showPanel('customerpos',this)">📋 Customer POs <span class="badge" id="open-orders-badge">0</span></div>
     <div class="ntab" onclick="showPanel('picktickets',this)">🎫 Pick Tickets</div>
     <div class="ntab" onclick="showPanel('packinglists',this)">📦 Packing Lists</div>
@@ -772,7 +773,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <!-- 통합 타임라인 보드: 단일 CSS grid, KPI + 카드 모두 동일 컬럼 -->
       <div id="os-kanban" style="overflow-x:auto;">
         <!-- 전체가 하나의 6컬럼 grid -->
-        <div id="os-board-grid" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;min-width:960px;">
+        <div id="os-board-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;min-width:900px;">
           <!-- KPI 헤더 셀 6개 (JS가 innerHTML로 교체) -->
           <div id="os-kpi-0" style="background:#f8fafc;border:2px solid #e2e8f0;border-top:3px solid #6b7280;border-radius:8px;padding:10px 14px;cursor:pointer;" onclick="osFilterStatus('po_entered')">
             <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;">📥 PO Entered</div>
@@ -794,11 +795,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div style="font-size:10px;font-weight:700;color:#7c3aed;text-transform:uppercase;">🧾 Invoiced</div>
             <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-invoiced">—</div>
           </div>
-          <div id="os-kpi-5" style="background:#fef2f2;border:2px solid #fca5a5;border-top:3px solid #dc2626;border-radius:8px;padding:10px 14px;cursor:pointer;border-left:4px solid #dc2626;margin-left:8px;" onclick="document.getElementById('os-backorder-section').scrollIntoView({behavior:'smooth'})">
-            <div style="font-size:9px;font-weight:700;color:#dc2626;text-transform:uppercase;margin-bottom:1px;">— 별도 섹션 —</div>
-            <div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;">🔴 Back Orders</div>
-            <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-backorder">—</div>
-          </div>
+
           <!-- 카드 셀들 (JS가 동적으로 append) -->
           <div id="os-rows-container" style="display:contents;"></div>
         </div>
@@ -843,6 +840,61 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
       </div>
     </div><!-- end panel-orderstatus -->
+
+    <!-- ── BACK ORDERS ── -->
+    <div class="panel" id="panel-backorders">
+      <!-- SC/CA 백오더 수량 강조 표시 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+        <div style="background:linear-gradient(135deg,#064e22,#0e7c3a);border-radius:12px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:1px;">SC — Sumter</div>
+            <div style="font-size:13px;color:rgba(255,255,255,0.8);margin-top:2px;">Back Orders</div>
+          </div>
+          <div style="font-size:48px;font-weight:900;color:#fff;font-family:'IBM Plex Mono',monospace;line-height:1;" id="bo-sc-count">—</div>
+        </div>
+        <div style="background:linear-gradient(135deg,#7c2d00,#c2410c);border-radius:12px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:1px;">CA — Eastvale</div>
+            <div style="font-size:13px;color:rgba(255,255,255,0.8);margin-top:2px;">Back Orders</div>
+          </div>
+          <div style="font-size:48px;font-weight:900;color:#fff;font-family:'IBM Plex Mono',monospace;line-height:1;" id="bo-ca-count">—</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center;">
+        <button class="btn" onclick="loadBackOrders()">🔄 Refresh</button>
+        <select class="fsel" id="bo-filter-wh" onchange="loadBackOrders()" style="height:28px;font-size:11px;">
+          <option value="">All Warehouses</option>
+          <option value="SC">SC — Sumter</option>
+          <option value="CA">CA — Eastvale</option>
+        </select>
+      </div>
+      <div id="bo-kanban" style="overflow-x:auto;">
+        <div id="bo-board-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;min-width:900px;">
+          <!-- KPI 헤더 -->
+          <div style="background:#fef2f2;border:2px solid #fca5a5;border-top:3px solid #dc2626;border-radius:8px;padding:10px 14px;">
+            <div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;">🔴 Back Order</div>
+            <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="bo-kpi-backorder">—</div>
+          </div>
+          <div style="background:#fffbeb;border:2px solid #fde68a;border-top:3px solid #f59e0b;border-radius:8px;padding:10px 14px;">
+            <div style="font-size:10px;font-weight:700;color:#d97706;text-transform:uppercase;">📦 Preparing</div>
+            <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="bo-kpi-preparing">—</div>
+          </div>
+          <div style="background:#ecfeff;border:2px solid #a5f3fc;border-top:3px solid #0891b2;border-radius:8px;padding:10px 14px;">
+            <div style="font-size:10px;font-weight:700;color:#0891b2;text-transform:uppercase;">✅ Ready to Ship</div>
+            <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="bo-kpi-ready">—</div>
+          </div>
+          <div style="background:#f0fdf4;border:2px solid #bbf7d0;border-top:3px solid #16a34a;border-radius:8px;padding:10px 14px;">
+            <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase;">🚚 Shipped</div>
+            <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="bo-kpi-shipped">—</div>
+          </div>
+          <div style="background:#f5f3ff;border:2px solid #ddd6fe;border-top:3px solid #7c3aed;border-radius:8px;padding:10px 14px;">
+            <div style="font-size:10px;font-weight:700;color:#7c3aed;text-transform:uppercase;">🧾 Invoiced</div>
+            <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="bo-kpi-invoiced">—</div>
+          </div>
+          <div id="bo-rows-container" style="display:contents;"></div>
+        </div>
+      </div>
+    </div>
 
     <!-- ── PICK TICKETS ── -->
     <div class="panel" id="panel-picktickets">
@@ -1907,6 +1959,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'invoice') loadInvoices();
   if (name === 'picktickets') loadPickTickets();
   if (name === 'packinglists') loadPackingLists();
+  if (name === 'backorders') loadBackOrders();
   if (name === 'styles') loadStyles();
   if (name === 'customers') loadCustomers();
   if (name === 'receiving') loadReceivingHistory();
@@ -4918,30 +4971,11 @@ async function loadOrderStatus() {
       });
     });
 
-    // backorder 카드
-    const backCards = allCards.filter(c => ['backordered','partial'].includes(c._status));
-    if (backCards.length > 0) {
-      // 구분선 (grid-column: 1/-1 span 전체)
-      const sep = document.createElement('div');
-      sep.style.cssText = 'grid-column:1/-1;border-top:2px solid #fecaca;margin:8px 0 4px;';
-      grid.appendChild(sep);
-      const label = document.createElement('div');
-      label.style.cssText = 'grid-column:1/-1;font-size:11px;font-weight:700;color:#dc2626;margin-bottom:4px;';
-      label.textContent = '🔴 BACK ORDERS';
-      grid.appendChild(label);
-      backCards.forEach(card => {
-        allCols.forEach((col, i) => {
-          const cell = document.createElement('div');
-          cell.style.cssText = 'min-height:60px;';
-          if (col === 'backorder') {
-            cell.style.borderLeft = '3px solid #fca5a5';
-            cell.style.paddingLeft = '6px';
-            cell.innerHTML = makeCardHtml(card, 'backorder');
-          }
-          grid.appendChild(cell);
-        });
-      });
-    }
+    // Back Orders는 별도 탭에서 관리
+    // backorders badge 업데이트
+    const boCount = allCards.filter(c => ['backordered','partial'].includes(c._status)).length;
+    const boBadge = document.getElementById('backorders-badge');
+    if (boBadge) { boBadge.textContent = boCount; boBadge.style.display = boCount > 0 ? 'inline' : 'none'; }
   }
 }
 
@@ -5440,6 +5474,112 @@ function renderCompletedTable(orders, returnsMap) {
     '<th>Order #</th><th>Customer</th><th>PO #</th><th>WH</th>'+
     '<th>Total Pcs</th><th>Amount</th><th>Date</th><th>Status</th><th>Returns</th><th></th>'+
     '</tr></thead><tbody>'+rows+'</tbody></table>';
+}
+
+// ── Back Orders 탭 로드
+async function loadBackOrders() {
+  const whFilter = document.getElementById('bo-filter-wh')?.value || '';
+  const { data: orders } = await db.from('orders')
+    .select('*, warehouses(code,name)')
+    .in('status', ['backordered','partial','preparing','ready_to_ship','shipped','invoiced'])
+    .order('created_at', { ascending: false });
+
+  const filtered = (orders||[]).filter(o => {
+    if (whFilter === 'SC') return o.wh_code !== 'CA';
+    if (whFilter === 'CA') return o.wh_code === 'CA';
+    return true;
+  });
+
+  // BO 오더만 (원래 backordered/partial인 것들)
+  const boOrders = filtered.filter(o => ['backordered','partial'].includes(o.status));
+  const preparingOrders = filtered.filter(o => o.status === 'preparing' && o.order_number.includes('-BO'));
+  const readyOrders = filtered.filter(o => o.status === 'ready_to_ship' && o.order_number.includes('-BO'));
+  const shippedOrders = filtered.filter(o => o.status === 'shipped' && o.order_number.includes('-BO'));
+  const invoicedOrders = filtered.filter(o => o.status === 'invoiced' && o.order_number.includes('-BO'));
+
+  // KPI 업데이트
+  document.getElementById('bo-kpi-backorder').textContent = boOrders.length;
+  document.getElementById('bo-kpi-preparing').textContent = preparingOrders.length;
+  document.getElementById('bo-kpi-ready').textContent = readyOrders.length;
+  document.getElementById('bo-kpi-shipped').textContent = shippedOrders.length;
+  document.getElementById('bo-kpi-invoiced').textContent = invoicedOrders.length;
+
+  // SC/CA 수량 표시
+  const scCount = boOrders.filter(o => (o.wh_code || o.warehouses?.code || 'SC') !== 'CA').length;
+  const caCount = boOrders.filter(o => (o.wh_code || o.warehouses?.code) === 'CA').length;
+  const scEl = document.getElementById('bo-sc-count');
+  const caEl = document.getElementById('bo-ca-count');
+  if (scEl) scEl.textContent = scCount;
+  if (caEl) caEl.textContent = caCount;
+
+  // badge 업데이트
+  const boBadge = document.getElementById('backorders-badge');
+  if (boBadge) { boBadge.textContent = boOrders.length; boBadge.style.display = boOrders.length > 0 ? 'inline' : 'none'; }
+
+  const grid = document.getElementById('bo-board-grid');
+  if (!grid) return;
+  // 기존 카드 제거 (KPI 5개 유지)
+  Array.from(grid.children).slice(5).forEach(el => el.remove());
+
+  const cols = ['backorder', 'preparing', 'ready', 'shipped', 'invoiced'];
+  const colOrders = [boOrders, preparingOrders, readyOrders, shippedOrders, invoicedOrders];
+  const maxRows = Math.max(...colOrders.map(c => c.length), 1);
+
+  for (let row = 0; row < maxRows; row++) {
+    cols.forEach((col, i) => {
+      const cell = document.createElement('div');
+      cell.style.cssText = 'min-height:60px;';
+      const o = colOrders[i][row];
+      if (o) {
+        const wh = o.wh_code || o.warehouses?.code || 'SC';
+        const isCA = wh === 'CA';
+        const borderColor = isCA ? '#fdba74' : '#86efac';
+        const cardBg = isCA ? '#fff7ed' : '#f0fdf4';
+        const whBadge = isCA
+          ? '<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;background:#ea580c;color:#fff;">CA</span>'
+          : '<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;background:#16a34a;color:#fff;">SC</span>';
+
+        const switchBtn = col === 'backorder' ? `
+          <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
+            ${!isCA ? `<button class="btn btn-sm" style="font-size:9px;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();switchBoWh('${o.id}','CA')">↔ CA로 변경</button>` : `<button class="btn btn-sm" style="font-size:9px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();switchBoWh('${o.id}','SC')">↔ SC로 변경</button>`}
+            <button class="btn btn-sm" style="font-size:9px;background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;" onclick="event.stopPropagation();startBackOrder('${o.id}','${wh}')">▶ Start Order</button>
+            <button class="btn btn-sm" style="font-size:9px;background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();cancelBackOrder('${o.id}','${o.order_number}')">✕ Cancel</button>
+          </div>` : '';
+
+        const actionBtns = col === 'ready' ? `<button class="btn btn-sm btn-green" style="width:100%;margin-top:8px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>` :
+          col === 'shipped' ? `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>` : '';
+
+        cell.innerHTML = `<div style="background:${cardBg};border:2px solid ${borderColor};border-radius:8px;padding:10px 12px;cursor:pointer;" onclick="openPODetail('${o.id}')">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
+            <div>
+              <div style="font-size:10px;color:#6b7280;">${o.customer_name}</div>
+              <div style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</div>
+            </div>
+            ${whBadge}
+          </div>
+          <div style="font-size:10px;font-weight:800;font-family:'IBM Plex Mono',monospace;padding:2px 7px;border-radius:5px;background:#fff;color:#111827;display:inline-block;border:1.5px solid #1f2937;margin-bottom:4px;">PO# ${o.customer_po||'—'}</div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:#6b7280;">
+            <span>${(o.total_pcs||0).toLocaleString()} pcs</span>
+            <span style="font-weight:700;color:var(--primary);">$${(o.total_amount||0).toLocaleString()}</span>
+          </div>
+          ${switchBtn}
+          ${actionBtns}
+        </div>`;
+      }
+      grid.appendChild(cell);
+    });
+  }
+}
+
+async function switchBoWh(orderId, newWh) {
+  const whObj = warehouses.find(w => w.code === newWh);
+  if (!whObj) { alert('창고를 찾을 수 없습니다.'); return; }
+  await db.from('orders').update({ 
+    wh_code: newWh,
+    warehouse_id: whObj.id 
+  }).eq('id', orderId);
+  showToast(`↔ ${newWh}로 변경됨`);
+  loadBackOrders();
 }
 
 // ── Back Order 섹션 렌더링
