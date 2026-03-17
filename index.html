@@ -3951,26 +3951,38 @@ async function _doSaveInvoice() {
     // alloc_detail: SC빈 상세, alloc_ca_detail: CA빈 상세 (SC&CA 라인 분리 저장)
     const _allocObjSC = l.allocSC || {};
     const _allocObjCA = l.allocCA || {};
-    const _allocObjMain = l.wh === 'CA' ? _allocObjCA : _allocObjSC;
+    // SC-only or SC&CA → alloc_detail = SC bins
+    // CA-only → alloc_detail = null, alloc_ca_detail = CA bins
+    // SC&CA → alloc_detail = SC bins, alloc_ca_detail = CA bins
     const _allocDetail = {};
-    for (const [bin, pcs] of Object.entries(_allocObjMain)) {
-      if (!pcs) continue;
-      const ppb = l.ppb || 1;
-      _allocDetail[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
-    }
     const _allocDetailCA = {};
-    if (l.wh === 'SC&CA') {
+    const ppb = l.ppb || 1;
+
+    if (l.wh !== 'CA') {
+      // SC or SC&CA: SC bins → alloc_detail
+      for (const [bin, pcs] of Object.entries(_allocObjSC)) {
+        if (!pcs) continue;
+        _allocDetail[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
+      }
+    }
+    if (l.wh === 'CA' || l.wh === 'SC&CA') {
+      // CA or SC&CA: CA bins → alloc_ca_detail
       for (const [bin, pcs] of Object.entries(_allocObjCA)) {
         if (!pcs) continue;
-        const ppb = l.ppb || 1;
         _allocDetailCA[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
       }
     }
-    // PCR Transfer 정보를 alloc_detail에 추가 (픽티켓 표시용)
-    const _pcrTransferList = l.wh === 'CA' ? (l.caPcrTransfersPending || []) : (l.pcrTransfersPending || []);
-    for (const t of _pcrTransferList) {
-      const transferKey = `${t.whGroup}-TRANSFER|${t.fromBin}`;
+    // PCR Transfer 정보를 alloc_detail/alloc_ca_detail에 추가 (픽티켓 표시용)
+    // SC transfer → alloc_detail, CA transfer → alloc_ca_detail
+    const _scTransferList = l.wh === 'CA' ? [] : (l.pcrTransfersPending || []);
+    const _caTransferList = (l.wh === 'CA' || l.wh === 'SC&CA') ? (l.caPcrTransfersPending || []) : [];
+    for (const t of _scTransferList) {
+      const transferKey = `SC-TRANSFER|${t.fromBin}`;
       _allocDetail[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
+    }
+    for (const t of _caTransferList) {
+      const transferKey = `CA-TRANSFER|${t.fromBin}`;
+      _allocDetailCA[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
     }
 
     const _mainBins = Object.keys(_allocObjMain).filter(k => !k.includes('PCR'));
