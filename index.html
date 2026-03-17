@@ -6805,23 +6805,17 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
       const alloc = l.alloc_detail || {};
       return Object.keys(alloc).some(k => k.includes('TRANSFER|'));
     });
-    // 2. WH Full Box 라인 (bin 있고 PCR/TRANSFER 아닌 것)
+    // 2. WH Full Box 라인 (transfer qty 뺀 나머지 full box가 있는 라인)
     const whLines = sectionLines.filter(l => {
       const alloc = l.alloc_detail || {};
-      // Transfer된 bin 목록
-      const transferredBins = new Set(Object.keys(alloc).filter(k => k.includes('TRANSFER|')).map(k => k.split('|')[1]));
-      // Transfer 아닌 실제 full box bin이 있는 라인만
+      const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
       return Object.entries(alloc).some(([k,v]) => {
         if (k.toUpperCase().includes('PCR') || k.includes('TRANSFER|')) return false;
-        // Transfer된 bin인데 transfer qty보다 더 많은 pcs가 있으면 full box 있음
         const pcs = typeof v === 'object' ? (v.pcs||0) : (v||0);
-        if (transferredBins.has(k)) {
-          const transferPcs = Object.entries(alloc)
-            .filter(([tk]) => tk === 'SC-TRANSFER|'+k || tk === 'CA-TRANSFER|'+k)
-            .reduce((s,[,tv]) => s+(typeof tv==='object'?tv.pcs:tv||0), 0);
-          return pcs > transferPcs;
-        }
-        return pcs > 0;
+        const transferPcs = Object.entries(alloc)
+          .filter(([tk]) => tk === 'SC-TRANSFER|'+k || tk === 'CA-TRANSFER|'+k)
+          .reduce((s,[,tv]) => s+(typeof tv==='object'?tv.pcs:tv||0), 0);
+        return Math.floor((pcs - transferPcs) / ppb) > 0;
       });
     });
     // 3. PC Room Partial: SC-PCR|PCR pcs > 0 인 라인 (TRANSFER 여부 무관)
@@ -6886,15 +6880,27 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
           <tbody>
             ${whLines.flatMap(l => {
               const alloc = l.alloc_detail || {};
+              const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
               const binEntries = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'));
               if (!binEntries.length) return [];
-              return binEntries.map(([bin, detail]) => `<tr style="border-bottom:1px solid #dcfce7;">
+              return binEntries.flatMap(([bin, detail]) => {
+                const allocPcs = typeof detail==='object' ? (detail.pcs||0) : (detail||0);
+                // transfer된 만큼 제외
+                const transferPcs = Object.entries(alloc)
+                  .filter(([k]) => k === 'SC-TRANSFER|'+bin || k === 'CA-TRANSFER|'+bin)
+                  .reduce((s,[,v]) => s+(typeof v==='object'?v.pcs:v||0), 0);
+                const fullPcs = allocPcs - transferPcs;
+                if (fullPcs <= 0) return [];
+                const fullBoxes = Math.floor(fullPcs / ppb);
+                if (fullBoxes <= 0) return [];
+                return [`<tr style="border-bottom:1px solid #dcfce7;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${bin}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
                 <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${typeof detail==='object'&&detail.boxes > 0 ? detail.boxes : (typeof detail==='number'?Math.floor(detail/72)||'—':'—')}</td>
-              </tr>`);
+                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${fullBoxes}</td>
+              </tr>`];
+              });
             }).join('')}
           </tbody>
         </table>
