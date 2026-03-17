@@ -51,7 +51,13 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 .pin-btn{padding:14px;font-size:18px;font-weight:600;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;cursor:pointer;transition:background 0.1s;width:100%;}
 .pin-btn:hover{background:#e5e7eb;}
 .pin-btn:active{background:#d1d5db;}
-.ntab{height:34px;padding:0 18px;font-size:12px;color:rgba(255,255,255,0.6);cursor:pointer;display:flex;align-items:center;gap:6px;border-radius:6px 6px 0 0;border:1px solid transparent;border-bottom:none;transition:all 0.15s;white-space:nowrap;}
+.ntab{height:34px;padding:0 10px;font-size:11px;color:rgba(255,255,255,0.6);cursor:pointer;display:flex;align-items:center;gap:4px;border-radius:6px 6px 0 0;border:1px solid transparent;border-bottom:none;transition:all 0.15s;white-space:nowrap;}
+.ntab-dropdown{position:relative;}
+.ntab-dd{display:none;position:absolute;top:34px;left:0;background:#1e293b;border:1px solid rgba(255,255,255,0.15);border-radius:0 6px 6px 6px;min-width:180px;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,0.4);}
+.ntab-dd div{padding:9px 14px;font-size:11px;color:rgba(255,255,255,0.8);cursor:pointer;white-space:nowrap;transition:background 0.1s;}
+.ntab-dd div:hover{background:rgba(255,255,255,0.1);color:#fff;}
+.ntab-dd div:first-child{border-radius:0 6px 0 0;}
+.ntab-dd div:last-child{border-radius:0 0 6px 6px;}
 .ntab:hover{color:#fff;background:rgba(255,255,255,0.1);}
 .ntab.active{background:var(--bg);color:var(--primary);font-weight:600;border-color:var(--border);}
 .ntab .badge{background:var(--red);color:#fff;font-size:9px;padding:1px 5px;border-radius:8px;font-family:'IBM Plex Mono',monospace;}
@@ -357,19 +363,31 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
   </div>
 
   <!-- NAV TABS -->
-  <div class="navtabs">
+  <div class="navtabs" style="position:relative;">
     <div class="ntab active" onclick="showPanel('dashboard',this)">📊 Dashboard</div>
+    <div class="ntab" onclick="showPanel('customerpos',this)">📋 Customer POs <span class="badge" id="open-orders-badge">0</span></div>
     <div class="ntab" onclick="showPanel('orderstatus',this)">🚦 Order Status</div>
     <div class="ntab" onclick="showPanel('backorders',this)">🔴 Back Orders <span class="badge" id="backorders-badge" style="background:#dc2626;">0</span></div>
-    <div class="ntab" onclick="showPanel('customerpos',this)">📋 Customer POs <span class="badge" id="open-orders-badge">0</span></div>
-    <div class="ntab" onclick="showPanel('picktickets',this)">🎫 Pick Tickets</div>
-    <div class="ntab" onclick="showPanel('packinglists',this)">📦 Packing Lists</div>
-    <div class="ntab" onclick="showPanel('invoice',this)">🧾 Invoices</div>
     <div class="ntab" onclick="showPanel('completed',this)">✅ Completed</div>
-    <div class="ntab" onclick="showPanel('inventory',this)">🏭 Inventory</div>
-    <div class="ntab" onclick="showPanel('receiving',this)">📥 Receiving</div>
-    <div class="ntab" onclick="showPanel('intransit',this)">🚢 In Transit</div>
-    <div class="ntab" onclick="showPanel('styles',this)">👕 Styles</div>
+    <!-- Order Processing 드롭다운 -->
+    <div class="ntab ntab-dropdown" id="ntab-orderproc" onmouseenter="showDropdown('dd-orderproc')" onmouseleave="hideDropdown('dd-orderproc')">
+      📄 Order Documents ▾
+      <div class="ntab-dd" id="dd-orderproc">
+        <div onclick="showPanel('picktickets',document.getElementById('ntab-orderproc'));hideDropdown('dd-orderproc')">🎫 Pick Tickets</div>
+        <div onclick="showPanel('packinglists',document.getElementById('ntab-orderproc'));hideDropdown('dd-orderproc')">📦 Packing Lists</div>
+        <div onclick="showPanel('invoice',document.getElementById('ntab-orderproc'));hideDropdown('dd-orderproc')">🧾 Invoices</div>
+      </div>
+    </div>
+    <!-- Inventory 드롭다운 -->
+    <div class="ntab ntab-dropdown" id="ntab-inventory" onmouseenter="showDropdown('dd-inventory')" onmouseleave="hideDropdown('dd-inventory')">
+      🏭 Inventory ▾
+      <div class="ntab-dd" id="dd-inventory">
+        <div onclick="showPanel('inventory',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🔍 Search by Item</div>
+        <div onclick="showPanel('receiving',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">📥 Receiving</div>
+        <div onclick="showPanel('intransit',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🚛 In Transit</div>
+        <div onclick="showPanel('styles',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">👕 Styles</div>
+      </div>
+    </div>
     <div class="ntab" onclick="showPanel('customers',this)">🏢 Customers</div>
     <div class="ntab" onclick="showPanel('settings',this)">⚙️ Settings</div>
   </div>
@@ -1904,6 +1922,15 @@ async function loadMasterData() {
 // ══════════════════════════════════
 // PANEL SWITCHING
 // ══════════════════════════════════
+function showDropdown(id) {
+  const dd = document.getElementById(id);
+  if (dd) dd.style.display = 'block';
+}
+function hideDropdown(id) {
+  const dd = document.getElementById(id);
+  if (dd) dd.style.display = 'none';
+}
+
 function showPanel(name, el, subview = null, fromPopstate = false) {
   // 역할 체크
   if (_currentEmployee) {
@@ -4721,7 +4748,7 @@ async function loadOrderStatus() {
   document.getElementById('os-kpi-ready').textContent     = count('ready_to_ship');
   document.getElementById('os-kpi-shipped').textContent   = count('shipped');
   document.getElementById('os-kpi-invoiced').textContent  = count('invoiced');
-  document.getElementById('os-kpi-backorder').textContent = backOrders.length;
+  const osKpiBo = document.getElementById('os-kpi-backorder'); if (osKpiBo) osKpiBo.textContent = backOrders.length;
 
   // 칸반 열 매핑 — backordered/partial은 칸반에서 제외 (하단 섹션으로 이동)
   const priOrder = { urgent: 0, normal: 1 };
@@ -4776,7 +4803,7 @@ async function loadOrderStatus() {
   document.getElementById('os-kpi-shipped').textContent   = [...new Set(cols.shipped.map(c=>c.id))].length;
   document.getElementById('os-kpi-invoiced').textContent  = [...new Set(cols.invoiced.map(c=>c.id))].length;
   const backorderCount = [...new Set(cols.backorder.map(c=>c.id))].length;
-  document.getElementById('os-kpi-backorder').textContent = backorderCount;
+  const osKpiBo2 = document.getElementById('os-kpi-backorder'); if (osKpiBo2) osKpiBo2.textContent = backorderCount;
   const backWrap = document.getElementById('os-kpi-backorder-wrap');
   if (backWrap) backWrap.style.display = backorderCount > 0 ? 'block' : 'none';
 
