@@ -9994,6 +9994,28 @@ async function execPcrTransfer(whGroup, ppb) {
   if (pcrBin) { pcrBin.qty += qty; }
   else { window.binInventory[pcrWh2][k].push({ bin: 'PCR', qty, committed: 0, received_date: new Date().toISOString().slice(0,10) }); }
 
+  // 재렌더링 전 현재 입력값 저장 (SC/CA 입력값 보존)
+  const saveWrapInputs = (wrapId) => {
+    const alloc = {};
+    document.querySelectorAll(`${wrapId} input[data-type="box"], ${wrapId} input[data-type="pcs"]`).forEach(inp => {
+      const v = parseInt(inp.value)||0;
+      if (v > 0) alloc[inp.dataset.bin] = v;
+    });
+    return alloc;
+  };
+  if (isBoth) {
+    const scAlloc = saveWrapInputs('#alloc-both-sc-wrap');
+    const caAlloc = saveWrapInputs('#alloc-both-ca-wrap');
+    if (Object.keys(scAlloc).length > 0) poLines[_allocState.lineIdx].allocSC = scAlloc;
+    if (Object.keys(caAlloc).length > 0) poLines[_allocState.lineIdx].allocCA = caAlloc;
+  } else {
+    const liveAlloc = saveWrapInputs('#alloc-bins-wrap');
+    if (Object.keys(liveAlloc).length > 0) {
+      if (whGroup === 'SC') poLines[_allocState.lineIdx].allocSC = liveAlloc;
+      else poLines[_allocState.lineIdx].allocCA = liveAlloc;
+    }
+  }
+
   // 모달 다시 그리기 (선택 상태 복원 포함)
   const savedBin = bin;
   const savedWh = whGroup;
