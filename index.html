@@ -1391,7 +1391,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div class="ff"><label>Contact Name</label><input class="fi" id="cust-contact" placeholder="John Smith"/></div>
         <div class="ff"><label>Phone</label><input class="fi" id="cust-phone" placeholder="(312) 555-0000"/></div>
         <div class="ff"><label>Email <span style="font-size:10px;color:#6b7280;">(Packing List / BOL 수신)</span></label><input class="fi" id="cust-email" placeholder="orders@customer.com"/></div>
+        <div class="ff"><label>Email CC <span style="font-size:10px;color:#6b7280;">(쉼표로 구분)</span></label><input class="fi" id="cust-email-cc" placeholder="cc1@customer.com, cc2@customer.com"/></div>
         <div class="ff"><label>Accounting Email <span style="font-size:10px;color:#6b7280;">(Invoice 수신)</span></label><input class="fi" id="cust-accounting-email" placeholder="accounting@customer.com"/></div>
+        <div class="ff"><label>Accounting CC <span style="font-size:10px;color:#6b7280;">(쉼표로 구분)</span></label><input class="fi" id="cust-accounting-email-cc" placeholder="cc1@accounting.com, cc2@accounting.com"/></div>
         <div class="ff">
           <label>Bill To Address</label>
           <textarea class="fi" id="cust-bill-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="6650 S Narragansett Ave&#10;Unit B&#10;Bedford Park IL 60638"></textarea>
@@ -4062,6 +4064,7 @@ async function _doSaveInvoice() {
       });
       const hasAnyBackorder = emailLines.some(l => l.back_qty > 0);
       // 백그라운드로 이메일 발송 (await 제거 - 느린 이메일 때문에 저장 지연 방지)
+      const custCc = custObj?.email_cc || '';
       fetch('https://po-confirm-email.hjbae.workers.dev/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4070,6 +4073,7 @@ async function _doSaveInvoice() {
           customer_name: cust,
           customer_po: po,
           customer_email: custEmail,
+          cc: custCc,
           total_pcs: totalPcs,
           total_amount: totalAmt,
           ship_date: shipDate || '',
@@ -6614,7 +6618,10 @@ async function reviewAndSendInvoice(orderId, wh) {
 
   const invoiceNum = order.invoice_number || order.order_number;
   document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, invoiceNum);
-  document.getElementById('invoice-review-email').textContent = order.email || '(이메일 없음)';
+  const invCustObj = customers.find(c => c.id === order.customer_id);
+  const invToEmail = invCustObj?.accounting_email || order.email || '(이메일 없음)';
+  const invCcEmail = invCustObj?.accounting_email_cc || '';
+  document.getElementById('invoice-review-email').textContent = invToEmail + (invCcEmail ? ' + CC: ' + invCcEmail : '');
   document.getElementById('modal-invoice-review').style.display = 'flex';
 }
 
@@ -6625,15 +6632,18 @@ async function sendInvoiceEmail() {
 
   await updateWhStatus(_invoiceOrderId, _invoiceWh || 'SC', 'invoiced');
 
-  // 이메일 발송
+  // 이메일 발송 (accounting_email 우선, 없으면 email)
   try {
     const { data: order } = await db.from('orders').select('*').eq('id', _invoiceOrderId).single();
     const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', _invoiceOrderId);
-    if (order?.email) {
+    const custObj = customers.find(c => c.id === order?.customer_id);
+    const toEmail = custObj?.accounting_email || order?.email;
+    const ccEmail = custObj?.accounting_email_cc || '';
+    if (toEmail) {
       await fetch('https://po-confirm-email.hjbae.workers.dev/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'invoice', order, lines })
+        body: JSON.stringify({ type: 'invoice', order, lines, customer_email: toEmail, cc: ccEmail })
       });
     }
   } catch(e) { console.warn('Invoice email error:', e); }
@@ -6922,27 +6932,134 @@ function buildPackingListHtml(order, lines, isSplit) {
   const dateStr = new Date().toLocaleDateString();
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
+  // Box allocation 계산 (pick ticket과 동일 로직)
+  function calcPlBoxAllocation(sectionLines) {
+    const groups = {};
+    sectionLines.forEach(l => {
+      const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
+      const key = `${l.styles?.style_number||''}|||${l.color||''}|||${ppb}`;
+      if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
+      const alloc = l.alloc_detail || {};
+      const pcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+      const fullPcs = (l.qty_pieces||0) - pcrPcs;
+      if (fullPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: fullPcs, isFullBox: true });
+      if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs, isPartial: true });
+    });
+    const result = [];
+    let globalBoxNum = 1;
+    Object.values(groups).sort((a,b) => b.boxQty - a.boxQty).forEach(g => {
+      const boxQty = g.boxQty;
+      const fullSizes = g.sizes.filter(s => s.isFullBox && s.qty > 0).sort((a,b) => sizeOrd(a.size)-sizeOrd(b.size));
+      const partialSizes = g.sizes.filter(s => s.isPartial && s.qty > 0).sort((a,b) => sizeOrd(a.size)-sizeOrd(b.size));
+      const boxes = [];
+      let currentBox = { items: [], isPartial: false };
+      let currentTotal = 0;
+      // Full boxes first
+      fullSizes.forEach(s => {
+        let remaining = s.qty;
+        while (remaining > 0) {
+          const space = boxQty - currentTotal;
+          if (remaining > space && currentTotal > 0) {
+            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: false });
+            currentBox = { items: [] }; currentTotal = 0;
+          }
+          const take = Math.min(remaining, boxQty - currentTotal);
+          if (take > 0) { currentBox.items.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
+          if (currentTotal >= boxQty) {
+            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: false });
+            currentBox = { items: [] }; currentTotal = 0;
+          }
+        }
+      });
+      if (currentBox.items.length > 0) { boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: false }); currentBox = { items: [] }; currentTotal = 0; }
+      // Partial boxes
+      partialSizes.forEach(s => {
+        let remaining = s.qty;
+        while (remaining > 0) {
+          const space = boxQty - currentTotal;
+          if (remaining > space && currentTotal > 0) {
+            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
+            currentBox = { items: [] }; currentTotal = 0;
+          }
+          const take = Math.min(remaining, boxQty - currentTotal);
+          if (take > 0) { currentBox.items.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
+          if (currentTotal >= boxQty) {
+            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
+            currentBox = { items: [] }; currentTotal = 0;
+          }
+        }
+      });
+      if (currentBox.items.length > 0) boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
+      if (boxes.length) result.push({ styleNum: g.styleNum, color: g.color, boxQty, boxes });
+    });
+    return result;
+  }
+
   const renderPlSection = (sectionLines, whLabel, whColor) => {
     if (!sectionLines.length) return '';
     const sorted = [...sectionLines].sort((a,b) => {
       const ca = (a.color||'').localeCompare(b.color||'');
       return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
     });
+
+    // Summary table
     const rows = sorted.map(l => {
-      const ppb = l.pcs_per_box || 72;
-      const boxes = Math.floor((l.qty_pieces||0) / ppb);
-      const loose = (l.qty_pieces||0) % ppb;
+      const ppb = l.pcs_per_box || 60;
+      const alloc = l.alloc_detail || {};
+      const pcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+      const fullBoxes = Object.entries(alloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
       return `<tr style="border-bottom:1px solid #f3f4f6;">
         <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
         <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${(l.qty_pieces||0).toLocaleString()}</td>
-        <td style="padding:6px 8px;font-size:11px;text-align:center;">${boxes > 0 ? boxes : '—'}</td>
-        <td style="padding:6px 8px;font-size:11px;text-align:center;${loose>0?'color:#7c3aed;font-weight:700;':''}">${loose > 0 ? loose : '—'}</td>
+        <td style="padding:6px 8px;font-size:11px;text-align:center;">${fullBoxes > 0 ? fullBoxes : '—'}</td>
+        <td style="padding:6px 8px;font-size:11px;text-align:center;${pcrPcs>0?'color:#7c3aed;font-weight:700;':''}">${pcrPcs > 0 ? pcrPcs : '—'}</td>
       </tr>`;
     }).join('');
     const totalPcs = sorted.reduce((s,l) => s+(l.qty_pieces||0), 0);
-    const totalBoxes = sorted.reduce((s,l) => s+Math.floor((l.qty_pieces||0)/(l.pcs_per_box||72)), 0);
+    const totalBoxes = sorted.reduce((s,l) => {
+      const alloc = l.alloc_detail || {};
+      const ppb = l.pcs_per_box || 60;
+      return s + Object.entries(alloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
+    }, 0);
+
+    // Box detail table
+    const boxAlloc = calcPlBoxAllocation(sectionLines);
+    const boxDetailHtml = boxAlloc.length ? `
+      <div style="margin-top:16px;">
+        <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding:6px 10px;background:#f8fafc;border-radius:6px;border:1px solid #e5e7eb;">📦 Box Detail</div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;">
+          <thead><tr style="background:#f3f4f6;">
+            <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;width:80px;">Box #</th>
+            <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Style</th>
+            <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Color</th>
+            <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Size</th>
+            <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Pcs</th>
+            <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Box Total</th>
+          </tr></thead>
+          <tbody>
+            ${boxAlloc.flatMap(g => g.boxes.flatMap((box, bi) => {
+              const boxTotal = box.items.reduce((s,i)=>s+i.qty,0);
+              const isPartialBox = box.isPartial;
+              return box.items.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===box.items.length-1?'#d1d5db':'#f3f4f6'};${isPartialBox?'background:#faf5ff;':''}">
+                <td style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?'BOX '+box.boxNum+(isPartialBox?' *':''):''}</td>
+                <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${ii===0?g.styleNum:''}</td>
+                <td style="padding:6px 10px;font-size:11px;">${ii===0?g.color:''}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?boxTotal+' pcs':''}</td>
+              </tr>`);
+            })).join('')}
+          </tbody>
+          <tfoot><tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb;">
+            <td colspan="5" style="padding:8px 10px;text-align:right;">Total Cartons:</td>
+            <td style="padding:8px 10px;text-align:center;font-size:13px;">${boxAlloc.reduce((s,g)=>s+g.boxes.length,0)} boxes</td>
+          </tr></tfoot>
+        </table>
+        <div style="font-size:10px;color:#7c3aed;margin-top:4px;">* Partial box (PC Room)</div>
+      </div>` : '';
+
     return `
       <div style="margin-bottom:${isSplit?'28px':'0'};">
         ${isSplit ? `<div style="font-size:13px;font-weight:700;color:${whColor};padding:6px 10px;background:${whColor}15;border-radius:6px;margin-bottom:10px;">${whLabel}</div>` : ''}
@@ -6963,6 +7080,7 @@ function buildPackingListHtml(order, lines, isSplit) {
             <td></td>
           </tr></tfoot>
         </table>
+        ${boxDetailHtml}
       </div>`;
   };
 
@@ -8837,7 +8955,7 @@ function openAddCustomer() {
   document.getElementById('cust-edit-id').value = '';
   document.getElementById('cust-modal-title').textContent = '+ Add Customer';
   document.getElementById('cust-delete-btn').style.display = 'none';
-  ['cust-company','cust-contact','cust-phone','cust-email','cust-accounting-email','cust-bill-addr','cust-ship-addr','cust-notes'].forEach(id => {
+  ['cust-company','cust-contact','cust-phone','cust-email','cust-email-cc','cust-accounting-email','cust-accounting-email-cc','cust-bill-addr','cust-ship-addr','cust-notes'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -8856,6 +8974,8 @@ function openEditCustomer(id) {
   document.getElementById('cust-phone').value = c.phone || '';
   document.getElementById('cust-email').value = c.email || '';
   document.getElementById('cust-accounting-email').value = c.accounting_email || '';
+  document.getElementById('cust-email-cc').value = c.email_cc || '';
+  document.getElementById('cust-accounting-email-cc').value = c.accounting_email_cc || '';
   document.getElementById('cust-bill-addr').value = c.bill_address || '';
   document.getElementById('cust-ship-addr').value = c.ship_address || '';
   document.getElementById('cust-terms').value = c.terms || 'N30';
@@ -8874,6 +8994,8 @@ async function saveCustomer() {
     phone:           document.getElementById('cust-phone').value.trim(),
     email:           document.getElementById('cust-email').value.trim(),
     accounting_email: document.getElementById('cust-accounting-email').value.trim(),
+    email_cc: document.getElementById('cust-email-cc').value.trim(),
+    accounting_email_cc: document.getElementById('cust-accounting-email-cc').value.trim(),
     bill_address: document.getElementById('cust-bill-addr').value.trim(),
     ship_address: document.getElementById('cust-ship-addr').value.trim(),
     terms:   document.getElementById('cust-terms').value.trim(),
