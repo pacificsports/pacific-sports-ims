@@ -794,7 +794,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div style="font-size:10px;font-weight:700;color:#7c3aed;text-transform:uppercase;">🧾 Invoiced</div>
             <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-invoiced">—</div>
           </div>
-          <div id="os-kpi-5" style="background:#fef2f2;border:2px solid #fecaca;border-top:3px solid #dc2626;border-radius:8px;padding:10px 14px;cursor:pointer;" onclick="document.getElementById('os-backorder-section').scrollIntoView({behavior:'smooth'})">
+          <div id="os-kpi-5" style="background:#fef2f2;border:2px solid #fca5a5;border-top:3px solid #dc2626;border-radius:8px;padding:10px 14px;cursor:pointer;border-left:4px solid #dc2626;margin-left:8px;" onclick="document.getElementById('os-backorder-section').scrollIntoView({behavior:'smooth'})">
+            <div style="font-size:9px;font-weight:700;color:#dc2626;text-transform:uppercase;margin-bottom:1px;">— 별도 섹션 —</div>
             <div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;">🔴 Back Orders</div>
             <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-backorder">—</div>
           </div>
@@ -1319,7 +1320,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
         <div class="ff"><label>Contact Name</label><input class="fi" id="cust-contact" placeholder="John Smith"/></div>
         <div class="ff"><label>Phone</label><input class="fi" id="cust-phone" placeholder="(312) 555-0000"/></div>
-        <div class="ff" style="grid-column:1/-1"><label>Email</label><input class="fi" id="cust-email" placeholder="orders@customer.com"/></div>
+        <div class="ff"><label>Email <span style="font-size:10px;color:#6b7280;">(Packing List / BOL 수신)</span></label><input class="fi" id="cust-email" placeholder="orders@customer.com"/></div>
+        <div class="ff"><label>Accounting Email <span style="font-size:10px;color:#6b7280;">(Invoice 수신)</span></label><input class="fi" id="cust-accounting-email" placeholder="accounting@customer.com"/></div>
         <div class="ff">
           <label>Bill To Address</label>
           <textarea class="fi" id="cust-bill-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="6650 S Narragansett Ave&#10;Unit B&#10;Bedford Park IL 60638"></textarea>
@@ -4683,6 +4685,12 @@ async function loadOrderStatus() {
   const makeCards = (orders) => {
     const cards = [];
     orders.forEach(o => {
+      // backordered/partial은 항상 status 우선 (sc_status/ca_status 무시)
+      if (['backordered','partial'].includes(o.status)) {
+        const wh = o.wh_code || o.warehouses?.code || 'SC';
+        cards.push({ ...o, _wh: wh, _status: o.status });
+        return;
+      }
       const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
       if (isSplit) {
         cards.push({ ...o, _wh: 'SC', _status: o.sc_status || o.status });
@@ -4925,7 +4933,11 @@ async function loadOrderStatus() {
         allCols.forEach((col, i) => {
           const cell = document.createElement('div');
           cell.style.cssText = 'min-height:60px;';
-          if (col === 'backorder') cell.innerHTML = makeCardHtml(card, 'backorder');
+          if (col === 'backorder') {
+            cell.style.borderLeft = '3px solid #fca5a5';
+            cell.style.paddingLeft = '6px';
+            cell.innerHTML = makeCardHtml(card, 'backorder');
+          }
           grid.appendChild(cell);
         });
       });
@@ -5869,15 +5881,22 @@ async function openWhComplete(orderId, wh) {
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
     : lines;
 
-  // Full Box가 있는 라인만
+  // Full Box가 있는 라인만 (alloc_detail의 non-PCR, non-TRANSFER boxes 합산)
   const whLines = filteredLines.filter(l => {
     const alloc = l.alloc_detail || l.alloc_ca_detail || {};
-    return Object.entries(alloc).some(([k,v]) => !k.toUpperCase().includes('PCR') && (typeof v==='object'?v.pcs:v)>0);
+    return Object.entries(alloc).some(([k,v]) => 
+      !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|') && 
+      (typeof v==='object' ? (v.boxes||0) > 0 : (v||0) > 0)
+    );
   });
 
   _whCompleteLines = whLines.map((l,i) => {
     const ppb = l.pcs_per_box || 72;
-    const fullBoxes = Math.floor((l.qty_pieces||0) / ppb);
+    const alloc = l.alloc_detail || l.alloc_ca_detail || {};
+    // alloc_detail의 non-PCR, non-TRANSFER boxes 합산
+    const fullBoxes = Object.entries(alloc)
+      .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+      .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0) : Math.floor((v||0)/ppb)), 0);
     return { idx: i, lineId: l.id, styleNum: l.styles?.style_number||'', color: l.color||'', size: l.size||'', orderQty: l.qty_pieces||0, fullBoxes, ppb };
   });
 
@@ -5965,17 +5984,26 @@ async function openPcrComplete(orderId, wh) {
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
     : lines;
 
-  // Partial pcs가 있는 라인만
-  const pcrLines = filteredLines.filter(l => (l.qty_pieces || 0) % (l.pcs_per_box || 72) > 0);
+  // Partial pcs가 있는 라인만 (alloc_detail의 PCR|PCR pcs 기준)
+  const pcrLines = filteredLines.filter(l => {
+    const alloc = l.alloc_detail || {};
+    const pcrEntry = Object.entries(alloc).find(([k]) => k.includes('PCR|PCR'));
+    const pcrPcs = pcrEntry ? (typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0)) : 0;
+    return pcrPcs > 0;
+  });
 
   _pcrCompleteLines = pcrLines.map((l,i) => {
     const ppb = l.pcs_per_box || 72;
-    const partialQty = (l.qty_pieces || 0) % ppb;
-    // PCR bin ID 찾기
     const alloc = l.alloc_detail || {};
-    const pcrBinEntry = Object.entries(alloc).find(([k]) => k.toUpperCase().includes('PCR'));
-    const pcrBinId = pcrBinEntry ? pcrBinEntry[0] : null;
-    return { idx: i, lineId: l.id, styleNum: l.styles?.style_number||'', color: l.color||'', size: l.size||'', orderQty: l.qty_pieces||0, partialQty, ppb, pcrBinId };
+    // alloc_detail의 PCR|PCR pcs 사용
+    const pcrEntry = Object.entries(alloc).find(([k]) => k.includes('PCR|PCR'));
+    const partialQty = pcrEntry ? (typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0)) : 0;
+    const pcrBinId = pcrEntry ? pcrEntry[0] : null;
+    // box allocation 계산
+    const fullBoxes = Object.entries(alloc)
+      .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+      .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0) : Math.floor((v||0)/ppb)), 0);
+    return { idx: i, lineId: l.id, styleNum: l.styles?.style_number||'', color: l.color||'', size: l.size||'', orderQty: l.qty_pieces||0, partialQty, ppb, pcrBinId, fullBoxes };
   });
 
   const container = document.getElementById('pcr-complete-lines');
@@ -5988,6 +6016,7 @@ async function openPcrComplete(orderId, wh) {
           <div>
             <span style="font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;">${l.styleNum}</span>
             <span style="font-size:11px;color:#6b7280;margin-left:8px;">${l.color} / ${l.size}</span>
+            ${l.fullBoxes > 0 ? `<span style="font-size:10px;background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:4px;margin-left:8px;font-weight:700;">📦 ${l.fullBoxes}박스 + partial</span>` : ''}
           </div>
           <span style="font-size:11px;color:#6b7280;">오더: ${l.orderQty.toLocaleString()} pcs</span>
         </div>
@@ -6072,18 +6101,25 @@ async function submitPcrComplete() {
   });
 
   // PCR qty_on_hand 차감 (준비수량 + 불량수량)
+  const pcrWhCode = _pcrCompleteWh + '-PCR';
+  const pcrWhObj = warehouses.find(w => w.code === pcrWhCode);
   for (const l of preparedLines) {
     const totalDeduct = l.preparedQty + l.defectTotal;
-    if (totalDeduct <= 0) continue;
-    // PCR bin 찾기 — alloc에 저장된 bin ID 우선, 없으면 warehouse+color+size로 검색
-    if (l.pcrBinId) {
-      const { data: inv } = await db.from('inventory').select('id,qty_on_hand,qty_committed').eq('id', l.pcrBinId).single();
-      if (inv) {
-        await db.from('inventory').update({
-          qty_on_hand: Math.max(0, (inv.qty_on_hand||0) - totalDeduct),
-          qty_committed: Math.max(0, (inv.qty_committed||0) - l.partialQty)
-        }).eq('id', inv.id);
-      }
+    if (totalDeduct <= 0 || !pcrWhObj) continue;
+    // PCR bin을 warehouse+style+color+size로 검색
+    const styleObj = styles.find(s => s.style_number === l.styleNum);
+    const { data: invRows } = await db.from('inventory')
+      .select('id,qty_on_hand,qty_committed')
+      .eq('warehouse_id', pcrWhObj.id)
+      .eq('color', (l.color||'').toUpperCase())
+      .eq('size', (l.size||'').toUpperCase())
+      .eq('location', 'PCR');
+    if (invRows && invRows.length > 0) {
+      const inv = invRows[0];
+      await db.from('inventory').update({
+        qty_on_hand: Math.max(0, (inv.qty_on_hand||0) - totalDeduct),
+        qty_committed: Math.max(0, (inv.qty_committed||0) - l.partialQty)
+      }).eq('id', inv.id);
     }
   }
 
@@ -6127,7 +6163,9 @@ async function checkAndMoveToReady(orderId, wh) {
   // Partial pcs 있으면 PCR도 완료돼야 Ready to Ship
   if (!hasPartial || pcrDone) {
     await updateWhStatus(orderId, wh, 'ready_to_ship');
-    showToast('🚀 ' + wh + ' Ready to Ship!');
+    showToast('🚀 ' + wh + ' Ready to Ship! Packing List를 프린트하세요.');
+    // 자동으로 Packing List 프리뷰 열기
+    await preparationComplete(orderId, wh);
   }
 }
 
@@ -6173,9 +6211,58 @@ async function confirmPreparationComplete() {
 }
 
 // ── 3단계: Mark as Shipped → 재고 차감 + Back Order 처리
+let _shippedOrderId = null;
+let _shippedWh = null;
+let _shippedEmp = null;
+
+function toggleShipTrackingLabel() {
+  const carrier = document.getElementById('ship-carrier').value;
+  const label = document.getElementById('ship-tracking-label');
+  label.textContent = carrier === 'LTL' ? 'PRO #' : 'Tracking #';
+}
+
 async function doShipped(orderId, wh) {
-  const shipDate = prompt('출고 날짜 (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
-  if (!shipDate) return;
+  // PIN 입력 → 직원 확인
+  const pin = prompt('담당자 PIN을 입력하세요:');
+  if (!pin) return;
+  const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = empRows?.[0];
+  if (!emp) { alert('❌ PIN이 올바르지 않습니다.'); return; }
+  if (!['admin','manager','warehouse'].includes(emp.role)) { alert('❌ 권한이 없습니다. (Warehouse Manager 이상 필요)'); return; }
+
+  _shippedOrderId = orderId;
+  _shippedWh = wh;
+  _shippedEmp = emp;
+
+  // 오더 정보 표시
+  const orderCard = allOrderStatusData?.find(o => o.id === orderId);
+  if (orderCard) {
+    document.getElementById('modal-shipped-info').innerHTML =
+      `<b>${orderCard.order_number}</b> — ${orderCard.customer_name} &nbsp;|&nbsp; PO# ${orderCard.customer_po||'—'} &nbsp;|&nbsp; 담당: <b>${emp.name}</b>`;
+  }
+
+  // 기본값 세팅
+  document.getElementById('ship-date-inp').value = new Date().toISOString().slice(0,10);
+  document.getElementById('ship-carrier').value = '';
+  document.getElementById('ship-tracking').value = '';
+  document.getElementById('ship-pickup-company').value = '';
+  document.getElementById('ship-note').value = '';
+
+  document.getElementById('modal-shipped').style.display = 'flex';
+}
+
+async function confirmShipped() {
+  const shipDate = document.getElementById('ship-date-inp').value;
+  if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
+
+  document.getElementById('modal-shipped').style.display = 'none';
+
+  const carrier = document.getElementById('ship-carrier').value;
+  const tracking = document.getElementById('ship-tracking').value;
+  const pickupCompany = document.getElementById('ship-pickup-company').value;
+  const shipNote = document.getElementById('ship-note').value;
+  const orderId = _shippedOrderId;
+  const wh = _shippedWh;
 
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
@@ -6257,7 +6344,15 @@ async function doShipped(orderId, wh) {
 
   // WH별 status 업데이트
   await updateWhStatus(orderId, wh || 'SC', 'shipped');
-  await db.from('orders').update({ ship_date: shipDate, invoice_number: invoiceNumber }).eq('id', orderId);
+  await db.from('orders').update({
+    ship_date: shipDate,
+    invoice_number: invoiceNumber,
+    carrier: carrier || null,
+    tracking_number: tracking || null,
+    pickup_company: pickupCompany || null,
+    ship_note: shipNote || null,
+    shipped_by: _shippedEmp?.name || null
+  }).eq('id', orderId);
 
   // Back Order가 있으면 별도 Back Order 레코드 생성
   if (totalBackQty > 0) {
@@ -6472,12 +6567,10 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
   const renderPickTicket = (sectionLines, whLabel, whColor) => {
     if (!sectionLines.length) return '';
 
-    // 1. PCR Transfer 라인 - SC-PCR|PCR pcs > 0 이거나 TRANSFER key 있는 것
+    // 1. PCR Transfer 라인 - TRANSFER key 있는 것만 (warehouse bin → PCR 이동)
     const pcrLines = sectionLines.filter(l => {
       const alloc = l.alloc_detail || {};
-      const hasPcr = Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && (typeof v==='object'?v.pcs:v) > 0);
-      const hasTransfer = Object.keys(alloc).some(k => k.includes('TRANSFER|'));
-      return hasPcr || hasTransfer;
+      return Object.keys(alloc).some(k => k.includes('TRANSFER|'));
     });
     // 2. WH Full Box 라인 (bin 있고 PCR 아닌 것)
     const whLines = sectionLines.filter(l => {
@@ -6519,22 +6612,6 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
                 <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : '—'}</td>
               </tr>`);
               });
-              // SC-PCR|PCR: partial pcs만 있는 경우 (transfer 없이 PCR에 직접)
-              if (!transferEntries.length) {
-                const pcrEntry = Object.entries(alloc).find(([k]) => k.includes('PCR|PCR'));
-                if (pcrEntry) {
-                  const pcs = typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0);
-                  if (pcs > 0) {
-                    rows.push(`<tr style="border-bottom:1px solid #fee2e2;">
-                    <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">PCR ROOM</td>
-                    <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
-                    <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
-                    <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
-                    <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${pcs}pcs</td>
-                  </tr>`);
-                  }
-                }
-              }
               return rows;
             }).join('')}
           </tbody>
@@ -6601,7 +6678,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
             })).join('')}
           </tbody>
         </table>
-        <div style="font-size:10px;color:#6b7280;margin-top:6px;text-align:right;">* Max ${boxAlloc[0]?.boxQty||72} pcs/box</div>
+
       </div>` : '';
 
     return pcrTransferHtml + whFullHtml + pcrPartialHtml;
@@ -8565,7 +8642,7 @@ function openAddCustomer() {
   document.getElementById('cust-edit-id').value = '';
   document.getElementById('cust-modal-title').textContent = '+ Add Customer';
   document.getElementById('cust-delete-btn').style.display = 'none';
-  ['cust-company','cust-contact','cust-phone','cust-email','cust-bill-addr','cust-ship-addr','cust-notes'].forEach(id => {
+  ['cust-company','cust-contact','cust-phone','cust-email','cust-accounting-email','cust-bill-addr','cust-ship-addr','cust-notes'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -8583,6 +8660,7 @@ function openEditCustomer(id) {
   document.getElementById('cust-contact').value = c.contact_name || '';
   document.getElementById('cust-phone').value = c.phone || '';
   document.getElementById('cust-email').value = c.email || '';
+  document.getElementById('cust-accounting-email').value = c.accounting_email || '';
   document.getElementById('cust-bill-addr').value = c.bill_address || '';
   document.getElementById('cust-ship-addr').value = c.ship_address || '';
   document.getElementById('cust-terms').value = c.terms || 'N30';
@@ -8600,6 +8678,7 @@ async function saveCustomer() {
     contact_name:    document.getElementById('cust-contact').value.trim(),
     phone:           document.getElementById('cust-phone').value.trim(),
     email:           document.getElementById('cust-email').value.trim(),
+    accounting_email: document.getElementById('cust-accounting-email').value.trim(),
     bill_address: document.getElementById('cust-bill-addr').value.trim(),
     ship_address: document.getElementById('cust-ship-addr').value.trim(),
     terms:   document.getElementById('cust-terms').value.trim(),
@@ -10751,6 +10830,50 @@ function showCreditHoldFlash(overAmt) {
       <button class="btn" onclick="closeModal('modal-pl-preview')">취소</button>
       <button class="btn" style="background:#0891b2;color:#fff;" onclick="printInNewWindow(document.getElementById('pl-preview-content').innerHTML)">🖨️ Print Packing List</button>
       <button class="btn btn-green" onclick="confirmPreparationComplete()">✅ Confirm — Move to Ready to Ship</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Mark as Shipped 모달 ── -->
+<div id="modal-shipped" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;padding:28px;width:480px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <div style="font-size:16px;font-weight:700;color:#111827;">🚛 Mark as Shipped</div>
+      <button onclick="document.getElementById('modal-shipped').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+    </div>
+    <div id="modal-shipped-info" style="font-size:12px;color:#6b7280;margin-bottom:16px;padding:8px 12px;background:#f9fafb;border-radius:6px;"></div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div>
+        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">출고 날짜 <span style="color:#dc2626">*</span></label>
+        <input type="date" id="ship-date-inp" class="fi" style="width:100%;"/>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Carrier</label>
+        <select id="ship-carrier" class="fi" style="width:100%;" onchange="toggleShipTrackingLabel()">
+          <option value="">선택...</option>
+          <option value="UPS">UPS</option>
+          <option value="FedEx">FedEx</option>
+          <option value="LTL">LTL</option>
+          <option value="Will Call">Will Call</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="ship-tracking-label">Tracking # / PRO #</label>
+        <input type="text" id="ship-tracking" class="fi" placeholder="예: 1Z999AA10123456784" style="width:100%;"/>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Pickup Company</label>
+        <input type="text" id="ship-pickup-company" class="fi" placeholder="예: ABC Freight, UPS Store #123" style="width:100%;"/>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">메모</label>
+        <input type="text" id="ship-note" class="fi" placeholder="기타 메모" style="width:100%;"/>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">
+      <button class="btn" onclick="document.getElementById('modal-shipped').style.display='none'">취소</button>
+      <button class="btn btn-primary" onclick="confirmShipped()" style="background:#16a34a;border-color:#16a34a;">🚛 Shipped 확정</button>
     </div>
   </div>
 </div>
