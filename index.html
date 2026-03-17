@@ -6040,7 +6040,16 @@ async function printPickTicket(orderId, wh, ticketType) {
       ? (wh === 'CA' ? (matchPo.caPcrTransfers||[]) : (matchPo.pcrTransfers||[]))
       : [];
 
-    return { ...l, location: mainLoc, _pcrQty: pcrQty, _pcrTransfers: transfers };
+    // pick ticket용으로 올바른 alloc_detail 설정
+    // CA pick ticket이면 alloc_ca_detail을 alloc_detail로, alloc_ca_detail은 null로
+    const _effectiveAllocDetail = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const _effectiveAllocCaDetail = wh === 'CA' ? null : l.alloc_ca_detail;
+
+    return { ...l, location: mainLoc, _pcrQty: pcrQty, _pcrTransfers: transfers,
+      alloc_detail: _effectiveAllocDetail,
+      alloc_ca_detail: _effectiveAllocCaDetail };
   });
 
   // 전체 PCR Transfer 목록 (모든 라인 합산)
