@@ -370,7 +370,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <div class="ntab" onclick="showPanel('backorders',this)">🔴 Back Orders <span class="badge" id="backorders-badge" style="background:#dc2626;">0</span></div>
     <div class="ntab" onclick="showPanel('completed',this)">✅ Completed</div>
     <!-- Order Processing 드롭다운 -->
-    <div class="ntab ntab-dropdown" id="ntab-orderproc" onmouseenter="showDropdown('dd-orderproc')" onmouseleave="hideDropdown('dd-orderproc')">
+    <div class="ntab ntab-dropdown" id="ntab-orderproc" onmouseenter="showDropdown('dd-orderproc')" onmouseleave="hideDropdown('dd-orderproc')" onclick="toggleDropdown('dd-orderproc')">
       📄 Order Documents ▾
       <div class="ntab-dd" id="dd-orderproc">
         <div onclick="showPanel('picktickets',document.getElementById('ntab-orderproc'));hideDropdown('dd-orderproc')">🎫 Pick Tickets</div>
@@ -379,7 +379,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
     <!-- Inventory 드롭다운 -->
-    <div class="ntab ntab-dropdown" id="ntab-inventory" onmouseenter="showDropdown('dd-inventory')" onmouseleave="hideDropdown('dd-inventory')">
+    <div class="ntab ntab-dropdown" id="ntab-inventory" onmouseenter="showDropdown('dd-inventory')" onmouseleave="hideDropdown('dd-inventory')" onclick="toggleDropdown('dd-inventory')">
       🏭 Inventory ▾
       <div class="ntab-dd" id="dd-inventory">
         <div onclick="showPanel('inventory',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🔍 Search by Item</div>
@@ -1932,6 +1932,15 @@ function hideDropdown(id) {
   const dd = document.getElementById(id);
   if (dd) dd.style.display = 'none';
 }
+function toggleDropdown(id) {
+  const dd = document.getElementById(id);
+  if (!dd) return;
+  const isVisible = dd.style.display === 'block';
+  // 다른 드롭다운 닫기
+  document.querySelectorAll('.ntab-dd').forEach(d => d.style.display = 'none');
+  // 현재 것 토글
+  if (!isVisible) dd.style.display = 'block';
+}
 
 function showPanel(name, el, subview = null, fromPopstate = false) {
   // 역할 체크
@@ -3038,12 +3047,12 @@ function renderEntryTable() {
         const allocSC = l.allocSC || {};
         const allocCA = l.allocCA || {};
         const ppb = l.ppb || 72;
-        // transfer qty 제외한 실제 full box 수량
-        const scTransferQty = (l.pcrTransfersPending||[]).reduce((s,t)=>s+t.qty,0);
-        const caTransferQty = (l.caPcrTransfersPending||[]).reduce((s,t)=>s+t.qty,0);
-        const scMainPcs = Object.entries(allocSC).filter(([k])=>!k.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) - scTransferQty;
-        const caMainPcs = Object.entries(allocCA).filter(([k])=>!k.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) - caTransferQty;
-        const allocBoxes = Math.floor(Math.max(0,scMainPcs)/ppb) + Math.floor(Math.max(0,caMainPcs)/ppb);
+        // TRANSFER 제외, PCR 포함한 전체 배분 수량으로 full box 계산
+        const filterAlloc = obj => Object.entries(obj)
+          .filter(([k]) => !k.includes('TRANSFER|'))
+          .reduce((s,[,v]) => s+(v||0), 0);
+        const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA);
+        const allocBoxes = Math.floor(totalAlloc / ppb);
         return `<span style="font-size:18px;font-weight:700;">${allocBoxes}</span><span style="font-size:10px;font-weight:400;margin-left:3px;">boxes</span>`;
       })()}</td>
       <td style="text-align:center;" id="loose-cell-${idx}">
