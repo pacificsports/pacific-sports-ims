@@ -1380,7 +1380,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
     <div class="modal-foot" style="flex-shrink:0;">
       <button class="btn" onclick="closeModal('modal-backorder')">닫기</button>
-      <button class="btn" id="bo-cancel-btn" onclick="cancelBackOrder()" style="color:var(--red);border-color:var(--red);display:none;">✕ Back Order 취소</button>
+      <button class="btn" id="bo-cancel-btn" onclick="cancelBackOrderModal()" style="color:var(--red);border-color:var(--red);display:none;">✕ Back Order 취소</button>
       <button class="btn btn-green" id="bo-fulfill-btn" onclick="fulfillBackOrder()" style="display:none">✓ 재고 차감 & Pick Ticket 생성</button>
     </div>
   </div>
@@ -6387,152 +6387,115 @@ async function openPcrComplete(orderId, wh) {
 function renderPcrBoxes() {
   const container = document.getElementById('pcr-complete-lines');
   const boxes = window._pcrBoxes || [];
-  const styleOptions = (window.styles||[]).map(s => `<option value="${s.style_number}">`).join('');
+  const styleOptsList = (window.styles||[]).map(function(s){ return '<option value="'+s.style_number+'">'; }).join('');
 
-  const boxesHtml = boxes.map((box, bi) => {
-    const total = box.items.reduce((s,i) => s+(i.qty||0), 0);
+  let html = '';
+  for (let bi = 0; bi < boxes.length; bi++) {
+    const box = boxes[bi];
+    const total = box.items.reduce(function(s,i){ return s+(i.qty||0); }, 0);
+    const borderColor = box.isCustom ? '#fbbf24' : '#e2e8f0';
 
-    const itemsHtml = box.isCustom
-      ? box.items.map((item, ii) => `
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:#f8fafc;border-radius:6px;">
-          <span style="font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#1e3a8a;min-width:40px;">${item.styleNum}</span>
-          <span style="font-size:12px;color:#374151;min-width:80px;">${item.color}</span>
-          <span style="font-size:12px;font-weight:700;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;min-width:30px;">${item.size}</span>
-          <input type="number" min="0" value="${item.qty}"
-            onchange="window._pcrBoxes[${bi}].items[${ii}].qty=parseInt(this.value)||0"
-            style="width:60px;height:28px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#1e3a8a;">
-          <span style="font-size:11px;color:#9ca3af;">pcs</span>
-          <button onclick="window._pcrBoxes[${bi}].items.splice(${ii},1);renderPcrBoxes()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:13px;padding:0;margin-left:auto;">✕</button>
-        </div>`).join('')
-      : box.items.map((item, ii) => {
-        const origQty = window._pcrBoxesOriginal?.[bi]?.items?.[ii]?.qty;
-        const changed = origQty !== undefined && item.qty !== origQty;
-        return `
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-          <span style="font-size:13px;font-weight:700;color:#1e3a8a;width:36px;font-family:'IBM Plex Mono',monospace;">${item.size}</span>
-          <input type="number" min="0" value="${item.qty}"
-            onchange="updatePcrBoxItem(${bi},${ii},this.value);checkPcrChanges()"
-            style="width:64px;height:30px;border:1px solid ${changed?'#f59e0b':'#93c5fd'};border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${changed?'#92400e':'#1e3a8a'};">
-          <span style="font-size:11px;color:#9ca3af;">pcs</span>
-          ${changed ? '<span style="font-size:10px;color:#92400e;font-weight:600;">원본: '+origQty+'</span>' : ''}
-        </div>`;}).join('');
+    // Items HTML
+    let itemsHtml = '';
+    if (box.isCustom) {
+      for (let ii = 0; ii < box.items.length; ii++) {
+        const item = box.items[ii];
+        itemsHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:#f8fafc;border-radius:6px;">'
+          + '<span style="font-size:12px;font-weight:700;font-family:IBM Plex Mono,monospace;color:#1e3a8a;min-width:40px;">'+item.styleNum+'</span>'
+          + '<span style="font-size:12px;color:#374151;min-width:80px;">'+item.color+'</span>'
+          + '<span style="font-size:12px;font-weight:700;color:#1e3a8a;font-family:IBM Plex Mono,monospace;min-width:30px;">'+item.size+'</span>'
+          + '<input type="number" min="0" value="'+item.qty+'" onchange="window._pcrBoxes['+bi+'].items['+ii+'].qty=parseInt(this.value)||0" style="width:60px;height:28px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#1e3a8a;">'
+          + '<span style="font-size:11px;color:#9ca3af;">pcs</span>'
+          + '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:13px;padding:0;margin-left:auto;">&#x2715;</button>'
+          + '</div>';
+      }
+    } else {
+      for (let ii = 0; ii < box.items.length; ii++) {
+        const item = box.items[ii];
+        const origQty = window._pcrBoxesOriginal && window._pcrBoxesOriginal[bi] && window._pcrBoxesOriginal[bi].items[ii] ? window._pcrBoxesOriginal[bi].items[ii].qty : null;
+        const changed = origQty !== null && item.qty !== origQty;
+        const borderCol = changed ? '#f59e0b' : '#93c5fd';
+        const textCol = changed ? '#92400e' : '#1e3a8a';
+        const origNote = changed ? '<span style="font-size:10px;color:#92400e;font-weight:600;">&#xC6D0;&#xBCF8;: '+origQty+'</span>' : '';
+        itemsHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+          + '<span style="font-size:13px;font-weight:700;color:#1e3a8a;width:36px;font-family:IBM Plex Mono,monospace;">'+item.size+'</span>'
+          + '<input type="number" min="0" value="'+item.qty+'" onchange="updatePcrBoxItem('+bi+','+ii+',this.value);checkPcrChanges()" style="width:64px;height:30px;border:1px solid '+borderCol+';border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:IBM Plex Mono,monospace;color:'+textCol+';">'
+          + '<span style="font-size:11px;color:#9ca3af;">pcs</span>'
+          + origNote
+          + '</div>';
+      }
+    }
 
-    const addItemFormHtml = box.addingItem ? `
-      <div style="margin-top:8px;padding:10px;background:#f0f9ff;border-radius:6px;border:1px solid #93c5fd;">
-        <div style="font-size:10px;color:#1d4ed8;font-weight:700;margin-bottom:8px;">새 아이템 추가</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;">
-          <div>
-            <div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Style</div>
-            <input list="pcr-style-opts-${bi}" id="pcr-add-style-${bi}" placeholder="1368"
-              style="width:72px;height:30px;border:1px solid #93c5fd;border-radius:4px;padding:0 6px;font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;">
-            <datalist id="pcr-style-opts-${bi}">${styleOptions}</datalist>
-          </div>
-          <div>
-            <div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Color</div>
-            <input id="pcr-add-color-${bi}" placeholder="Navy Htr"
-              style="width:100px;height:30px;border:1px solid #93c5fd;border-radius:4px;padding:0 6px;font-size:12px;">
-          </div>
-          <div>
-            <div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Size</div>
-            <select id="pcr-add-size-${bi}" style="width:64px;height:30px;border:1px solid #93c5fd;border-radius:4px;padding:0 4px;font-size:12px;">
-              <option value="">-</option>
-              <option>XS</option><option>S</option><option>M</option><option>L</option><option>XL</option>
-              <option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>
-              <option>2T</option><option>3T</option><option>4T</option><option>5T</option>
-              <option>YS</option><option>YM</option><option>YL</option><option>YXL</option>
-            </select>
-          </div>
-          <div>
-            <div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Qty</div>
-            <input type="number" id="pcr-add-qty-${bi}" min="1" placeholder="0"
-              style="width:56px;height:30px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace;">
-          </div>
-          <button onclick="confirmPcrBoxItemAdd(${bi})"
-            style="height:30px;padding:0 12px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">✓</button>
-          <button onclick="cancelPcrBoxItemAdd(${bi})"
-            style="height:30px;padding:0 10px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:4px;font-size:12px;cursor:pointer;">취소</button>
-        </div>
-      </div>` : '';
+    // Add item form
+    let addFormHtml = '';
+    if (box.addingItem) {
+      addFormHtml = '<div style="margin-top:8px;padding:10px;background:#f0f9ff;border-radius:6px;border:1px solid #93c5fd;">'
+        + '<div style="font-size:10px;color:#1d4ed8;font-weight:700;margin-bottom:8px;">&#xC0C8; &#xC544;&#xC774;&#xD15C; &#xCD94;&#xAC00;</div>'
+        + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;">'
+        + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Style</div>'
+        + '<input list="pcr-style-opts-'+bi+'" id="pcr-add-style-'+bi+'" placeholder="1368" style="width:72px;height:30px;border:1px solid #93c5fd;border-radius:4px;padding:0 6px;font-size:12px;font-weight:700;">'
+        + '<datalist id="pcr-style-opts-'+bi+'">'+styleOptsList+'</datalist></div>'
+        + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Color</div>'
+        + '<input id="pcr-add-color-'+bi+'" placeholder="Navy Htr" style="width:100px;height:30px;border:1px solid #93c5fd;border-radius:4px;padding:0 6px;font-size:12px;"></div>'
+        + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Size</div>'
+        + '<select id="pcr-add-size-'+bi+'" style="width:64px;height:30px;border:1px solid #93c5fd;border-radius:4px;padding:0 4px;font-size:12px;">'
+        + '<option value="">-</option><option>XS</option><option>S</option><option>M</option><option>L</option><option>XL</option>'
+        + '<option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>'
+        + '<option>2T</option><option>3T</option><option>4T</option><option>5T</option>'
+        + '<option>YS</option><option>YM</option><option>YL</option><option>YXL</option></select></div>'
+        + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Qty</div>'
+        + '<input type="number" id="pcr-add-qty-'+bi+'" min="1" placeholder="0" style="width:56px;height:30px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:13px;font-weight:700;"></div>'
+        + '<button onclick="confirmPcrBoxItemAdd('+bi+')" style="height:30px;padding:0 12px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">&#x2713;</button>'
+        + '<button onclick="cancelPcrBoxItemAdd('+bi+')" style="height:30px;padding:0 10px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:4px;font-size:12px;cursor:pointer;">&#xCDE8;&#xC18C;</button>'
+        + '</div></div>';
+    }
 
-    const addItemBtnHtml = !box.addingItem ? `
-      <button onclick="addPcrBoxItemInline(${bi})"
-        style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:4px 12px;cursor:pointer;margin-top:6px;">
-        + 아이템 추가
-      </button>` : '';
+    const addBtnHtml = !box.addingItem
+      ? '<button onclick="addPcrBoxItemInline('+bi+')" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:4px 12px;cursor:pointer;margin-top:6px;">+ &#xC544;&#xC774;&#xD15C; &#xCD94;&#xAC00;</button>'
+      : '';
 
     const headerLabel = box.isCustom
-      ? `<span style="font-size:12px;color:#92400e;background:#fef3c7;padding:2px 8px;border-radius:4px;">추가 박스</span>`
-      : `<span style="font-size:14px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#111;">${box.styleNum}</span>
-         <span style="font-size:13px;font-weight:600;color:#374151;margin-left:8px;">${box.color}</span>`;
+      ? '<span style="font-size:12px;color:#92400e;background:#fef3c7;padding:2px 8px;border-radius:4px;">&#xCD94;&#xAC00; &#xBC15;&#xC2A4;</span>'
+      : '<span style="font-size:14px;font-weight:800;font-family:IBM Plex Mono,monospace;color:#111;">'+box.styleNum+'</span>'
+        + '<span style="font-size:13px;font-weight:600;color:#374151;margin-left:8px;">'+box.color+'</span>';
 
-    return `
-      <div style="border:1px solid ${box.isCustom?'#fbbf24':'#e2e8f0'};border-radius:10px;padding:14px;margin-bottom:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #f1f5f9;">
-          <div style="display:flex;align-items:center;gap:10px;">
-            <span style="background:#1e3a8a;color:#fff;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:800;font-family:'IBM Plex Mono',monospace;">BOX ${box.boxNum}</span>
-            ${headerLabel}
-          </div>
-          <div style="display:flex;align-items:center;gap:10px;">
-            <span style="font-size:15px;font-weight:800;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;">${total} pcs</span>
-            ${box.isCustom ? `<button onclick="removePcrBox(${bi})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:18px;padding:0;line-height:1;">🗑</button>` : ''}
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-          <div>
-            <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">
-              ${box.isCustom ? '아이템 목록' : '사이즈별 수량'}
-            </div>
-            ${itemsHtml}
-            ${addItemFormHtml}
-            ${addItemBtnHtml}
-          </div>
-          <div>
-            <div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">⚠️ 불량 (선택사항)</div>
-            <div style="display:flex;flex-direction:column;gap:5px;">
-              <div style="display:flex;align-items:center;gap:6px;">
-                <span style="font-size:11px;color:#374151;width:52px;font-weight:600;">Total</span>
-                <input type="number" min="0" value="0" id="pcr-defect-box-${bi}"
-                  style="width:58px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;background:#fff;"
-                  oninput="togglePcrBoxDefect(${bi},this.value)">
-              </div>
-              <div id="pcr-defect-detail-${bi}" style="display:none;flex-direction:column;gap:5px;padding:8px;background:#fef2f2;border-radius:6px;margin-top:2px;">
-                <div style="display:flex;align-items:center;gap:6px;">
-                  <span style="font-size:11px;color:#6b7280;width:52px;">🌫 Shade</span>
-                  <input type="number" min="0" value="0" id="pcr-shade-box-${bi}" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;">
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                  <span style="font-size:11px;color:#6b7280;width:52px;">🕳 Hole</span>
-                  <input type="number" min="0" value="0" id="pcr-hole-box-${bi}" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;">
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                  <span style="font-size:11px;color:#6b7280;width:52px;">🟤 Stain</span>
-                  <input type="number" min="0" value="0" id="pcr-stain-box-${bi}" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;">
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                  <span style="font-size:11px;color:#6b7280;width:52px;">📝 Other</span>
-                  <input type="number" min="0" value="0" id="pcr-other-box-${bi}" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;">
-                </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                  <input type="text" id="pcr-other-note-box-${bi}" placeholder="Other 이유..."
-                    style="flex:1;height:26px;border:1px solid #fecaca;border-radius:4px;padding:0 8px;font-size:11px;">
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>`;
-  }).join('');
+    const deleteBtn = box.isCustom
+      ? '<button onclick="removePcrBox('+bi+')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:18px;padding:0;line-height:1;">&#x1F5D1;</button>'
+      : '';
 
-  const addBoxHtml = `
-    <button onclick="addPcrBox()" style="width:100%;padding:12px;border:2px dashed #93c5fd;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:13px;font-weight:700;cursor:pointer;margin-top:4px;transition:background 0.1s;"
-      onmouseover="this.style.background='#dbeafe'" onmouseout="this.style.background='#f0f9ff'">
-      📦 + 박스 추가
-    </button>`;
+    html += '<div style="border:1px solid '+borderColor+';border-radius:10px;padding:14px;margin-bottom:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #f1f5f9;">'
+      + '<div style="display:flex;align-items:center;gap:10px;">'
+      + '<span style="background:#1e3a8a;color:#fff;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:800;font-family:IBM Plex Mono,monospace;">BOX '+box.boxNum+'</span>'
+      + headerLabel + '</div>'
+      + '<div style="display:flex;align-items:center;gap:10px;">'
+      + '<span style="font-size:15px;font-weight:800;color:#1e3a8a;font-family:IBM Plex Mono,monospace;">'+total+' pcs</span>'
+      + deleteBtn + '</div></div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">'
+      + '<div><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">'
+      + (box.isCustom ? '&#xC544;&#xC774;&#xD15C; &#xBAA9;&#xB85D;' : '&#xC0AC;&#xC774;&#xC988;&#xBCC4; &#xC218;&#xB7C9;')
+      + '</div>' + itemsHtml + addFormHtml + addBtnHtml + '</div>'
+      + '<div><div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">&#x26A0;&#xFE0F; &#xBD88;&#xB7C9; (&#xC120;&#xD0DD;&#xC0AC;&#xD56D;)</div>'
+      + '<div style="display:flex;flex-direction:column;gap:5px;">'
+      + '<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:#374151;width:52px;font-weight:600;">Total</span>'
+      + '<input type="number" min="0" value="0" id="pcr-defect-box-'+bi+'" style="width:58px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;background:#fff;" oninput="togglePcrBoxDefect('+bi+',this.value)"></div>'
+      + '<div id="pcr-defect-detail-'+bi+'" style="display:none;flex-direction:column;gap:5px;padding:8px;background:#fef2f2;border-radius:6px;margin-top:2px;">'
+      + '<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:#6b7280;width:52px;">&#x1F32B; Shade</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;"></div>'
+      + '<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:#6b7280;width:52px;">&#x1F573; Hole</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;"></div>'
+      + '<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:#6b7280;width:52px;">&#x1F7E4; Stain</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;"></div>'
+      + '<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:11px;color:#6b7280;width:52px;">&#x1F4DD; Other</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;"></div>'
+      + '<div style="display:flex;align-items:center;gap:6px;"><input type="text" id="pcr-other-note-box-'+bi+'" placeholder="Other &#xC774;&#xC720;..." style="flex:1;height:26px;border:1px solid #fecaca;border-radius:4px;padding:0 8px;font-size:11px;"></div>'
+      + '</div></div></div></div>';
+  }
 
-  container.innerHTML = boxesHtml + addBoxHtml;
+  html += '<button onclick="addPcrBox()" style="width:100%;padding:12px;border:2px dashed #93c5fd;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:13px;font-weight:700;cursor:pointer;margin-top:4px;">&#x1F4E6; + &#xBC15;&#xC2A4; &#xCD94;&#xAC00;</button>';
 
-  // 변경 감지 → Manager 승인 섹션 표시/숨김
+  container.innerHTML = html;
+
+  // 변경 감지
   checkPcrChanges();
+}
+
 function togglePcrBoxDefect(bi, val) {
   const det = document.getElementById('pcr-defect-detail-'+bi);
   if (det) det.style.display = parseInt(val) > 0 ? 'flex' : 'none';
@@ -8277,7 +8240,7 @@ async function saveBOnote() {
   await db.from('orders').update({ bo_note: note }).eq('id', currentBoOrderId);
   showToast('📝 메모 저장됨');
 }
-async function cancelBackOrder() {
+async function cancelBackOrderModal() {
   if (!currentBoOrderId) return;
   const order = allOrders.find(o => o.id === currentBoOrderId);
   if (!confirm(`Back Order 취소하시겠습니까?
