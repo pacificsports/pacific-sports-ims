@@ -671,7 +671,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                     <thead><tr>
                       <th>Item Code</th><th>Style</th><th>Color</th><th>Size</th>
                       <th>Qty(pcs)</th><th>Unit$</th><th>SC/SC-PCR</th><th>CA/CA-PCR</th>
-                      <th>Ship</th><th>Full Boxes</th><th>Partial Pcs(PCR)</th><th>Back Order</th><th>✕</th>
+                      <th>Ship</th><th>Full Boxes</th><th>Partial Pcs(PCR)</th><th>Back Order</th><th style="color:#a84212;">Transfer</th><th>✕</th>
                     </tr></thead>
                     <tbody id="po-lines-body"></tbody>
                   </table>
@@ -3029,9 +3029,13 @@ function renderEntryTable() {
       <td style="text-align:center;color:#2e7d32">${(function(){
         const allocSC = l.allocSC || {};
         const allocCA = l.allocCA || {};
-        const totalAlloc = [...Object.values(allocSC), ...Object.values(allocCA)].reduce((s,v)=>s+(v||0),0);
         const ppb = l.ppb || 72;
-        const allocBoxes = Math.floor(totalAlloc / ppb);
+        // transfer qty 제외한 실제 full box 수량
+        const scTransferQty = (l.pcrTransfersPending||[]).reduce((s,t)=>s+t.qty,0);
+        const caTransferQty = (l.caPcrTransfersPending||[]).reduce((s,t)=>s+t.qty,0);
+        const scMainPcs = Object.entries(allocSC).filter(([k])=>!k.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) - scTransferQty;
+        const caMainPcs = Object.entries(allocCA).filter(([k])=>!k.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) - caTransferQty;
+        const allocBoxes = Math.floor(Math.max(0,scMainPcs)/ppb) + Math.floor(Math.max(0,caMainPcs)/ppb);
         return `<span style="font-size:18px;font-weight:700;">${allocBoxes}</span><span style="font-size:10px;font-weight:400;margin-left:3px;">boxes</span>`;
       })()}</td>
       <td style="text-align:center;" id="loose-cell-${idx}">
@@ -3064,6 +3068,16 @@ function renderEntryTable() {
           return `<span style="color:#b91c1c;font-weight:700;">${backQty} pcs</span><br><span style="color:#b91c1c;font-size:10px;font-weight:400;">(${breakdown})</span>`;
         })()}
       </td>
+      <td style="text-align:center;font-size:12px;">${(function(){
+        const scT = (l.pcrTransfersPending||[]).reduce((s,t)=>s+t.boxes,0);
+        const caT = (l.caPcrTransfersPending||[]).reduce((s,t)=>s+t.boxes,0);
+        const total = scT + caT;
+        if (total === 0) return '<span style="color:#ccc;">—</span>';
+        let parts = [];
+        if (scT > 0) parts.push(`<span style="color:#a84212;font-weight:700;">SC: ${scT}박스</span>`);
+        if (caT > 0) parts.push(`<span style="color:#5b21b6;font-weight:700;">CA: ${caT}박스</span>`);
+        return parts.join('<br>');
+      })()}</td>
       <td><button class="btn btn-sm" style="color:var(--red);padding:2px 6px" onclick="poLines.splice(${idx},1);renderEntryTable();liveRenderDocs()">✕</button></td>
     </tr>`;
   }).join('');
