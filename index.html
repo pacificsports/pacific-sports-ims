@@ -6287,7 +6287,7 @@ async function openPcrComplete(orderId, wh) {
 
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const filteredLines = isSplit
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
+    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
     : lines;
 
   // Partial pcs가 있는 라인만 (alloc_detail의 PCR|PCR pcs 기준)
@@ -6316,21 +6316,29 @@ async function openPcrComplete(orderId, wh) {
   if (_pcrCompleteLines.length === 0) {
     container.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;">Partial pcs 없음 — 모두 full box</div>';
   } else {
-    // Pick Ticket 박스 배치와 동일한 로직으로 박스 생성
     const sizeOrd = s => (['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf(s)+1)||99;
     const groups = {};
-    pcrLines.forEach(l => {
+
+    // SC&CA 스플릿 라인은 alloc_detail(SC) + alloc_ca_detail(CA) 둘 다 확인
+    filteredLines.forEach(l => {
       const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
       const key = `${l.styles?.style_number||''}|||${l.color||''}|||${ppb}`;
       if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
-      const alloc = l.alloc_detail || {};
-      const pcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-      if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs });
+
+      // SC PCR pcs
+      const allocSC = l.alloc_detail || {};
+      const scPcrPcs = Object.entries(allocSC).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+      // CA PCR pcs (SC&CA 라인)
+      const allocCA = l.alloc_ca_detail || {};
+      const caPcrPcs = Object.entries(allocCA).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+      const totalPcrPcs = scPcrPcs + caPcrPcs;
+
+      if (totalPcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: totalPcrPcs });
     });
 
     // 박스 배치 계산
     let globalBoxNum = 1;
-    window._pcrBoxes = []; // 전역으로 저장 (추가/수정용)
+    window._pcrBoxes = [];
     Object.values(groups).sort((a,b) => b.boxQty - a.boxQty).forEach(g => {
       const boxQty = g.boxQty;
       const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size) - sizeOrd(b.size));
@@ -6342,20 +6350,20 @@ async function openPcrComplete(orderId, wh) {
         while (remaining > 0) {
           const space = boxQty - currentTotal;
           if (remaining > space && currentTotal > 0) {
-            window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox });
+            window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox, items: [...currentBox.items] });
             currentBox = { items: [], styleNum: g.styleNum, color: g.color, boxQty, isCustom: false };
             currentTotal = 0;
           }
           const take = Math.min(remaining, boxQty - currentTotal);
           if (take > 0) { currentBox.items.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
           if (currentTotal >= boxQty) {
-            window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox });
+            window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox, items: [...currentBox.items] });
             currentBox = { items: [], styleNum: g.styleNum, color: g.color, boxQty, isCustom: false };
             currentTotal = 0;
           }
         }
       });
-      if (currentBox.items.length > 0) window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox });
+      if (currentBox.items.length > 0) window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox, items: [...currentBox.items] });
     });
 
     renderPcrBoxes();
@@ -6371,56 +6379,68 @@ function renderPcrBoxes() {
   const boxesHtml = boxes.map((box, bi) => {
     const total = box.items.reduce((s,i) => s+i.qty, 0);
     const itemsHtml = box.items.map((item, ii) => `
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-        <span style="font-size:11px;color:#6b7280;width:32px;">${item.size}</span>
-        <input type="number" min="0" value="${item.qty}" 
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="font-size:13px;font-weight:700;color:#1e3a8a;width:36px;font-family:'IBM Plex Mono',monospace;">${item.size}</span>
+        <input type="number" min="0" value="${item.qty}"
           onchange="updatePcrBoxItem(${bi},${ii},this.value)"
-          style="width:60px;height:26px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;">
-        <span style="font-size:10px;color:#9ca3af;">pcs</span>
-        ${box.isCustom ? `<button onclick="removePcrBoxItem(${bi},${ii})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:12px;padding:0;">✕</button>` : ''}
+          style="width:64px;height:30px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#1e3a8a;">
+        <span style="font-size:11px;color:#9ca3af;">pcs</span>
+        ${box.isCustom ? `<button onclick="removePcrBoxItem(${bi},${ii})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:13px;padding:0;line-height:1;">✕</button>` : ''}
       </div>`).join('');
 
     return `
-      <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:8px;background:#fff;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <span style="background:#1e3a8a;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:800;font-family:'IBM Plex Mono',monospace;">BOX ${box.boxNum}</span>
-            <span style="font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace;">${box.styleNum}</span>
-            <span style="font-size:11px;color:#6b7280;">${box.color}</span>
-            ${box.isCustom ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:4px;">추가됨</span>' : ''}
+      <div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;margin-bottom:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+        <!-- 헤더 -->
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #f1f5f9;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="background:#1e3a8a;color:#fff;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:800;font-family:'IBM Plex Mono',monospace;letter-spacing:0.5px;">BOX ${box.boxNum}</span>
+            <div>
+              <span style="font-size:14px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#111;">${box.styleNum}</span>
+              <span style="font-size:13px;font-weight:600;color:#374151;margin-left:8px;">${box.color}</span>
+              ${box.isCustom ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:4px;margin-left:6px;">추가됨</span>' : ''}
+            </div>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;">
-            <span style="font-size:12px;font-weight:700;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;">${total} pcs</span>
-            ${box.isCustom ? `<button onclick="removePcrBox(${bi})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:0;">🗑</button>` : ''}
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="font-size:15px;font-weight:800;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;">${total} pcs</span>
+            ${box.isCustom ? `<button onclick="removePcrBox(${bi})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:18px;padding:0;line-height:1;">🗑</button>` : ''}
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <!-- 사이즈별 수량 + 불량 -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
           <div>
-            <div style="font-size:10px;color:#6b7280;margin-bottom:6px;font-weight:600;">사이즈별 수량</div>
+            <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">사이즈별 수량</div>
             ${itemsHtml}
-            ${box.isCustom ? `<button onclick="addPcrBoxItem(${bi})" style="font-size:10px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:3px 8px;cursor:pointer;margin-top:4px;">+ 사이즈 추가</button>` : ''}
+            ${box.isCustom ? `<button onclick="addPcrBoxItem(${bi})" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:4px 10px;cursor:pointer;margin-top:4px;">+ 사이즈 추가</button>` : ''}
           </div>
           <div>
-            <div style="font-size:10px;color:#dc2626;margin-bottom:6px;font-weight:600;">⚠️ 불량 (선택사항)</div>
-            <div style="display:flex;flex-direction:column;gap:4px;">
+            <div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">⚠️ 불량 (선택사항)</div>
+            <div style="display:flex;flex-direction:column;gap:5px;">
               <div style="display:flex;align-items:center;gap:6px;">
-                <span style="font-size:10px;color:#6b7280;width:48px;">Total</span>
+                <span style="font-size:11px;color:#374151;width:52px;font-weight:600;">Total</span>
                 <input type="number" min="0" value="0" id="pcr-defect-box-${bi}"
-                  style="width:54px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;color:#dc2626;"
+                  style="width:58px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;background:#fff;"
                   oninput="togglePcrBoxDefect(${bi},this.value)">
               </div>
-              <div id="pcr-defect-detail-${bi}" style="display:none;flex-direction:column;gap:4px;">
+              <div id="pcr-defect-detail-${bi}" style="display:none;flex-direction:column;gap:5px;padding:8px;background:#fef2f2;border-radius:6px;margin-top:2px;">
                 <div style="display:flex;align-items:center;gap:6px;">
-                  <span style="font-size:10px;color:#6b7280;width:48px;">🌫 Shade</span>
-                  <input type="number" min="0" value="0" id="pcr-shade-box-${bi}" style="width:54px;height:26px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
+                  <span style="font-size:11px;color:#6b7280;width:52px;">🌫 Shade</span>
+                  <input type="number" min="0" value="0" id="pcr-shade-box-${bi}" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;">
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;">
-                  <span style="font-size:10px;color:#6b7280;width:48px;">🕳 Hole</span>
-                  <input type="number" min="0" value="0" id="pcr-hole-box-${bi}" style="width:54px;height:26px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
+                  <span style="font-size:11px;color:#6b7280;width:52px;">🕳 Hole</span>
+                  <input type="number" min="0" value="0" id="pcr-hole-box-${bi}" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;">
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;">
-                  <span style="font-size:10px;color:#6b7280;width:48px;">🟤 Stain</span>
-                  <input type="number" min="0" value="0" id="pcr-stain-box-${bi}" style="width:54px;height:26px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
+                  <span style="font-size:11px;color:#6b7280;width:52px;">🟤 Stain</span>
+                  <input type="number" min="0" value="0" id="pcr-stain-box-${bi}" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;">
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-size:11px;color:#6b7280;width:52px;">📝 Other</span>
+                  <input type="number" min="0" value="0" id="pcr-other-box-${bi}" style="width:58px;height:26px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;font-weight:600;">
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input type="text" id="pcr-other-note-box-${bi}" placeholder="Other 이유..."
+                    style="flex:1;height:26px;border:1px solid #fecaca;border-radius:4px;padding:0 8px;font-size:11px;">
                 </div>
               </div>
             </div>
@@ -6429,10 +6449,10 @@ function renderPcrBoxes() {
       </div>`;
   }).join('');
 
-  // 박스 추가 버튼
   const addBoxHtml = `
-    <button onclick="addPcrBox()" style="width:100%;padding:10px;border:2px dashed #93c5fd;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;margin-top:4px;">
-      + 박스 추가
+    <button onclick="addPcrBox()" style="width:100%;padding:12px;border:2px dashed #93c5fd;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:13px;font-weight:700;cursor:pointer;margin-top:4px;transition:background 0.1s;"
+      onmouseover="this.style.background='#dbeafe'" onmouseout="this.style.background='#f0f9ff'">
+      📦 + 박스 추가
     </button>`;
 
   container.innerHTML = boxesHtml + addBoxHtml;
