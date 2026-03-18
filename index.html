@@ -5982,6 +5982,14 @@ async function resubmitCreditHold(orderId, orderNumber, customerName, customerPo
 async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
   if (!confirm(`${fromStatus === 'preparing' ? 'Preparing → PO Entered' : 'Ready to Ship → Preparing'} 로 되돌릴까요?`)) return;
   await updateWhStatus(orderId, wh, toStatus);
+  // PO Entered로 돌아갈 때 → 해당 WH 프린트 플래그 리셋
+  if (toStatus === 'po_entered') {
+    const pre = wh === 'CA' ? 'ca_' : 'sc_';
+    await db.from('orders').update({
+      [pre + 'warehouse_printed_at']: null,
+      [pre + 'pcroom_printed_at']: null
+    }).eq('id', orderId);
+  }
   loadOrderStatus();
 }
 async function updateWhStatus(orderId, wh, newStatus) {
@@ -6471,6 +6479,133 @@ async function confirmPreparationComplete() {
       loadOrderStatus();
     }
   );
+}
+
+// ── BOL (Bill of Lading) 기능
+let _bolSigCanvas = null;
+let _bolSigCtx = null;
+let _bolDrawing = false;
+let _bolHasSig = false;
+let _bolOrder = null;
+let _bolLines = null;
+
+async function openSignedBolModal() {
+  // 현재 shipped 모달의 정보 수집
+  const orderId = _shippedOrderId;
+  if (!orderId) { alert('오더를 먼저 선택하세요.'); return; }
+
+  const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
+  const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+  _bolOrder = order;
+  _bolLines = lines || [];
+
+  // 날짜 기본값
+  document.getElementById('bol-sign-date').value =
+    new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }) +
+    ' ' + new Date().toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
+  document.getElementById('bol-driver-name').value = '';
+
+  // 모달 열기
+  document.getElementById('modal-signed-bol').style.display = 'flex';
+
+  // Canvas 초기화 (열린 후에 크기 설정)
+  requestAnimationFrame(() => {
+    initBolCanvas();
+    switchBolTab('sign');
+  });
+}
+
+function initBolCanvas() {
+  const canvas = document.getElementById('bol-sig-canvas');
+  if (!canvas) return;
+  const container = canvas.parentElement;
+  canvas.width = container.clientWidth;
+  canvas.height = 160;
+  _bolSigCanvas = canvas;
+  _bolSigCtx = canvas.getContext('2d');
+  _bolSigCtx.strokeStyle = '#1e3a8a';
+  _bolSigCtx.lineWidth = 2.5;
+  _bolSigCtx.lineCap = 'round';
+  _bolSigCtx.lineJoin = 'round';
+  _bolHasSig = false;
+  document.getElementById('bol-sig-placeholder').style.display = 'block';
+
+  // Touch events
+  canvas.addEventListener('touchstart', bolTouchStart, { passive: false });
+  canvas.addEventListener('touchmove', bolTouchMove, { passive: false });
+  canvas.addEventListener('touchend', bolTouchEnd, { passive: false });
+  // Mouse events
+  canvas.addEventListener('mousedown', bolMouseDown);
+  canvas.addEventListener('mousemove', bolMouseMove);
+  canvas.addEventListener('mouseup', bolMouseUp);
+  canvas.addEventListener('mouseleave', bolMouseUp);
+}
+
+function getBolPos(e, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const touch = e.touches ? e.touches[0] : e;
+  return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+}
+
+function bolTouchStart(e) { e.preventDefault(); _bolDrawing = true; const p = getBolPos(e, _bolSigCanvas); _bolSigCtx.beginPath(); _bolSigCtx.moveTo(p.x, p.y); hideBolPlaceholder(); }
+function bolTouchMove(e) { e.preventDefault(); if (!_bolDrawing) return; const p = getBolPos(e, _bolSigCanvas); _bolSigCtx.lineTo(p.x, p.y); _bolSigCtx.stroke(); _bolHasSig = true; }
+function bolTouchEnd(e) { e.preventDefault(); _bolDrawing = false; updateBolSigStatus(); }
+function bolMouseDown(e) { _bolDrawing = true; const p = getBolPos(e, _bolSigCanvas); _bolSigCtx.beginPath(); _bolSigCtx.moveTo(p.x, p.y); hideBolPlaceholder(); }
+function bolMouseMove(e) { if (!_bolDrawing) return; const p = getBolPos(e, _bolSigCanvas); _bolSigCtx.lineTo(p.x, p.y); _bolSigCtx.stroke(); _bolHasSig = true; }
+function bolMouseUp() { _bolDrawing = false; if (_bolHasSig) updateBolSigStatus(); }
+
+function hideBolPlaceholder() {
+  const ph = document.getElementById('bol-sig-placeholder');
+  if (ph) ph.style.display = 'none';
+}
+
+function updateBolSigStatus() {
+  const el = document.getElementById('bol-sig-status');
+  if (el && _bolHasSig) el.innerHTML = '<span style="color:#16a34a;font-weight:700;">✓ 서명 완료</span>';
+}
+
+function clearBolSignature() {
+  if (!_bolSigCtx || !_bolSigCanvas) return;
+  _bolSigCtx.clearRect(0, 0, _bolSigCanvas.width, _bolSigCanvas.height);
+  _bolHasSig = false;
+  const ph = document.getElementById('bol-sig-placeholder');
+  if (ph) ph.style.display = 'block';
+  const el = document.getElementById('bol-sig-status');
+  if (el) el.innerHTML = '';
+}
+
+function switchBolTab(tab) {
+  document.getElementById('bol-panel-sign').style.display = tab === 'sign' ? 'block' : 'none';
+  document.getElementById('bol-panel-preview').style.display = tab === 'preview' ? 'block' : 'none';
+  document.getElementById('bol-tab-sign').style.borderBottomColor = tab === 'sign' ? '#0f2744' : 'transparent';
+  document.getElementById('bol-tab-sign').style.color = tab === 'sign' ? '#0f2744' : '#6b7280';
+  document.getElementById('bol-tab-preview').style.borderBottomColor = tab === 'preview' ? '#0f2744' : 'transparent';
+  document.getElementById('bol-tab-preview').style.color = tab === 'preview' ? '#0f2744' : '#6b7280';
+}
+
+function previewSignedBol() {
+  if (!_bolOrder || !_bolLines) { alert('오더 데이터가 없습니다.'); return; }
+  const driverName = document.getElementById('bol-driver-name').value.trim();
+  const signDate = document.getElementById('bol-sign-date').value;
+  const carrier = document.getElementById('ship-carrier')?.value || '';
+  const tracking = document.getElementById('ship-tracking')?.value || '';
+  const pickupCompany = document.getElementById('ship-pickup-company')?.value || '';
+  const shipDate = document.getElementById('ship-date-inp')?.value || '';
+
+  const sigData = (_bolHasSig && _bolSigCanvas) ? _bolSigCanvas.toDataURL('image/png') : null;
+  const shipInfo = { carrier, tracking, pickupCompany, driverName, signDate, shipDate };
+
+  const html = buildBolHtml(_bolOrder, _bolLines, shipInfo, sigData);
+  document.getElementById('bol-preview-content').innerHTML = html;
+  switchBolTab('preview');
+}
+
+function printSignedBol() {
+  previewSignedBol();
+  setTimeout(() => {
+    const content = document.getElementById('bol-preview-content').innerHTML;
+    printInNewWindow(content);
+  }, 200);
 }
 
 // ── 3단계: Mark as Shipped → 재고 차감 + Back Order 처리
@@ -7202,6 +7337,155 @@ function buildPackingListHtml(order, lines, isSplit) {
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date||'—'}</div></div>
     </div>
     ${body}
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// BOL (Bill of Lading) HTML 빌더
+// ═══════════════════════════════════════════════════════
+function buildBolHtml(order, lines, shipInfo, signatureData) {
+  const dateStr = shipInfo?.shipDate || new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const bolNum = 'BOL-' + (order.order_number || '').replace(/[^A-Z0-9]/g,'') + '-' + Date.now().toString().slice(-4);
+  const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
+
+  const sorted = [...lines].sort((a,b) => {
+    const ca = (a.color||'').localeCompare(b.color||'');
+    return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
+  });
+
+  // 총 수량, 박스 계산
+  let totalPcs = 0, totalBoxes = 0;
+  const rows = sorted.map(l => {
+    const pcs = l.qty_pieces || 0;
+    const alloc = l.alloc_detail || {};
+    const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
+    const boxes = Object.entries(alloc)
+      .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+      .reduce((s,[,v]) => s + (typeof v==='object' ? v.boxes||0 : Math.floor((v||0)/ppb)), 0);
+    totalPcs += pcs;
+    totalBoxes += boxes;
+    return `<tr style="border-bottom:1px solid #e5e7eb;">
+      <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
+      <td style="padding:6px 8px;font-size:11px;">${l.styles?.description||''}</td>
+      <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${pcs.toLocaleString()}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:center;">${boxes > 0 ? boxes : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  const fromAddr = '1605 South Guignard Parkway\nSumter, SC 29150\nTel: (803) 000-0000';
+  const signatureBlock = signatureData ? `
+    <div style="margin-top:4px;">
+      <img src="${signatureData}" style="max-height:60px;border:1px solid #e5e7eb;border-radius:4px;background:#fff;padding:2px;">
+    </div>` : `<div style="height:60px;border-bottom:1px solid #374151;margin-top:4px;"></div>`;
+
+  return `<div style="font-family:Arial,sans-serif;font-size:12px;">
+    <!-- Header -->
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;padding-bottom:12px;border-bottom:3px solid #111;">
+      <div>
+        <div style="font-size:22px;font-weight:800;letter-spacing:2px;color:#111;">PACIFIC SPORTS INC</div>
+        <div style="font-size:11px;color:#555;margin-top:4px;white-space:pre-line;">${fromAddr}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:24px;font-weight:800;color:#0f2744;letter-spacing:1px;">BILL OF LADING</div>
+        <div style="font-size:11px;color:#555;margin-top:4px;"><b>BOL #:</b> ${bolNum}</div>
+        <div style="font-size:11px;color:#555;"><b>Date:</b> ${dateStr}</div>
+        <div style="font-size:11px;color:#555;"><b>Order #:</b> ${order.order_number||'—'}</div>
+      </div>
+    </div>
+
+    <!-- Ship From / Ship To / Carrier -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;">
+      <div style="border:1px solid #d1d5db;border-radius:6px;padding:10px;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Ship From</div>
+        <div style="font-weight:700;font-size:12px;">PACIFIC SPORTS INC</div>
+        <div style="font-size:11px;color:#374151;margin-top:2px;">1605 South Guignard Pkwy<br>Sumter, SC 29150</div>
+      </div>
+      <div style="border:1px solid #d1d5db;border-radius:6px;padding:10px;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Ship To</div>
+        <div style="font-weight:700;font-size:12px;">${order.customer_name||'—'}</div>
+        <div style="font-size:11px;color:#374151;margin-top:2px;">${(order.ship_addr||'').replace(/\n/g,'<br>') || '—'}</div>
+      </div>
+      <div style="border:1px solid #d1d5db;border-radius:6px;padding:10px;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Carrier Info</div>
+        <div style="font-size:11px;color:#374151;">
+          <div><b>Carrier:</b> ${shipInfo?.carrier||'—'}</div>
+          <div><b>PRO/Tracking:</b> ${shipInfo?.tracking||'—'}</div>
+          <div><b>Pickup Co.:</b> ${shipInfo?.pickupCompany||'—'}</div>
+          <div><b>PO #:</b> ${order.customer_po||'—'}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Freight Details -->
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px;">
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Total Pieces</div><div style="font-weight:700;font-size:16px;">${totalPcs.toLocaleString()}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Total Boxes</div><div style="font-weight:700;font-size:16px;">${totalBoxes}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${dateStr}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'Prepaid'}</div></div>
+      </div>
+    </div>
+
+    <!-- Line Items -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+      <thead>
+        <tr style="background:#0f2744;color:#fff;">
+          <th style="padding:7px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Style #</th>
+          <th style="padding:7px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Description</th>
+          <th style="padding:7px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Color</th>
+          <th style="padding:7px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Size</th>
+          <th style="padding:7px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Qty (Pcs)</th>
+          <th style="padding:7px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Boxes</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+      <tfoot>
+        <tr style="background:#f1f5f9;font-weight:700;">
+          <td colspan="4" style="padding:8px;text-align:right;font-size:12px;">TOTAL:</td>
+          <td style="padding:8px;text-align:center;font-size:13px;">${totalPcs.toLocaleString()} pcs</td>
+          <td style="padding:8px;text-align:center;font-size:13px;">${totalBoxes} boxes</td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <!-- Signature Section -->
+    <div style="border:2px solid #374151;border-radius:8px;padding:16px;margin-top:20px;">
+      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;">📝 Acknowledgment of Receipt</div>
+      <div style="font-size:11px;color:#6b7280;margin-bottom:16px;">
+        Received in good order and condition, except as noted herein, the merchandise described above.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:8px;">
+        <div>
+          <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;margin-bottom:4px;">Driver Signature</div>
+          ${signatureBlock}
+          <div style="font-size:10px;color:#374151;margin-top:4px;">
+            ${signatureData ? '<span style="color:#16a34a;font-weight:700;">✓ Signed</span>' : '<span style="color:#9ca3af;">Signature required</span>'}
+          </div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;margin-bottom:4px;">Driver Name (Print)</div>
+          <div style="height:60px;border-bottom:1px solid #374151;margin-top:4px;padding-top:4px;font-size:13px;font-weight:700;color:#111;">
+            ${signatureData ? (shipInfo?.driverName||'') : ''}
+          </div>
+          <div style="font-size:10px;color:#9ca3af;margin-top:4px;">Print clearly</div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:#9ca3af;text-transform:uppercase;margin-bottom:4px;">Date / Time</div>
+          <div style="height:60px;border-bottom:1px solid #374151;margin-top:4px;padding-top:4px;font-size:13px;font-weight:700;color:#111;">
+            ${signatureData ? (shipInfo?.signDate||dateStr) : ''}
+          </div>
+          <div style="font-size:10px;color:#9ca3af;margin-top:4px;">${dateStr}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="margin-top:16px;padding-top:10px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;">
+      <div>Pacific Sports Inc · 1605 South Guignard Parkway, Sumter SC 29150</div>
+      <div>BOL# ${bolNum} · ${dateStr}</div>
+    </div>
   </div>`;
 }
 
@@ -11254,6 +11538,7 @@ function showCreditHoldFlash(overAmt) {
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">
       <button class="btn" onclick="document.getElementById('modal-shipped').style.display='none'">취소</button>
+      <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="openSignedBolModal()">📋 Create Signed BOL</button>
       <button class="btn btn-primary" onclick="confirmShipped()" style="background:#16a34a;border-color:#16a34a;">🚛 Shipped 확정</button>
     </div>
   </div>
@@ -11501,6 +11786,65 @@ function showCreditHoldFlash(overAmt) {
           </div>
         </div>
       </div>
+
+<!-- ── Signed BOL 모달 ── -->
+<div id="modal-signed-bol" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:760px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,0.4);">
+    <!-- Header -->
+    <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+      <span style="color:#fff;font-weight:700;font-size:15px;">📋 Bill of Lading — Driver Signature</span>
+      <button onclick="document.getElementById('modal-signed-bol').style.display='none'" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1;">×</button>
+    </div>
+    <!-- Tabs -->
+    <div style="display:flex;border-bottom:1px solid #e5e7eb;background:#f8fafc;flex-shrink:0;">
+      <div id="bol-tab-sign" class="bol-tab active-bol-tab" onclick="switchBolTab('sign')" style="padding:10px 20px;font-size:12px;font-weight:600;cursor:pointer;border-bottom:2px solid #0f2744;color:#0f2744;">✍️ Signature</div>
+      <div id="bol-tab-preview" class="bol-tab" onclick="switchBolTab('preview')" style="padding:10px 20px;font-size:12px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;color:#6b7280;">📄 BOL Preview</div>
+    </div>
+    <!-- Body -->
+    <div style="flex:1;overflow-y:auto;">
+      <!-- Signature Panel -->
+      <div id="bol-panel-sign" style="padding:20px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Driver Name <span style="color:#dc2626">*</span></label>
+            <input id="bol-driver-name" class="fi" type="text" placeholder="Full name" style="font-size:13px;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Date / Time</label>
+            <input id="bol-sign-date" class="fi" type="text" style="font-size:13px;">
+          </div>
+        </div>
+        <!-- Canvas Signature Area -->
+        <div style="margin-bottom:12px;">
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:8px;">Driver Signature <span style="color:#dc2626">*</span> <span style="font-size:10px;color:#6b7280;font-weight:400;">(draw with finger or mouse)</span></label>
+          <div style="border:2px solid #374151;border-radius:8px;background:#f9fafb;position:relative;overflow:hidden;">
+            <canvas id="bol-sig-canvas" style="display:block;cursor:crosshair;touch-action:none;"></canvas>
+            <div id="bol-sig-placeholder" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#d1d5db;font-size:14px;pointer-events:none;text-align:center;">
+              ✍️ Sign here
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="btn" style="font-size:11px;" onclick="clearBolSignature()">🗑 Clear</button>
+            <div id="bol-sig-status" style="font-size:11px;color:#6b7280;align-self:center;"></div>
+          </div>
+        </div>
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;font-size:11px;color:#1e3a8a;">
+          💡 운전기사가 터치/마우스로 서명란에 직접 서명합니다. 서명 완료 후 <b>Preview BOL</b>을 클릭하세요.
+        </div>
+      </div>
+      <!-- Preview Panel -->
+      <div id="bol-panel-preview" style="padding:20px;display:none;">
+        <div id="bol-preview-content" style="border:1px solid #e5e7eb;border-radius:6px;padding:20px;background:#fff;"></div>
+      </div>
+    </div>
+    <!-- Footer -->
+    <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;background:#fff;border-radius:0 0 12px 12px;flex-shrink:0;">
+      <button class="btn" onclick="document.getElementById('modal-signed-bol').style.display='none'">닫기</button>
+      <button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2;" onclick="previewSignedBol()">👁 Preview BOL</button>
+      <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="printSignedBol()">🖨️ Print BOL</button>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
