@@ -6353,6 +6353,7 @@ async function openPcrComplete(orderId, wh) {
     // 박스 배치 계산
     let globalBoxNum = 1;
     window._pcrBoxes = [];
+    window._pcrBoxesOriginal = null; // 원본 스냅샷 (변경 감지용)
     Object.values(groups).sort((a,b) => b.boxQty - a.boxQty).forEach(g => {
       const boxQty = g.boxQty;
       const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size) - sizeOrd(b.size));
@@ -6381,6 +6382,8 @@ async function openPcrComplete(orderId, wh) {
     });
 
     renderPcrBoxes();
+    // 원본 스냅샷 저장 (변경 감지용)
+    window._pcrBoxesOriginal = JSON.parse(JSON.stringify(window._pcrBoxes));
   }
 
   document.getElementById('pcr-complete-modal').style.display = 'flex';
@@ -6406,16 +6409,20 @@ function renderPcrBoxes() {
           <span style="font-size:11px;color:#9ca3af;">pcs</span>
           <button onclick="window._pcrBoxes[${bi}].items.splice(${ii},1);renderPcrBoxes()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:13px;padding:0;margin-left:auto;">✕</button>
         </div>`).join('')
-      : box.items.map((item, ii) => `
+      : box.items.map((item, ii) => {
+        const origQty = window._pcrBoxesOriginal?.[bi]?.items?.[ii]?.qty;
+        const changed = origQty !== undefined && item.qty !== origQty;
+        return `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <span style="font-size:13px;font-weight:700;color:#1e3a8a;width:36px;font-family:'IBM Plex Mono',monospace;">${item.size}</span>
           <input type="number" min="0" value="${item.qty}"
-            onchange="updatePcrBoxItem(${bi},${ii},this.value)"
-            style="width:64px;height:30px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#1e3a8a;">
+            onchange="updatePcrBoxItem(${bi},${ii},this.value);checkPcrChanges()"
+            style="width:64px;height:30px;border:1px solid ${changed?'#f59e0b':'#93c5fd'};border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${changed?'#92400e':'#1e3a8a'};">
           <span style="font-size:11px;color:#9ca3af;">pcs</span>
-        </div>`).join('');
+          ${changed ? '<span style="font-size:10px;color:#92400e;font-weight:600;">원본: '+origQty+'</span>' : ''}
+        </div>`;}).join('');
 
-    const addItemFormHtml = box.isCustom && box.addingItem ? `
+    const addItemFormHtml = box.addingItem ? `
       <div style="margin-top:8px;padding:10px;background:#f0f9ff;border-radius:6px;border:1px solid #93c5fd;">
         <div style="font-size:10px;color:#1d4ed8;font-weight:700;margin-bottom:8px;">새 아이템 추가</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;">
@@ -6452,7 +6459,7 @@ function renderPcrBoxes() {
         </div>
       </div>` : '';
 
-    const addItemBtnHtml = box.isCustom && !box.addingItem ? `
+    const addItemBtnHtml = !box.addingItem ? `
       <button onclick="addPcrBoxItemInline(${bi})"
         style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:4px 12px;cursor:pointer;margin-top:6px;">
         + 아이템 추가
@@ -6529,19 +6536,8 @@ function renderPcrBoxes() {
 
   container.innerHTML = boxesHtml + addBoxHtml;
 
-  const hasCustom = (window._pcrBoxes||[]).some(b => b.isCustom);
-  const managerSection = document.getElementById('pcr-manager-pin-section');
-  if (managerSection) {
-    managerSection.style.display = hasCustom ? 'block' : 'none';
-    if (!hasCustom) {
-      window._pcrManagerApproved = false;
-      const pinEl = document.getElementById('pcr-manager-pin');
-      if (pinEl) pinEl.value = '';
-      const okEl = document.getElementById('pcr-manager-pin-ok');
-      if (okEl) okEl.style.display = 'none';
-    }
-  }
-}
+  // 변경 감지 → Manager 승인 섹션 표시/숨김
+  checkPcrChanges();
 function togglePcrBoxDefect(bi, val) {
   const det = document.getElementById('pcr-defect-detail-'+bi);
   if (det) det.style.display = parseInt(val) > 0 ? 'flex' : 'none';
@@ -6623,21 +6619,88 @@ function toggleDefectDetail(idx, val) {
   if (det) det.style.display = parseInt(val) > 0 ? 'flex' : 'none';
 }
 
+function checkPcrChanges() {
+  const boxes = window._pcrBoxes || [];
+  const original = window._pcrBoxesOriginal || [];
+
+  let hasChanges = false;
+
+  // 1. 새 박스 추가됐는지
+  if (boxes.length > original.length) hasChanges = true;
+
+  // 2. 기존 박스 수량 변경됐는지
+  if (!hasChanges) {
+    boxes.forEach((box, bi) => {
+      if (box.isCustom) { hasChanges = true; return; }
+      const origBox = original[bi];
+      if (!origBox) { hasChanges = true; return; }
+      box.items.forEach((item, ii) => {
+        const origItem = origBox.items[ii];
+        if (!origItem || item.qty !== origItem.qty) hasChanges = true;
+      });
+      // 아이템이 추가됐는지
+      if (box.items.length > origBox.items.length) hasChanges = true;
+    });
+  }
+
+  // Manager 승인 섹션 표시/숨김
+  const managerSection = document.getElementById('pcr-manager-pin-section');
+  if (managerSection) {
+    managerSection.style.display = hasChanges ? 'block' : 'none';
+    if (!hasChanges) {
+      window._pcrManagerApproved = false;
+      window._pcrApprovalId = null;
+      const pinEl = document.getElementById('pcr-manager-pin');
+      if (pinEl) pinEl.value = '';
+      const okEl = document.getElementById('pcr-manager-pin-ok');
+      if (okEl) okEl.style.display = 'none';
+      // 승인 섹션 초기화
+      const reqSec = document.getElementById('pcr-approval-request-section');
+      const pendSec = document.getElementById('pcr-approval-pending-section');
+      if (reqSec) reqSec.style.display = 'block';
+      if (pendSec) pendSec.style.display = 'none';
+    }
+  }
+  return hasChanges;
+}
+
 async function requestManagerApproval() {
-  const boxes = (window._pcrBoxes||[]).filter(b => b.isCustom);
-  if (boxes.length === 0) return;
+  const boxes = window._pcrBoxes || [];
+  const original = window._pcrBoxesOriginal || [];
 
-  // 현재 직원 PIN으로 이름 가져오기 (입력됐으면)
+  // 변경 내용 요약
+  const changes = [];
+  boxes.forEach((box, bi) => {
+    if (box.isCustom) {
+      changes.push({ type: 'new_box', box });
+      return;
+    }
+    const origBox = original[bi];
+    box.items.forEach((item, ii) => {
+      const origItem = origBox?.items?.[ii];
+      if (origItem && item.qty !== origItem.qty) {
+        changes.push({ type: 'qty_change', boxNum: box.boxNum, size: item.size, from: origItem.qty, to: item.qty });
+      }
+    });
+    // 기존 박스에 아이템 추가
+    if (box.items.length > (origBox?.items?.length || 0)) {
+      box.items.slice(origBox?.items?.length || 0).forEach(item => {
+        changes.push({ type: 'item_added', boxNum: box.boxNum, item });
+      });
+    }
+  });
+
   const empName = _pcrCompleteEmp?.name || '직원';
+  const orderNum = document.getElementById('pcr-complete-info')?.textContent?.split('—')[0]?.trim() || '';
 
-  // manager_approvals에 저장
   const { data, error } = await db.from('manager_approvals').insert({
     order_id: _pcrCompleteOrderId,
-    order_number: document.getElementById('pcr-complete-info')?.textContent?.split('—')[0]?.trim() || '',
+    order_number: orderNum,
     requested_by: empName,
     wh: _pcrCompleteWh,
-    extra_boxes: boxes,
-    status: 'pending'
+    extra_boxes: boxes.filter(b => b.isCustom),
+    status: 'pending',
+    changes: changes  // 변경 내용 상세
   }).select().single();
 
   if (error) {
@@ -6648,7 +6711,6 @@ async function requestManagerApproval() {
   window._pcrApprovalId = data.id;
   showToast('✅ Manager에게 승인 요청됨!');
 
-  // UI 전환: Request 버튼 숨기고 PIN 입력 표시
   document.getElementById('pcr-approval-request-section').style.display = 'none';
   document.getElementById('pcr-approval-pending-section').style.display = 'block';
 }
@@ -6686,12 +6748,23 @@ async function loadManagerApprovals() {
 
 function renderApprovalCard(a) {
   const boxes = a.extra_boxes || [];
+  const changes = a.changes || [];
   const isPending = a.status === 'pending';
   const statusColor = isPending ? '#92400e' : a.status === 'approved' ? '#15803d' : '#dc2626';
   const statusLabel = isPending ? '⏳ 대기중' : a.status === 'approved' ? '✅ 승인됨' : '❌ 거부됨';
   const createdAt = new Date(a.created_at).toLocaleString('ko-KR', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 
-  const boxesHtml = boxes.map(box => {
+  const changesHtml = changes.length > 0 ? changes.map(c => {
+    if (c.type === 'new_box') {
+      const items = (c.box?.items||[]).map(i => `${i.styleNum} ${i.color} ${i.size} ${i.qty}pcs`).join(', ');
+      return `<div style="font-size:11px;margin-bottom:3px;"><span style="background:#dbeafe;color:#1e3a8a;padding:1px 5px;border-radius:3px;font-weight:700;">새 박스</span> ${items}</div>`;
+    } else if (c.type === 'qty_change') {
+      return `<div style="font-size:11px;margin-bottom:3px;"><span style="background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:3px;font-weight:700;">BOX ${c.boxNum} ${c.size}</span> ${c.from}pcs → <span style="font-weight:700;color:#dc2626;">${c.to}pcs</span></div>`;
+    } else if (c.type === 'item_added') {
+      return `<div style="font-size:11px;margin-bottom:3px;"><span style="background:#dcfce7;color:#15803d;padding:1px 5px;border-radius:3px;font-weight:700;">BOX ${c.boxNum} 추가</span> ${c.item?.styleNum} ${c.item?.color} ${c.item?.size} ${c.item?.qty}pcs</div>`;
+    }
+    return '';
+  }).join('') : boxes.map(box => {
     const items = (box.items||[]).map(item =>
       `<span style="font-size:11px;background:#f1f5f9;padding:2px 6px;border-radius:3px;margin:2px;">${item.styleNum} ${item.color} ${item.size} ${item.qty}pcs</span>`
     ).join('');
@@ -6707,7 +6780,7 @@ function renderApprovalCard(a) {
         </div>
         <span style="font-size:11px;font-weight:700;color:${statusColor};">${statusLabel}</span>
       </div>
-      <div style="margin-bottom:${isPending?'10px':'0'};">${boxesHtml}</div>
+      <div style="margin-bottom:${isPending?'10px':'0'};">${changesHtml}</div>
       ${isPending ? `
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid #fde68a;">
         <input type="password" maxlength="4" inputmode="numeric" placeholder="Manager PIN"
