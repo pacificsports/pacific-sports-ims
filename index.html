@@ -5249,63 +5249,86 @@ async function restoreOrderInventory(orderId) {
   const { data: lines } = await db.from('order_lines').select('*').eq('order_id', orderId);
   if (!lines || lines.length === 0) return;
 
-  // 오더의 PCR Complete 완료 여부 확인
   const { data: order } = await db.from('orders')
-    .select('sc_pcr_complete_at,ca_pcr_complete_at,sc_wh_complete_at,ca_wh_complete_at,wh_code,is_split_warehouse')
+    .select('sc_pcr_complete_at,ca_pcr_complete_at,wh_code,is_split_warehouse')
     .eq('id', orderId).single();
-
-  // bin별 복구 수량 집계
-  // SC 메인 bin: qty_committed ↓ (항상)
-  // SC-PCR bin: PCR Complete 됐으면 qty_on_hand ↑ + qty_committed ↓
-  //             PCR Complete 안 됐으면 qty_committed ↓ 만
-  const committedMap = {}; // { binId: qty } — qty_committed 감소
-  const onHandMap    = {}; // { binId: qty } — qty_on_hand 증가 (PCR complete된 경우)
 
   const scPcrDone = !!order?.sc_pcr_complete_at;
   const caPcrDone = !!order?.ca_pcr_complete_at;
 
+  // bin location 이름 → inventory id 매핑
+  const { data: allInv } = await db.from('inventory').select('id,location,qty_committed,qty_on_hand,warehouses(code)');
+  const invByLocation = {};
+  (allInv||[]).forEach(inv => {
+    const whCode = inv.warehouses?.code || '';
+    const key = whCode + '|' + inv.location;
+    if (!invByLocation[key]) invByLocation[key] = [];
+    invByLocation[key].push(inv);
+  });
+
+  // 복구할 수량 집계 { invId: { committed, onHand } }
+  const restoreMap = {};
+  const addRestore = (invId, committed, onHand=0) => {
+    if (!restoreMap[invId]) restoreMap[invId] = { committed: 0, onHand: 0 };
+    restoreMap[invId].committed += committed;
+    restoreMap[invId].onHand += onHand;
+  };
+
   for (const line of lines) {
     const lineWh = line.wh || 'SC';
-    const isPcrDone = lineWh === 'CA' ? caPcrDone : scPcrDone;
+    const scPcr = scPcrDone;
+    const caPcr = caPcrDone;
 
-    // SC / SC-PCR alloc
-    const allocSC = line.alloc_detail || {};
-    for (const [binId, val] of Object.entries(allocSC)) {
-      const qty = typeof val === 'object' ? (val.pcs || 0) : (val || 0);
-      if (qty <= 0) continue;
-      committedMap[binId] = (committedMap[binId] || 0) + qty;
-      // PCR bin이고 PCR Complete 됐으면 qty_on_hand도 복구
-      if (binId.toUpperCase().includes('PCR') && isPcrDone) {
-        onHandMap[binId] = (onHandMap[binId] || 0) + qty;
+    // alloc_detail (SC bins)
+    for (const [key, val] of Object.entries(line.alloc_detail || {})) {
+      if (key.includes('TRANSFER|')) continue; // transfer key는 실제 재고 아님
+      const pcs = typeof val === 'object' ? (val.pcs||0) : (val||0);
+      if (pcs <= 0) continue;
+      const isScPcr = key.includes('PCR|PCR');
+      const wh = isScPcr ? 'SC-PCR' : 'SC';
+      const loc = isScPcr ? 'PCR' : key;
+      const matches = invByLocation[wh+'|'+loc] || [];
+      // 가장 많이 committed된 것부터 차감
+      let remaining = pcs;
+      for (const inv of matches) {
+        if (remaining <= 0) break;
+        const release = Math.min(remaining, inv.qty_committed||0);
+        if (release > 0) {
+          addRestore(inv.id, release, isScPcr && scPcr ? release : 0);
+          remaining -= release;
+        }
       }
     }
 
-    // CA / CA-PCR alloc
-    const allocCA = line.alloc_ca_detail || {};
-    for (const [binId, val] of Object.entries(allocCA)) {
-      const qty = typeof val === 'object' ? (val.pcs || 0) : (val || 0);
-      if (qty <= 0) continue;
-      committedMap[binId] = (committedMap[binId] || 0) + qty;
-      if (binId.toUpperCase().includes('PCR') && caPcrDone) {
-        onHandMap[binId] = (onHandMap[binId] || 0) + qty;
+    // alloc_ca_detail (CA bins)
+    for (const [key, val] of Object.entries(line.alloc_ca_detail || {})) {
+      if (key.includes('TRANSFER|')) continue;
+      const pcs = typeof val === 'object' ? (val.pcs||0) : (val||0);
+      if (pcs <= 0) continue;
+      const isCaPcr = key.includes('PCR|PCR');
+      const wh = isCaPcr ? 'CA-PCR' : 'CA';
+      const loc = isCaPcr ? 'PCR' : key;
+      const matches = invByLocation[wh+'|'+loc] || [];
+      let remaining = pcs;
+      for (const inv of matches) {
+        if (remaining <= 0) break;
+        const release = Math.min(remaining, inv.qty_committed||0);
+        if (release > 0) {
+          addRestore(inv.id, release, isCaPcr && caPcr ? release : 0);
+          remaining -= release;
+        }
       }
     }
   }
 
   // DB 업데이트
-  const allBinIds = new Set([...Object.keys(committedMap), ...Object.keys(onHandMap)]);
-  for (const binId of allBinIds) {
-    const { data: inv } = await db.from('inventory')
-      .select('id,qty_on_hand,qty_committed')
-      .eq('id', binId).single();
+  for (const [invId, amounts] of Object.entries(restoreMap)) {
+    const inv = (allInv||[]).find(i => i.id === invId);
     if (!inv) continue;
-    const update = {
-      qty_committed: Math.max(0, (inv.qty_committed||0) - (committedMap[binId]||0))
-    };
-    if (onHandMap[binId]) {
-      update.qty_on_hand = (inv.qty_on_hand||0) + onHandMap[binId];
-    }
-    await db.from('inventory').update(update).eq('id', binId);
+    await db.from('inventory').update({
+      qty_committed: Math.max(0, (inv.qty_committed||0) - amounts.committed),
+      qty_on_hand: amounts.onHand > 0 ? (inv.qty_on_hand||0) + amounts.onHand : inv.qty_on_hand
+    }).eq('id', invId);
   }
 }
 
@@ -9971,103 +9994,74 @@ async function execPcrBackTransfer(whGroup, ppb) {
 }
 
 async function execPcrTransfer(whGroup, ppb) {
-  const container = document.getElementById('alloc-both-' + whGroup.toLowerCase() + '-wrap')
-                 || document.getElementById('alloc-bins-wrap')
-                 || document.body;
-  const bin  = _pcrSelectedBin;
-  const boxes = parseInt((container.querySelector('[id="pcr-transfer-boxes-' + whGroup + '"]') || document.getElementById('pcr-transfer-boxes-' + whGroup))?.value)||1;
-  if (!bin) { alert('Bin을 선택해주세요.'); return; }
-  _pcrSelectedBin = null;
-  const qty  = boxes * ppb;
-  const pcrWh = whGroup + '-PCR';
-
   if (!_allocState) return;
-  const l = poLines[_allocState.lineIdx];
+  const lineIdx = _allocState.lineIdx;
+  const l = poLines[lineIdx];
   if (!l) return;
 
-  // DB에 바로 쓰지 않고 — 재고 검증만 하고 pending 목록에 추가
-  // 실제 DB 반영은 applyAlloc / applyAllocBoth 때 수행
-  const scWhObj = warehouses.find(w => w.code === whGroup);
-  if (!scWhObj) { alert('창고 정보를 찾을 수 없습니다.'); return; }
+  const container = _allocState.whGroup === 'SC&CA'
+    ? (document.getElementById('alloc-both-' + whGroup.toLowerCase() + '-wrap') || document.body)
+    : (document.getElementById('alloc-bins-wrap') || document.body);
 
-  // SC bin 재고 확인 (검증용, DB 수정 없음)
-  // pending transfer에서 이미 차감된 양도 반영
-  const pendingDeduct = _pcrTransfers
-    .filter(t => t.whGroup === whGroup && t.fromBin === bin)
-    .reduce((s, t) => s + t.qty, 0);
-  const binData = (window.binInventory?.[whGroup]?.[`${l.styleNum||''}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`] || [])
-    .find(b => b.bin === bin);
-  const availableQty = (binData?.qty || 0) - pendingDeduct;
-  if (availableQty < qty) {
-    alert(`재고 부족! 가용 재고: ${availableQty} pcs`);
-    return;
-  }
+  const bin = _pcrSelectedBin;
+  if (!bin) { alert('Bin을 선택해주세요.'); return; }
 
-  // pending 목록에 추가 (화면에만 반영)
-  _pcrTransfers.push({ fromBin: bin, whGroup, qty, boxes, styleNum: l.styleNum||'', color: l.color, size: l.size });
+  const boxesInput = container.querySelector('[id="pcr-transfer-boxes-' + whGroup + '"]')
+                  || document.getElementById('pcr-transfer-boxes-' + whGroup);
+  const boxes = parseInt(boxesInput?.value)||1;
+  const qty = boxes * ppb;
 
-  showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty} pcs) — 적용 버튼으로 확정`);
-
-  // Transfer 후 alloc 값은 저장하지 않음 (기존 배분값 유지)
-  // Transfer 정보만 _pcrTransfers에 추가됨
-  const isBoth = _allocState.whGroup === 'SC&CA';
-
-  // binInventory를 pending 반영해서 화면 업데이트 (DB 건드리지 않음)
+  // 재고 확인
   const k = `${l.styleNum||''}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
-  if (window.binInventory[whGroup]?.[k]) {
-    const b = window.binInventory[whGroup][k].find(b => b.bin === bin);
-    if (b) b.qty -= qty;
-  }
-  const pcrWh2 = whGroup + '-PCR';
-  if (!window.binInventory[pcrWh2]) window.binInventory[pcrWh2] = {};
-  if (!window.binInventory[pcrWh2][k]) window.binInventory[pcrWh2][k] = [];
-  const pcrBin = window.binInventory[pcrWh2][k].find(b => b.bin === 'PCR');
-  if (pcrBin) { pcrBin.qty += qty; }
-  else { window.binInventory[pcrWh2][k].push({ bin: 'PCR', qty, committed: 0, received_date: new Date().toISOString().slice(0,10) }); }
+  const binData = (window.binInventory?.[whGroup]?.[k]||[]).find(b => b.bin === bin);
+  const alreadyPending = _pcrTransfers.filter(t=>t.whGroup===whGroup&&t.fromBin===bin).reduce((s,t)=>s+t.qty,0);
+  const available = (binData?.qty||0) - alreadyPending;
+  if (available < qty) { alert(`재고 부족! 가용: ${available}pcs`); return; }
 
-  // 재렌더링 전 현재 입력값 저장 (SC/CA 입력값 보존)
-  const saveWrapInputs = (wrapId) => {
+  // ── 핵심: _pcrTransfers에 추가
+  _pcrTransfers.push({ fromBin: bin, whGroup, qty, boxes });
+  _pcrSelectedBin = null;
+
+  // 현재 입력값 저장 (재렌더링 후 복원용)
+  const readInputs = (wrapId) => {
     const alloc = {};
-    document.querySelectorAll(`${wrapId} input[data-type="box"], ${wrapId} input[data-type="pcs"]`).forEach(inp => {
+    document.querySelectorAll(`${wrapId} input[data-bin]`).forEach(inp => {
       const v = parseInt(inp.value)||0;
       if (v > 0) alloc[inp.dataset.bin] = v;
     });
     return alloc;
   };
+  const isBoth = _allocState.whGroup === 'SC&CA';
   if (isBoth) {
-    const scAlloc = saveWrapInputs('#alloc-both-sc-wrap');
-    const caAlloc = saveWrapInputs('#alloc-both-ca-wrap');
-    if (Object.keys(scAlloc).length > 0) poLines[_allocState.lineIdx].allocSC = scAlloc;
-    if (Object.keys(caAlloc).length > 0) poLines[_allocState.lineIdx].allocCA = caAlloc;
+    const sc = readInputs('#alloc-both-sc-wrap');
+    const ca = readInputs('#alloc-both-ca-wrap');
+    if (Object.keys(sc).length) poLines[lineIdx].allocSC = sc;
+    if (Object.keys(ca).length) poLines[lineIdx].allocCA = ca;
   } else {
-    const liveAlloc = saveWrapInputs('#alloc-bins-wrap');
-    if (Object.keys(liveAlloc).length > 0) {
-      if (whGroup === 'SC') poLines[_allocState.lineIdx].allocSC = liveAlloc;
-      else poLines[_allocState.lineIdx].allocCA = liveAlloc;
-    }
+    const a = readInputs('#alloc-bins-wrap');
+    if (whGroup === 'SC') poLines[lineIdx].allocSC = a;
+    else poLines[lineIdx].allocCA = a;
   }
 
-  // 모달 다시 그리기 (선택 상태 복원 포함)
-  const savedBin = bin;
-  const savedWh = whGroup;
+  // binInventory 화면용 차감
+  if (window.binInventory[whGroup]?.[k]) {
+    const b = window.binInventory[whGroup][k].find(b=>b.bin===bin);
+    if (b) b.qty -= qty;
+  }
+  const pcrWh = whGroup+'-PCR';
+  if (!window.binInventory[pcrWh]) window.binInventory[pcrWh] = {};
+  if (!window.binInventory[pcrWh][k]) window.binInventory[pcrWh][k] = [];
+  const pcrB = window.binInventory[pcrWh][k].find(b=>b.bin==='PCR');
+  if (pcrB) pcrB.qty += qty;
+  else window.binInventory[pcrWh][k].push({bin:'PCR',qty,committed:0,received_date:new Date().toISOString().slice(0,10)});
+
+  showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty}pcs) 지정됨`);
+
+  // 재렌더링
   if (isBoth) {
-    openAllocModalBoth(_allocState.lineIdx);
-    setTimeout(() => {
-      const wrap = document.getElementById('pcr-transfer-wrap-SC') || document.getElementById('pcr-transfer-wrap-CA');
-      if (wrap) {
-        const opt = wrap.querySelector(`.pcr-bin-opt[data-bin="${savedBin}"]`);
-        if (opt) { opt.style.background = '#fff3e0'; opt.style.border = '2px solid #a84212'; }
-      }
-    }, 300);
+    openAllocModalBoth(lineIdx);
   } else {
-    openAllocModal(_allocState.lineIdx, whGroup);
-    setTimeout(() => {
-      const wrap = document.getElementById('pcr-transfer-wrap-' + savedWh);
-      if (wrap) {
-        const opt = wrap.querySelector(`.pcr-bin-opt[data-bin="${savedBin}"]`);
-        if (opt) { opt.style.background = '#fff3e0'; opt.style.border = '2px solid #a84212'; }
-      }
-    }, 300);
+    openAllocModal(lineIdx, whGroup);
   }
 }
 
@@ -10278,42 +10272,31 @@ function cancelAllocBothModal() {
 function applyAlloc() {
   if (!_allocState) return;
   const { lineIdx, whGroup } = _allocState;
+
+  // 현재 input값 읽기 (pcs 단위)
   const alloc = {};
-
-  // SC/CA bin pcs
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="box"]').forEach(inp => {
-    const qty = parseInt(inp.value)||0;
-    if (qty > 0) alloc[inp.dataset.bin] = qty;
-  });
-  // PCR pcs
-  document.querySelectorAll('#alloc-bins-wrap input[data-type="pcs"]').forEach(inp => {
-    const qty = parseInt(inp.value)||0;
-    if (qty > 0) alloc[inp.dataset.bin] = qty;
+  document.querySelectorAll('#alloc-bins-wrap input[data-bin]').forEach(inp => {
+    const v = parseInt(inp.value)||0;
+    if (v > 0) alloc[inp.dataset.bin] = v;
   });
 
-  // transfer된 bin에 transfer qty 더하기
-  _pcrTransfers.forEach(t => {
+  // transfer된 bin에 transfer qty 합산 (transfer 후 input이 줄어든 것 보정)
+  _pcrTransfers.filter(t => t.whGroup === whGroup).forEach(t => {
     alloc[t.fromBin] = (alloc[t.fromBin] || 0) + t.qty;
   });
 
+  const transfers = _pcrTransfers.filter(t => t.whGroup === whGroup);
+
   if (whGroup === 'SC') {
     poLines[lineIdx].allocSC = alloc;
-    poLines[lineIdx].pcrTransfers = [..._pcrTransfers];
-    const firstSCBin = Object.keys(alloc).find(k => !k.includes('SC-PCR|'));
-    if (firstSCBin) poLines[lineIdx].location = firstSCBin;
+    poLines[lineIdx].pcrTransfersPending = transfers;
+    const firstBin = Object.keys(alloc).find(k => !k.includes('PCR'));
+    if (firstBin) poLines[lineIdx].location = firstBin;
   } else {
     poLines[lineIdx].allocCA = alloc;
-    poLines[lineIdx].caPcrTransfers = [..._pcrTransfers];
+    poLines[lineIdx].caPcrTransfersPending = transfers;
   }
 
-  // transfer 정보를 poLines에 저장 (DB 반영은 saveInvoice에서)
-  if (whGroup === 'SC') {
-    poLines[lineIdx].pcrTransfersPending = [..._pcrTransfers];
-    poLines[lineIdx].pcrBackTransfersPending = [..._pcrBackTransfers];
-  } else {
-    poLines[lineIdx].caPcrTransfersPending = [..._pcrTransfers];
-    poLines[lineIdx].caPcrBackTransfersPending = [..._pcrBackTransfers];
-  }
   _pcrTransfers = [];
   _pcrBackTransfers = [];
   _allocState = null;
@@ -10576,36 +10559,31 @@ function applyAllocBoth() {
   const l = poLines[lineIdx];
   if (!l) return;
 
-  // SC 입력값 수집 (transfer qty 합산해서 저장)
+  // SC 입력값 읽기 + transfer qty 합산
   const scAlloc = {};
   document.querySelectorAll('#alloc-both-sc-wrap input[data-bin]').forEach(inp => {
-    const v = parseInt(inp.value) || 0;
+    const v = parseInt(inp.value)||0;
     if (v > 0) scAlloc[inp.dataset.bin] = v;
   });
-  // SC transfer된 bin에 transfer qty 더하기
   _pcrTransfers.filter(t => t.whGroup === 'SC').forEach(t => {
-    scAlloc[t.fromBin] = (scAlloc[t.fromBin] || 0) + t.qty;
+    scAlloc[t.fromBin] = (scAlloc[t.fromBin]||0) + t.qty;
   });
 
-  // CA 입력값 수집 (transfer qty 합산해서 저장)
+  // CA 입력값 읽기 + transfer qty 합산
   const caAlloc = {};
   document.querySelectorAll('#alloc-both-ca-wrap input[data-bin]').forEach(inp => {
-    const v = parseInt(inp.value) || 0;
+    const v = parseInt(inp.value)||0;
     if (v > 0) caAlloc[inp.dataset.bin] = v;
   });
-  // CA transfer된 bin에 transfer qty 더하기
   _pcrTransfers.filter(t => t.whGroup === 'CA').forEach(t => {
-    caAlloc[t.fromBin] = (caAlloc[t.fromBin] || 0) + t.qty;
+    caAlloc[t.fromBin] = (caAlloc[t.fromBin]||0) + t.qty;
   });
 
   poLines[lineIdx].allocSC = Object.keys(scAlloc).length > 0 ? scAlloc : null;
   poLines[lineIdx].allocCA = Object.keys(caAlloc).length > 0 ? caAlloc : null;
-
-  // pending PCR transfers를 DB에 반영
-  // transfer 정보를 poLines에 저장 (DB 반영은 saveInvoice에서)
   poLines[lineIdx].pcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC');
-  poLines[lineIdx].pcrBackTransfersPending = _pcrBackTransfers.filter(t => t.whGroup === 'SC');
   poLines[lineIdx].caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'CA');
+  poLines[lineIdx].pcrBackTransfersPending = _pcrBackTransfers.filter(t => t.whGroup === 'SC');
   poLines[lineIdx].caPcrBackTransfersPending = _pcrBackTransfers.filter(t => t.whGroup === 'CA');
   _pcrTransfers = [];
   _pcrBackTransfers = [];
