@@ -7000,17 +7000,14 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
       const alloc = l.alloc_detail || {};
       return Object.keys(alloc).some(k => k.includes('TRANSFER|'));
     });
-    // 2. WH Full Box 라인 (transfer qty 뺀 나머지 full box가 있는 라인)
+    // 2. WH Full Box 라인 (transfer는 별도 키로 저장되므로 그냥 bin pcs로 계산)
     const whLines = sectionLines.filter(l => {
       const alloc = l.alloc_detail || {};
       const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
       return Object.entries(alloc).some(([k,v]) => {
         if (k.toUpperCase().includes('PCR') || k.includes('TRANSFER|')) return false;
         const pcs = typeof v === 'object' ? (v.pcs||0) : (v||0);
-        const transferPcs = Object.entries(alloc)
-          .filter(([tk]) => tk === 'SC-TRANSFER|'+k || tk === 'CA-TRANSFER|'+k)
-          .reduce((s,[,tv]) => s+(typeof tv==='object'?tv.pcs:tv||0), 0);
-        return Math.floor((pcs - transferPcs) / ppb) > 0;
+        return Math.floor(pcs / ppb) > 0;
       });
     });
     // 3. PC Room Partial: SC-PCR|PCR pcs > 0 인 라인 (TRANSFER 여부 무관)
@@ -7081,11 +7078,8 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
               if (!binEntries.length) return [];
               return binEntries.flatMap(([bin, detail]) => {
                 const allocPcs = typeof detail==='object' ? (detail.pcs||0) : (detail||0);
-                // transfer된 만큼 제외
-                const transferPcs = Object.entries(alloc)
-                  .filter(([k]) => k === 'SC-TRANSFER|'+bin || k === 'CA-TRANSFER|'+bin)
-                  .reduce((s,[,v]) => s+(typeof v==='object'?v.pcs:v||0), 0);
-                const fullPcs = allocPcs - transferPcs;
+                // transfer는 별도 키로 저장되므로 여기서 빼지 않음
+                const fullPcs = allocPcs;
                 if (fullPcs <= 0) return [];
                 const fullBoxes = Math.floor(fullPcs / ppb);
                 if (fullBoxes <= 0) return [];
@@ -10223,16 +10217,23 @@ function renderPcrTransfers() {
   el.innerHTML = `
     <div style="margin:8px 0;padding:10px 12px;border:1px solid #fdba74;border-radius:8px;background:#fffbeb;">
       <div style="font-size:11px;font-weight:700;color:#a84212;margin-bottom:8px;">✂️ PCR 이동 지정 목록 — 저장 시 Transfer Order 자동 생성</div>
-      ${_pcrTransfers.map((t,i)=>`
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:#fff;border-radius:4px;border:1px solid #fdba74;">
-          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;">${t.fromBin}</span>
+      ${_pcrTransfers.map((t,i)=>{
+        const isSC = t.whGroup === 'SC';
+        const whColor = isSC ? '#14532d' : '#9a3412';
+        const whBg = isSC ? '#f0fdf4' : '#fff7ed';
+        const whBorder = isSC ? '#86efac' : '#fdba74';
+        const whLabel = isSC ? '🟢 SC-PCR Room' : '🟠 CA-PCR Room';
+        return `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:${whBg};border-radius:4px;border:1px solid ${whBorder};">
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:${whColor};">${t.fromBin}</span>
           <span style="color:var(--text3);">→</span>
-          <span style="font-size:11px;font-weight:700;color:#a84212;">${t.whGroup}-PCR Room</span>
+          <span style="font-size:11px;font-weight:700;color:${whColor};">${whLabel}</span>
           <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text2);">${t.qty} pcs</span>
-          <span style="font-size:10px;color:var(--text3);">${t.boxes}박스 (${t.qty} pcs)</span>
+          <span style="font-size:10px;color:var(--text3);">${t.boxes}박스</span>
           <button onclick="_pcrTransfers.splice(${i},1);renderPcrTransfers();"
             style="margin-left:auto;font-size:11px;color:var(--red);background:none;border:none;cursor:pointer;font-weight:700;">✕ 제거</button>
-        </div>`).join('')}
+        </div>`;
+      }).join('')}
       <div style="font-size:10px;color:var(--text3);margin-top:4px;">📋 Pick Ticket에 "X Bin → PCR Room 이동" 으로 표시됩니다</div>
     </div>`;
 }
