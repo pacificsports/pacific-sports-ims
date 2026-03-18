@@ -9826,13 +9826,14 @@ let _pcrSelectedBin = null;
 let _pcrSelectedWh = null;
 
 function selectPcrBin(el, ppb, wh) {
-  // SC&CA 통합 모달에서는 wrap 컨테이너 안에서 찾기
-  const container = document.getElementById('alloc-both-' + wh.toLowerCase() + '-wrap')
-                 || document.getElementById('alloc-bins-wrap')
-                 || document.body;
-  const wrap  = container.querySelector('[id="pcr-transfer-wrap-' + wh + '"]') || document.getElementById('pcr-transfer-wrap-' + wh);
-  const label = container.querySelector('[id="pcr-selected-bin-label-' + wh + '"]') || document.getElementById('pcr-selected-bin-label-' + wh);
-  const btn   = container.querySelector('[id="pcr-transfer-btn-' + wh + '"]') || document.getElementById('pcr-transfer-btn-' + wh);
+  // el의 실제 부모 모달 컨테이너 찾기 (SC&CA 모달이면 alloc-both-xx-wrap, 단일이면 alloc-bins-wrap)
+  const parentWrap = el.closest('[id^="alloc-both-"]') || el.closest('#alloc-bins-wrap') || document.body;
+  
+  // parentWrap 안에서만 요소 찾기 (ID 중복 방지)
+  const findInWrap = (id) => parentWrap.querySelector('[id="' + id + '"]') || parentWrap.querySelector('#' + id);
+  const label = findInWrap('pcr-selected-bin-label-' + wh);
+  const btn   = findInWrap('pcr-transfer-btn-' + wh);
+  const boxInp = findInWrap('pcr-transfer-boxes-' + wh);
 
   // 이미 선택된 bin 다시 클릭 → 선택 해제
   if (_pcrSelectedBin === el.dataset.bin && _pcrSelectedWh === wh) {
@@ -9841,18 +9842,13 @@ function selectPcrBin(el, ppb, wh) {
     _pcrSelectedBin = null;
     _pcrSelectedWh = null;
     if (label) label.innerHTML = `<span style="font-size:12px;color:#888;font-style:italic;">← Bin 선택</span>`;
-    if (btn) { btn.disabled = true; btn.style.cursor = ''; btn.style.background = ''; }
+    if (btn) { btn.disabled = true; btn.style.cursor = ''; btn.style.background = '#ccc'; }
     return;
   }
 
-  // 모든 pcr-bin-opt 선택 초기화 (SC/CA 양쪽)
-  document.querySelectorAll('.pcr-bin-opt').forEach(o => { o.style.background = '#fff'; o.style.border = '1px solid #e5e7eb'; });
-  // 반대 WH 버튼/label도 초기화
-  const otherWh = wh === 'SC' ? 'CA' : 'SC';
-  const otherBtn = document.getElementById('pcr-transfer-btn-' + otherWh);
-  const otherLabel = document.getElementById('pcr-selected-bin-label-' + otherWh);
-  if (otherBtn) { otherBtn.disabled = true; otherBtn.style.cursor = ''; otherBtn.style.background = '#ccc'; }
-  if (otherLabel) otherLabel.innerHTML = `<span style="font-size:12px;color:#888;font-style:italic;">← Bin 선택</span>`;
+  // 같은 wrap 안의 pcr-bin-opt만 초기화
+  parentWrap.querySelectorAll('.pcr-bin-opt').forEach(o => { o.style.background = '#fff'; o.style.border = '1px solid #e5e7eb'; });
+
   el.style.background = '#fff3e0';
   el.style.border = '2px solid #a84212';
   _pcrSelectedBin = el.dataset.bin;
@@ -9862,8 +9858,6 @@ function selectPcrBin(el, ppb, wh) {
   if (label) {
     label.innerHTML = `<span style="display:inline-flex;align-items:center;gap:6px;background:#a84212;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;">✂️ <b style="font-family:'IBM Plex Mono',monospace;">${_pcrSelectedBin}</b> 선택됨 · 최대 ${maxBoxes}박스</span>`;
   }
-
-  const boxInp = document.getElementById('pcr-transfer-boxes-' + wh);
   if (boxInp) { boxInp.max = maxBoxes; boxInp.value = Math.min(parseInt(boxInp.value)||1, maxBoxes); }
   if (btn) { btn.disabled = false; btn.style.cursor = 'pointer'; btn.style.background = '#a84212'; }
 
@@ -10013,16 +10007,17 @@ async function execPcrTransfer(whGroup, ppb) {
   const l = poLines[lineIdx];
   if (!l) return;
 
-  const container = _allocState.whGroup === 'SC&CA'
-    ? (document.getElementById('alloc-both-' + whGroup.toLowerCase() + '-wrap') || document.body)
-    : (document.getElementById('alloc-bins-wrap') || document.body);
+  // SC&CA 모달이면 해당 wrap 안에서만 찾기 (ID 중복 방지)
+  const isBothModal = _allocState.whGroup === 'SC&CA';
+  const wrapId = isBothModal ? 'alloc-both-' + whGroup.toLowerCase() + '-wrap' : 'alloc-bins-wrap';
+  const container = document.getElementById(wrapId) || document.body;
 
   const bin = _pcrSelectedBin;
   if (!bin) { alert('Bin을 선택해주세요.'); return; }
 
-  const boxesInput = container.querySelector('[id="pcr-transfer-boxes-' + whGroup + '"]')
-                  || document.getElementById('pcr-transfer-boxes-' + whGroup);
-  const boxes = parseInt(boxesInput?.value)||1;
+  // container 안에서 boxes input 찾기 (ID 중복 방지)
+  const boxesInput = container.querySelector('[id="pcr-transfer-boxes-' + whGroup + '"]');
+  const boxes = parseInt(boxesInput?.value) || 1;
   const qty = boxes * ppb;
 
   // 재고 확인
