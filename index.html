@@ -6290,22 +6290,21 @@ async function openPcrComplete(orderId, wh) {
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
     : lines;
 
-  // Partial pcs가 있는 라인만 (alloc_detail의 PCR|PCR pcs 기준)
+  // Partial pcs가 있는 라인만 (wh에 따라 SC-PCR 또는 CA-PCR 기준)
+  const pcrKeyPrefix = wh === 'CA' ? 'CA-PCR|PCR' : 'SC-PCR|PCR';
   const pcrLines = filteredLines.filter(l => {
-    const alloc = l.alloc_detail || {};
-    const pcrEntry = Object.entries(alloc).find(([k]) => k.includes('PCR|PCR'));
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
+    const pcrEntry = Object.entries(alloc).find(([k]) => k.includes(pcrKeyPrefix));
     const pcrPcs = pcrEntry ? (typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0)) : 0;
     return pcrPcs > 0;
   });
 
   _pcrCompleteLines = pcrLines.map((l,i) => {
     const ppb = l.pcs_per_box || 72;
-    const alloc = l.alloc_detail || {};
-    // alloc_detail의 PCR|PCR pcs 사용
-    const pcrEntry = Object.entries(alloc).find(([k]) => k.includes('PCR|PCR'));
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
+    const pcrEntry = Object.entries(alloc).find(([k]) => k.includes(pcrKeyPrefix));
     const partialQty = pcrEntry ? (typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0)) : 0;
     const pcrBinId = pcrEntry ? pcrEntry[0] : null;
-    // box allocation 계산
     const fullBoxes = Object.entries(alloc)
       .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0) : Math.floor((v||0)/ppb)), 0);
@@ -6325,13 +6324,14 @@ async function openPcrComplete(orderId, wh) {
       const key = `${l.styles?.style_number||''}|||${l.color||''}|||${ppb}`;
       if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
 
-      // SC PCR pcs
+      // SC PCR pcs (SC Pick Ticket용)
       const allocSC = l.alloc_detail || {};
-      const scPcrPcs = Object.entries(allocSC).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-      // CA PCR pcs (SC&CA 라인)
+      const scPcrPcs = Object.entries(allocSC).filter(([k])=>k.includes('SC-PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+      // CA PCR pcs (CA Pick Ticket용)
       const allocCA = l.alloc_ca_detail || {};
-      const caPcrPcs = Object.entries(allocCA).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-      const totalPcrPcs = scPcrPcs + caPcrPcs;
+      const caPcrPcs = Object.entries(allocCA).filter(([k])=>k.includes('CA-PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+      // wh에 따라 해당 PCR pcs만 사용
+      const totalPcrPcs = wh === 'CA' ? caPcrPcs : scPcrPcs;
 
       if (totalPcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: totalPcrPcs });
     });
