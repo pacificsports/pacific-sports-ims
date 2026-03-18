@@ -10125,6 +10125,81 @@ function updatePcrTransferLabel(wh, ppb) {
   if (el) el.textContent = `(${(boxes*ppb).toLocaleString()} pcs)`;
 }
 
+function execPcrTransfer(whGroup, ppb) {
+  if (!_allocState) return;
+  const { lineIdx } = _allocState;
+  const l = poLines[lineIdx];
+  if (!l) return;
+
+  const container = _allocState.whGroup === 'SC&CA'
+    ? (document.getElementById('alloc-both-' + whGroup.toLowerCase() + '-wrap') || document.body)
+    : document.body;
+
+  const bin = _pcrSelectedBin;
+  if (!bin) { alert('Bin을 선택해주세요.'); return; }
+
+  const boxesInput = container.querySelector('[id="pcr-transfer-boxes-' + whGroup + '"]');
+  const boxes = parseInt(boxesInput?.value) || 1;
+  const qty = boxes * ppb;
+
+  const k = `${l.styleNum||''}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+  const binData = (window.binInventory?.[whGroup]?.[k]||[]).find(b => b.bin === bin);
+  const alreadyPending = _pcrTransfers.filter(t=>t.whGroup===whGroup&&t.fromBin===bin).reduce((s,t)=>s+t.qty,0);
+  const available = (binData?.qty||0) - alreadyPending;
+  if (available < qty) { alert(`재고 부족! 가용: ${available}pcs`); return; }
+
+  _pcrTransfers.push({ fromBin: bin, whGroup, qty, boxes });
+  _pcrSelectedBin = null;
+  _pcrSelectedWh = null;
+
+  // 현재 입력값 저장 (재렌더링 후 복원용)
+  const readInputs = (wrapId) => {
+    const alloc = {};
+    document.querySelectorAll(`${wrapId} input[data-bin]`).forEach(inp => {
+      const v = parseInt(inp.value)||0;
+      if (v > 0) alloc[inp.dataset.bin] = v;
+    });
+    return alloc;
+  };
+  const isBoth = _allocState.whGroup === 'SC&CA';
+  if (isBoth) {
+    const sc = readInputs('#alloc-both-sc-wrap');
+    const ca = readInputs('#alloc-both-ca-wrap');
+    if (Object.keys(sc).length) poLines[lineIdx].allocSC = sc;
+    if (Object.keys(ca).length) poLines[lineIdx].allocCA = ca;
+  } else {
+    const a = readInputs('#alloc-bins-wrap');
+    if (whGroup === 'SC') poLines[lineIdx].allocSC = a;
+    else poLines[lineIdx].allocCA = a;
+  }
+
+  // binInventory 화면용 차감
+  if (window.binInventory[whGroup]?.[k]) {
+    const b = window.binInventory[whGroup][k].find(b=>b.bin===bin);
+    if (b) b.qty -= qty;
+  }
+  const pcrWh = whGroup+'-PCR';
+  if (!window.binInventory[pcrWh]) window.binInventory[pcrWh] = {};
+  if (!window.binInventory[pcrWh][k]) window.binInventory[pcrWh][k] = [];
+  const pcrB = window.binInventory[pcrWh][k].find(b=>b.bin==='PCR');
+  if (pcrB) pcrB.qty += qty;
+  else window.binInventory[pcrWh][k].push({bin:'PCR',qty,committed:0,received_date:new Date().toISOString().slice(0,10)});
+
+  showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty}pcs) 지정됨`);
+
+  // 재렌더링
+  if (isBoth) {
+    window._allocBothRerendering = true;
+    openAllocModalBoth(lineIdx);
+    window._allocBothRerendering = false;
+  } else {
+    const _wasRerendering = true;
+    window._allocRerendering = true;
+    openAllocModal(lineIdx, whGroup);
+    window._allocRerendering = false;
+  }
+}
+
 
 
 
