@@ -2277,6 +2277,13 @@ async function openInvoice(orderId, skipPushState = false) {
     allocCA: l.alloc_ca_detail
       ? Object.fromEntries(Object.entries(l.alloc_ca_detail).map(([k,v]) => [k, v.pcs||v]))
       : (l.wh === 'CA' && l.alloc_detail) ? Object.fromEntries(Object.entries(l.alloc_detail).map(([k,v]) => [k, v.pcs||v])) : {},
+    // alloc_detail의 TRANSFER 키에서 pcrTransfersPending 복원
+    pcrTransfersPending: Object.entries(l.alloc_detail || {})
+      .filter(([k]) => k.startsWith('SC-TRANSFER|'))
+      .map(([k, v]) => ({ fromBin: k.replace('SC-TRANSFER|',''), boxes: v.boxes||0, qty: v.pcs||0, wh:'SC' })),
+    caPcrTransfersPending: Object.entries(l.alloc_ca_detail || {})
+      .filter(([k]) => k.startsWith('CA-TRANSFER|'))
+      .map(([k, v]) => ({ fromBin: k.replace('CA-TRANSFER|',''), boxes: v.boxes||0, qty: v.pcs||0, wh:'CA' })),
   }));
 
   currentInvoiceData = { order };
@@ -3042,9 +3049,9 @@ function renderEntryTable() {
         ${(function(){
           const allocSC = l.allocSC || {};
           const allocCA = l.allocCA || {};
-          // PCR, TRANSFER 키 제외
+          // TRANSFER 키만 제외 (PCR은 배정된 수량이므로 포함)
           const filterAllocLoose = obj => Object.entries(obj)
-            .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+            .filter(([k]) => !k.includes('TRANSFER|'))
             .reduce((s,[,v]) => s+(v||0), 0);
           const totalAlloc = filterAllocLoose(allocSC) + filterAllocLoose(allocCA);
           const ppb = l.ppb || 72;
@@ -3058,9 +3065,9 @@ function renderEntryTable() {
         ${(function(){
           const allocSC = l.allocSC || {};
           const allocCA = l.allocCA || {};
-          // PCR, TRANSFER 키 제외하고 실제 배분 수량만 합산
+          // TRANSFER 키만 제외 (PCR은 배정된 수량이므로 포함)
           const filterAlloc = obj => Object.entries(obj)
-            .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+            .filter(([k]) => !k.includes('TRANSFER|'))
             .reduce((s,[,v]) => s+(v||0), 0);
           const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA);
           const backQty = Math.max(0, l.qty - totalAlloc);
@@ -9930,6 +9937,10 @@ function openAllocModal(lineIdx, whGroup) {
   const isSC = whGroup === 'SC';
   const needQty = l.qty || 0;
 
+  // 저장된 Transfer 복원 (다시 열 때 이전 transfer 표시)
+  const savedTransfers = isSC ? (l.pcrTransfersPending || []) : (l.caPcrTransfersPending || []);
+  _pcrTransfers = savedTransfers.map(t => ({ ...t, whGroup }));
+
   // 헤더 업데이트
   const head = document.getElementById('alloc-modal-head');
   head.style.background = isSC ? '#064e22' : '#0f2744';
@@ -9953,6 +9964,7 @@ function openAllocModal(lineIdx, whGroup) {
   window._lastAllocHtml = { html, lineIdx, whGroup };
   updateAllocSum();
   refreshPcrTransferSection();
+  renderPcrTransfers(); // 저장된 transfer 목록 복원 표시
   openModal('modal-alloc');
 
   // In Transit 힌트 비동기 로드
