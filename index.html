@@ -6388,6 +6388,42 @@ function renderPcrBoxes() {
         ${box.isCustom ? `<button onclick="removePcrBoxItem(${bi},${ii})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:13px;padding:0;line-height:1;">✕</button>` : ''}
       </div>`).join('');
 
+    // 새 박스 인라인 입력 폼
+    const sizes = ['S','M','L','XL','2XL','3XL','4XL','5XL','YS','YM','YL','YXL'];
+    const styleOptions = (window.styles||[]).map(s => `<option value="${s.style_number}">${s.style_number}</option>`).join('');
+    const inlineSizePickerHtml = box.isCustom ? `
+      <div style="margin-top:8px;padding:10px;background:#f8fafc;border-radius:6px;border:1px dashed #93c5fd;">
+        ${box.items.length === 0 ? `
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+          <div>
+            <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Style</div>
+            <input list="pcr-style-list-${bi}" id="pcr-new-style-${bi}" placeholder="e.g. 1368"
+              style="width:90px;height:30px;border:1px solid #93c5fd;border-radius:4px;padding:0 8px;font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;"
+              value="${box.styleNum}" onchange="window._pcrBoxes[${bi}].styleNum=this.value;document.getElementById('pcr-box-style-label-${bi}').textContent=this.value;">
+            <datalist id="pcr-style-list-${bi}">${styleOptions}</datalist>
+          </div>
+          <div>
+            <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Color</div>
+            <input id="pcr-new-color-${bi}" placeholder="e.g. Navy Htr"
+              style="width:110px;height:30px;border:1px solid #93c5fd;border-radius:4px;padding:0 8px;font-size:12px;"
+              value="${box.color}" onchange="window._pcrBoxes[${bi}].color=this.value;document.getElementById('pcr-box-color-label-${bi}').textContent=this.value;">
+          </div>
+        </div>` : ''}
+        <div style="font-size:10px;color:#6b7280;margin-bottom:6px;font-weight:600;">사이즈 선택 후 수량 입력:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
+          ${sizes.map(s => `
+            <button onclick="pcrBoxSizeToggle(${bi},'${s}')" id="pcr-size-btn-${bi}-${s}"
+              style="padding:4px 10px;border:1px solid #93c5fd;border-radius:4px;background:#fff;color:#1e3a8a;font-size:11px;font-weight:700;cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all 0.1s;">
+              ${s}
+            </button>`).join('')}
+        </div>
+        <div id="pcr-size-inputs-${bi}" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+        <button onclick="confirmPcrBoxItems(${bi})"
+          style="margin-top:8px;padding:6px 18px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">
+          ✓ 확인
+        </button>
+      </div>` : '';
+
     return `
       <div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;margin-bottom:10px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
         <!-- 헤더 -->
@@ -6395,8 +6431,8 @@ function renderPcrBoxes() {
           <div style="display:flex;align-items:center;gap:10px;">
             <span style="background:#1e3a8a;color:#fff;padding:4px 12px;border-radius:6px;font-size:12px;font-weight:800;font-family:'IBM Plex Mono',monospace;letter-spacing:0.5px;">BOX ${box.boxNum}</span>
             <div>
-              <span style="font-size:14px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#111;">${box.styleNum}</span>
-              <span style="font-size:13px;font-weight:600;color:#374151;margin-left:8px;">${box.color}</span>
+              <span style="font-size:14px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#111;" id="pcr-box-style-label-${bi}">${box.styleNum}</span>
+              <span style="font-size:13px;font-weight:600;color:#374151;margin-left:8px;" id="pcr-box-color-label-${bi}">${box.color}</span>
               ${box.isCustom ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:4px;margin-left:6px;">추가됨</span>' : ''}
             </div>
           </div>
@@ -6410,7 +6446,8 @@ function renderPcrBoxes() {
           <div>
             <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">사이즈별 수량</div>
             ${itemsHtml}
-            ${box.isCustom ? `<button onclick="addPcrBoxItem(${bi})" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:4px 10px;cursor:pointer;margin-top:4px;">+ 사이즈 추가</button>` : ''}
+            ${inlineSizePickerHtml}
+            ${box.isCustom && box.items.length > 0 ? `<button onclick="addPcrBoxItem(${bi})" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:4px 10px;cursor:pointer;margin-top:4px;">+ 사이즈 추가</button>` : ''}
           </div>
           <div>
             <div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">⚠️ 불량 (선택사항)</div>
@@ -6458,7 +6495,56 @@ function renderPcrBoxes() {
   container.innerHTML = boxesHtml + addBoxHtml;
 }
 
-function togglePcrBoxDefect(bi, val) {
+function pcrBoxSizeToggle(bi, size) {
+  const btn = document.getElementById(`pcr-size-btn-${bi}-${size}`);
+  const inputsDiv = document.getElementById(`pcr-size-inputs-${bi}`);
+  const inputId = `pcr-new-qty-${bi}-${size}`;
+  const existing = document.getElementById(inputId);
+
+  if (existing) {
+    // 이미 선택됨 → 취소
+    existing.parentElement.remove();
+    btn.style.background = '#fff';
+    btn.style.color = '#1e3a8a';
+    btn.style.borderColor = '#93c5fd';
+  } else {
+    // 선택
+    btn.style.background = '#1e3a8a';
+    btn.style.color = '#fff';
+    btn.style.borderColor = '#1e3a8a';
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    wrap.innerHTML = `
+      <span style="font-size:12px;font-weight:700;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;width:32px;">${size}</span>
+      <input type="number" id="${inputId}" min="1" value="" placeholder="수량"
+        style="width:64px;height:30px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#1e3a8a;"
+        autofocus>
+      <span style="font-size:11px;color:#9ca3af;">pcs</span>`;
+    inputsDiv.appendChild(wrap);
+    document.getElementById(inputId)?.focus();
+  }
+}
+
+function confirmPcrBoxItems(bi) {
+  const box = window._pcrBoxes[bi];
+  if (!box) return;
+  // style/color 저장
+  const styleInp = document.getElementById(`pcr-new-style-${bi}`);
+  const colorInp = document.getElementById(`pcr-new-color-${bi}`);
+  if (styleInp) box.styleNum = styleInp.value || box.styleNum;
+  if (colorInp) box.color = colorInp.value || box.color;
+  // 사이즈별 수량 저장
+  const sizes = ['S','M','L','XL','2XL','3XL','4XL','5XL','YS','YM','YL','YXL'];
+  sizes.forEach(s => {
+    const inp = document.getElementById(`pcr-new-qty-${bi}-${s}`);
+    if (inp) {
+      const qty = parseInt(inp.value)||0;
+      if (qty > 0) box.items.push({ size: s, qty });
+    }
+  });
+  box.isNew = false;
+  renderPcrBoxes();
+}
   const det = document.getElementById('pcr-defect-detail-'+bi);
   if (det) det.style.display = parseInt(val) > 0 ? 'flex' : 'none';
 }
@@ -6500,11 +6586,15 @@ function addPcrBox() {
     styleNum, color,
     boxQty: 72,
     items: [],
-    isCustom: true
+    isCustom: true,
+    isNew: true  // 새 박스 표시 - 인라인 입력 폼 보여주기
   });
   renderPcrBoxes();
-  // 바로 사이즈 추가
-  setTimeout(() => addPcrBoxItem(window._pcrBoxes.length - 1), 100);
+  // 새 박스 스크롤
+  setTimeout(() => {
+    const container = document.getElementById('pcr-complete-lines');
+    container.scrollTop = container.scrollHeight;
+  }, 50);
 }
 
 function openPcrComplete_placeholder() {
