@@ -6316,56 +6316,178 @@ async function openPcrComplete(orderId, wh) {
   if (_pcrCompleteLines.length === 0) {
     container.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;">Partial pcs 없음 — 모두 full box</div>';
   } else {
-    container.innerHTML = _pcrCompleteLines.map(l => `
-      <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <div>
-            <span style="font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;">${l.styleNum}</span>
-            <span style="font-size:11px;color:#6b7280;margin-left:8px;">${l.color} / ${l.size}</span>
-            ${l.fullBoxes > 0 ? `<span style="font-size:10px;background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:4px;margin-left:8px;font-weight:700;">📦 ${l.fullBoxes}박스 + partial</span>` : ''}
-          </div>
-          <span style="font-size:11px;color:#6b7280;">오더: ${l.orderQty.toLocaleString()} pcs</span>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
-          <div style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:10px;text-align:center;">
-            <div style="font-size:10px;color:#92400e;text-transform:uppercase;margin-bottom:4px;">Partial Pcs (오더)</div>
-            <div style="font-size:22px;font-weight:700;color:#c2410c;font-family:'IBM Plex Mono',monospace;">${l.partialQty}</div>
-          </div>
-          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px;text-align:center;">
-            <div style="font-size:10px;color:#0369a1;text-transform:uppercase;margin-bottom:4px;">준비 수량</div>
-            <input type="number" min="0" value="${l.partialQty}" id="pcr-qty-${l.idx}"
-              style="width:80px;height:32px;border:1px solid #bae6fd;border-radius:4px;text-align:center;font-size:18px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:#0369a1;background:#fff;">
-          </div>
-        </div>
-        <div style="background:#fef2f2;border-radius:6px;padding:10px;">
-          <div style="font-size:10px;font-weight:700;color:#dc2626;margin-bottom:8px;">⚠️ 불량 (선택사항)</div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <div style="text-align:center;">
-              <div style="font-size:9px;color:#6b7280;margin-bottom:3px;">Total 불량</div>
-              <input type="number" min="0" value="0" id="pcr-defect-${l.idx}"
-                style="width:60px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;"
-                oninput="toggleDefectDetail(${l.idx}, this.value)">
-            </div>
-            <div id="defect-detail-${l.idx}" style="display:none;display:flex;gap:6px;flex-wrap:wrap;">
-              <div style="text-align:center;">
-                <div style="font-size:9px;color:#6b7280;margin-bottom:3px;">🌫 Shade</div>
-                <input type="number" min="0" value="0" id="pcr-shade-${l.idx}" style="width:54px;height:28px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
-              </div>
-              <div style="text-align:center;">
-                <div style="font-size:9px;color:#6b7280;margin-bottom:3px;">🕳 Hole</div>
-                <input type="number" min="0" value="0" id="pcr-hole-${l.idx}" style="width:54px;height:28px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
-              </div>
-              <div style="text-align:center;">
-                <div style="font-size:9px;color:#6b7280;margin-bottom:3px;">🟤 Stain</div>
-                <input type="number" min="0" value="0" id="pcr-stain-${l.idx}" style="width:54px;height:28px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>`).join('');
+    // Pick Ticket 박스 배치와 동일한 로직으로 박스 생성
+    const sizeOrd = s => (['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf(s)+1)||99;
+    const groups = {};
+    pcrLinesForAlloc.forEach(l => {
+      const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+      const key = `${l.styles?.style_number||''}|||${l.color||''}|||${ppb}`;
+      if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
+      const alloc = l.alloc_detail || {};
+      const pcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+      if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs });
+    });
+
+    // 박스 배치 계산
+    let globalBoxNum = 1;
+    window._pcrBoxes = []; // 전역으로 저장 (추가/수정용)
+    Object.values(groups).sort((a,b) => b.boxQty - a.boxQty).forEach(g => {
+      const boxQty = g.boxQty;
+      const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size) - sizeOrd(b.size));
+      if (!sizes.length) return;
+      let currentBox = { items: [], styleNum: g.styleNum, color: g.color, boxQty, isCustom: false };
+      let currentTotal = 0;
+      sizes.forEach(s => {
+        let remaining = s.qty;
+        while (remaining > 0) {
+          const space = boxQty - currentTotal;
+          if (remaining > space && currentTotal > 0) {
+            window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox });
+            currentBox = { items: [], styleNum: g.styleNum, color: g.color, boxQty, isCustom: false };
+            currentTotal = 0;
+          }
+          const take = Math.min(remaining, boxQty - currentTotal);
+          if (take > 0) { currentBox.items.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
+          if (currentTotal >= boxQty) {
+            window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox });
+            currentBox = { items: [], styleNum: g.styleNum, color: g.color, boxQty, isCustom: false };
+            currentTotal = 0;
+          }
+        }
+      });
+      if (currentBox.items.length > 0) window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox });
+    });
+
+    renderPcrBoxes();
   }
 
   document.getElementById('pcr-complete-modal').style.display = 'flex';
+}
+
+function renderPcrBoxes() {
+  const container = document.getElementById('pcr-complete-lines');
+  const boxes = window._pcrBoxes || [];
+
+  const boxesHtml = boxes.map((box, bi) => {
+    const total = box.items.reduce((s,i) => s+i.qty, 0);
+    const itemsHtml = box.items.map((item, ii) => `
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+        <span style="font-size:11px;color:#6b7280;width:32px;">${item.size}</span>
+        <input type="number" min="0" value="${item.qty}" 
+          onchange="updatePcrBoxItem(${bi},${ii},this.value)"
+          style="width:60px;height:26px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;">
+        <span style="font-size:10px;color:#9ca3af;">pcs</span>
+        ${box.isCustom ? `<button onclick="removePcrBoxItem(${bi},${ii})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:12px;padding:0;">✕</button>` : ''}
+      </div>`).join('');
+
+    return `
+      <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:8px;background:#fff;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="background:#1e3a8a;color:#fff;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:800;font-family:'IBM Plex Mono',monospace;">BOX ${box.boxNum}</span>
+            <span style="font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace;">${box.styleNum}</span>
+            <span style="font-size:11px;color:#6b7280;">${box.color}</span>
+            ${box.isCustom ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:4px;">추가됨</span>' : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:12px;font-weight:700;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;">${total} pcs</span>
+            ${box.isCustom ? `<button onclick="removePcrBox(${bi})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:0;">🗑</button>` : ''}
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <div style="font-size:10px;color:#6b7280;margin-bottom:6px;font-weight:600;">사이즈별 수량</div>
+            ${itemsHtml}
+            ${box.isCustom ? `<button onclick="addPcrBoxItem(${bi})" style="font-size:10px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:3px 8px;cursor:pointer;margin-top:4px;">+ 사이즈 추가</button>` : ''}
+          </div>
+          <div>
+            <div style="font-size:10px;color:#dc2626;margin-bottom:6px;font-weight:600;">⚠️ 불량 (선택사항)</div>
+            <div style="display:flex;flex-direction:column;gap:4px;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="font-size:10px;color:#6b7280;width:48px;">Total</span>
+                <input type="number" min="0" value="0" id="pcr-defect-box-${bi}"
+                  style="width:54px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;color:#dc2626;"
+                  oninput="togglePcrBoxDefect(${bi},this.value)">
+              </div>
+              <div id="pcr-defect-detail-${bi}" style="display:none;flex-direction:column;gap:4px;">
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-size:10px;color:#6b7280;width:48px;">🌫 Shade</span>
+                  <input type="number" min="0" value="0" id="pcr-shade-box-${bi}" style="width:54px;height:26px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-size:10px;color:#6b7280;width:48px;">🕳 Hole</span>
+                  <input type="number" min="0" value="0" id="pcr-hole-box-${bi}" style="width:54px;height:26px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <span style="font-size:10px;color:#6b7280;width:48px;">🟤 Stain</span>
+                  <input type="number" min="0" value="0" id="pcr-stain-box-${bi}" style="width:54px;height:26px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // 박스 추가 버튼
+  const addBoxHtml = `
+    <button onclick="addPcrBox()" style="width:100%;padding:10px;border:2px dashed #93c5fd;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;margin-top:4px;">
+      + 박스 추가
+    </button>`;
+
+  container.innerHTML = boxesHtml + addBoxHtml;
+}
+
+function togglePcrBoxDefect(bi, val) {
+  const det = document.getElementById('pcr-defect-detail-'+bi);
+  if (det) det.style.display = parseInt(val) > 0 ? 'flex' : 'none';
+}
+
+function updatePcrBoxItem(bi, ii, val) {
+  if (window._pcrBoxes[bi]) window._pcrBoxes[bi].items[ii].qty = parseInt(val)||0;
+}
+
+function removePcrBoxItem(bi, ii) {
+  if (window._pcrBoxes[bi]) { window._pcrBoxes[bi].items.splice(ii, 1); renderPcrBoxes(); }
+}
+
+function removePcrBox(bi) {
+  if (confirm('이 박스를 삭제할까요?')) {
+    window._pcrBoxes.splice(bi, 1);
+    // 박스 번호 재정렬
+    window._pcrBoxes.forEach((b,i) => b.boxNum = i+1);
+    renderPcrBoxes();
+  }
+}
+
+function addPcrBoxItem(bi) {
+  const size = prompt('사이즈 입력 (예: S, M, L, XL, 2XL):');
+  if (!size) return;
+  const qty = parseInt(prompt('수량 입력:'))||0;
+  if (qty <= 0) return;
+  window._pcrBoxes[bi].items.push({ size: size.toUpperCase(), qty });
+  renderPcrBoxes();
+}
+
+function addPcrBox() {
+  const boxes = window._pcrBoxes || [];
+  const lastBox = boxes[boxes.length-1];
+  const styleNum = lastBox?.styleNum || '';
+  const color = lastBox?.color || '';
+  const newBoxNum = (boxes[boxes.length-1]?.boxNum || 0) + 1;
+  window._pcrBoxes.push({
+    boxNum: newBoxNum,
+    styleNum, color,
+    boxQty: 72,
+    items: [],
+    isCustom: true
+  });
+  renderPcrBoxes();
+  // 바로 사이즈 추가
+  setTimeout(() => addPcrBoxItem(window._pcrBoxes.length - 1), 100);
+}
+
+function openPcrComplete_placeholder() {
 }
 
 function toggleDefectDetail(idx, val) {
@@ -6397,13 +6519,19 @@ async function submitPcrComplete() {
   const whPre = _pcrCompleteWh === 'CA' ? 'ca_' : 'sc_';
   const empName = _pcrCompleteEmp.name;
 
+  // 새 박스 구조에서 데이터 수집
+  const boxes = window._pcrBoxes || [];
   const preparedLines = _pcrCompleteLines.map(l => {
-    const preparedQty = parseInt(document.getElementById('pcr-qty-'+l.idx)?.value || l.partialQty);
-    const defectTotal = parseInt(document.getElementById('pcr-defect-'+l.idx)?.value || 0);
-    const shade = parseInt(document.getElementById('pcr-shade-'+l.idx)?.value || 0);
-    const hole  = parseInt(document.getElementById('pcr-hole-'+l.idx)?.value || 0);
-    const stain = parseInt(document.getElementById('pcr-stain-'+l.idx)?.value || 0);
-    return { ...l, preparedQty, defectTotal, shade, hole, stain, pcrBinId: l.pcrBinId };
+    // 박스들에서 이 size/style/color의 총 수량 합산
+    const preparedQty = boxes.reduce((s, box) => {
+      return s + box.items.filter(item => item.size === l.size).reduce((ss,item) => ss+item.qty, 0);
+    }, 0);
+    // 불량은 박스별로 수집 (같은 사이즈가 여러 박스에 걸쳐있을 수 있으니 박스 인덱스로)
+    const defectTotal = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-defect-box-'+bi)?.value||0)), 0);
+    const shade = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-shade-box-'+bi)?.value||0)), 0);
+    const hole  = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-hole-box-'+bi)?.value||0)), 0);
+    const stain = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-stain-box-'+bi)?.value||0)), 0);
+    return { ...l, preparedQty: preparedQty || l.partialQty, defectTotal, shade, hole, stain, pcrBinId: l.pcrBinId };
   });
 
   // PCR qty_on_hand 차감 (준비수량 + 불량수량)
