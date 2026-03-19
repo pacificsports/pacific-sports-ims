@@ -7163,12 +7163,20 @@ function toggleShipTrackingLabel() {
 }
 
 async function printPackingListFromCard(orderId) {
-  const order = allOrders.find(o => o.id === orderId);
-  if (!order) return;
+  showToast('📋 Packing List 로딩중...');
+  // order 가져오기
+  let order = (allOrders||[]).find(o => o.id === orderId);
+  if (!order) {
+    const { data } = await db.from('orders').select('*').eq('id', orderId).single();
+    order = data;
+  }
+  if (!order) { showToast('❌ 오더를 찾을 수 없습니다.'); return; }
+
   const { data: lines } = await db.from('order_lines')
     .select('*, styles(*)')
     .eq('order_id', orderId);
-  if (!lines || !lines.length) { showToast('라인 데이터 없음'); return; }
+  if (!lines || !lines.length) { showToast('❌ 라인 데이터 없음'); return; }
+
   const isSplit = order.is_split_warehouse || order.wh_code === 'SC&CA';
   const html = buildPackingListHtml(order, lines, isSplit);
   printInNewWindow(html);
