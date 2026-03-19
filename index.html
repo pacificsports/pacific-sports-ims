@@ -6992,11 +6992,31 @@ async function preparationComplete(orderId, wh) {
   _plOrderId = orderId;
   _plWh = wh || 'SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
-  const filteredLines = isSplit
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
-    : lines;
 
-  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false);
+  // whFilter에 따라 해당 창고 배분이 있는 라인만 필터링
+  let filteredLines = lines;
+  if (isSplit || wh) {
+    const whFilter = wh || 'SC';
+    filteredLines = lines.filter(l => {
+      if (whFilter === 'CA') {
+        if (l.wh === 'SC' || !l.wh || l.wh === '') return false;
+        if (l.wh === 'SC&CA') {
+          const allocCA = l.alloc_ca_detail || {};
+          return Object.values(allocCA).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
+        }
+        return l.wh === 'CA';
+      } else {
+        if (l.wh === 'CA') return false;
+        if (l.wh === 'SC&CA') {
+          const alloc = l.alloc_detail || {};
+          return Object.values(alloc).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
+        }
+        return true;
+      }
+    });
+  }
+
+  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC');
   document.getElementById('modal-pl-preview').style.display = 'flex';
 }
 
@@ -7963,7 +7983,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Customer</div><div style="font-weight:700;">${order.customer_name}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">PO #</div><div style="font-weight:700;">${order.customer_po||'—'}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship To</div><div style="font-weight:700;">${order.ship_addr||order.customer_name}</div></div>
-      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date||'—'}</div></div>
+      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date || new Date().toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'})}</div></div>
     </div>
     ${body}
   </div>`;
