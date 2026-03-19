@@ -6394,51 +6394,65 @@ function renderPcrBoxes() {
     const box = boxes[bi];
     const total = box.items.reduce(function(s,i){ return s+(i.qty||0); }, 0);
     const isCustom = box.isCustom;
-    const borderColor = isCustom ? '#fbbf24' : '#e2e8f0';
-    const bgColor = isCustom ? '#fffbeb' : '#fff';
 
-    // Items as table rows
+    // Items rows
     let rowsHtml = '';
     for (let ii = 0; ii < box.items.length; ii++) {
       const item = box.items[ii];
       const origQty = window._pcrBoxesOriginal && window._pcrBoxesOriginal[bi] && window._pcrBoxesOriginal[bi].items[ii] ? window._pcrBoxesOriginal[bi].items[ii].qty : null;
       const changed = origQty !== null && item.qty !== origQty;
-      const borderCol = changed ? '#f59e0b' : '#d1d5db';
-      const isDiff = item.styleNum && (item.styleNum !== box.styleNum || item.color !== box.color);
+      const inputBorder = changed ? '1px solid #f59e0b' : '1px solid #d1d5db';
+      const inputColor = changed ? '#92400e' : '#1e3a8a';
 
-      // Can delete if: added item OR custom box
-      const canDelete = isCustom || (origQty === undefined || origQty === null);
+      // Style/Color label - show for all items
+      const styleLabel = (item.styleNum || item.color)
+        ? item.styleNum + ' ' + item.color
+        : (box.styleNum + ' ' + box.color);
+
+      // Can delete if added (not in original)
+      const canDelete = isCustom || origQty === null || origQty === undefined;
       const delBtn = canDelete
-        ? '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:13px;padding:0 4px;line-height:1;">&#x2715;</button>'
+        ? '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px;padding:0 0 0 8px;line-height:1;">&#x2715;</button>'
         : '';
 
-      const styleCell = isDiff
-        ? '<td style="font-size:11px;color:#374151;padding:4px 6px;white-space:nowrap;">'+item.styleNum+' <span style="color:#6b7280;">'+item.color+'</span></td>'
-        : '<td style="padding:4px 6px;"></td>';
+      const changedNote = changed ? '<span style="font-size:10px;color:#92400e;margin-left:4px;">(&#xC6D0;: '+origQty+')</span>' : '';
 
-      const origNote = changed ? ' <span style="font-size:10px;color:#92400e;">(&#xC6D0;: '+origQty+')</span>' : '';
-
-      rowsHtml += '<tr>'
-        + styleCell
-        + '<td style="font-size:13px;font-weight:700;color:#1e3a8a;padding:4px 6px;font-family:IBM Plex Mono,monospace;">'+item.size+'</td>'
-        + '<td style="padding:4px 6px;">'
-        + '<input type="number" min="0" value="'+item.qty+'" onchange="updatePcrBoxItem('+bi+','+ii+',this.value);checkPcrChanges()" style="width:60px;height:28px;border:1px solid '+borderCol+';border-radius:4px;text-align:center;font-size:13px;font-weight:700;font-family:IBM Plex Mono,monospace;color:'+(changed?'#92400e':'#1e3a8a')+';">'
-        + origNote + '</td>'
-        + '<td style="font-size:11px;color:#9ca3af;padding:4px 6px;">pcs</td>'
-        + '<td style="padding:4px 2px;">'+delBtn+'</td>'
-        + '</tr>';
+      rowsHtml += '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #f1f5f9;">'
+        // Style + Color
+        + '<div style="min-width:140px;font-size:12px;font-weight:700;font-family:IBM Plex Mono,monospace;color:#111;">'
+        + styleLabel + '</div>'
+        // Size
+        + '<div style="font-size:13px;font-weight:700;color:#1e3a8a;min-width:32px;font-family:IBM Plex Mono,monospace;">'
+        + item.size + '</div>'
+        // Qty input + pcs
+        + '<input type="number" min="0" value="'+item.qty+'" onchange="updatePcrBoxItem('+bi+','+ii+',this.value);checkPcrChanges()" style="width:64px;height:30px;border:'+inputBorder+';border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:IBM Plex Mono,monospace;color:'+inputColor+';">'
+        + '<span style="font-size:11px;color:#6b7280;margin-right:8px;">pcs</span>'
+        + changedNote
+        // Defect total
+        + '<span style="font-size:10px;color:#dc2626;font-weight:600;">&#xBD88;&#xB7C9;</span>'
+        + '<input type="number" min="0" value="0" id="pcr-defect-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;color:#dc2626;" oninput="togglePcrItemDefect('+bi+','+ii+',this.value)">'
+        // Defect detail (hidden)
+        + '<div id="pcr-defect-detail-'+bi+'-'+ii+'" style="display:none;gap:6px;align-items:center;flex-wrap:wrap;">'
+        + '<span style="font-size:10px;color:#6b7280;">Shade</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'-'+ii+'" style="width:40px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Hole</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'-'+ii+'" style="width:40px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Stain</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'-'+ii+'" style="width:40px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Other</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'-'+ii+'" style="width:40px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
+        + '<input type="text" id="pcr-other-note-box-'+bi+'-'+ii+'" placeholder="&#xC774;&#xC720;..." style="width:90px;height:24px;border:1px solid #fecaca;border-radius:4px;padding:0 5px;font-size:11px;">'
+        + '</div>'
+        + delBtn
+        + '</div>';
     }
 
     // Add item form
     let addFormHtml = '';
     if (box.addingItem) {
-      addFormHtml = '<tr><td colspan="5" style="padding:6px 0 4px;">'
-        + '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;padding:8px;background:#f0f9ff;border-radius:6px;border:1px solid #93c5fd;">'
+      addFormHtml = '<div style="padding:8px 12px;background:#f0f9ff;border-top:1px solid #bfdbfe;">'
+        + '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">'
         + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:2px;">Style</div>'
-        + '<input list="pcr-style-opts-'+bi+'" id="pcr-add-style-'+bi+'" placeholder="1368" style="width:70px;height:28px;border:1px solid #93c5fd;border-radius:4px;padding:0 5px;font-size:12px;font-weight:700;">'
+        + '<input list="pcr-style-opts-'+bi+'" id="pcr-add-style-'+bi+'" placeholder="1368" style="width:68px;height:28px;border:1px solid #93c5fd;border-radius:4px;padding:0 5px;font-size:12px;font-weight:700;">'
         + '<datalist id="pcr-style-opts-'+bi+'">'+styleOptsList+'</datalist></div>'
         + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:2px;">Color</div>'
-        + '<input id="pcr-add-color-'+bi+'" placeholder="Navy Htr" style="width:95px;height:28px;border:1px solid #93c5fd;border-radius:4px;padding:0 5px;font-size:12px;"></div>'
+        + '<input id="pcr-add-color-'+bi+'" placeholder="Navy Htr" style="width:100px;height:28px;border:1px solid #93c5fd;border-radius:4px;padding:0 5px;font-size:12px;"></div>'
         + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:2px;">Size</div>'
         + '<select id="pcr-add-size-'+bi+'" style="width:62px;height:28px;border:1px solid #93c5fd;border-radius:4px;padding:0 3px;font-size:12px;">'
         + '<option value="">-</option><option>XS</option><option>S</option><option>M</option><option>L</option><option>XL</option>'
@@ -6447,53 +6461,36 @@ function renderPcrBoxes() {
         + '<option>YS</option><option>YM</option><option>YL</option><option>YXL</option></select></div>'
         + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:2px;">Qty</div>'
         + '<input type="number" id="pcr-add-qty-'+bi+'" min="1" placeholder="0" style="width:52px;height:28px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:12px;font-weight:700;"></div>'
-        + '<button onclick="confirmPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 10px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">&#x2713;</button>'
+        + '<button onclick="confirmPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 12px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">&#x2713;</button>'
         + '<button onclick="cancelPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 8px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:4px;font-size:12px;cursor:pointer;">&#xCDE8;&#xC18C;</button>'
-        + '</div></td></tr>';
+        + '</div></div>';
     }
 
-    const addBtnRow = !box.addingItem
-      ? '<tr><td colspan="5" style="padding:4px 0 0;">'
+    const addBtnHtml = !box.addingItem
+      ? '<div style="padding:8px 12px;border-top:1px solid #f1f5f9;">'
         + '<button onclick="addPcrBoxItemInline('+bi+')" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:3px 10px;cursor:pointer;">+ &#xC544;&#xC774;&#xD15C; &#xCD94;&#xAC00;</button>'
-        + '</td></tr>'
+        + '</div>'
       : '';
 
     const deleteBoxBtn = isCustom
-      ? '<button onclick="removePcrBox('+bi+')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px;padding:0 0 0 6px;line-height:1;" title="&#xBC15;&#xC2A4; &#xC0AD;&#xC81C;">&#x1F5D1;</button>'
+      ? '<button onclick="removePcrBox('+bi+')" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:14px;padding:0;line-height:1;">&#x1F5D1;</button>'
       : '';
 
-    const headerStyle = isCustom ? 'background:#fef3c7;color:#92400e;' : 'background:#1e3a8a;color:#fff;';
-    const headerLabel = isCustom
-      ? '&#xCD94;&#xAC00; &#xBC15;&#xC2A4;'
-      : box.styleNum + '  ' + box.color;
-
-    // Defect row
-    const defectRow = '<tr><td colspan="5" style="padding:6px 0 0;">'
-      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
-      + '<span style="font-size:10px;color:#dc2626;font-weight:700;">&#x26A0;&#xFE0F; &#xBD88;&#xB7C9;:</span>'
-      + '<span style="font-size:10px;color:#6b7280;">Total</span>'
-      + '<input type="number" min="0" value="0" id="pcr-defect-box-'+bi+'" style="width:48px;height:24px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;color:#dc2626;" oninput="togglePcrBoxDefect('+bi+',this.value)">'
-      + '<div id="pcr-defect-detail-'+bi+'" style="display:none;gap:8px;align-items:center;flex-wrap:wrap;">'
-      + '<span style="font-size:10px;color:#6b7280;">Shade</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'" style="width:44px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
-      + '<span style="font-size:10px;color:#6b7280;">Hole</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'" style="width:44px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
-      + '<span style="font-size:10px;color:#6b7280;">Stain</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'" style="width:44px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
-      + '<span style="font-size:10px;color:#6b7280;">Other</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'" style="width:44px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
-      + '<input type="text" id="pcr-other-note-box-'+bi+'" placeholder="Other &#xC774;&#xC720;..." style="width:120px;height:24px;border:1px solid #fecaca;border-radius:4px;padding:0 6px;font-size:11px;">'
-      + '</div></div></td></tr>';
-
-    html += '<div style="border:1px solid '+borderColor+';border-radius:8px;margin-bottom:8px;background:'+bgColor+';overflow:hidden;">'
-      + '<div style="'+headerStyle+'padding:7px 12px;display:flex;justify-content:space-between;align-items:center;">'
-      + '<div style="display:flex;align-items:center;gap:8px;">'
-      + '<span style="font-size:11px;font-weight:800;font-family:IBM Plex Mono,monospace;letter-spacing:0.5px;">BOX '+box.boxNum+'</span>'
-      + '<span style="font-size:12px;font-weight:600;">'+headerLabel+'</span>'
+    html += '<div style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;overflow:hidden;">'
+      // Header
+      + '<div style="background:#1e3a8a;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">'
+      + '<div style="display:flex;align-items:center;gap:10px;">'
+      + '<span style="font-size:12px;font-weight:800;color:#fff;font-family:IBM Plex Mono,monospace;letter-spacing:0.5px;">BOX '+box.boxNum+'</span>'
+      + (isCustom ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:3px;">&#xCD94;&#xAC00;</span>' : '')
       + '</div>'
-      + '<div style="display:flex;align-items:center;gap:6px;">'
-      + '<span style="font-size:13px;font-weight:800;font-family:IBM Plex Mono,monospace;">'+total+' pcs</span>'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + '<span style="font-size:13px;font-weight:800;color:#fff;font-family:IBM Plex Mono,monospace;">'+total+' pcs</span>'
       + deleteBoxBtn + '</div></div>'
-      + '<div style="padding:10px 12px;">'
-      + '<table style="width:100%;border-collapse:collapse;">'
-      + rowsHtml + addFormHtml + addBtnRow + defectRow
-      + '</table></div></div>';
+      // Items
+      + rowsHtml
+      + addFormHtml
+      + addBtnHtml
+      + '</div>';
   }
 
   html += '<button onclick="addPcrBox()" style="width:100%;padding:10px;border:2px dashed #93c5fd;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;margin-top:4px;">&#x1F4E6; + &#xBC15;&#xC2A4; &#xCD94;&#xAC00;</button>';
@@ -6504,6 +6501,11 @@ function renderPcrBoxes() {
 
 function togglePcrBoxDefect(bi, val) {
   const det = document.getElementById('pcr-defect-detail-'+bi);
+  if (det) det.style.display = parseInt(val) > 0 ? 'flex' : 'none';
+}
+
+function togglePcrItemDefect(bi, ii, val) {
+  const det = document.getElementById('pcr-defect-detail-'+bi+'-'+ii);
   if (det) det.style.display = parseInt(val) > 0 ? 'flex' : 'none';
 }
 
