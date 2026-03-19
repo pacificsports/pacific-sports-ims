@@ -7794,14 +7794,14 @@ function buildPackingListHtml(order, lines, isSplit) {
       const ppb = l.pcs_per_box || 60;
       const alloc = l.alloc_detail || {};
       const allocCA = l.alloc_ca_detail || {};
-      // sectionWh에 따라 해당 창고 배분량만 사용
       const isCA = sectionWh === 'CA';
       const activeAlloc = isCA ? allocCA : alloc;
       const scPcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
       const caPcrPcs = Object.entries(allocCA).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
       const pcrPcs = isCA ? caPcrPcs : scPcrPcs;
       const fullBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
-      // Partial boxes count (PCR boxes = ceil(pcrPcs/ppb))
+      // 이 창고 배분 총 pcs = full box pcs + partial pcs
+      const whTotalPcs = fullBoxes * ppb + pcrPcs;
       const pcrBoxes = pcrPcs > 0 ? Math.ceil(pcrPcs / ppb) : 0;
       const pcrDisplay = pcrPcs > 0
         ? pcrPcs + ' pcs' + (pcrBoxes > 0 ? '<br><span style="font-size:10px;color:#9ca3af;">'+pcrBoxes+' box</span>' : '')
@@ -7810,23 +7810,28 @@ function buildPackingListHtml(order, lines, isSplit) {
         <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
         <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
-        <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${(l.qty_pieces||0).toLocaleString()}</td>
+        <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${whTotalPcs.toLocaleString()}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;">${fullBoxes > 0 ? fullBoxes : '—'}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;${pcrPcs>0?'color:#7c3aed;font-weight:700;':''}">${pcrDisplay}</td>
       </tr>`;
     }).join('');
-    const totalPcs = sorted.reduce((s,l) => s+(l.qty_pieces||0), 0);
+    // totalPcs = 각 라인의 이 창고 배분량 합산
+    const totalPcs = sorted.reduce((s,l) => {
+      const ppb = l.pcs_per_box || 60;
+      const isCA = sectionWh === 'CA';
+      const activeAlloc = isCA ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+      const fBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
+      const pPcs = Object.entries(activeAlloc).filter(([k])=>k.includes('PCR|PCR')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.pcs||0:v||0),0);
+      return s + fBoxes * ppb + pPcs;
+    }, 0);
     const totalBoxes = sorted.reduce((s,l) => {
       const ppb = l.pcs_per_box || 60;
       const _alloc2 = sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
       return s + Object.entries(_alloc2).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
     }, 0);
-    const totalPcrBoxes = sorted.reduce((s,l) => {
-      const ppb = l.pcs_per_box || 60;
-      const allocPcr = sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
-      const pcrPcsL = Object.entries(allocPcr).filter(([k])=>k.includes('PCR|PCR')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.pcs||0:v||0),0);
-      return s + (pcrPcsL > 0 ? Math.ceil(pcrPcsL / ppb) : 0);
-    }, 0);
+    // totalPcrBoxes = PC Room 박스 수 (중복 없이 calcPlBoxAllocation 결과 기준)
+    const boxAllocForCount = calcPlBoxAllocation(sectionLines, sectionWh);
+    const totalPcrBoxes = boxAllocForCount.reduce((s,g) => s + g.boxes.filter(b=>b.isPartial).length, 0);
 
     // Box detail table
     const boxAlloc = calcPlBoxAllocation(sectionLines, sectionWh);
@@ -7852,7 +7857,7 @@ function buildPackingListHtml(order, lines, isSplit) {
                 <td style="padding:6px 10px;font-size:11px;">${ii===0?g.color:''}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
-                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?(box.items.length === 1 ? '1 box' : isPartialBox ? boxTotal+' pcs' : '1 box'):''}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?'1 box':''}</td>
               </tr>`);
             })).join('')}
           </tbody>
