@@ -6399,8 +6399,10 @@ function renderPcrBoxes() {
     let rowsHtml = '';
     for (let ii = 0; ii < box.items.length; ii++) {
       const item = box.items[ii];
-      const origQty = window._pcrBoxesOriginal && window._pcrBoxesOriginal[bi] && window._pcrBoxesOriginal[bi].items[ii] ? window._pcrBoxesOriginal[bi].items[ii].qty : null;
-      const changed = origQty !== null && item.qty !== origQty;
+      const origItem = window._pcrBoxesOriginal && window._pcrBoxesOriginal[bi] && window._pcrBoxesOriginal[bi].items ? window._pcrBoxesOriginal[bi].items[ii] : undefined;
+      const origQty = origItem !== undefined ? origItem.qty : null;
+      const isNewItem = origItem === undefined; // 원본에 없는 새 아이템
+      const changed = !isNewItem && item.qty !== origQty;
       const inputBorder = changed ? '1px solid #f59e0b' : '1px solid #d1d5db';
       const inputColor = changed ? '#92400e' : '#1e3a8a';
 
@@ -6410,7 +6412,7 @@ function renderPcrBoxes() {
         : (box.styleNum + ' ' + box.color);
 
       // Can delete only if newly added (not in original snapshot)
-      const canDelete = origQty === null || origQty === undefined;
+      const canDelete = isNewItem;
       const delBtn = canDelete
         ? '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px;padding:0 0 0 8px;line-height:1;">&#x2715;</button>'
         : '';
@@ -6424,9 +6426,10 @@ function renderPcrBoxes() {
         // Size
         + '<div style="font-size:13px;font-weight:700;color:#1e3a8a;min-width:32px;font-family:IBM Plex Mono,monospace;">'
         + item.size + '</div>'
-        // Qty input + pcs
+        // Qty input
         + '<input type="number" min="0" value="'+item.qty+'" onchange="updatePcrBoxItem('+bi+','+ii+',this.value);checkPcrChanges()" style="width:64px;height:30px;border:'+inputBorder+';border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:IBM Plex Mono,monospace;color:'+inputColor+';">'
-        + '<span style="font-size:11px;color:#6b7280;margin-right:8px;">pcs</span>'
+        // / 오더수량 (원본 기준)
+        + '<span style="font-size:12px;color:#9ca3af;">/ <b style="color:#374151;">'+(origQty !== null ? origQty : item.qty)+'</b> pcs</span>'
         + changedNote
         // Defect total
         + '<span style="font-size:10px;color:#dc2626;font-weight:600;">&#xBD88;&#xB7C9;</span>'
