@@ -7817,10 +7817,15 @@ function buildPackingListHtml(order, lines, isSplit) {
     }).join('');
     const totalPcs = sorted.reduce((s,l) => s+(l.qty_pieces||0), 0);
     const totalBoxes = sorted.reduce((s,l) => {
-      const alloc = l.alloc_detail || {};
       const ppb = l.pcs_per_box || 60;
       const _alloc2 = sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
       return s + Object.entries(_alloc2).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
+    }, 0);
+    const totalPcrBoxes = sorted.reduce((s,l) => {
+      const ppb = l.pcs_per_box || 60;
+      const allocPcr = sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+      const pcrPcsL = Object.entries(allocPcr).filter(([k])=>k.includes('PCR|PCR')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.pcs||0:v||0),0);
+      return s + (pcrPcsL > 0 ? Math.ceil(pcrPcsL / ppb) : 0);
     }, 0);
 
     // Box detail table
@@ -7847,7 +7852,7 @@ function buildPackingListHtml(order, lines, isSplit) {
                 <td style="padding:6px 10px;font-size:11px;">${ii===0?g.color:''}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
-                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?(isPartialBox ? boxTotal+' pcs' : '1 box'):''}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?(box.items.length === 1 ? '1 box' : isPartialBox ? boxTotal+' pcs' : '1 box'):''}</td>
               </tr>`);
             })).join('')}
           </tbody>
@@ -7876,7 +7881,7 @@ function buildPackingListHtml(order, lines, isSplit) {
             <td colspan="3" style="padding:8px;text-align:right;">Total:</td>
             <td style="padding:8px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
             <td style="padding:8px;text-align:center;">${totalBoxes} boxes</td>
-            <td></td>
+            <td style="padding:8px;text-align:center;color:#7c3aed;">${totalPcrBoxes > 0 ? totalPcrBoxes+' boxes' : '—'}</td>
           </tr></tfoot>
         </table>
         ${boxDetailHtml}
@@ -7885,8 +7890,27 @@ function buildPackingListHtml(order, lines, isSplit) {
 
   let body = '';
   if (isSplit) {
-    const scLines = lines.filter(l => !l.wh || l.wh === 'SC' || l.wh === 'SC&CA');
-    const caLines = lines.filter(l => l.wh === 'CA' || l.wh === 'SC&CA');
+    // SC 라인: SC 배분이 있는 라인만 (SC&CA 라인은 alloc_detail에 SC 배분이 있을 때만)
+    const scLines = lines.filter(l => {
+      if (l.wh === 'CA') return false;
+      if (l.wh === 'SC&CA') {
+        const alloc = l.alloc_detail || {};
+        const hasSC = Object.values(alloc).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
+        return hasSC;
+      }
+      return true;
+    });
+    // CA 라인: CA 배분이 있는 라인만
+    const caLines = lines.filter(l => {
+      if (l.wh === 'SC') return false;
+      if (!l.wh || l.wh === '') return false;
+      if (l.wh === 'SC&CA') {
+        const allocCA = l.alloc_ca_detail || {};
+        const hasCA = Object.values(allocCA).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
+        return hasCA;
+      }
+      return l.wh === 'CA';
+    });
     body = renderPlSection(scLines, '🟢 SC — Sumter Warehouse', '#064e22', 'SC')
          + renderPlSection(caLines, '🔵 CA — Eastvale Warehouse', '#0f2744', 'CA');
   } else {
