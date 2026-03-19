@@ -6395,114 +6395,115 @@ function renderPcrBoxes() {
     const total = box.items.reduce(function(s,i){ return s+(i.qty||0); }, 0);
     const isCustom = box.isCustom;
 
-    // Items rows
     let rowsHtml = '';
     for (let ii = 0; ii < box.items.length; ii++) {
       const item = box.items[ii];
       const origItem = window._pcrBoxesOriginal && window._pcrBoxesOriginal[bi] && window._pcrBoxesOriginal[bi].items ? window._pcrBoxesOriginal[bi].items[ii] : undefined;
       const origQty = origItem !== undefined ? origItem.qty : null;
-      const isNewItem = origItem === undefined; // 원본에 없는 새 아이템
+      const isNewItem = origItem === undefined;
       const changed = !isNewItem && item.qty !== origQty;
-      const inputBorder = changed ? '1px solid #f59e0b' : '1px solid #d1d5db';
-      const inputColor = changed ? '#92400e' : '#1e3a8a';
 
-      // Style/Color label - show for all items
       const styleLabel = (item.styleNum || item.color)
         ? item.styleNum + ' ' + item.color
         : (box.styleNum + ' ' + box.color);
 
-      // Can delete only if newly added (not in original snapshot)
-      const canDelete = isNewItem;
-      const delBtn = canDelete
-        ? '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px;padding:0 0 0 8px;line-height:1;">&#x2715;</button>'
-        : '';
+      const qtyColor = changed ? '#dc2626' : '#111827';
+      const refQty = origQty !== null ? origQty : item.qty;
 
-      const changedNote = changed ? '<span style="font-size:10px;color:#92400e;margin-left:4px;">(&#xC6D0;: '+origQty+')</span>' : '';
+      const delBtn = isNewItem
+        ? '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" title="&#xC0AD;&#xC81C;" style="background:none;border:none;color:#fca5a5;cursor:pointer;font-size:12px;padding:0 0 0 6px;line-height:1;opacity:0.7;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">&#x2715;</button>'
+        : '<div style="width:20px;"></div>';
 
-      rowsHtml += '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #f1f5f9;">'
-        // Style + Color
-        + '<div style="min-width:140px;font-size:12px;font-weight:700;font-family:IBM Plex Mono,monospace;color:#111;">'
-        + styleLabel + '</div>'
-        // Size
-        + '<div style="font-size:13px;font-weight:700;color:#1e3a8a;min-width:32px;font-family:IBM Plex Mono,monospace;">'
-        + item.size + '</div>'
-        // Qty input
-        + '<input type="number" min="0" value="'+item.qty+'" onchange="updatePcrBoxItem('+bi+','+ii+',this.value);checkPcrChanges()" style="width:64px;height:30px;border:'+inputBorder+';border-radius:4px;text-align:center;font-size:14px;font-weight:700;font-family:IBM Plex Mono,monospace;color:'+inputColor+';">'
-        // / 오더수량 (원본 기준)
-        + '<span style="font-size:12px;color:#9ca3af;">/ <b style="color:#374151;">'+(origQty !== null ? origQty : item.qty)+'</b> pcs</span>'
-        + changedNote
+      // Defect input - gray when 0, red when >0
+      const defectId = 'pcr-defect-box-'+bi+'-'+ii;
+
+      rowsHtml += '<div style="display:flex;align-items:center;padding:9px 14px;border-bottom:1px solid #f1f5f9;gap:0;">'
+        // Style# - bold blue
+        + '<span style="font-size:12px;font-weight:800;color:#1e3a8a;font-family:IBM Plex Mono,monospace;min-width:44px;">'+item.styleNum+'</span>'
+        // Color - normal
+        + '<span style="font-size:12px;color:#374151;min-width:100px;margin-right:12px;">'+item.color+'</span>'
+        // Size - bold blue
+        + '<span style="font-size:13px;font-weight:800;color:#1e3a8a;font-family:IBM Plex Mono,monospace;min-width:36px;">'+item.size+'</span>'
+        // Qty input - large
+        + '<input type="number" min="0" value="'+item.qty+'" onchange="updatePcrBoxItem('+bi+','+ii+',this.value);checkPcrChanges()" style="width:60px;height:32px;border:1px solid #e5e7eb;border-radius:6px;text-align:center;font-size:15px;font-weight:800;font-family:IBM Plex Mono,monospace;color:'+qtyColor+';background:'+(changed?'#fff5f5':'#f9fafb')+';">'
+        // / ref qty
+        + '<span style="font-size:12px;margin:0 12px;white-space:nowrap;"><span style="color:#9ca3af;">/ </span><span style="color:'+(changed?'#dc2626':'#6b7280');+'font-weight:600;">'+refQty+'</span><span style="color:#9ca3af;font-size:11px;"> pcs</span></span>'
         // Spacer
         + '<div style="flex:1;"></div>'
-        // Defect (far right)
-        + '<span style="font-size:10px;color:#dc2626;font-weight:600;">불량</span>'
-        + '<input type="number" min="0" value="0" id="pcr-defect-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;color:#dc2626;" oninput="togglePcrItemDefect('+bi+','+ii+',this.value)">'
-        // Defect detail (hidden)
-        + '<div id="pcr-defect-detail-'+bi+'-'+ii+'" style="display:none;gap:6px;align-items:center;">'
-        + '<span style="font-size:10px;color:#6b7280;">Shade</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'-'+ii+'" style="width:38px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Hole</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'-'+ii+'" style="width:38px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Stain</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'-'+ii+'" style="width:38px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Other</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'-'+ii+'" style="width:38px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
-        + '<input type="text" id="pcr-other-note-box-'+bi+'-'+ii+'" placeholder="&#xC774;&#xC720;..." style="width:80px;height:24px;border:1px solid #fecaca;border-radius:4px;padding:0 5px;font-size:11px;">'
+        // Defect label + input
+        + '<span style="font-size:10px;color:#9ca3af;margin-right:4px;">불량</span>'
+        + '<input type="number" min="0" value="0" id="'+defectId+'" style="width:40px;height:28px;border:1px solid #e5e7eb;border-radius:4px;text-align:center;font-size:12px;font-weight:700;color:#9ca3af;background:#f9fafb;" oninput="pcrDefectStyle(this);togglePcrItemDefect('+bi+','+ii+',this.value)">'
+        // Defect detail (hidden inline)
+        + '<div id="pcr-defect-detail-'+bi+'-'+ii+'" style="display:none;gap:4px;align-items:center;margin-left:6px;">'
+        + '<span style="font-size:9px;color:#9ca3af;">S</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'-'+ii+'" style="width:34px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
+        + '<span style="font-size:9px;color:#9ca3af;">H</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'-'+ii+'" style="width:34px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
+        + '<span style="font-size:9px;color:#9ca3af;">St</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'-'+ii+'" style="width:34px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
+        + '<span style="font-size:9px;color:#9ca3af;">O</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'-'+ii+'" style="width:34px;height:24px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:11px;">'
+        + '<input type="text" id="pcr-other-note-box-'+bi+'-'+ii+'" placeholder="&#xC774;&#xC720;" style="width:70px;height:24px;border:1px solid #fecaca;border-radius:4px;padding:0 4px;font-size:10px;">'
         + '</div>'
-        // Delete btn - only for new items
-        + (canDelete ? '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px;padding:0 0 0 4px;line-height:1;">&#x2715;</button>' : '')
+        + delBtn
         + '</div>';
     }
 
     // Add item form
     let addFormHtml = '';
     if (box.addingItem) {
-      addFormHtml = '<div style="padding:8px 12px;background:#f0f9ff;border-top:1px solid #bfdbfe;">'
+      addFormHtml = '<div style="padding:8px 14px;background:#f8fafc;border-top:1px solid #e5e7eb;">'
         + '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">'
-        + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:2px;">Style</div>'
-        + '<input list="pcr-style-opts-'+bi+'" id="pcr-add-style-'+bi+'" placeholder="1368" style="width:68px;height:28px;border:1px solid #93c5fd;border-radius:4px;padding:0 5px;font-size:12px;font-weight:700;">'
+        + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">STYLE</div>'
+        + '<input list="pcr-style-opts-'+bi+'" id="pcr-add-style-'+bi+'" placeholder="1368" style="width:68px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 5px;font-size:12px;font-weight:700;">'
         + '<datalist id="pcr-style-opts-'+bi+'">'+styleOptsList+'</datalist></div>'
-        + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:2px;">Color</div>'
-        + '<input id="pcr-add-color-'+bi+'" placeholder="Navy Htr" style="width:100px;height:28px;border:1px solid #93c5fd;border-radius:4px;padding:0 5px;font-size:12px;"></div>'
-        + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:2px;">Size</div>'
-        + '<select id="pcr-add-size-'+bi+'" style="width:62px;height:28px;border:1px solid #93c5fd;border-radius:4px;padding:0 3px;font-size:12px;">'
+        + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">COLOR</div>'
+        + '<input id="pcr-add-color-'+bi+'" placeholder="Navy Htr" style="width:100px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 5px;font-size:12px;"></div>'
+        + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">SIZE</div>'
+        + '<select id="pcr-add-size-'+bi+'" style="width:62px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 3px;font-size:12px;">'
         + '<option value="">-</option><option>XS</option><option>S</option><option>M</option><option>L</option><option>XL</option>'
         + '<option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>'
         + '<option>2T</option><option>3T</option><option>4T</option><option>5T</option>'
         + '<option>YS</option><option>YM</option><option>YL</option><option>YXL</option></select></div>'
-        + '<div><div style="font-size:9px;color:#6b7280;margin-bottom:2px;">Qty</div>'
-        + '<input type="number" id="pcr-add-qty-'+bi+'" min="1" placeholder="0" style="width:52px;height:28px;border:1px solid #93c5fd;border-radius:4px;text-align:center;font-size:12px;font-weight:700;"></div>'
-        + '<button onclick="confirmPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 12px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">&#x2713;</button>'
+        + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">QTY</div>'
+        + '<input type="number" id="pcr-add-qty-'+bi+'" min="1" placeholder="0" style="width:52px;height:28px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-size:12px;font-weight:700;"></div>'
+        + '<button onclick="confirmPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 12px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">&#x2713; &#xCD94;&#xAC00;</button>'
         + '<button onclick="cancelPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 8px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:4px;font-size:12px;cursor:pointer;">&#xCDE8;&#xC18C;</button>'
         + '</div></div>';
     }
 
     const addBtnHtml = !box.addingItem
-      ? '<div style="padding:8px 12px;border-top:1px solid #f1f5f9;">'
-        + '<button onclick="addPcrBoxItemInline('+bi+')" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #93c5fd;border-radius:4px;padding:3px 10px;cursor:pointer;">+ &#xC544;&#xC774;&#xD15C; &#xCD94;&#xAC00;</button>'
+      ? '<div style="padding:6px 14px;">'
+        + '<button onclick="addPcrBoxItemInline('+bi+')" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #bfdbfe;border-radius:4px;padding:3px 10px;cursor:pointer;">+ &#xC544;&#xC774;&#xD15C; &#xCD94;&#xAC00;</button>'
         + '</div>'
       : '';
 
     const deleteBoxBtn = isCustom
-      ? '<button onclick="removePcrBox('+bi+')" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:14px;padding:0;line-height:1;">&#x1F5D1;</button>'
+      ? '<button onclick="removePcrBox('+bi+')" style="background:none;border:none;color:rgba(255,255,255,0.5);cursor:pointer;font-size:13px;padding:0;line-height:1;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">&#x1F5D1;</button>'
       : '';
 
-    html += '<div style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;overflow:hidden;">'
-      // Header
-      + '<div style="background:#1e3a8a;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;">'
-      + '<div style="display:flex;align-items:center;gap:10px;">'
-      + '<span style="font-size:12px;font-weight:800;color:#fff;font-family:IBM Plex Mono,monospace;letter-spacing:0.5px;">BOX '+box.boxNum+'</span>'
-      + (isCustom ? '<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:3px;">&#xCD94;&#xAC00;</span>' : '')
+    html += '<div style="border:1px solid #e2e8f0;border-radius:10px;margin-bottom:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04);">'
+      + '<div style="background:#1e3a8a;padding:9px 14px;display:flex;justify-content:space-between;align-items:center;">'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + '<span style="font-size:11px;font-weight:800;color:#fff;font-family:IBM Plex Mono,monospace;letter-spacing:1px;">BOX '+box.boxNum+'</span>'
+      + (isCustom ? '<span style="font-size:9px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:3px;font-weight:700;">&#xCD94;&#xAC00;</span>' : '')
       + '</div>'
       + '<div style="display:flex;align-items:center;gap:8px;">'
-      + '<span style="font-size:13px;font-weight:800;color:#fff;font-family:IBM Plex Mono,monospace;">'+total+' pcs</span>'
+      + '<span style="font-size:12px;font-weight:800;color:#93c5fd;font-family:IBM Plex Mono,monospace;">'+total+' pcs</span>'
       + deleteBoxBtn + '</div></div>'
-      // Items
       + rowsHtml
       + addFormHtml
       + addBtnHtml
       + '</div>';
   }
 
-  html += '<button onclick="addPcrBox()" style="width:100%;padding:10px;border:2px dashed #93c5fd;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;margin-top:4px;">&#x1F4E6; + &#xBC15;&#xC2A4; &#xCD94;&#xAC00;</button>';
+  html += '<button onclick="addPcrBox()" style="width:100%;padding:10px;border:2px dashed #bfdbfe;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;margin-top:4px;">&#x1F4E6; + &#xBC15;&#xC2A4; &#xCD94;&#xAC00;</button>';
 
   container.innerHTML = html;
   checkPcrChanges();
+}
+
+function pcrDefectStyle(el) {
+  const v = parseInt(el.value) || 0;
+  el.style.color = v > 0 ? '#dc2626' : '#9ca3af';
+  el.style.borderColor = v > 0 ? '#fca5a5' : '#e5e7eb';
+  el.style.background = v > 0 ? '#fff' : '#f9fafb';
 }
 
 function togglePcrBoxDefect(bi, val) {
