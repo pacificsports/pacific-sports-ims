@@ -5019,7 +5019,12 @@ async function loadOrderStatus() {
         </div>`;
       })():''}
       ${col==='ready'?`
-        <button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}')">📋 Print Packing List</button>
+        ${(o.wh_code==='SC&CA'||o.is_split_warehouse) ? `
+        <div style="display:flex;gap:4px;margin-top:8px;">
+          <button class="btn btn-sm" style="flex:1;font-size:10px;background:#f0fdf4;color:#166534;border-color:#86efac;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','SC')">📋 SC PL</button>
+          <button class="btn btn-sm" style="flex:1;font-size:10px;background:#eff6ff;color:#1e40af;border-color:#93c5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','CA')">📋 CA PL</button>
+        </div>` : `
+        <button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','SC')">📋 Print Packing List</button>`}
         <button class="btn btn-sm btn-green" style="width:100%;margin-top:4px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>
         <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','ready_to_ship','preparing')">↩ Back to Preparing</button>`:''}
       ${col==='shipped'?`<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>`:''}
@@ -7162,9 +7167,8 @@ function toggleShipTrackingLabel() {
   label.textContent = carrier === 'LTL' ? 'PRO #' : 'Tracking #';
 }
 
-async function printPackingListFromCard(orderId) {
+async function printPackingListFromCard(orderId, whFilter) {
   showToast('📋 Packing List 로딩중...');
-  // order 가져오기
   let order = (allOrders||[]).find(o => o.id === orderId);
   if (!order) {
     const { data } = await db.from('orders').select('*').eq('id', orderId).single();
@@ -7177,8 +7181,34 @@ async function printPackingListFromCard(orderId) {
     .eq('order_id', orderId);
   if (!lines || !lines.length) { showToast('❌ 라인 데이터 없음'); return; }
 
+  // whFilter가 있으면 해당 창고 라인만 필터링해서 단일 섹션으로 출력
   const isSplit = order.is_split_warehouse || order.wh_code === 'SC&CA';
-  const html = buildPackingListHtml(order, lines, isSplit);
+  let filteredLines = lines;
+  let useSplit = isSplit && !whFilter;
+
+  if (whFilter === 'SC') {
+    filteredLines = lines.filter(l => {
+      if (l.wh === 'CA') return false;
+      if (l.wh === 'SC&CA') {
+        const alloc = l.alloc_detail || {};
+        return Object.values(alloc).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
+      }
+      return true;
+    });
+    useSplit = false;
+  } else if (whFilter === 'CA') {
+    filteredLines = lines.filter(l => {
+      if (l.wh === 'SC' || !l.wh || l.wh === '') return false;
+      if (l.wh === 'SC&CA') {
+        const allocCA = l.alloc_ca_detail || {};
+        return Object.values(allocCA).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
+      }
+      return l.wh === 'CA';
+    });
+    useSplit = false;
+  }
+
+  const html = buildPackingListHtml(order, filteredLines, useSplit, whFilter);
   printInNewWindow(html);
 }
 
@@ -7710,7 +7740,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
 // ═══════════════════════════════════════════════════════
 // Packing List HTML 빌더
 // ═══════════════════════════════════════════════════════
-function buildPackingListHtml(order, lines, isSplit) {
+function buildPackingListHtml(order, lines, isSplit, whFilter) {
   const dateStr = new Date().toLocaleDateString();
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
@@ -7895,31 +7925,31 @@ function buildPackingListHtml(order, lines, isSplit) {
 
   let body = '';
   if (isSplit) {
-    // SC 라인: SC 배분이 있는 라인만 (SC&CA 라인은 alloc_detail에 SC 배분이 있을 때만)
     const scLines = lines.filter(l => {
       if (l.wh === 'CA') return false;
       if (l.wh === 'SC&CA') {
         const alloc = l.alloc_detail || {};
-        const hasSC = Object.values(alloc).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
-        return hasSC;
+        return Object.values(alloc).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
       }
       return true;
     });
-    // CA 라인: CA 배분이 있는 라인만
     const caLines = lines.filter(l => {
       if (l.wh === 'SC') return false;
       if (!l.wh || l.wh === '') return false;
       if (l.wh === 'SC&CA') {
         const allocCA = l.alloc_ca_detail || {};
-        const hasCA = Object.values(allocCA).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
-        return hasCA;
+        return Object.values(allocCA).some(v => (typeof v === 'object' ? (v.boxes||0)+(v.pcs||0) : v||0) > 0);
       }
       return l.wh === 'CA';
     });
     body = renderPlSection(scLines, '🟢 SC — Sumter Warehouse', '#064e22', 'SC')
          + renderPlSection(caLines, '🔵 CA — Eastvale Warehouse', '#0f2744', 'CA');
   } else {
-    body = renderPlSection(lines, '', '#064e22', 'SC');
+    // whFilter가 있으면 해당 창고 레이블 표시
+    const whLabel = whFilter === 'CA' ? '🔵 CA — Eastvale Warehouse' : whFilter === 'SC' ? '🟢 SC — Sumter Warehouse' : '';
+    const whColor = whFilter === 'CA' ? '#0f2744' : '#064e22';
+    const sectionWh = whFilter || 'SC';
+    body = renderPlSection(lines, whLabel, whColor, sectionWh);
   }
 
   return `<div style="font-family:Arial,sans-serif;">
