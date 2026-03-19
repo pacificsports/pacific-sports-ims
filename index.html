@@ -7880,50 +7880,88 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
 
     // Box detail table
     const boxAlloc = calcPlBoxAllocation(sectionLines, sectionWh);
-    const boxDetailHtml = boxAlloc.length ? `
+
+    // 모든 group에서 PCR 박스 먼저, Full 박스 나중에 재정렬
+    const allBoxRows = [];
+    let globalBoxNum2 = 1;
+    // 1. PCR 박스 먼저
+    boxAlloc.forEach(g => {
+      g.boxes.filter(b => b.isPartial).forEach(box => {
+        allBoxRows.push({ ...box, boxNum: globalBoxNum2++, styleNum: g.styleNum, color: g.color });
+      });
+    });
+    const pcrCount = globalBoxNum2 - 1;
+    // 2. Full 박스 나중에
+    boxAlloc.forEach(g => {
+      g.boxes.filter(b => !b.isPartial).forEach(box => {
+        allBoxRows.push({ ...box, boxNum: globalBoxNum2++, styleNum: g.styleNum, color: g.color });
+      });
+    });
+
+    const boxDetailHtml = allBoxRows.length ? `
       <div style="margin-top:16px;">
         <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;padding:6px 10px;background:#f8fafc;border-radius:6px;border:1px solid #e5e7eb;">📦 Box Detail</div>
-        <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;">
-          <thead><tr style="background:#f3f4f6;">
-            <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;width:80px;">Box #</th>
-            <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Style</th>
-            <th style="padding:6px 10px;text-align:left;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Color</th>
-            <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Size</th>
-            <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Pcs</th>
-            <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Box Total</th>
+
+        ${pcrCount > 0 ? `
+        <div style="font-size:11px;font-weight:700;color:#7c3aed;padding:6px 10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:6px 6px 0 0;border-bottom:none;">
+          💻 PC Room Boxes (BOX 1–${pcrCount})
+        </div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #c4b5fd;margin-bottom:12px;">
+          <thead><tr style="background:#ede9fe;">
+            <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #c4b5fd;width:80px;">Box #</th>
+            <th style="padding:5px 10px;text-align:left;font-size:10px;text-transform:uppercase;border-bottom:1px solid #c4b5fd;">Style</th>
+            <th style="padding:5px 10px;text-align:left;font-size:10px;text-transform:uppercase;border-bottom:1px solid #c4b5fd;">Color</th>
+            <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #c4b5fd;">Size</th>
+            <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #c4b5fd;">Pcs</th>
+            <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #c4b5fd;">Box Total</th>
           </tr></thead>
           <tbody>
-            ${boxAlloc.flatMap(g => {
-              const allBoxes = g.boxes;
-              const lastPcrIdx = allBoxes.reduce((last, b, i) => b.isPartial ? i : last, -1);
-              return allBoxes.flatMap((box, bi) => {
-                const boxTotal = box.items.reduce((s,i)=>s+i.qty,0);
-                const isPartialBox = box.isPartial;
-                const isLastPcr = bi === lastPcrIdx;
-                const rows = box.items.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===box.items.length-1&&!isLastPcr?'#d1d5db':ii===box.items.length-1&&isLastPcr?'#7c3aed':'#f3f4f6'};${isPartialBox?'background:#faf5ff;':''}">
-                  <td style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?'BOX '+box.boxNum+(isPartialBox?' *':''):''}</td>
-                  <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${ii===0?g.styleNum:''}</td>
-                  <td style="padding:6px 10px;font-size:11px;">${ii===0?g.color:''}</td>
-                  <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
-                  <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
-                  <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?'1 box':''}</td>
-                </tr>`);
-                // PCR 마지막 박스 후 구분선
-                if (isLastPcr) {
-                  rows.push(`<tr><td colspan="6" style="padding:0;"><div style="border-top:2px dashed #7c3aed;margin:4px 0;"></div></td></tr>
-                  <tr style="background:#f8f5ff;"><td colspan="6" style="padding:3px 10px;font-size:9px;font-weight:700;color:#7c3aed;letter-spacing:0.5px;">— PC ROOM ↑ &nbsp;&nbsp; WAREHOUSE ↓ —</td></tr>
-                  <tr><td colspan="6" style="padding:0;"><div style="border-top:2px dashed #7c3aed;margin:4px 0;"></div></td></tr>`);
-                }
-                return rows;
-              });
-            }).join('')}
+            ${allBoxRows.filter(b=>b.isPartial).flatMap(box =>
+              box.items.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===box.items.length-1?'#e5e7eb':'#f3f4f6'};background:#faf8ff;">
+                <td style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:#7c3aed;">${ii===0?'BOX '+box.boxNum:''}</td>
+                <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${ii===0?box.styleNum:''}</td>
+                <td style="padding:6px 10px;font-size:11px;">${ii===0?box.color:''}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:#7c3aed;">${ii===0?'1 box':''}</td>
+              </tr>`)
+            ).join('')}
           </tbody>
+        </table>` : ''}
+
+        ${allBoxRows.filter(b=>!b.isPartial).length > 0 ? `
+        <div style="font-size:11px;font-weight:700;color:#374151;padding:6px 10px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px 6px 0 0;border-bottom:none;">
+          📦 Full Case Boxes (BOX ${pcrCount+1}–${allBoxRows.length})
+        </div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;margin-bottom:12px;">
+          <thead><tr style="background:#f9fafb;">
+            <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;width:80px;">Box #</th>
+            <th style="padding:5px 10px;text-align:left;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Style</th>
+            <th style="padding:5px 10px;text-align:left;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Color</th>
+            <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Size</th>
+            <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Pcs</th>
+            <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Box Total</th>
+          </tr></thead>
+          <tbody>
+            ${allBoxRows.filter(b=>!b.isPartial).flatMap(box =>
+              box.items.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===box.items.length-1?'#e5e7eb':'#f3f4f6'};">
+                <td style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:#111827;">${ii===0?'BOX '+box.boxNum:''}</td>
+                <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${ii===0?box.styleNum:''}</td>
+                <td style="padding:6px 10px;font-size:11px;">${ii===0?box.color:''}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;">${ii===0?'1 box':''}</td>
+              </tr>`)
+            ).join('')}
+          </tbody>
+        </table>` : ''}
+
+        <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;">
           <tfoot><tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb;">
             <td colspan="5" style="padding:8px 10px;text-align:right;">Total Cartons:</td>
-            <td style="padding:8px 10px;text-align:center;font-size:13px;">${boxAlloc.reduce((s,g)=>s+g.boxes.length,0)} boxes</td>
+            <td style="padding:8px 10px;text-align:center;font-size:13px;">${allBoxRows.length} boxes</td>
           </tr></tfoot>
         </table>
-        <div style="font-size:10px;color:#7c3aed;margin-top:4px;">* Partial box (PC Room)</div>
       </div>` : '';
 
     return `
