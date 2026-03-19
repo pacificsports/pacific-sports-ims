@@ -7786,7 +7786,25 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
       const boxes = [];
       let currentBox = { items: [], isPartial: false };
       let currentTotal = 0;
-      // Full boxes first
+      // PCR Partial boxes FIRST (PC Room label과 번호 매칭)
+      partialSizes.forEach(s => {
+        let remaining = s.qty;
+        while (remaining > 0) {
+          const space = boxQty - currentTotal;
+          if (remaining > space && currentTotal > 0) {
+            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
+            currentBox = { items: [] }; currentTotal = 0;
+          }
+          const take = Math.min(remaining, boxQty - currentTotal);
+          if (take > 0) { currentBox.items.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
+          if (currentTotal >= boxQty) {
+            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
+            currentBox = { items: [] }; currentTotal = 0;
+          }
+        }
+      });
+      if (currentBox.items.length > 0) { boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true }); currentBox = { items: [] }; currentTotal = 0; }
+      // Full boxes after
       fullSizes.forEach(s => {
         let remaining = s.qty;
         while (remaining > 0) {
@@ -7804,24 +7822,6 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
         }
       });
       if (currentBox.items.length > 0) { boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: false }); currentBox = { items: [] }; currentTotal = 0; }
-      // Partial boxes
-      partialSizes.forEach(s => {
-        let remaining = s.qty;
-        while (remaining > 0) {
-          const space = boxQty - currentTotal;
-          if (remaining > space && currentTotal > 0) {
-            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
-            currentBox = { items: [] }; currentTotal = 0;
-          }
-          const take = Math.min(remaining, boxQty - currentTotal);
-          if (take > 0) { currentBox.items.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
-          if (currentTotal >= boxQty) {
-            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
-            currentBox = { items: [] }; currentTotal = 0;
-          }
-        }
-      });
-      if (currentBox.items.length > 0) boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
       if (boxes.length) result.push({ styleNum: g.styleNum, color: g.color, boxQty, boxes });
     });
     return result;
@@ -7893,18 +7893,30 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
             <th style="padding:6px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Box Total</th>
           </tr></thead>
           <tbody>
-            ${boxAlloc.flatMap(g => g.boxes.flatMap((box, bi) => {
-              const boxTotal = box.items.reduce((s,i)=>s+i.qty,0);
-              const isPartialBox = box.isPartial;
-              return box.items.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===box.items.length-1?'#d1d5db':'#f3f4f6'};${isPartialBox?'background:#faf5ff;':''}">
-                <td style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?'BOX '+box.boxNum+(isPartialBox?' *':''):''}</td>
-                <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${ii===0?g.styleNum:''}</td>
-                <td style="padding:6px 10px;font-size:11px;">${ii===0?g.color:''}</td>
-                <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
-                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
-                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?'1 box':''}</td>
-              </tr>`);
-            })).join('')}
+            ${boxAlloc.flatMap(g => {
+              const allBoxes = g.boxes;
+              const lastPcrIdx = allBoxes.reduce((last, b, i) => b.isPartial ? i : last, -1);
+              return allBoxes.flatMap((box, bi) => {
+                const boxTotal = box.items.reduce((s,i)=>s+i.qty,0);
+                const isPartialBox = box.isPartial;
+                const isLastPcr = bi === lastPcrIdx;
+                const rows = box.items.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===box.items.length-1&&!isLastPcr?'#d1d5db':ii===box.items.length-1&&isLastPcr?'#7c3aed':'#f3f4f6'};${isPartialBox?'background:#faf5ff;':''}">
+                  <td style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?'BOX '+box.boxNum+(isPartialBox?' *':''):''}</td>
+                  <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${ii===0?g.styleNum:''}</td>
+                  <td style="padding:6px 10px;font-size:11px;">${ii===0?g.color:''}</td>
+                  <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
+                  <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
+                  <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:${isPartialBox?'#7c3aed':'#111827'};">${ii===0?'1 box':''}</td>
+                </tr>`);
+                // PCR 마지막 박스 후 구분선
+                if (isLastPcr) {
+                  rows.push(`<tr><td colspan="6" style="padding:0;"><div style="border-top:2px dashed #7c3aed;margin:4px 0;"></div></td></tr>
+                  <tr style="background:#f8f5ff;"><td colspan="6" style="padding:3px 10px;font-size:9px;font-weight:700;color:#7c3aed;letter-spacing:0.5px;">— PC ROOM ↑ &nbsp;&nbsp; WAREHOUSE ↓ —</td></tr>
+                  <tr><td colspan="6" style="padding:0;"><div style="border-top:2px dashed #7c3aed;margin:4px 0;"></div></td></tr>`);
+                }
+                return rows;
+              });
+            }).join('')}
           </tbody>
           <tfoot><tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb;">
             <td colspan="5" style="padding:8px 10px;text-align:right;">Total Cartons:</td>
