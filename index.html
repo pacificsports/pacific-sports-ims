@@ -6153,10 +6153,12 @@ async function printPickTicket(orderId, wh, ticketType) {
   const allPcrTransfers = enrichedLines.flatMap(l => (l._pcrTransfers||[]).map(t => ({ ...t, color: l.color, size: l.size, styleNum: l.styles?.style_number||'' })));
 
   document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, ticketType);
-  // PC Room Ticket이면 Box Labels 버튼 표시
+  // 모든 Ticket 타입에 Box Labels 버튼 표시 (warehouse = full case, pcroom = partial)
   const boxLabelBtn = document.getElementById('btn-print-box-labels');
-  if (boxLabelBtn) boxLabelBtn.style.display = ticketType === 'pcroom' ? 'inline-flex' : 'none';
-  // 현재 오더 정보 저장 (박스 라벨용)
+  if (boxLabelBtn) {
+    boxLabelBtn.style.display = 'inline-flex';
+    boxLabelBtn.textContent = ticketType === 'pcroom' ? '🏷 Print Box Labels (Zebra)' : '🏷 Print Case Labels (Zebra)';
+  }
   window._ptCurrentOrder = order;
   window._ptCurrentLines = enrichedLines;
   document.getElementById('modal-pt-preview').style.display = 'flex';
@@ -7378,10 +7380,79 @@ async function printBoxLabels() {
   const order = window._ptCurrentOrder;
   const lines = window._ptCurrentLines;
   const wh = _ptWh;
+  const ticketType = _ptTicketType;
   if (!order || !lines) { showToast('❌ 오더 정보 없음'); return; }
 
-  // PCR 박스 계산 (calcPlBoxAllocation과 동일 로직)
+  if (ticketType === 'warehouse') {
+    await printWarehouseCaseLabels(order, lines, wh);
+  } else {
+    await printPcrBoxLabels(order, lines, wh);
+  }
+}
+
+// ── Full Case 라벨 (Warehouse)
+async function printWarehouseCaseLabels(order, lines, wh) {
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf(s)+1)||99;
+
+  // Full Box 계산 - alloc_detail에서 bins/boxes 추출
+  const caseLabels = [];
+  lines.forEach(l => {
+    const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    const fullBoxEntries = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'));
+    const fullBoxCount = fullBoxEntries.reduce((s,[,v]) => s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)), 0);
+    if (fullBoxCount > 0) {
+      caseLabels.push({
+        styleNum: l.styles?.style_number || '',
+        color: l.color || '',
+        size: l.size || '',
+        qty: ppb,
+        boxes: fullBoxCount
+      });
+    }
+  });
+
+  if (caseLabels.length === 0) { showToast('❌ Full Case 박스 없음'); return; }
+
+  // 각 라인별로 박스 수만큼 라벨 생성
+  const totalBoxes = caseLabels.reduce((s,l) => s+l.boxes, 0);
+  let boxNum = 1;
+  const zplAll = caseLabels.flatMap(l => {
+    const labels = [];
+    for (let i = 0; i < l.boxes; i++) {
+      labels.push(buildCaseLabelZpl(l, boxNum++, totalBoxes, order));
+    }
+    return labels;
+  }).join('\n');
+
+  await sendToZebraBrowserPrint(zplAll, totalBoxes);
+}
+
+function buildCaseLabelZpl(caseItem, boxNum, totalBoxes, order) {
+  // 2x1 inch = 406w x 203h dots (203 dpi)
+  const poNum = (order.customer_po || '').substring(0, 20);
+  const custName = (order.customer_name || '').substring(0, 24);
+
+  // 고객 이름 두 줄 처리
+  const words = custName.split(' ');
+  let line1 = '', line2 = '';
+  words.forEach(w => {
+    if ((line1 + ' ' + w).trim().length <= 14) line1 = (line1 + ' ' + w).trim();
+    else line2 = (line2 + ' ' + w).trim();
+  });
+  const twoLines = line2.length > 0;
+
+  return '^XA\n'
+    + '^MMT\n^PW406\n^LL203\n^LS0\n\n'
+    + '^FO10,8^A0N,32,32^FD' + line1 + '^FS\n'
+    + (twoLines ? '^FO10,44^A0N,32,32^FD' + line2 + '^FS\n' : '')
+    + '^FO10,' + (twoLines ? 88 : 55) + '^A0N,28,28^FDPO#^FS\n'
+    + '^FO70,' + (twoLines ? 83 : 50) + '^A0N,55,55^FD' + poNum + '^FS\n'
+    + '^XZ';
+}
+
+// ── PC Room 박스 라벨 (기존)
+async function printPcrBoxLabels(order, lines, wh) {
   const ppbDefault = 72;
   const groups = {};
   lines.forEach(l => {
