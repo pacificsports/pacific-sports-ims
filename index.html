@@ -7637,11 +7637,10 @@ function buildCaseLabelZpl(caseItem, boxNum, totalBoxes, order) {
 function buildBoxLabelZpl(box, totalBoxes, order) {
   // ZP450 4x6 inch = 812w x 1218h dots (203 dpi)
   const poNum = (order.customer_po || '').substring(0, 20);
-  // 고객 이름 — 전체 한 줄로 (최대 30자, 글자 크기로 조절)
   const custName = (order.customer_name || '').substring(0, 30);
   const custFontSize = custName.length > 20 ? 45 : custName.length > 15 ? 52 : 60;
 
-  // 아이템 목록 (스타일/컬러 그룹핑)
+  // 아이템 목록
   const groups = {};
   box.items.forEach(item => {
     const sNum = item.styleNum || box.styleNum || '';
@@ -7651,47 +7650,49 @@ function buildBoxLabelZpl(box, totalBoxes, order) {
     groups[key].sizes.push({ size: item.size, qty: item.qty });
   });
 
-  // 총 수량
   const totalQty = box.items.reduce((s, i) => s + (i.qty || 0), 0);
 
-  // 아이템 라인 ZPL
+  // 아이템 라인 — 구분선 바로 아래부터
   let itemLines = '';
-  let yPos = 680; // 구분선 아래부터 시작
+  let yPos = 530;
   Object.values(groups).forEach(g => {
-    // Style + Color
-    itemLines += '^FO30,' + yPos + '^A0N,38,38^FD' + g.styleNum + '  ' + g.color + '^FS\n';
-    yPos += 50;
+    // Style + Color 크게
+    itemLines += '^FO30,' + yPos + '^A0N,55,55^FD' + g.styleNum + '  ' + g.color + '^FS\n';
+    yPos += 68;
     g.sizes.forEach(s => {
-      itemLines += '^FO30,' + yPos + '^A0N,52,52^FD' + s.size.padEnd(8) + s.qty + ' pcs^FS\n';
-      yPos += 65;
+      const sizeStr = s.size.padEnd(6);
+      const qtyStr = s.qty + ' pcs';
+      itemLines += '^FO30,' + yPos + '^A0N,60,60^FD' + sizeStr + '   ' + qtyStr + '^FS\n';
+      yPos += 72;
     });
-    yPos += 8;
+    yPos += 6;
   });
 
-  // Total 라인
-  const totalY = yPos + 10;
-  const footerY = 1170;
+  // Total + 구분선
+  const divY2 = yPos + 8;
+  const totalY = divY2 + 16;
 
   return '^XA\n'
-    + '^MMT\n^PW812\n^LL1218\n^LS0\n\n'
-    // 고객 이름 (한 줄)
-    + '^FO30,40^A0N,' + custFontSize + ',' + custFontSize + '^FD' + custName + '^FS\n'
+    + '^MMT\n^PW812\n^LL1218\n^LS0\n'
+    + '^CF0,50\n'  // 기본 폰트 설정
+    // 고객 이름
+    + '^FO30,35^A0N,' + custFontSize + ',' + custFontSize + '^FD' + custName + '^FS\n'
     // PO# 라벨
-    + '^FO30,130^A0N,38,38^FDPO#^FS\n'
+    + '^FO30,120^A0N,40,40^FDPO#^FS\n'
     // PO# 번호 (크게)
-    + '^FO30,175^A0N,120,120^FD' + poNum + '^FS\n'
+    + '^FO30,165^A0N,130,130^FD' + poNum + '^FS\n'
     // BOX #
-    + '^FO30,340^A0N,90,90^FDBOX ' + box.boxNum + ' of ' + totalBoxes + '^FS\n'
+    + '^FO30,340^A0N,95,95^FDBOX ' + box.boxNum + ' of ' + totalBoxes + '^FS\n'
     // 구분선
-    + '^FO20,460^GB772,4,4^FS\n'
-    // 아이템들
+    + '^FO20,460^GB772,5,5^FS\n'
+    // 아이템
     + itemLines
-    // 구분선
-    + '^FO20,' + (totalY - 15) + '^GB772,3,3^FS\n'
+    // 구분선2
+    + '^FO20,' + divY2 + '^GB772,3,3^FS\n'
     // Total
-    + '^FO30,' + totalY + '^A0N,48,48^FDTotal:   ' + totalQty + ' pcs^FS\n'
-    // Pacific Sports (하단 중앙)
-    + '^FO0,' + footerY + '^FB812,1,0,C,0^A0N,28,28^FDPacific Sports^FS\n'
+    + '^FO30,' + totalY + '^A0N,55,55^FDTotal:   ' + totalQty + ' pcs^FS\n'
+    // Pacific Sports 하단 중앙
+    + '^FO0,1170^FB812,1,0,C,0^A0N,30,30^FDPacific Sports^FS\n'
     + '^XZ';
 }
 
@@ -12705,7 +12706,8 @@ function showCreditHoldFlash(overAmt) {
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 닫기</button>
       <button class="btn" id="btn-print-box-labels" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="printBoxLabels()">🏷 Reprint Box Labels (Zebra)</button>
-      <button class="btn btn-primary" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);autoPrintBoxLabels();closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Print Pick Ticket</button>
+      <button class="btn" style="background:#374151;color:#fff;border-color:#374151;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Pick Ticket Only</button>
+      <button class="btn btn-primary" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);autoPrintBoxLabels();closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Print + Labels</button>
     </div>
   </div>
 </div>
