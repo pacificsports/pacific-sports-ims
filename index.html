@@ -5286,12 +5286,19 @@ function deleteOrderConfirm(orderId, orderNum, customerName) {
     'Delete 확인',
     orderNum + ' — ' + customerName + ' 를 영구 삭제합니다.',
     async function(emp) {
-      await restoreOrderInventory(orderId);
-      await db.from('order_lines').delete().eq('order_id', orderId);
-      await db.from('orders').update({ deleted_by: emp.name }).eq('id', orderId);
-      await db.from('orders').delete().eq('id', orderId);
-      showToast('🗑 ' + orderNum + ' 영구 삭제 (' + emp.name + ')');
-      loadCustomerPOs(); loadOrderStatus();
+      try {
+        showToast('⏳ 삭제 중...');
+        await restoreOrderInventory(orderId);
+        await db.from('order_lines').delete().eq('order_id', orderId);
+        await db.from('orders').update({ deleted_by: emp.name }).eq('id', orderId);
+        const { error } = await db.from('orders').delete().eq('id', orderId);
+        if (error) { showToast('❌ 삭제 실패: ' + error.message); return; }
+        showToast('🗑 ' + orderNum + ' 영구 삭제 (' + emp.name + ')');
+        loadCustomerPOs(); loadOrderStatus();
+      } catch(e) {
+        showToast('❌ 삭제 오류: ' + e.message);
+        console.error('Delete error:', e);
+      }
     }
   );
 }
