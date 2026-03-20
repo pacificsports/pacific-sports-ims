@@ -802,8 +802,15 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-preparing">—</div>
           </div>
           <div id="os-kpi-2" style="background:#ecfeff;border:2px solid #a5f3fc;border-top:3px solid #0891b2;border-radius:8px;padding:10px 14px;cursor:pointer;" onclick="osFilterStatus('ready_to_ship')">
-            <div style="font-size:10px;font-weight:700;color:#0891b2;text-transform:uppercase;">✅ Ready to Ship</div>
-            <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-ready">—</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <div style="font-size:10px;font-weight:700;color:#0891b2;text-transform:uppercase;">✅ Ready to Ship</div>
+                <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-ready">—</div>
+              </div>
+              <button id="batch-ship-btn" onclick="event.stopPropagation();openBatchShipModal()" style="display:none;padding:5px 10px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">
+                🚛 Batch Ship (<span id="batch-ship-count">0</span>)
+              </button>
+            </div>
           </div>
           <div id="os-kpi-3" style="background:#f0fdf4;border:2px solid #bbf7d0;border-top:3px solid #16a34a;border-radius:8px;padding:10px 14px;cursor:pointer;" onclick="osFilterStatus('shipped')">
             <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase;">🚚 Shipped</div>
@@ -5019,7 +5026,13 @@ async function loadOrderStatus() {
         </div>`;
       })():''}
       ${col==='ready'?`
-        <button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','${wh}')">📋 Print Packing List</button>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <input type="checkbox" id="batch-cb-${o.id}-${wh}" value="${o.id}|${wh}"
+            onclick="event.stopPropagation();updateBatchShipCount()"
+            style="width:16px;height:16px;cursor:pointer;accent-color:#16a34a;">
+          <label for="batch-cb-${o.id}-${wh}" style="font-size:10px;color:#6b7280;cursor:pointer;" onclick="event.stopPropagation()">Batch Ship 선택</label>
+        </div>
+        <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','${wh}')">📋 Print Packing List</button>
         <button class="btn btn-sm btn-green" style="width:100%;margin-top:4px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>
         <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','ready_to_ship','preparing')">↩ Back to Preparing</button>`:''}
       ${col==='shipped'?`<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>`:''}
@@ -7018,6 +7031,13 @@ async function preparationComplete(orderId, wh) {
 
   document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC');
   document.getElementById('modal-pl-preview').style.display = 'flex';
+  // Shipping 필드 초기화
+  ['pl-carrier','pl-tracking','pl-pro','pl-ltl-carrier'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  ['pl-tracking-wrap','pl-pro-wrap','pl-ltl-carrier-wrap'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
 }
 
 let _plWh = 'SC';
@@ -7177,9 +7197,127 @@ let _shippedWh = null;
 let _shippedEmp = null;
 
 function toggleShipTrackingLabel() {
-  const carrier = document.getElementById('ship-carrier').value;
+  const carrier = document.getElementById('ship-carrier')?.value || '';
   const label = document.getElementById('ship-tracking-label');
-  label.textContent = carrier === 'LTL' ? 'PRO #' : 'Tracking #';
+  const freightWrap = document.getElementById('ship-freight-carrier-wrap');
+  if (label) label.textContent = carrier === 'LTL' ? 'PRO #' : 'Tracking #';
+  if (freightWrap) freightWrap.style.display = carrier === 'LTL' ? 'block' : 'none';
+}
+
+let _bolFileData = null; // { base64, mimeType, fileName }
+
+function handleBolFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  processBolFile(file);
+}
+
+function handleBolDrop(event) {
+  const file = event.dataTransfer.files[0];
+  if (!file) return;
+  processBolFile(file);
+}
+
+function processBolFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const base64 = e.target.result.split(',')[1];
+    _bolFileData = { base64, mimeType: file.type, fileName: file.name };
+    document.getElementById('bol-upload-placeholder').style.display = 'none';
+    document.getElementById('bol-upload-preview').style.display = 'block';
+    document.getElementById('bol-file-name').textContent = file.name;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
+  const custObj = (customers||[]).find(c => c.id === order.customer_id);
+  const toEmail = custObj?.email || order.customer_email || order.email || '';
+  const ccEmail = custObj?.email_cc || '';
+
+  if (!toEmail) return { ok: false, error: 'No customer email' };
+
+  // order_lines 가져오기
+  const { data: lines } = await db.from('order_lines')
+    .select('*, styles(style_number)')
+    .eq('order_id', order.id);
+
+  const lineItems = (lines||[]).map(l => ({
+    style: l.styles?.style_number || '',
+    color: l.color || '',
+    size: l.size || '',
+    qty: l.qty_pieces || 0
+  }));
+
+  const payload = {
+    order_number: order.order_number,
+    customer_name: order.customer_name,
+    customer_po: order.customer_po || '',
+    customer_email: toEmail,
+    ship_date: order.ship_date,
+    carrier: shippingInfo.carrier || '',
+    tracking_number: shippingInfo.tracking || '',
+    freight_company: shippingInfo.freightCarrier || '',
+    total_pcs: order.total_pcs || 0,
+    wh: shippingInfo.wh || 'SC',
+    lines: lineItems,
+    pl_html: plHtml || '',
+    bol_base64: bolData?.base64 || null,
+    bol_mime: bolData?.mimeType || null,
+    bol_filename: bolData?.fileName || null,
+    cc: ccEmail
+  };
+
+  try {
+    const res = await fetch('https://po-confirm-email.hjbae.workers.dev/send-shipped', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    return res.ok ? { ok: true, id: data.id } : { ok: false, error: data.error || 'Unknown error' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+function togglePlShippingFields() {
+  const carrier = document.getElementById('pl-carrier')?.value;
+  const isLtl = carrier === 'LTL';
+  const isParcel = carrier === 'UPS' || carrier === 'FedEx';
+  document.getElementById('pl-tracking-wrap').style.display = isParcel ? 'block' : 'none';
+  document.getElementById('pl-pro-wrap').style.display = isLtl ? 'block' : 'none';
+  document.getElementById('pl-ltl-carrier-wrap').style.display = isLtl ? 'block' : 'none';
+  updatePlShipping();
+}
+
+function updatePlShipping() {
+  const carrier = document.getElementById('pl-carrier')?.value || '';
+  const tracking = document.getElementById('pl-tracking')?.value || '';
+  const pro = document.getElementById('pl-pro')?.value || '';
+  const ltlCarrier = document.getElementById('pl-ltl-carrier')?.value || '';
+
+  // Shipping Info 섹션을 PL 미리보기에 업데이트
+  const shippingEl = document.getElementById('pl-shipping-info');
+  if (!shippingEl) return;
+
+  if (!carrier) { shippingEl.style.display = 'none'; return; }
+
+  let html = '';
+  if (carrier === 'LTL') {
+    html = '<div style="display:flex;gap:24px;">'
+      + (ltlCarrier ? `<div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Freight Carrier</div><div style="font-weight:700;">${ltlCarrier}</div></div>` : '')
+      + (pro ? `<div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">PRO #</div><div style="font-weight:700;font-family:'IBM Plex Mono',monospace;">${pro}</div></div>` : '')
+      + '</div>';
+  } else {
+    html = '<div style="display:flex;gap:24px;">'
+      + `<div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Carrier</div><div style="font-weight:700;">${carrier}</div></div>`
+      + (tracking ? `<div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Tracking #</div><div style="font-weight:700;font-family:'IBM Plex Mono',monospace;">${tracking}</div></div>` : '')
+      + '</div>';
+  }
+
+  shippingEl.style.display = 'block';
+  shippingEl.innerHTML = html;
 }
 
 async function printPackingListFromCard(orderId, whFilter) {
@@ -7251,10 +7389,153 @@ async function doShipped(orderId, wh) {
   document.getElementById('ship-date-inp').value = new Date().toISOString().slice(0,10);
   document.getElementById('ship-carrier').value = '';
   document.getElementById('ship-tracking').value = '';
-  document.getElementById('ship-pickup-company').value = '';
+  if (document.getElementById('ship-freight-carrier')) document.getElementById('ship-freight-carrier').value = '';
+  if (document.getElementById('ship-freight-carrier-wrap')) document.getElementById('ship-freight-carrier-wrap').style.display = 'none';
   document.getElementById('ship-note').value = '';
 
+  // BOL 업로드 초기화
+  _bolFileData = null;
+  document.getElementById('bol-file-input').value = '';
+  document.getElementById('bol-upload-placeholder').style.display = 'block';
+  document.getElementById('bol-upload-preview').style.display = 'none';
+
+  // 고객 이메일 표시
+  const custObj = (customers||[]).find(c => c.id === orderCard?.customer_id);
+  const custEmail = custObj?.email || orderCard?.email || '';
+  const emailToEl = document.getElementById('ship-email-to');
+  const noEmailWarn = document.getElementById('ship-no-email-warn');
+  if (emailToEl) emailToEl.textContent = custEmail || '—';
+  if (noEmailWarn) noEmailWarn.style.display = custEmail ? 'none' : 'block';
+  if (document.getElementById('ship-send-email')) {
+    document.getElementById('ship-send-email').checked = !!custEmail;
+  }
+
   document.getElementById('modal-shipped').style.display = 'flex';
+}
+
+function updateBatchShipCount() {
+  const checked = document.querySelectorAll('input[id^="batch-cb-"]:checked');
+  const btn = document.getElementById('batch-ship-btn');
+  const countEl = document.getElementById('batch-ship-count');
+  if (countEl) countEl.textContent = checked.length;
+  if (btn) btn.style.display = checked.length > 0 ? 'flex' : 'none';
+}
+
+async function openBatchShipModal() {
+  const checked = [...document.querySelectorAll('input[id^="batch-cb-"]:checked')];
+  if (checked.length === 0) return;
+
+  const items = checked.map(cb => {
+    const [orderId, wh] = cb.value.split('|');
+    return { orderId, wh };
+  });
+
+  // 오더 정보 수집
+  const orderIds = [...new Set(items.map(i => i.orderId))];
+  const orderInfos = orderIds.map(id => {
+    const o = (allOrderStatusData||[]).find(o => o.id === id);
+    return o ? `${o.order_number} — ${o.customer_name} (PO# ${o.customer_po||'—'})` : id;
+  });
+
+  // 모달에 목록 표시
+  document.getElementById('batch-ship-list').innerHTML = orderInfos.map(info =>
+    `<div style="font-size:12px;padding:4px 0;border-bottom:1px solid #f3f4f6;">${info}</div>`
+  ).join('');
+  window._batchShipItems = items;
+
+  // 날짜 기본값
+  document.getElementById('batch-ship-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('batch-ship-carrier').value = '';
+  document.getElementById('batch-ship-tracking').value = '';
+  document.getElementById('batch-ship-freight-company').value = '';
+  document.getElementById('batch-ship-freight-wrap').style.display = 'none';
+  document.getElementById('batch-ship-note').value = '';
+
+  // BOL 초기화
+  _bolFileData = null;
+  document.getElementById('batch-bol-file-input').value = '';
+  document.getElementById('batch-bol-placeholder').style.display = 'block';
+  document.getElementById('batch-bol-preview').style.display = 'none';
+
+  document.getElementById('modal-batch-ship').style.display = 'flex';
+}
+
+function toggleBatchCarrier() {
+  const carrier = document.getElementById('batch-ship-carrier').value;
+  const freightWrap = document.getElementById('batch-ship-freight-wrap');
+  const trackingLabel = document.getElementById('batch-tracking-label');
+  if (freightWrap) freightWrap.style.display = carrier === 'LTL' ? 'block' : 'none';
+  if (trackingLabel) trackingLabel.textContent = carrier === 'LTL' ? 'PRO #' : 'Tracking #';
+}
+
+function handleBatchBolFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    _bolFileData = { base64: e.target.result.split(',')[1], mimeType: file.type, fileName: file.name };
+    document.getElementById('batch-bol-placeholder').style.display = 'none';
+    document.getElementById('batch-bol-preview').style.display = 'block';
+    document.getElementById('batch-bol-file-name').textContent = file.name;
+  };
+  reader.readAsDataURL(file);
+}
+
+async function confirmBatchShip() {
+  const shipDate = document.getElementById('batch-ship-date').value;
+  if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
+
+  const pin = prompt('담당자 PIN을 입력하세요:');
+  if (!pin) return;
+  const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = empRows?.[0];
+  if (!emp) { alert('❌ PIN이 올바르지 않습니다.'); return; }
+  if (!['admin','manager','warehouse'].includes(emp.role)) { alert('❌ 권한이 없습니다.'); return; }
+
+  const carrier = document.getElementById('batch-ship-carrier').value;
+  const tracking = document.getElementById('batch-ship-tracking').value;
+  const freightCompany = document.getElementById('batch-ship-freight-company').value;
+  const note = document.getElementById('batch-ship-note').value;
+  const sendEmail = document.getElementById('batch-send-email').checked;
+
+  document.getElementById('modal-batch-ship').style.display = 'none';
+
+  const btn = document.getElementById('batch-ship-btn');
+  if (btn) { btn.style.display = 'none'; }
+
+  let successCount = 0;
+  const items = window._batchShipItems || [];
+
+  showToast(`⏳ ${items.length}건 처리 중...`);
+
+  for (const { orderId, wh } of items) {
+    _shippedOrderId = orderId;
+    _shippedWh = wh;
+    _shippedEmp = emp;
+
+    // ship-date-inp 등 기존 confirmShipped가 읽는 요소에 값 세팅
+    document.getElementById('ship-date-inp').value = shipDate;
+    document.getElementById('ship-carrier').value = carrier;
+    document.getElementById('ship-tracking').value = tracking;
+    document.getElementById('ship-note').value = note;
+    if (document.getElementById('ship-freight-carrier')) {
+      document.getElementById('ship-freight-carrier').value = freightCompany;
+    }
+    // 이메일 체크박스
+    if (document.getElementById('ship-send-email')) {
+      document.getElementById('ship-send-email').checked = sendEmail;
+    }
+
+    await confirmShipped();
+    successCount++;
+  }
+
+  // 체크박스 전부 해제
+  document.querySelectorAll('input[id^="batch-cb-"]:checked').forEach(cb => cb.checked = false);
+  updateBatchShipCount();
+  _bolFileData = null;
+
+  showToast(`✅ ${successCount}건 Shipped 완료!`);
 }
 
 async function confirmShipped() {
@@ -7405,6 +7686,39 @@ async function confirmShipped() {
     showToast(`🚚 ${order.order_number} Shipped 완료!`);
   }
 
+  // 이메일 발송
+  const sendEmail = document.getElementById('ship-send-email')?.checked;
+  if (sendEmail) {
+    showToast('📧 이메일 발송 중...');
+    const freightCarrier = document.getElementById('ship-freight-carrier')?.value || '';
+    const shippingInfo = { carrier, tracking, freightCarrier };
+
+    // Packing List HTML 생성
+    const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+    const filteredLines = lines.filter(l => {
+      if (!isSplit) return true;
+      if (wh === 'CA') {
+        if (l.wh === 'SC' || !l.wh || l.wh === '') return false;
+        if (l.wh === 'SC&CA') return Object.values(l.alloc_ca_detail||{}).some(v=>(typeof v==='object'?(v.boxes||0)+(v.pcs||0):v||0)>0);
+        return l.wh === 'CA';
+      } else {
+        if (l.wh === 'CA') return false;
+        if (l.wh === 'SC&CA') return Object.values(l.alloc_detail||{}).some(v=>(typeof v==='object'?(v.boxes||0)+(v.pcs||0):v||0)>0);
+        return true;
+      }
+    });
+    const plHtml = buildPackingListHtml(order, filteredLines, false, wh || 'SC');
+    const result = await sendShippedEmail(order, shippingInfo, plHtml, _bolFileData);
+    if (result.ok) {
+      showToast('✅ 이메일 발송 완료!');
+      // DB에 발송 기록
+      await db.from('orders').update({ shipped_email_sent_at: new Date().toISOString() }).eq('id', orderId);
+    } else {
+      showToast('❌ 이메일 발송 실패: ' + result.error);
+    }
+  }
+
+  _bolFileData = null;
   loadOrderStatus();
 }
 
@@ -8035,6 +8349,8 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship To</div><div style="font-weight:700;">${order.ship_addr||order.customer_name}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date || new Date().toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'})}</div></div>
     </div>
+    <!-- Shipping Info (동적으로 업데이트됨) -->
+    <div id="pl-shipping-info" style="display:none;margin-bottom:12px;padding:8px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;font-size:11px;"></div>
     ${body}
   </div>`;
 }
@@ -11995,6 +12311,43 @@ function showCreditHoldFlash(overAmt) {
       <button class="modal-close" style="color:#fff;" onclick="closeModal('modal-pl-preview')">×</button>
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pl-preview-content"></div>
+
+    <!-- Shipping Info 입력 -->
+    <div style="padding:12px 16px;border-top:2px solid #e5e7eb;background:#f8fafc;flex-shrink:0;">
+      <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">🚚 Shipping Info (선택사항)</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <!-- Carrier 선택 -->
+        <div>
+          <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Carrier</div>
+          <select id="pl-carrier" onchange="togglePlShippingFields()" style="height:30px;border:1px solid #d1d5db;border-radius:4px;padding:0 6px;font-size:12px;font-weight:600;">
+            <option value="">선택...</option>
+            <option value="UPS">UPS</option>
+            <option value="FedEx">FedEx</option>
+            <option value="LTL">LTL</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <!-- UPS/FedEx Tracking # -->
+        <div id="pl-tracking-wrap" style="display:none;">
+          <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Tracking #</div>
+          <input id="pl-tracking" type="text" placeholder="1Z999AA10123456784" oninput="updatePlShipping()"
+            style="height:30px;width:200px;border:1px solid #d1d5db;border-radius:4px;padding:0 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;">
+        </div>
+        <!-- LTL PRO # -->
+        <div id="pl-pro-wrap" style="display:none;">
+          <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">PRO #</div>
+          <input id="pl-pro" type="text" placeholder="PRO Number" oninput="updatePlShipping()"
+            style="height:30px;width:160px;border:1px solid #d1d5db;border-radius:4px;padding:0 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;">
+        </div>
+        <!-- LTL 픽업 업체 -->
+        <div id="pl-ltl-carrier-wrap" style="display:none;">
+          <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Freight Carrier</div>
+          <input id="pl-ltl-carrier" type="text" placeholder="XPO, SAIA, ODFL..." oninput="updatePlShipping()"
+            style="height:30px;width:160px;border:1px solid #d1d5db;border-radius:4px;padding:0 8px;font-size:12px;">
+        </div>
+      </div>
+    </div>
+
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="closeModal('modal-pl-preview')">취소</button>
       <button class="btn" style="background:#0891b2;color:#fff;" onclick="printInNewWindow(document.getElementById('pl-preview-content').innerHTML)">🖨️ Print Packing List</button>
@@ -12003,47 +12356,166 @@ function showCreditHoldFlash(overAmt) {
   </div>
 </div>
 
+<!-- ── Batch Ship 모달 ── -->
+<div id="modal-batch-ship" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:540px;max-width:95vw;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:18px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#16a34a;border-radius:12px 12px 0 0;">
+      <div style="font-size:15px;font-weight:700;color:#fff;">🚛 Batch Ship</div>
+      <button onclick="document.getElementById('modal-batch-ship').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fff;">✕</button>
+    </div>
+    <div style="padding:20px 24px;">
+      <!-- 선택된 PO 목록 -->
+      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">📦 선택된 PO</div>
+      <div id="batch-ship-list" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px 12px;margin-bottom:16px;max-height:120px;overflow-y:auto;"></div>
+
+      <!-- 출고 정보 -->
+      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">🚚 운송 정보</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">출고 날짜 <span style="color:#dc2626">*</span></label>
+          <input type="date" id="batch-ship-date" class="fi" style="width:180px;"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Carrier</label>
+            <select id="batch-ship-carrier" class="fi" style="width:100%;" onchange="toggleBatchCarrier()">
+              <option value="">선택...</option>
+              <option value="UPS">UPS</option>
+              <option value="FedEx">FedEx</option>
+              <option value="LTL">LTL</option>
+              <option value="Will Call">Will Call</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div id="batch-ship-freight-wrap" style="display:none;">
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Freight Company</label>
+            <input type="text" id="batch-ship-freight-company" class="fi" placeholder="XPO, SAIA..." style="width:100%;"/>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="batch-tracking-label">Tracking # / PRO #</label>
+          <input type="text" id="batch-ship-tracking" class="fi" placeholder="공통 Tracking #" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>
+          <div style="font-size:10px;color:#9ca3af;margin-top:3px;">선택한 모든 PO에 동일하게 적용됩니다</div>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">메모</label>
+          <input type="text" id="batch-ship-note" class="fi" placeholder="기타 메모" style="width:100%;"/>
+        </div>
+      </div>
+
+      <!-- BOL 업로드 -->
+      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">📄 BOL 업로드 (선택사항)</div>
+      <div style="border:2px dashed #d1d5db;border-radius:8px;padding:14px;text-align:center;cursor:pointer;background:#fafafa;margin-bottom:16px;"
+        onclick="document.getElementById('batch-bol-file-input').click()">
+        <div id="batch-bol-placeholder">
+          <div style="font-size:22px;">📸</div>
+          <div style="font-size:12px;font-weight:600;color:#374151;">사진 또는 PDF 업로드</div>
+          <div style="font-size:10px;color:#9ca3af;margin-top:2px;">클릭 · JPG, PNG, PDF</div>
+        </div>
+        <div id="batch-bol-preview" style="display:none;">
+          <div style="font-size:12px;font-weight:600;color:#16a34a;">✅ <span id="batch-bol-file-name"></span></div>
+        </div>
+      </div>
+      <input type="file" id="batch-bol-file-input" accept="image/*,application/pdf" style="display:none;" onchange="handleBatchBolFileSelect(this)">
+
+      <!-- 이메일 -->
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="batch-send-email" checked style="width:16px;height:16px;cursor:pointer;accent-color:#16a34a;">
+          <label for="batch-send-email" style="font-size:12px;font-weight:600;color:#15803d;cursor:pointer;">각 고객에게 Shipped 이메일 발송 (PO별 개별 발송)</label>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:12px 24px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;background:#fff;border-radius:0 0 12px 12px;">
+      <button class="btn" onclick="document.getElementById('modal-batch-ship').style.display='none'">취소</button>
+      <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="confirmBatchShip()">🚛 전체 Shipped 확정</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Mark as Shipped 모달 ── -->
 <div id="modal-shipped" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:12px;padding:28px;width:480px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+  <div style="background:#fff;border-radius:12px;width:520px;max-width:95vw;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:20px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:#fff;z-index:1;">
       <div style="font-size:16px;font-weight:700;color:#111827;">🚛 Mark as Shipped</div>
       <button onclick="document.getElementById('modal-shipped').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
     </div>
-    <div id="modal-shipped-info" style="font-size:12px;color:#6b7280;margin-bottom:16px;padding:8px 12px;background:#f9fafb;border-radius:6px;"></div>
-    <div style="display:flex;flex-direction:column;gap:12px;">
-      <div>
-        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">출고 날짜 <span style="color:#dc2626">*</span></label>
-        <input type="date" id="ship-date-inp" class="fi" style="width:100%;"/>
+    <div style="padding:20px 24px;">
+      <div id="modal-shipped-info" style="font-size:12px;color:#6b7280;margin-bottom:16px;padding:8px 12px;background:#f9fafb;border-radius:6px;"></div>
+
+      <!-- 출고 정보 -->
+      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">📦 출고 정보</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">출고 날짜 <span style="color:#dc2626">*</span></label>
+          <input type="date" id="ship-date-inp" class="fi" style="width:100%;"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Carrier</label>
+            <select id="ship-carrier" class="fi" style="width:100%;" onchange="toggleShipTrackingLabel()">
+              <option value="">선택...</option>
+              <option value="UPS">UPS</option>
+              <option value="FedEx">FedEx</option>
+              <option value="LTL">LTL</option>
+              <option value="Will Call">Will Call</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div id="ship-freight-carrier-wrap" style="display:none;">
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Freight Company</label>
+            <input type="text" id="ship-freight-carrier" class="fi" placeholder="XPO, SAIA, ODFL..." style="width:100%;"/>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="ship-tracking-label">Tracking # / PRO #</label>
+          <input type="text" id="ship-tracking" class="fi" placeholder="예: 1Z999AA10123456784" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">메모</label>
+          <input type="text" id="ship-note" class="fi" placeholder="기타 메모" style="width:100%;"/>
+        </div>
       </div>
-      <div>
-        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Carrier</label>
-        <select id="ship-carrier" class="fi" style="width:100%;" onchange="toggleShipTrackingLabel()">
-          <option value="">선택...</option>
-          <option value="UPS">UPS</option>
-          <option value="FedEx">FedEx</option>
-          <option value="LTL">LTL</option>
-          <option value="Will Call">Will Call</option>
-          <option value="Other">Other</option>
-        </select>
+
+      <!-- BOL 업로드 -->
+      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">📄 BOL 업로드 (선택사항)</div>
+      <div id="bol-upload-area" style="border:2px dashed #d1d5db;border-radius:8px;padding:20px;text-align:center;cursor:pointer;background:#fafafa;margin-bottom:20px;transition:all 0.2s;"
+        onclick="document.getElementById('bol-file-input').click()"
+        ondragover="event.preventDefault();this.style.borderColor='#6366f1';this.style.background='#eef2ff'"
+        ondragleave="this.style.borderColor='#d1d5db';this.style.background='#fafafa'"
+        ondrop="event.preventDefault();this.style.borderColor='#d1d5db';this.style.background='#fafafa';handleBolDrop(event)">
+        <div id="bol-upload-placeholder">
+          <div style="font-size:28px;margin-bottom:6px;">📸</div>
+          <div style="font-size:13px;font-weight:600;color:#374151;">사진 또는 PDF 업로드</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px;">클릭하거나 드래그 · JPG, PNG, PDF</div>
+        </div>
+        <div id="bol-upload-preview" style="display:none;">
+          <div style="font-size:13px;font-weight:600;color:#16a34a;">✅ <span id="bol-file-name"></span></div>
+          <div style="font-size:11px;color:#6b7280;margin-top:4px;">클릭해서 변경</div>
+        </div>
       </div>
-      <div>
-        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="ship-tracking-label">Tracking # / PRO #</label>
-        <input type="text" id="ship-tracking" class="fi" placeholder="예: 1Z999AA10123456784" style="width:100%;"/>
-      </div>
-      <div>
-        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Pickup Company</label>
-        <input type="text" id="ship-pickup-company" class="fi" placeholder="예: ABC Freight, UPS Store #123" style="width:100%;"/>
-      </div>
-      <div>
-        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">메모</label>
-        <input type="text" id="ship-note" class="fi" placeholder="기타 메모" style="width:100%;"/>
+      <input type="file" id="bol-file-input" accept="image/*,application/pdf" style="display:none;" onchange="handleBolFileSelect(this)">
+
+      <!-- 이메일 발송 -->
+      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">📧 고객 이메일 발송</div>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:20px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <input type="checkbox" id="ship-send-email" checked style="width:16px;height:16px;cursor:pointer;">
+          <label for="ship-send-email" style="font-size:12px;font-weight:600;color:#15803d;cursor:pointer;">Shipped 확정 시 자동 이메일 발송</label>
+        </div>
+        <div style="font-size:11px;color:#6b7280;">
+          <div>수신: <span id="ship-email-to" style="font-weight:600;color:#374151;"></span></div>
+          <div style="margin-top:3px;">포함: Packing List · BOL (업로드 시) · Tracking 정보</div>
+        </div>
+        <div id="ship-no-email-warn" style="display:none;font-size:11px;color:#dc2626;margin-top:6px;">⚠️ 고객 이메일이 등록되지 않았습니다.</div>
       </div>
     </div>
-    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">
+
+    <div style="padding:12px 24px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;background:#fff;border-radius:0 0 12px 12px;">
       <button class="btn" onclick="document.getElementById('modal-shipped').style.display='none'">취소</button>
-      <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="openSignedBolModal()">📋 Create Signed BOL</button>
-      <button class="btn btn-primary" onclick="confirmShipped()" style="background:#16a34a;border-color:#16a34a;">🚛 Shipped 확정</button>
+      <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="openSignedBolModal()">📋 Create BOL</button>
+      <button class="btn btn-primary" id="btn-confirm-shipped" onclick="confirmShipped()" style="background:#16a34a;border-color:#16a34a;">🚛 Shipped 확정</button>
     </div>
   </div>
 </div>
