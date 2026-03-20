@@ -6153,6 +6153,12 @@ async function printPickTicket(orderId, wh, ticketType) {
   const allPcrTransfers = enrichedLines.flatMap(l => (l._pcrTransfers||[]).map(t => ({ ...t, color: l.color, size: l.size, styleNum: l.styles?.style_number||'' })));
 
   document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, ticketType);
+  // PC Room Ticket이면 Box Labels 버튼 표시
+  const boxLabelBtn = document.getElementById('btn-print-box-labels');
+  if (boxLabelBtn) boxLabelBtn.style.display = ticketType === 'pcroom' ? 'inline-flex' : 'none';
+  // 현재 오더 정보 저장 (박스 라벨용)
+  window._ptCurrentOrder = order;
+  window._ptCurrentLines = enrichedLines;
   document.getElementById('modal-pt-preview').style.display = 'flex';
 }
 
@@ -7363,6 +7369,155 @@ async function printPackingListFromCard(orderId, whFilter) {
 
   const html = buildPackingListHtml(order, filteredLines, useSplit, whFilter);
   printInNewWindow(html);
+}
+
+// ══════════════════════════════════════════════════════
+// BOX LABEL — Zebra ZPL (ZP450, 4x6 inch)
+// ══════════════════════════════════════════════════════
+async function printBoxLabels() {
+  const order = window._ptCurrentOrder;
+  const lines = window._ptCurrentLines;
+  const wh = _ptWh;
+  if (!order || !lines) { showToast('❌ 오더 정보 없음'); return; }
+
+  // PCR 박스 계산 (calcPlBoxAllocation과 동일 로직)
+  const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf(s)+1)||99;
+  const ppbDefault = 72;
+  const groups = {};
+  lines.forEach(l => {
+    const ppb = l.pcs_per_box || l.styles?.box_qty || ppbDefault;
+    const key = (l.styles?.style_number||'') + '|||' + (l.color||'') + '|||' + ppb;
+    if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    const pcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+    if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs });
+  });
+
+  // 박스 목록 생성 (PCR 박스만, 번호는 1부터)
+  const boxes = [];
+  let boxNum = 1;
+  Object.values(groups).forEach(g => {
+    const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size)-sizeOrd(b.size));
+    let currentItems = [];
+    let currentTotal = 0;
+    sizes.forEach(s => {
+      let remaining = s.qty;
+      while (remaining > 0) {
+        const space = g.boxQty - currentTotal;
+        if (remaining > space && currentTotal > 0) {
+          boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], boxQty: g.boxQty });
+          currentItems = []; currentTotal = 0;
+        }
+        const take = Math.min(remaining, g.boxQty - currentTotal);
+        if (take > 0) { currentItems.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
+        if (currentTotal >= g.boxQty) {
+          boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], boxQty: g.boxQty });
+          currentItems = []; currentTotal = 0;
+        }
+      }
+    });
+    if (currentItems.length > 0) boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], boxQty: g.boxQty });
+  });
+
+  const totalBoxes = boxes.length;
+  if (totalBoxes === 0) { showToast('❌ PC Room 박스 없음'); return; }
+
+  // ZPL 생성 (모든 박스 연속)
+  const zplAll = boxes.map(box => buildBoxLabelZpl(box, totalBoxes, order)).join('\n');
+
+  // Zebra Browser Print로 전송
+  await sendToZebraBrowserPrint(zplAll, totalBoxes);
+}
+
+function buildBoxLabelZpl(box, totalBoxes, order) {
+  // ZP450 4x6 inch = 812w x 1218h dots (203 dpi)
+  const poNum = (order.customer_po || '').substring(0, 20);
+  const custName = (order.customer_name || '').substring(0, 22);
+
+  // 오른쪽 아이템 목록 - 스타일/컬러 그룹핑
+  let rightLines = '';
+  let yPos = 50;
+  const groups = {};
+  box.items.forEach(item => {
+    const sNum = item.styleNum || box.styleNum || '';
+    const col = item.color || box.color || '';
+    const key = sNum + '|' + col;
+    if (!groups[key]) groups[key] = { styleNum: sNum, color: col, sizes: [] };
+    groups[key].sizes.push({ size: item.size, qty: item.qty });
+  });
+  Object.values(groups).forEach(g => {
+    rightLines += '^FO430,' + yPos + '^A0N,40,40^FD' + g.styleNum + ' ' + g.color + '^FS\n';
+    yPos += 52;
+    g.sizes.forEach(s => {
+      rightLines += '^FO430,' + yPos + '^A0N,55,55^FD' + s.size.padEnd(5) + ' ' + s.qty + ' pcs^FS\n';
+      yPos += 68;
+    });
+    yPos += 12;
+  });
+
+  // 고객 이름 두 줄 처리
+  const words = custName.split(' ');
+  let line1 = '', line2 = '';
+  words.forEach(w => {
+    if ((line1 + ' ' + w).trim().length <= 12) line1 = (line1 + ' ' + w).trim();
+    else line2 = (line2 + ' ' + w).trim();
+  });
+  const twoLines = line2.length > 0;
+
+  return '^XA\n'
+    + '^MMT\n^PW812\n^LL1218\n^LS0\n\n'
+    + '^FO30,50^A0N,65,65^FD' + line1 + '^FS\n'
+    + (twoLines ? '^FO30,125^A0N,65,65^FD' + line2 + '^FS\n' : '')
+    + '^FO30,' + (twoLines ? 220 : 145) + '^A0N,38,38^FDPO#^FS\n'
+    + '^FO30,' + (twoLines ? 265 : 188) + '^A0N,115,115^FD' + poNum + '^FS\n'
+    + '^FO30,' + (twoLines ? 420 : 345) + '^GB375,4,4^FS\n'
+    + '^FO30,' + (twoLines ? 450 : 370) + '^A0N,80,80^FDBOX ' + box.boxNum + '^FS\n'
+    + '^FO30,' + (twoLines ? 545 : 465) + '^A0N,55,55^FDof ' + totalBoxes + '^FS\n'
+    + '^FO410,30^GB4,1160,4^FS\n'
+    + rightLines
+    + '\n^FO0,1170^FB812,1,0,C,0^A0N,28,28^FDPacific Sports Inc^FS\n'
+    + '^XZ';
+}
+
+async function sendToZebraBrowserPrint(zplData, labelCount) {
+  showToast('🏷 Zebra Browser Print 연결 중...');
+  try {
+    // Zebra Browser Print 기본 포트: 9100 (local)
+    const response = await fetch('http://localhost:9100', {
+      method: 'GET',
+      mode: 'no-cors'
+    });
+  } catch(e) { /* no-cors라 에러 무시 */ }
+
+  // Browser Print API
+  try {
+    const bpResponse = await fetch('http://localhost:9100/available', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const devices = await bpResponse.json();
+    const printer = devices?.printer?.[0] || devices?.[0];
+    if (!printer) {
+      showToast('❌ Zebra 프린터를 찾을 수 없습니다. Browser Print가 실행 중인지 확인하세요.');
+      return;
+    }
+    // ZPL 전송
+    await fetch('http://localhost:9100/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device: printer, data: zplData })
+    });
+    showToast('✅ ' + labelCount + '개 박스 라벨 프린트 완료!');
+  } catch(e) {
+    // Browser Print 없으면 ZPL 텍스트 창 열기 (수동 복사용)
+    showToast('⚠️ Browser Print 미설치 — ZPL 코드 창을 열었어요.');
+    const w = window.open('', '_blank', 'width=600,height=500');
+    w.document.write('<html><body style="font-family:monospace;white-space:pre;padding:20px;">'
+      + '<h3>ZPL Code — Copy & paste to Zebra printer</h3>'
+      + '<textarea style="width:100%;height:400px;font-family:monospace;font-size:11px;">'
+      + zplData.replace(/</g,'&lt;')
+      + '</textarea></body></html>');
+  }
 }
 
 async function doShipped(orderId, wh) {
@@ -12298,7 +12453,8 @@ function showCreditHoldFlash(overAmt) {
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pt-preview-content"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 닫기</button>
-      <button class="btn btn-primary" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Print</button>
+      <button class="btn" id="btn-print-box-labels" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="printBoxLabels()">🏷 Print Box Labels (Zebra)</button>
+      <button class="btn btn-primary" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Print Pick Ticket</button>
     </div>
   </div>
 </div>
