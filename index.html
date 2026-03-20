@@ -7447,6 +7447,41 @@ async function printPackingListFromCard(orderId, whFilter) {
 // ══════════════════════════════════════════════════════
 // BOX LABEL — Zebra ZPL (ZP450, 4x6 inch)
 // ══════════════════════════════════════════════════════
+async function autoPrintAllAndClose() {
+  // 모달 닫기 전에 데이터 미리 저장
+  const order = window._ptCurrentOrder;
+  const lines = window._ptCurrentLines;
+  const wh = _ptWh;
+  const ticketType = _ptTicketType;
+  const html = document.getElementById('pt-preview-content').innerHTML;
+
+  // Pick Ticket 프린트
+  printInNewWindow(html);
+
+  // 모달 닫기
+  closeModal('modal-pt-preview');
+  loadOrderStatus();
+
+  // 잠깐 대기 후 Zebra 라벨 (프린트 창이 뜨고 나서)
+  if (!order || !lines) return;
+  await new Promise(r => setTimeout(r, 800));
+
+  const allBoxes = ticketType === 'warehouse'
+    ? calcWarehouseBoxList(lines, wh, order)
+    : calcPcrBoxList(lines, wh);
+
+  if (allBoxes.length === 0) return;
+
+  const totalBoxes = allBoxes.length;
+  const zplAll = allBoxes.map(box =>
+    ticketType === 'warehouse'
+      ? buildCaseLabelZpl(box, box.boxNum, totalBoxes, order)
+      : buildBoxLabelZpl(box, totalBoxes, order)
+  ).join('\n');
+
+  await sendToZebraBrowserPrint(zplAll, totalBoxes);
+}
+
 // Pick Ticket 프린트 시 자동으로 전체 라벨 출력 (선택 모달 없음)
 async function autoPrintBoxLabels() {
   const order = window._ptCurrentOrder;
@@ -12707,7 +12742,7 @@ function showCreditHoldFlash(overAmt) {
       <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 닫기</button>
       <button class="btn" id="btn-print-box-labels" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="printBoxLabels()">🏷 Reprint Box Labels (Zebra)</button>
       <button class="btn" style="background:#374151;color:#fff;border-color:#374151;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Pick Ticket Only</button>
-      <button class="btn btn-primary" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);autoPrintBoxLabels();closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Print + Labels</button>
+      <button class="btn btn-primary" onclick="autoPrintAllAndClose()">🖨️ Print + Labels</button>
     </div>
   </div>
 </div>
