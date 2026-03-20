@@ -7038,13 +7038,23 @@ async function preparationComplete(orderId, wh) {
 
   document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC');
   document.getElementById('modal-pl-preview').style.display = 'flex';
-  // Shipping 필드 초기화
-  ['pl-carrier','pl-tracking','pl-pro','pl-ltl-carrier'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.value = '';
-  });
-  ['pl-tracking-wrap','pl-pro-wrap','pl-ltl-carrier-wrap'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.style.display = 'none';
-  });
+
+  // Mark as Shipped 후 운송정보가 있으면 PL에 표시
+  const shippingEl = document.getElementById('pl-shipping-info');
+  if (shippingEl) {
+    if (order.carrier || order.tracking_number) {
+      const isLtl = order.carrier === 'LTL';
+      let html = '<div style="display:flex;gap:24px;flex-wrap:wrap;">';
+      if (order.carrier) html += '<div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Carrier</div><div style="font-weight:700;">' + order.carrier + '</div></div>';
+      if (isLtl && order.pickup_company) html += '<div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Freight Company</div><div style="font-weight:700;">' + order.pickup_company + '</div></div>';
+      if (order.tracking_number) html += '<div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">' + (isLtl ? 'PRO #' : 'Tracking #') + '</div><div style="font-weight:700;font-family:\'IBM Plex Mono\',monospace;">' + order.tracking_number + '</div></div>';
+      html += '</div>';
+      shippingEl.style.display = 'block';
+      shippingEl.innerHTML = html;
+    } else {
+      shippingEl.style.display = 'none';
+    }
+  }
 }
 
 let _plWh = 'SC';
@@ -12619,38 +12629,6 @@ function showCreditHoldFlash(overAmt) {
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pl-preview-content"></div>
 
-    <!-- Shipping Info 입력 -->
-    <div style="padding:12px 16px;border-top:2px solid #e5e7eb;background:#f8fafc;flex-shrink:0;">
-      <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">🚚 Shipping Info (선택사항)</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-        <div>
-          <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Carrier</div>
-          <select id="pl-carrier" onchange="togglePlShippingFields()" style="height:30px;border:1px solid #d1d5db;border-radius:4px;padding:0 6px;font-size:12px;font-weight:600;">
-            <option value="">선택...</option>
-            <option value="UPS">UPS</option>
-            <option value="FedEx">FedEx</option>
-            <option value="LTL">LTL</option>
-            <option value="Other">Other</option>
-          </select>
-        </div>
-        <div id="pl-tracking-wrap" style="display:none;">
-          <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Tracking #</div>
-          <input id="pl-tracking" type="text" placeholder="1Z999AA10123456784" oninput="updatePlShipping()"
-            style="height:30px;width:200px;border:1px solid #d1d5db;border-radius:4px;padding:0 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;">
-        </div>
-        <div id="pl-pro-wrap" style="display:none;">
-          <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">PRO #</div>
-          <input id="pl-pro" type="text" placeholder="PRO Number" oninput="updatePlShipping()"
-            style="height:30px;width:160px;border:1px solid #d1d5db;border-radius:4px;padding:0 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;">
-        </div>
-        <div id="pl-ltl-carrier-wrap" style="display:none;">
-          <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Freight Carrier</div>
-          <input id="pl-ltl-carrier" type="text" placeholder="XPO, SAIA, ODFL..." oninput="updatePlShipping()"
-            style="height:30px;width:160px;border:1px solid #d1d5db;border-radius:4px;padding:0 8px;font-size:12px;">
-        </div>
-      </div>
-    </div>
-
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="if(confirm('Packing List를 확인하지 않고 닫으시겠습니까?')) { _plOrderId=null; closeModal('modal-pl-preview'); }">취소</button>
       <button class="btn" style="background:#0891b2;color:#fff;" onclick="printInNewWindow(document.getElementById('pl-preview-content').innerHTML)">🖨️ Print Packing List</button>
@@ -12666,8 +12644,8 @@ function showCreditHoldFlash(overAmt) {
     <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:4px;">Ready to Ship 확인</div>
     <div style="font-size:13px;color:#6b7280;margin-bottom:20px;">Manager PIN을 입력하세요</div>
     <input id="pl-confirm-pin-input" type="password" maxlength="4" inputmode="numeric"
-      placeholder="· · · ·"
-      style="width:160px;height:52px;border:2px solid #e5e7eb;border-radius:10px;text-align:center;font-size:28px;letter-spacing:12px;font-family:'IBM Plex Mono',monospace;outline:none;transition:border-color 0.15s;"
+      placeholder=""
+      style="width:160px;height:52px;border:2px solid #e5e7eb;border-radius:10px;text-align:center;font-size:28px;letter-spacing:8px;font-family:'IBM Plex Mono',monospace;outline:none;transition:border-color 0.15s;"
       oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyPlConfirmPin()"
       onfocus="this.style.borderColor='#0891b2'"
       onblur="this.style.borderColor='#e5e7eb'">
