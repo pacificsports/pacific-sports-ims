@@ -7732,43 +7732,45 @@ function buildBoxLabelZpl(box, totalBoxes, order) {
 }
 
 async function sendToZebraBrowserPrint(zplData, labelCount) {
-  showToast('🏷 Zebra Browser Print 연결 중...');
-  try {
-    // Zebra Browser Print 기본 포트: 9100 (local)
-    const response = await fetch('http://localhost:9100', {
-      method: 'GET',
-      mode: 'no-cors'
-    });
-  } catch(e) { /* no-cors라 에러 무시 */ }
+  showToast('🏷 Zebra 프린터 연결 중...');
 
-  // Browser Print API
   try {
-    const bpResponse = await fetch('http://localhost:9100/available', {
+    // Zebra Browser Print API (포트 9101)
+    const bpResponse = await fetch('http://localhost:9101/available', {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });
     const devices = await bpResponse.json();
     const printer = devices?.printer?.[0] || devices?.[0];
+
     if (!printer) {
-      showToast('❌ Zebra 프린터를 찾을 수 없습니다. Browser Print가 실행 중인지 확인하세요.');
+      showToast('❌ Zebra 프린터를 찾을 수 없어요. Browser Print 실행 확인하세요.');
       return;
     }
+
     // ZPL 전송
-    await fetch('http://localhost:9100/write', {
+    const writeRes = await fetch('http://localhost:9101/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device: printer, data: zplData })
     });
-    showToast('✅ ' + labelCount + '개 박스 라벨 프린트 완료!');
+
+    if (writeRes.ok) {
+      showToast('✅ ' + labelCount + '개 라벨 프린트 완료!');
+    } else {
+      throw new Error('Write failed: ' + writeRes.status);
+    }
   } catch(e) {
-    // Browser Print 없으면 ZPL 텍스트 창 열기 (수동 복사용)
-    showToast('⚠️ Browser Print 미설치 — ZPL 코드 창을 열었어요.');
+    // 연결 실패 시 ZPL 텍스트 창
+    showToast('⚠️ Browser Print 연결 실패 — ZPL 코드창을 열었어요.');
     const w = window.open('', '_blank', 'width=600,height=500');
-    w.document.write('<html><body style="font-family:monospace;white-space:pre;padding:20px;">'
-      + '<h3>ZPL Code — Copy & paste to Zebra printer</h3>'
-      + '<textarea style="width:100%;height:400px;font-family:monospace;font-size:11px;">'
-      + zplData.replace(/</g,'&lt;')
-      + '</textarea></body></html>');
+    if (w) {
+      w.document.write('<html><body style="font-family:monospace;padding:20px;">'
+        + '<h3>ZPL Code — Copy & paste to Zebra printer</h3>'
+        + '<textarea style="width:100%;height:400px;font-family:monospace;font-size:11px;">'
+        + zplData
+        + '</textarea></body></html>');
+    }
   }
 }
 
