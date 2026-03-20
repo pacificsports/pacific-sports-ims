@@ -7383,51 +7383,138 @@ async function printBoxLabels() {
   const ticketType = _ptTicketType;
   if (!order || !lines) { showToast('❌ 오더 정보 없음'); return; }
 
-  if (ticketType === 'warehouse') {
-    await printWarehouseCaseLabels(order, lines, wh);
-  } else {
-    await printPcrBoxLabels(order, lines, wh);
-  }
+  // 박스 목록 계산
+  const allBoxes = ticketType === 'warehouse'
+    ? calcWarehouseBoxList(lines, wh, order)
+    : calcPcrBoxList(lines, wh);
+
+  if (allBoxes.length === 0) { showToast('❌ 박스 없음'); return; }
+
+  // 선택 모달 표시
+  openBoxSelectModal(allBoxes, order, ticketType);
 }
 
-// ── Full Case 라벨 (Warehouse)
-async function printWarehouseCaseLabels(order, lines, wh) {
-  const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf(s)+1)||99;
-
-  // Full Box 계산 - alloc_detail에서 bins/boxes 추출
-  const caseLabels = [];
+function calcWarehouseBoxList(lines, wh, order) {
+  const boxes = [];
+  let boxNum = 1;
   lines.forEach(l => {
     const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
     const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
-    const fullBoxEntries = Object.entries(alloc).filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'));
-    const fullBoxCount = fullBoxEntries.reduce((s,[,v]) => s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)), 0);
-    if (fullBoxCount > 0) {
-      caseLabels.push({
+    const fullBoxCount = Object.entries(alloc)
+      .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+      .reduce((s,[,v]) => s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)), 0);
+    for (let i = 0; i < fullBoxCount; i++) {
+      boxes.push({
+        boxNum: boxNum++,
         styleNum: l.styles?.style_number || '',
         color: l.color || '',
         size: l.size || '',
         qty: ppb,
-        boxes: fullBoxCount
+        type: 'warehouse',
+        items: [{ size: l.size||'', qty: ppb }]
       });
     }
   });
-
-  if (caseLabels.length === 0) { showToast('❌ Full Case 박스 없음'); return; }
-
-  // 각 라인별로 박스 수만큼 라벨 생성
-  const totalBoxes = caseLabels.reduce((s,l) => s+l.boxes, 0);
-  let boxNum = 1;
-  const zplAll = caseLabels.flatMap(l => {
-    const labels = [];
-    for (let i = 0; i < l.boxes; i++) {
-      labels.push(buildCaseLabelZpl(l, boxNum++, totalBoxes, order));
-    }
-    return labels;
-  }).join('\n');
-
-  await sendToZebraBrowserPrint(zplAll, totalBoxes);
+  return boxes;
 }
 
+function calcPcrBoxList(lines, wh) {
+  const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf(s)+1)||99;
+  const groups = {};
+  lines.forEach(l => {
+    const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+    const key = (l.styles?.style_number||'') + '|||' + (l.color||'') + '|||' + ppb;
+    if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    const pcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+    if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs });
+  });
+  const boxes = [];
+  let boxNum = 1;
+  Object.values(groups).forEach(g => {
+    const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size)-sizeOrd(b.size));
+    let currentItems = [], currentTotal = 0;
+    sizes.forEach(s => {
+      let remaining = s.qty;
+      while (remaining > 0) {
+        const space = g.boxQty - currentTotal;
+        if (remaining > space && currentTotal > 0) {
+          boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], type: 'pcroom' });
+          currentItems = []; currentTotal = 0;
+        }
+        const take = Math.min(remaining, g.boxQty - currentTotal);
+        if (take > 0) { currentItems.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
+        if (currentTotal >= g.boxQty) {
+          boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], type: 'pcroom' });
+          currentItems = []; currentTotal = 0;
+        }
+      }
+    });
+    if (currentItems.length > 0) boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], type: 'pcroom' });
+  });
+  return boxes;
+}
+
+function openBoxSelectModal(allBoxes, order, ticketType) {
+  const totalBoxes = allBoxes.length;
+  const isPcr = ticketType !== 'warehouse';
+
+  const boxListHtml = allBoxes.map(box => {
+    const desc = isPcr
+      ? box.items.map(i => i.size + ' ' + i.qty + 'pcs').join(' / ')
+      : box.styleNum + ' ' + box.color + ' ' + box.size + ' ' + box.qty + 'pcs';
+    return '<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f3f4f6;cursor:pointer;">'
+      + '<input type="checkbox" class="box-label-cb" value="' + (box.boxNum-1) + '" checked '
+      + 'style="width:16px;height:16px;accent-color:#7c3aed;cursor:pointer;">'
+      + '<span style="font-size:12px;font-weight:700;color:#7c3aed;min-width:52px;font-family:IBM Plex Mono,monospace;">BOX ' + box.boxNum + '</span>'
+      + '<span style="font-size:12px;color:#374151;">' + desc + '</span>'
+      + '</label>';
+  }).join('');
+
+  // 기존 모달 있으면 제거
+  const existing = document.getElementById('modal-box-select');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'modal-box-select';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:999999;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = '<div style="background:#fff;border-radius:12px;width:420px;max-width:95vw;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">'
+    + '<div style="background:#7c3aed;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">'
+    + '<span style="color:#fff;font-weight:700;font-size:14px;">🏷 Box Label 선택</span>'
+    + '<button onclick="document.getElementById(\'modal-box-select\').remove()" style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;">✕</button>'
+    + '</div>'
+    + '<div style="padding:12px 16px;background:#f5f3ff;border-bottom:1px solid #e5e7eb;display:flex;gap:8px;">'
+    + '<button onclick="document.querySelectorAll(\'.box-label-cb\').forEach(c=>c.checked=true)" style="font-size:11px;padding:4px 10px;background:#7c3aed;color:#fff;border:none;border-radius:4px;cursor:pointer;">전체 선택</button>'
+    + '<button onclick="document.querySelectorAll(\'.box-label-cb\').forEach(c=>c.checked=false)" style="font-size:11px;padding:4px 10px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">전체 해제</button>'
+    + '<span style="font-size:11px;color:#6b7280;margin-left:auto;line-height:2;">총 ' + totalBoxes + '개</span>'
+    + '</div>'
+    + '<div style="overflow-y:auto;flex:1;">' + boxListHtml + '</div>'
+    + '<div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">'
+    + '<button onclick="document.getElementById(\'modal-box-select\').remove()" style="padding:7px 16px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:6px;cursor:pointer;">취소</button>'
+    + '<button onclick="confirmBoxLabelPrint()" style="padding:7px 16px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">🏷 프린트</button>'
+    + '</div></div>';
+
+  document.body.appendChild(modal);
+  window._boxSelectData = { allBoxes, order, ticketType };
+}
+
+async function confirmBoxLabelPrint() {
+  const { allBoxes, order, ticketType } = window._boxSelectData;
+  const checked = [...document.querySelectorAll('.box-label-cb:checked')].map(c => parseInt(c.value));
+  if (checked.length === 0) { showToast('❌ 박스를 선택해주세요.'); return; }
+
+  document.getElementById('modal-box-select').remove();
+
+  const selected = checked.map(i => allBoxes[i]);
+  const totalBoxes = allBoxes.length;
+  const zplAll = selected.map(box =>
+    ticketType === 'warehouse'
+      ? buildCaseLabelZpl(box, box.boxNum, totalBoxes, order)
+      : buildBoxLabelZpl(box, totalBoxes, order)
+  ).join('\n');
+
+  await sendToZebraBrowserPrint(zplAll, selected.length);
+}
 function buildCaseLabelZpl(caseItem, boxNum, totalBoxes, order) {
   // 2x1 inch = 406w x 203h dots (203 dpi)
   const poNum = (order.customer_po || '').substring(0, 20);
@@ -7449,55 +7536,6 @@ function buildCaseLabelZpl(caseItem, boxNum, totalBoxes, order) {
     + '^FO10,' + (twoLines ? 88 : 55) + '^A0N,28,28^FDPO#^FS\n'
     + '^FO70,' + (twoLines ? 83 : 50) + '^A0N,55,55^FD' + poNum + '^FS\n'
     + '^XZ';
-}
-
-// ── PC Room 박스 라벨 (기존)
-async function printPcrBoxLabels(order, lines, wh) {
-  const ppbDefault = 72;
-  const groups = {};
-  lines.forEach(l => {
-    const ppb = l.pcs_per_box || l.styles?.box_qty || ppbDefault;
-    const key = (l.styles?.style_number||'') + '|||' + (l.color||'') + '|||' + ppb;
-    if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
-    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
-    const pcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-    if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs });
-  });
-
-  // 박스 목록 생성 (PCR 박스만, 번호는 1부터)
-  const boxes = [];
-  let boxNum = 1;
-  Object.values(groups).forEach(g => {
-    const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size)-sizeOrd(b.size));
-    let currentItems = [];
-    let currentTotal = 0;
-    sizes.forEach(s => {
-      let remaining = s.qty;
-      while (remaining > 0) {
-        const space = g.boxQty - currentTotal;
-        if (remaining > space && currentTotal > 0) {
-          boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], boxQty: g.boxQty });
-          currentItems = []; currentTotal = 0;
-        }
-        const take = Math.min(remaining, g.boxQty - currentTotal);
-        if (take > 0) { currentItems.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
-        if (currentTotal >= g.boxQty) {
-          boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], boxQty: g.boxQty });
-          currentItems = []; currentTotal = 0;
-        }
-      }
-    });
-    if (currentItems.length > 0) boxes.push({ boxNum: boxNum++, styleNum: g.styleNum, color: g.color, items: [...currentItems], boxQty: g.boxQty });
-  });
-
-  const totalBoxes = boxes.length;
-  if (totalBoxes === 0) { showToast('❌ PC Room 박스 없음'); return; }
-
-  // ZPL 생성 (모든 박스 연속)
-  const zplAll = boxes.map(box => buildBoxLabelZpl(box, totalBoxes, order)).join('\n');
-
-  // Zebra Browser Print로 전송
-  await sendToZebraBrowserPrint(zplAll, totalBoxes);
 }
 
 function buildBoxLabelZpl(box, totalBoxes, order) {
@@ -12426,10 +12464,19 @@ async function getInTransitHint(styleNum, color, size) {
 
 function printInNewWindow(html) {
   const w = window.open('', '_blank', 'width=900,height=700');
-  w.document.write(`<!DOCTYPE html><html><head><title>Print</title>
+  w.document.write(`<!DOCTYPE html><html><head><title>\u00A0</title>
     <style>
       body { font-family: Arial, sans-serif; margin: 24px; background: #fff; }
-      @media print { body { margin: 0; } }
+      @media print {
+        body { margin: 0; }
+        @page {
+          margin-top: 0;
+          margin-bottom: 0;
+          margin-left: 10mm;
+          margin-right: 10mm;
+          size: auto;
+        }
+      }
       table { border-collapse: collapse; width: 100%; }
       th, td { padding: 6px 8px; }
     </style>
