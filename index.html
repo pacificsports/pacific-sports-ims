@@ -5288,19 +5288,16 @@ function deleteOrderConfirm(orderId, orderNum, customerName) {
     async function(emp) {
       try {
         showToast('⏳ 삭제 중...');
-        try {
-          await restoreOrderInventory(orderId);
-        } catch(restoreErr) {
-          console.warn('재고 복구 중 오류 (계속 진행):', restoreErr.message);
-        }
-        await db.from('order_lines').delete().eq('order_id', orderId);
-        await db.from('orders').update({ deleted_by: emp.name }).eq('id', orderId);
-        const { error } = await db.from('orders').delete().eq('id', orderId);
-        if (error) { showToast('❌ 삭제 실패: ' + error.message); return; }
-        showToast('🗑 ' + orderNum + ' 영구 삭제 (' + emp.name + ')');
+        console.log('DELETE START', orderId);
+        const r1 = await db.from('order_lines').delete().eq('order_id', orderId);
+        console.log('order_lines:', JSON.stringify(r1.error));
+        const r2 = await db.from('orders').delete().eq('id', orderId);
+        console.log('orders:', JSON.stringify(r2.error));
+        if (r2.error) { showToast('❌ 삭제 실패: ' + r2.error.message); return; }
+        showToast('🗑 ' + orderNum + ' 삭제 완료');
         loadCustomerPOs(); loadOrderStatus();
       } catch(e) {
-        showToast('❌ 삭제 오류: ' + e.message);
+        showToast('❌ 오류: ' + e.message);
         console.error('Delete error:', e);
       }
     }
@@ -13258,3 +13255,4 @@ function showCreditHoldFlash(overAmt) {
 
 </body>
 </html>
+
