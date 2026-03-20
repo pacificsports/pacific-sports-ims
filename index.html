@@ -5176,7 +5176,7 @@ async function checkPin() {
     return;
   }
   closePinModal();
-  console.log('calling callback...');
+  console.log('calling callback...', _pinCallback?.toString().substring(0, 100));
   if (_pinCallback) _pinCallback(emp);
 }
 
@@ -5284,27 +5284,34 @@ async function submitCancelOrder() {
 }
 
 function deleteOrderConfirm(orderId, orderNum, customerName) {
-  openPinModal(
-    '🗑',
-    'Delete 확인',
-    orderNum + ' — ' + customerName + ' 를 영구 삭제합니다.',
-    async function(emp) {
-      try {
-        showToast('⏳ 삭제 중...');
-        console.log('DELETE START', orderId);
-        const r1 = await db.from('order_lines').delete().eq('order_id', orderId);
-        console.log('order_lines:', JSON.stringify(r1.error));
-        const r2 = await db.from('orders').delete().eq('id', orderId);
-        console.log('orders:', JSON.stringify(r2.error));
-        if (r2.error) { showToast('❌ 삭제 실패: ' + r2.error.message); return; }
-        showToast('🗑 ' + orderNum + ' 삭제 완료');
-        loadCustomerPOs(); loadOrderStatus();
-      } catch(e) {
-        showToast('❌ 오류: ' + e.message);
-        console.error('Delete error:', e);
-      }
+  _deleteOrderId = orderId;
+  _deleteOrderNum = orderNum;
+  document.getElementById('delete-order-info').innerHTML =
+    '<b>' + orderNum + '</b> — ' + customerName + ' 를 영구 삭제합니다.';
+  document.getElementById('delete-confirm-input').value = '';
+  document.getElementById('delete-order-modal').style.display = 'flex';
+}
+
+async function submitDeleteOrder() {
+  const input = document.getElementById('delete-confirm-input').value.trim();
+  if (input !== _deleteOrderNum) {
+    alert('오더번호가 일치하지 않습니다: ' + _deleteOrderNum);
+    return;
+  }
+  document.getElementById('delete-order-modal').style.display = 'none';
+  openPinModal('🗑', 'Delete 확인', _deleteOrderNum + ' 영구 삭제', async function(emp) {
+    try {
+      showToast('⏳ 삭제 중...');
+      await db.from('order_lines').delete().eq('order_id', _deleteOrderId);
+      const { error } = await db.from('orders').delete().eq('id', _deleteOrderId);
+      if (error) { showToast('❌ 삭제 실패: ' + error.message); return; }
+      showToast('🗑 ' + _deleteOrderNum + ' 삭제 완료');
+      _deleteOrderId = null; _deleteOrderNum = null;
+      loadCustomerPOs(); loadOrderStatus();
+    } catch(e) {
+      showToast('❌ 오류: ' + e.message);
     }
-  );
+  });
 }
 
 async function restoreOrderInventory(orderId) {
@@ -13258,4 +13265,5 @@ function showCreditHoldFlash(overAmt) {
 
 </body>
 </html>
+
 
