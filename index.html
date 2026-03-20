@@ -7728,43 +7728,70 @@ async function openBatchShipModal() {
     const [orderId, wh] = cb.value.split('|');
     return { orderId, wh };
   });
-
-  // 오더 정보 수집
-  const orderIds = [...new Set(items.map(i => i.orderId))];
-  const orderInfos = orderIds.map(id => {
-    const o = (allOrderStatusData||[]).find(o => o.id === id);
-    return o ? `${o.order_number} — ${o.customer_name} (PO# ${o.customer_po||'—'})` : id;
-  });
-
-  // 모달에 목록 표시
-  document.getElementById('batch-ship-list').innerHTML = orderInfos.map(info =>
-    `<div style="font-size:12px;padding:4px 0;border-bottom:1px solid #f3f4f6;">${info}</div>`
-  ).join('');
   window._batchShipItems = items;
 
-  // 날짜 기본값
-  document.getElementById('batch-ship-date').value = new Date().toISOString().slice(0,10);
-  document.getElementById('batch-ship-carrier').value = '';
-  document.getElementById('batch-ship-tracking').value = '';
-  document.getElementById('batch-ship-freight-company').value = '';
-  document.getElementById('batch-ship-freight-wrap').style.display = 'none';
-  document.getElementById('batch-ship-note').value = '';
+  // PO별 행 렌더링
+  const rowsHtml = items.map(({ orderId, wh }) => {
+    const o = (allOrderStatusData||[]).find(o => o.id === orderId);
+    const label = o ? (o.order_number + ' — ' + o.customer_name + ' (PO# ' + (o.customer_po||'—') + ')') : orderId;
+    const uid = orderId + '_' + wh;
+    return '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:4px;">'
+      + '<div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">' + label + '</div>'
+      + '<div style="display:grid;grid-template-columns:120px 1fr 1fr;gap:8px;align-items:end;">'
+      + '<div><div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Carrier</div>'
+      + '<select id="bpo-carrier-' + uid + '" class="fi" style="width:100%;font-size:11px;" onchange="toggleBpoFields(\'' + uid + '\')">'
+      + '<option value="">선택...</option><option value="UPS">UPS</option><option value="FedEx">FedEx</option>'
+      + '<option value="LTL">LTL</option><option value="Will Call">Will Call</option><option value="Other">Other</option>'
+      + '</select></div>'
+      + '<div id="bpo-freight-wrap-' + uid + '" style="display:none;"><div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Freight Co.</div>'
+      + '<input type="text" id="bpo-freight-' + uid + '" class="fi" placeholder="XPO, SAIA..." style="width:100%;font-size:11px;"></div>'
+      + '<div><div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;" id="bpo-tracking-label-' + uid + '">Tracking #</div>'
+      + '<input type="text" id="bpo-tracking-' + uid + '" class="fi" placeholder="Tracking / PRO #" style="width:100%;font-size:11px;font-family:IBM Plex Mono,monospace;"></div>'
+      + '</div></div>';
+  }).join('');
 
-  // BOL 초기화
+  document.getElementById('batch-po-rows').innerHTML = rowsHtml;
+  document.getElementById('batch-ship-date').value = new Date().toISOString().slice(0,10);
+  const ltlWrap = document.getElementById('batch-ltl-common-wrap');
+  if (ltlWrap) ltlWrap.style.display = 'none';
+  const ltlFreight = document.getElementById('batch-ltl-freight');
+  const ltlPro = document.getElementById('batch-ltl-pro');
+  if (ltlFreight) ltlFreight.value = '';
+  if (ltlPro) ltlPro.value = '';
   _bolFileData = null;
   document.getElementById('batch-bol-file-input').value = '';
   document.getElementById('batch-bol-placeholder').style.display = 'block';
   document.getElementById('batch-bol-preview').style.display = 'none';
-
   document.getElementById('modal-batch-ship').style.display = 'flex';
 }
 
-function toggleBatchCarrier() {
-  const carrier = document.getElementById('batch-ship-carrier').value;
-  const freightWrap = document.getElementById('batch-ship-freight-wrap');
-  const trackingLabel = document.getElementById('batch-tracking-label');
+function toggleBpoFields(uid) {
+  const carrier = document.getElementById('bpo-carrier-' + uid)?.value;
+  const freightWrap = document.getElementById('bpo-freight-wrap-' + uid);
+  const trackingLabel = document.getElementById('bpo-tracking-label-' + uid);
   if (freightWrap) freightWrap.style.display = carrier === 'LTL' ? 'block' : 'none';
   if (trackingLabel) trackingLabel.textContent = carrier === 'LTL' ? 'PRO #' : 'Tracking #';
+  const hasLtl = (window._batchShipItems||[]).some(({ orderId, wh }) => {
+    const u = orderId + '_' + wh;
+    return document.getElementById('bpo-carrier-' + u)?.value === 'LTL';
+  });
+  const ltlWrap = document.getElementById('batch-ltl-common-wrap');
+  if (ltlWrap) ltlWrap.style.display = hasLtl ? 'block' : 'none';
+}
+
+function applyLtlToAll() {
+  const freight = document.getElementById('batch-ltl-freight')?.value || '';
+  const pro = document.getElementById('batch-ltl-pro')?.value || '';
+  (window._batchShipItems||[]).forEach(({ orderId, wh }) => {
+    const uid = orderId + '_' + wh;
+    if (document.getElementById('bpo-carrier-' + uid)?.value === 'LTL') {
+      const freightEl = document.getElementById('bpo-freight-' + uid);
+      const trackingEl = document.getElementById('bpo-tracking-' + uid);
+      if (freightEl) freightEl.value = freight;
+      if (trackingEl) trackingEl.value = pro;
+    }
+  });
+  showToast('✅ LTL 정보 적용 완료');
 }
 
 function handleBatchBolFileSelect(input) {
@@ -7783,7 +7810,6 @@ function handleBatchBolFileSelect(input) {
 async function confirmBatchShip() {
   const shipDate = document.getElementById('batch-ship-date').value;
   if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
-
   const pin = prompt('담당자 PIN을 입력하세요:');
   if (!pin) return;
   const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
@@ -7791,50 +7817,39 @@ async function confirmBatchShip() {
   if (!emp) { alert('❌ PIN이 올바르지 않습니다.'); return; }
   if (!['admin','manager','warehouse'].includes(emp.role)) { alert('❌ 권한이 없습니다.'); return; }
 
-  const carrier = document.getElementById('batch-ship-carrier').value;
-  const tracking = document.getElementById('batch-ship-tracking').value;
-  const freightCompany = document.getElementById('batch-ship-freight-company').value;
-  const note = document.getElementById('batch-ship-note').value;
   const sendEmail = document.getElementById('batch-send-email').checked;
-
   document.getElementById('modal-batch-ship').style.display = 'none';
-
   const btn = document.getElementById('batch-ship-btn');
-  if (btn) { btn.style.display = 'none'; }
+  if (btn) btn.style.display = 'none';
+
+  const items = window._batchShipItems || [];
+  showToast('⏳ ' + items.length + '건 처리 중...');
 
   let successCount = 0;
-  const items = window._batchShipItems || [];
-
-  showToast(`⏳ ${items.length}건 처리 중...`);
-
   for (const { orderId, wh } of items) {
+    const uid = orderId + '_' + wh;
+    const carrier = document.getElementById('bpo-carrier-' + uid)?.value || '';
+    const tracking = document.getElementById('bpo-tracking-' + uid)?.value || '';
+    const freight = document.getElementById('bpo-freight-' + uid)?.value || '';
+
     _shippedOrderId = orderId;
     _shippedWh = wh;
     _shippedEmp = emp;
-
-    // ship-date-inp 등 기존 confirmShipped가 읽는 요소에 값 세팅
     document.getElementById('ship-date-inp').value = shipDate;
     document.getElementById('ship-carrier').value = carrier;
     document.getElementById('ship-tracking').value = tracking;
-    document.getElementById('ship-note').value = note;
-    if (document.getElementById('ship-freight-carrier')) {
-      document.getElementById('ship-freight-carrier').value = freightCompany;
-    }
-    // 이메일 체크박스
-    if (document.getElementById('ship-send-email')) {
-      document.getElementById('ship-send-email').checked = sendEmail;
-    }
+    document.getElementById('ship-note').value = '';
+    if (document.getElementById('ship-freight-carrier')) document.getElementById('ship-freight-carrier').value = freight;
+    if (document.getElementById('ship-send-email')) document.getElementById('ship-send-email').checked = sendEmail;
 
-    await confirmShipped();
+    await _doShippedCore(emp);
     successCount++;
   }
 
-  // 체크박스 전부 해제
   document.querySelectorAll('input[id^="batch-cb-"]:checked').forEach(cb => cb.checked = false);
   updateBatchShipCount();
   _bolFileData = null;
-
-  showToast(`✅ ${successCount}건 Shipped 완료!`);
+  showToast('✅ ' + successCount + '건 Shipped 완료!');
 }
 
 async function confirmShipped() {
@@ -7851,11 +7866,16 @@ async function confirmShipped() {
   _shippedEmp = emp;
 
   document.getElementById('modal-shipped').style.display = 'none';
+  await _doShippedCore(emp);
+}
 
+// Batch Ship에서 PIN 없이 직접 호출하는 코어 로직
+async function _doShippedCore(emp) {
+  const shipDate = document.getElementById('ship-date-inp').value;
   const carrier = document.getElementById('ship-carrier').value;
   const tracking = document.getElementById('ship-tracking').value;
-  const pickupCompany = document.getElementById('ship-pickup-company').value;
   const shipNote = document.getElementById('ship-note').value;
+  const freightCarrier = document.getElementById('ship-freight-carrier')?.value || '';
   const orderId = _shippedOrderId;
   const wh = _shippedWh;
 
@@ -7944,7 +7964,7 @@ async function confirmShipped() {
     invoice_number: invoiceNumber,
     carrier: carrier || null,
     tracking_number: tracking || null,
-    pickup_company: pickupCompany || null,
+    pickup_company: freightCarrier || null,
     ship_note: shipNote || null,
     shipped_by: _shippedEmp?.name || null
   }).eq('id', orderId);
@@ -12657,50 +12677,38 @@ function showCreditHoldFlash(overAmt) {
 
 <!-- ── Batch Ship 모달 ── -->
 <div id="modal-batch-ship" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:12px;width:540px;max-width:95vw;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-    <div style="padding:18px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#16a34a;border-radius:12px 12px 0 0;">
+  <div style="background:#fff;border-radius:12px;width:620px;max-width:95vw;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:18px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#16a34a;border-radius:12px 12px 0 0;position:sticky;top:0;z-index:1;">
       <div style="font-size:15px;font-weight:700;color:#fff;">🚛 Batch Ship</div>
       <button onclick="document.getElementById('modal-batch-ship').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fff;">✕</button>
     </div>
     <div style="padding:20px 24px;">
-      <!-- 선택된 PO 목록 -->
-      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">📦 선택된 PO</div>
-      <div id="batch-ship-list" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:8px 12px;margin-bottom:16px;max-height:120px;overflow-y:auto;"></div>
 
-      <!-- 출고 정보 -->
-      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">🚚 운송 정보</div>
-      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">
-        <div>
-          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">출고 날짜 <span style="color:#dc2626">*</span></label>
-          <input type="date" id="batch-ship-date" class="fi" style="width:180px;"/>
-        </div>
+      <!-- 출고 날짜 -->
+      <div style="margin-bottom:16px;">
+        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">출고 날짜 <span style="color:#dc2626">*</span></label>
+        <input type="date" id="batch-ship-date" class="fi" style="width:180px;"/>
+      </div>
+
+      <!-- LTL 공통 정보 -->
+      <div id="batch-ltl-common-wrap" style="display:none;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:14px 16px;margin-bottom:16px;">
+        <div style="font-size:11px;font-weight:700;color:#0369a1;margin-bottom:10px;">🚚 LTL 공통 정보</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
           <div>
-            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Carrier</label>
-            <select id="batch-ship-carrier" class="fi" style="width:100%;" onchange="toggleBatchCarrier()">
-              <option value="">선택...</option>
-              <option value="UPS">UPS</option>
-              <option value="FedEx">FedEx</option>
-              <option value="LTL">LTL</option>
-              <option value="Will Call">Will Call</option>
-              <option value="Other">Other</option>
-            </select>
-          </div>
-          <div id="batch-ship-freight-wrap" style="display:none;">
             <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Freight Company</label>
-            <input type="text" id="batch-ship-freight-company" class="fi" placeholder="XPO, SAIA..." style="width:100%;"/>
+            <input type="text" id="batch-ltl-freight" class="fi" placeholder="XPO, SAIA, ODFL..." style="width:100%;"/>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>
+            <input type="text" id="batch-ltl-pro" class="fi" placeholder="PRO Number" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>
           </div>
         </div>
-        <div>
-          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="batch-tracking-label">Tracking # / PRO #</label>
-          <input type="text" id="batch-ship-tracking" class="fi" placeholder="공통 Tracking #" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>
-          <div style="font-size:10px;color:#9ca3af;margin-top:3px;">선택한 모든 PO에 동일하게 적용됩니다</div>
-        </div>
-        <div>
-          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">메모</label>
-          <input type="text" id="batch-ship-note" class="fi" placeholder="기타 메모" style="width:100%;"/>
-        </div>
+        <button onclick="applyLtlToAll()" style="margin-top:10px;padding:5px 14px;background:#0369a1;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">↓ LTL 선택된 PO에 모두 적용</button>
       </div>
+
+      <!-- PO별 운송 정보 -->
+      <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">📦 PO별 운송 정보</div>
+      <div id="batch-po-rows" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;"></div>
 
       <!-- BOL 업로드 -->
       <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">📄 BOL 업로드 (선택사항)</div>
