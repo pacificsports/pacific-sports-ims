@@ -7735,8 +7735,8 @@ async function sendToZebraBrowserPrint(zplData, labelCount) {
   showToast('🏷 Zebra 프린터 연결 중...');
 
   try {
-    // Zebra Browser Print API (포트 9101)
-    const bpResponse = await fetch('http://localhost:9101/available', {
+    // Zebra Browser Print — HTTPS 필요 (워커스 앱이 HTTPS라서)
+    const bpResponse = await fetch('http://localhost:9100/available', {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -7749,7 +7749,7 @@ async function sendToZebraBrowserPrint(zplData, labelCount) {
     }
 
     // ZPL 전송
-    const writeRes = await fetch('http://localhost:9101/write', {
+    const writeRes = await fetch('http://localhost:9100/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ device: printer, data: zplData })
@@ -7761,16 +7761,10 @@ async function sendToZebraBrowserPrint(zplData, labelCount) {
       throw new Error('Write failed: ' + writeRes.status);
     }
   } catch(e) {
-    // 연결 실패 시 ZPL 텍스트 창
-    showToast('⚠️ Browser Print 연결 실패 — ZPL 코드창을 열었어요.');
-    const w = window.open('', '_blank', 'width=600,height=500');
-    if (w) {
-      w.document.write('<html><body style="font-family:monospace;padding:20px;">'
-        + '<h3>ZPL Code — Copy & paste to Zebra printer</h3>'
-        + '<textarea style="width:100%;height:400px;font-family:monospace;font-size:11px;">'
-        + zplData
-        + '</textarea></body></html>');
-    }
+    // 연결 실패 시 안내
+    showToast('⚠️ Browser Print 연결 실패');
+    const go = confirm('Zebra Browser Print 연결에 실패했어요.\n\n한 번만 설정 필요:\nChrome에서 http://localhost:9100/ssl_support 접속 → "고급" → "localhost로 이동" 클릭\n\n지금 해당 페이지를 열까요?');
+    if (go) window.open('http://localhost:9100/ssl_support', '_blank');
   }
 }
 
