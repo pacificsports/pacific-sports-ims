@@ -5287,31 +5287,36 @@ function deleteOrderConfirm(orderId, orderNum, customerName) {
   _deleteOrderId = orderId;
   _deleteOrderNum = orderNum;
   document.getElementById('delete-order-info').innerHTML =
-    '<b>' + orderNum + '</b> — ' + customerName + ' 를 영구 삭제합니다.';
-  document.getElementById('delete-confirm-input').value = '';
+    '<b>' + orderNum + '</b> — ' + customerName;
+  document.getElementById('delete-pin-input').value = '';
+  document.getElementById('delete-pin-error').textContent = '';
   document.getElementById('delete-order-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('delete-pin-input')?.focus(), 100);
 }
 
 async function submitDeleteOrder() {
-  const input = document.getElementById('delete-confirm-input').value.trim();
-  if (input !== _deleteOrderNum) {
-    alert('오더번호가 일치하지 않습니다: ' + _deleteOrderNum);
-    return;
-  }
+  const pin = document.getElementById('delete-pin-input').value;
+  const errEl = document.getElementById('delete-pin-error');
+  if (pin.length < 4) { errEl.textContent = 'PIN 4자리를 입력하세요.'; return; }
+
+  if (_pinEmployees.length === 0) await loadPinEmployees();
+  const emp = _pinEmployees.find(e => e.pin === pin);
+  if (!emp) { errEl.textContent = '❌ PIN이 올바르지 않습니다.'; return; }
+
   document.getElementById('delete-order-modal').style.display = 'none';
-  openPinModal('🗑', 'Delete 확인', _deleteOrderNum + ' 영구 삭제', async function(emp) {
-    try {
-      showToast('⏳ 삭제 중...');
-      await db.from('order_lines').delete().eq('order_id', _deleteOrderId);
-      const { error } = await db.from('orders').delete().eq('id', _deleteOrderId);
-      if (error) { showToast('❌ 삭제 실패: ' + error.message); return; }
-      showToast('🗑 ' + _deleteOrderNum + ' 삭제 완료');
-      _deleteOrderId = null; _deleteOrderNum = null;
-      loadCustomerPOs(); loadOrderStatus();
-    } catch(e) {
-      showToast('❌ 오류: ' + e.message);
-    }
-  });
+  showToast('⏳ 삭제 중...');
+
+  try {
+    const { error: e1 } = await db.from('order_lines').delete().eq('order_id', _deleteOrderId);
+    if (e1) { showToast('❌ 라인 삭제 실패: ' + e1.message); return; }
+    const { error: e2 } = await db.from('orders').delete().eq('id', _deleteOrderId);
+    if (e2) { showToast('❌ 오더 삭제 실패: ' + e2.message); return; }
+    showToast('🗑 ' + _deleteOrderNum + ' 삭제 완료');
+    _deleteOrderId = null; _deleteOrderNum = null;
+    loadCustomerPOs(); loadOrderStatus();
+  } catch(e) {
+    showToast('❌ 오류: ' + e.message);
+  }
 }
 
 async function restoreOrderInventory(orderId) {
@@ -13158,18 +13163,26 @@ function showCreditHoldFlash(overAmt) {
 
   <!-- Delete Order 모달 -->
   <div id="delete-order-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
-    <div style="background:#fff;border-radius:12px;padding:28px;width:480px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="background:#fff;border-radius:12px;padding:28px;width:440px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
       <div style="font-size:16px;font-weight:700;color:#dc2626;margin-bottom:8px;">🗑 Delete Order</div>
-      <div style="font-size:13px;color:#374151;margin-bottom:16px;" id="delete-order-info"></div>
-      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:12px 14px;font-size:12px;color:#991b1b;margin-bottom:20px;">
-        ⛔ <b>완전 삭제</b>됩니다. 복구 불가능합니다.<br>배정된 재고는 자동으로 복구됩니다.
+      <div style="font-size:13px;color:#374151;margin-bottom:12px;" id="delete-order-info"></div>
+      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:10px 14px;font-size:12px;color:#991b1b;margin-bottom:16px;">
+        ⛔ <b>완전 삭제</b>됩니다. 복구 불가능합니다.
       </div>
-      <div style="margin-bottom:20px;">
-        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">확인을 위해 오더번호 입력</label>
-        <input id="delete-confirm-input" class="fi" type="text" placeholder="예: PO-2026-0001" style="font-size:12px;">
+      <div style="margin-bottom:12px;">
+        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Manager PIN</label>
+        <input id="delete-pin-input" type="password" maxlength="4" inputmode="numeric" autocomplete="off"
+          placeholder="" class="fi"
+          style="width:120px;text-align:center;font-size:22px;letter-spacing:8px;font-family:'IBM Plex Mono',monospace;"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'')">
       </div>
+      <div id="delete-pin-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:12px;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="document.getElementById('delete-order-modal').style.display='none'">닫기</button>
+        <button class="btn" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700;" onclick="submitDeleteOrder()">🗑 영구 삭제</button>
+      </div>
+    </div>
+  </div>
         <button class="btn" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700;" onclick="submitDeleteOrder()">🗑 영구 삭제</button>
       </div>
     </div>
