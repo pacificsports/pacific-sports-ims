@@ -7671,11 +7671,14 @@ function buildCaseLabelZpl(caseItem, boxNum, totalBoxes, order) {
 
 function buildBoxLabelZpl(box, totalBoxes, order) {
   // ZP450 4x6 inch = 812w x 1218h dots (203 dpi)
+  // 상단 고정 영역: 고객명(35) + PO#(120~295) + BOX#(340~435) + 구분선(460) = 460 dots
+  // 하단 아이템 영역: 470 ~ 1140 = 670 dots 사용 가능
+
   const poNum = (order.customer_po || '').substring(0, 20);
   const custName = (order.customer_name || '').substring(0, 30);
   const custFontSize = custName.length > 20 ? 45 : custName.length > 15 ? 52 : 60;
 
-  // 아이템 목록
+  // 아이템 목록 그룹핑
   const groups = {};
   box.items.forEach(item => {
     const sNum = item.styleNum || box.styleNum || '';
@@ -7684,50 +7687,56 @@ function buildBoxLabelZpl(box, totalBoxes, order) {
     if (!groups[key]) groups[key] = { styleNum: sNum, color: col, sizes: [] };
     groups[key].sizes.push({ size: item.size, qty: item.qty });
   });
-
   const totalQty = box.items.reduce((s, i) => s + (i.qty || 0), 0);
 
-  // 아이템 라인 — 구분선 바로 아래부터
+  // 총 라인 수: 스타일/컬러 헤더 + 사이즈 라인들 + Total 라인
+  let totalLineCount = 0;
+  Object.values(groups).forEach(g => { totalLineCount += 1 + g.sizes.length; });
+  totalLineCount += 1; // Total 라인
+
+  // 아이템 영역 높이: 470~1140 = 670 dots
+  // 각 라인 높이 자동 계산 (최대 80, 최소 40)
+  const ITEM_START_Y = 475;
+  const ITEM_END_Y = 1140;
+  const availH = ITEM_END_Y - ITEM_START_Y;
+  const lineH = Math.min(80, Math.max(40, Math.floor(availH / totalLineCount)));
+
+  // 폰트 크기: 라인 높이 기준 (헤더 작게, 사이즈/수량 크게)
+  const itemFontH = Math.min(65, Math.max(32, lineH - 14));
+  const styleFontH = Math.max(28, Math.round(itemFontH * 0.75));
+
+  // 아이템 라인 ZPL — Size: X=30 고정, Qty: X=220 고정
   let itemLines = '';
-  let yPos = 530;
+  let yPos = ITEM_START_Y;
   Object.values(groups).forEach(g => {
-    // Style + Color 크게
-    itemLines += '^FO30,' + yPos + '^A0N,55,55^FD' + g.styleNum + '  ' + g.color + '^FS\n';
-    yPos += 68;
+    itemLines += '^FO30,' + yPos + '^A0N,' + styleFontH + ',' + styleFontH + '^FD' + g.styleNum + '  ' + g.color + '^FS\n';
+    yPos += Math.round(lineH * 0.82);
     g.sizes.forEach(s => {
-      const sizeStr = s.size.padEnd(6);
-      const qtyStr = s.qty + ' pcs';
-      itemLines += '^FO30,' + yPos + '^A0N,60,60^FD' + sizeStr + '   ' + qtyStr + '^FS\n';
-      yPos += 72;
+      itemLines += '^FO30,' + yPos + '^A0N,' + itemFontH + ',' + itemFontH + '^FD' + s.size + '^FS\n';
+      itemLines += '^FO220,' + yPos + '^A0N,' + itemFontH + ',' + itemFontH + '^FD' + s.qty + ' pcs^FS\n';
+      yPos += lineH;
     });
-    yPos += 6;
   });
 
-  // Total + 구분선
-  const divY2 = yPos + 8;
-  const totalY = divY2 + 16;
+  // Total 구분선 + Total
+  const totalDivY = yPos + 4;
+  const totalTextY = totalDivY + 10;
 
   return '^XA\n'
     + '^MMT\n^PW812\n^LL1218\n^LS0\n'
-    + '^CF0,50\n'  // 기본 폰트 설정
-    // 고객 이름
+    // ── 상단 고정 영역 (절대 변경 안 됨) ──
     + '^FO30,35^A0N,' + custFontSize + ',' + custFontSize + '^FD' + custName + '^FS\n'
-    // PO# 라벨
     + '^FO30,120^A0N,40,40^FDPO#^FS\n'
-    // PO# 번호 (크게)
     + '^FO30,165^A0N,130,130^FD' + poNum + '^FS\n'
-    // BOX #
     + '^FO30,340^A0N,95,95^FDBOX ' + box.boxNum + ' of ' + totalBoxes + '^FS\n'
-    // 구분선
     + '^FO20,460^GB772,5,5^FS\n'
-    // 아이템
+    // ── 아이템 영역 (자동 크기 조절) ──
     + itemLines
-    // 구분선2
-    + '^FO20,' + divY2 + '^GB772,3,3^FS\n'
-    // Total
-    + '^FO30,' + totalY + '^A0N,55,55^FDTotal:   ' + totalQty + ' pcs^FS\n'
-    // Pacific Sports 하단 중앙
-    + '^FO0,1170^FB812,1,0,C,0^A0N,30,30^FDPacific Sports^FS\n'
+    + '^FO20,' + totalDivY + '^GB772,3,3^FS\n'
+    + '^FO30,' + totalTextY + '^A0N,' + itemFontH + ',' + itemFontH + '^FDTotal:^FS\n'
+    + '^FO220,' + totalTextY + '^A0N,' + itemFontH + ',' + itemFontH + '^FD' + totalQty + ' pcs^FS\n'
+    // ── 하단 Pacific Sports ──
+    + '^FO0,1175^FB812,1,0,C,0^A0N,28,28^FDPacific Sports^FS\n'
     + '^XZ';
 }
 
