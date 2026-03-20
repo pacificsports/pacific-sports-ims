@@ -7049,10 +7049,11 @@ async function preparationComplete(orderId, wh) {
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
   // whFilter에 따라 해당 창고 배분이 있는 라인만 필터링 + 수량 0 제외
-  let filteredLines = lines.filter(l => (l.qty_pieces || 0) > 0);
+  const nonZeroLines = lines.filter(l => (l.qty_pieces || 0) > 0);
+  let filteredLines = nonZeroLines;
   if (isSplit || wh) {
     const whFilter = wh || 'SC';
-    filteredLines = lines.filter(l => {
+    filteredLines = nonZeroLines.filter(l => {
       if (whFilter === 'CA') {
         if (l.wh === 'SC' || !l.wh || l.wh === '') return false;
         if (l.wh === 'SC&CA') {
@@ -7422,11 +7423,12 @@ async function printPackingListFromCard(orderId, whFilter) {
 
   // whFilter가 있으면 해당 창고 라인만 필터링해서 단일 섹션으로 출력
   const isSplit = order.is_split_warehouse || order.wh_code === 'SC&CA';
-  let filteredLines = lines.filter(l => (l.qty_pieces || 0) > 0); // 수량 0 제외
+  const nonZeroLines = lines.filter(l => (l.qty_pieces || 0) > 0); // 수량 0 제외
+  let filteredLines = nonZeroLines;
   let useSplit = isSplit && !whFilter;
 
   if (whFilter === 'SC') {
-    filteredLines = lines.filter(l => {
+    filteredLines = nonZeroLines.filter(l => {
       if (l.wh === 'CA') return false;
       if (l.wh === 'SC&CA') {
         const alloc = l.alloc_detail || {};
@@ -7436,7 +7438,7 @@ async function printPackingListFromCard(orderId, whFilter) {
     });
     useSplit = false;
   } else if (whFilter === 'CA') {
-    filteredLines = lines.filter(l => {
+    filteredLines = nonZeroLines.filter(l => {
       if (l.wh === 'SC' || !l.wh || l.wh === '') return false;
       if (l.wh === 'SC&CA') {
         const allocCA = l.alloc_ca_detail || {};
@@ -8529,7 +8531,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
       const fullBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
       // 이 창고 배분 총 pcs = full box pcs + partial pcs
       const whTotalPcs = fullBoxes * ppb + pcrPcs;
-      if (whTotalPcs === 0) return '';
+      if ((l.qty_pieces || 0) === 0 && whTotalPcs === 0) return '';
       const pcrBoxes = pcrPcs > 0 ? Math.ceil(pcrPcs / ppb) : 0;
       const pcrDisplay = pcrPcs > 0
         ? pcrPcs + ' pcs' + (pcrBoxes > 0 ? '<br><span style="font-size:10px;color:#9ca3af;">'+pcrBoxes+' box</span>' : '')
