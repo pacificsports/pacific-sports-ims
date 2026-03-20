@@ -7050,6 +7050,37 @@ async function preparationComplete(orderId, wh) {
 
 let _plWh = 'SC';
 
+function openPlConfirmPin() {
+  const modal = document.getElementById('modal-pl-confirm-pin');
+  const input = document.getElementById('pl-confirm-pin-input');
+  const err = document.getElementById('pl-confirm-pin-error');
+  if (input) { input.value = ''; input.style.borderColor = '#e5e7eb'; }
+  if (err) err.textContent = '';
+  if (modal) {
+    modal.style.display = 'flex';
+    setTimeout(() => input?.focus(), 100);
+  }
+}
+
+async function verifyPlConfirmPin() {
+  const input = document.getElementById('pl-confirm-pin-input');
+  const err = document.getElementById('pl-confirm-pin-error');
+  const pin = input?.value || '';
+  if (pin.length < 4) return;
+
+  const { data: emps } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = emps?.[0];
+  if (!emp || !['manager','owner','admin'].includes(emp.role)) {
+    if (err) err.textContent = '❌ Manager PIN이 올바르지 않습니다.';
+    if (input) { input.value = ''; input.style.borderColor = '#fca5a5'; setTimeout(() => { input.style.borderColor = '#e5e7eb'; input.focus(); }, 1000); }
+    return;
+  }
+
+  // 확인 완료 → Ready to Ship 처리
+  document.getElementById('modal-pl-confirm-pin').style.display = 'none';
+  confirmPreparationComplete();
+}
+
 async function confirmPreparationComplete() {
   closeModal('modal-pl-preview');
   if (!_plOrderId) return;
@@ -12582,7 +12613,7 @@ function showCreditHoldFlash(overAmt) {
   <div class="modal-box" style="max-width:860px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
     <div class="modal-head" style="background:#0891b2;flex-shrink:0;">
       <span style="color:#fff;font-weight:700;font-size:14px;">📦 Packing List</span>
-      <button class="modal-close" style="color:#fff;" onclick="closeModal('modal-pl-preview')">×</button>
+      <button class="modal-close" style="color:#fff;" onclick="if(confirm('Packing List를 확인하지 않고 닫으시겠습니까?\nReady to Ship으로 넘어가지 않습니다.')) closeModal('modal-pl-preview')">×</button>
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pl-preview-content"></div>
 
@@ -12590,7 +12621,6 @@ function showCreditHoldFlash(overAmt) {
     <div style="padding:12px 16px;border-top:2px solid #e5e7eb;background:#f8fafc;flex-shrink:0;">
       <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px;">🚚 Shipping Info (선택사항)</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
-        <!-- Carrier 선택 -->
         <div>
           <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Carrier</div>
           <select id="pl-carrier" onchange="togglePlShippingFields()" style="height:30px;border:1px solid #d1d5db;border-radius:4px;padding:0 6px;font-size:12px;font-weight:600;">
@@ -12601,19 +12631,16 @@ function showCreditHoldFlash(overAmt) {
             <option value="Other">Other</option>
           </select>
         </div>
-        <!-- UPS/FedEx Tracking # -->
         <div id="pl-tracking-wrap" style="display:none;">
           <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Tracking #</div>
           <input id="pl-tracking" type="text" placeholder="1Z999AA10123456784" oninput="updatePlShipping()"
             style="height:30px;width:200px;border:1px solid #d1d5db;border-radius:4px;padding:0 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;">
         </div>
-        <!-- LTL PRO # -->
         <div id="pl-pro-wrap" style="display:none;">
           <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">PRO #</div>
           <input id="pl-pro" type="text" placeholder="PRO Number" oninput="updatePlShipping()"
             style="height:30px;width:160px;border:1px solid #d1d5db;border-radius:4px;padding:0 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;">
         </div>
-        <!-- LTL 픽업 업체 -->
         <div id="pl-ltl-carrier-wrap" style="display:none;">
           <div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Freight Carrier</div>
           <input id="pl-ltl-carrier" type="text" placeholder="XPO, SAIA, ODFL..." oninput="updatePlShipping()"
@@ -12623,10 +12650,27 @@ function showCreditHoldFlash(overAmt) {
     </div>
 
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
-      <button class="btn" onclick="closeModal('modal-pl-preview')">취소</button>
+      <button class="btn" onclick="if(confirm('Packing List를 확인하지 않고 닫으시겠습니까?')) closeModal('modal-pl-preview')">취소</button>
       <button class="btn" style="background:#0891b2;color:#fff;" onclick="printInNewWindow(document.getElementById('pl-preview-content').innerHTML)">🖨️ Print Packing List</button>
-      <button class="btn btn-green" onclick="confirmPreparationComplete()">✅ Confirm — Move to Ready to Ship</button>
+      <button class="btn btn-green" onclick="openPlConfirmPin()">✅ Confirm — Move to Ready to Ship</button>
     </div>
+  </div>
+</div>
+
+<!-- ── PL Confirm PIN 모달 ── -->
+<div id="modal-pl-confirm-pin" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:16px;padding:28px 32px;width:340px;max-width:95vw;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="font-size:22px;margin-bottom:8px;">✅</div>
+    <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:4px;">Ready to Ship 확인</div>
+    <div style="font-size:13px;color:#6b7280;margin-bottom:20px;">Manager PIN을 입력하세요</div>
+    <input id="pl-confirm-pin-input" type="password" maxlength="4" inputmode="numeric"
+      placeholder="· · · ·"
+      style="width:160px;height:52px;border:2px solid #e5e7eb;border-radius:10px;text-align:center;font-size:28px;letter-spacing:12px;font-family:'IBM Plex Mono',monospace;outline:none;transition:border-color 0.15s;"
+      oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyPlConfirmPin()"
+      onfocus="this.style.borderColor='#0891b2'"
+      onblur="this.style.borderColor='#e5e7eb'">
+    <div id="pl-confirm-pin-error" style="color:#dc2626;font-size:12px;min-height:18px;margin-top:8px;"></div>
+    <button onclick="document.getElementById('modal-pl-confirm-pin').style.display='none'" style="margin-top:16px;width:100%;padding:10px;background:#f9fafb;color:#6b7280;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;cursor:pointer;">취소</button>
   </div>
 </div>
 
