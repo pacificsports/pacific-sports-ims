@@ -6351,7 +6351,7 @@ async function openPcrComplete(orderId, wh) {
 
     // SC&CA 스플릿 라인은 alloc_detail(SC) + alloc_ca_detail(CA) 둘 다 확인
     filteredLines.forEach(l => {
-      const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+      const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
       const key = `${l.styles?.style_number||''}|||${l.color||''}|||${ppb}`;
       if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
 
@@ -6367,36 +6367,70 @@ async function openPcrComplete(orderId, wh) {
       if (totalPcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: totalPcrPcs, styleNum: l.styles?.style_number||'', color: l.color||'' });
     });
 
-    // 박스 배치 계산
+    // 박스 배치 계산 — 같은 색상 우선, 박스 최소화
     let globalBoxNum = 1;
     window._pcrBoxes = [];
-    window._pcrBoxesOriginal = null; // 원본 스냅샷 (변경 감지용)
-    Object.values(groups).sort((a,b) => b.boxQty - a.boxQty).forEach(g => {
-      const boxQty = g.boxQty;
-      const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size) - sizeOrd(b.size));
-      if (!sizes.length) return;
-      let currentBox = { items: [], styleNum: g.styleNum, color: g.color, boxQty, isCustom: false };
-      let currentTotal = 0;
-      sizes.forEach(s => {
-        let remaining = s.qty;
-        while (remaining > 0) {
-          const space = boxQty - currentTotal;
-          if (remaining > space && currentTotal > 0) {
-            window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox, items: [...currentBox.items] });
-            currentBox = { items: [], styleNum: g.styleNum, color: g.color, boxQty, isCustom: false };
-            currentTotal = 0;
-          }
-          const take = Math.min(remaining, boxQty - currentTotal);
-          if (take > 0) { currentBox.items.push({ size: s.size, qty: take, styleNum: s.styleNum||g.styleNum, color: s.color||g.color }); currentTotal += take; remaining -= take; }
-          if (currentTotal >= boxQty) {
-            window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox, items: [...currentBox.items] });
-            currentBox = { items: [], styleNum: g.styleNum, color: g.color, boxQty, isCustom: false };
-            currentTotal = 0;
-          }
-        }
-      });
-      if (currentBox.items.length > 0) window._pcrBoxes.push({ boxNum: globalBoxNum++, ...currentBox, items: [...currentBox.items] });
+    window._pcrBoxesOriginal = null;
+
+    // 모든 사이즈 아이템을 색상별로 정렬된 flat 리스트로 만들기
+    // 색상별 총 pcs 내림차순 → 같은 색상끼리 묶어서 처리
+    const colorOrder = {};
+    Object.values(groups).forEach(g => {
+      const total = g.sizes.reduce((s,x) => s+x.qty, 0);
+      if (!colorOrder[g.color]) colorOrder[g.color] = 0;
+      colorOrder[g.color] += total;
     });
+
+    // 색상 총량 내림차순 정렬
+    const sortedGroups = Object.values(groups).sort((a, b) => {
+      const ca = colorOrder[b.color] - colorOrder[a.color];
+      if (ca !== 0) return ca;
+      return 0;
+    });
+
+    // 전체 아이템 flat 리스트 (색상 순서 유지, 사이즈 오름차순)
+    const allItems = [];
+    sortedGroups.forEach(g => {
+      g.sizes.filter(s => s.qty > 0)
+        .sort((a,b) => sizeOrd(a.size) - sizeOrd(b.size))
+        .forEach(s => allItems.push({ size: s.size, qty: s.qty, styleNum: g.styleNum, color: g.color, boxQty: g.boxQty }));
+    });
+
+    // 박스 채우기 — 현재 박스가 차면 새 박스
+    const defaultBoxQty = sortedGroups[0]?.boxQty || 60;
+    let currentBox = { items: [], boxQty: defaultBoxQty, isCustom: false };
+    let currentTotal = 0;
+    let currentColor = null;
+
+    const flushBox = () => {
+      if (currentBox.items.length > 0) {
+        // 박스의 주 색상 = 가장 많은 색상
+        const colorTotals = {};
+        currentBox.items.forEach(i => { colorTotals[i.color] = (colorTotals[i.color]||0) + i.qty; });
+        const mainColor = Object.entries(colorTotals).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
+        const mainStyle = currentBox.items[0]?.styleNum || '';
+        window._pcrBoxes.push({ boxNum: globalBoxNum++, styleNum: mainStyle, color: mainColor, items: [...currentBox.items], boxQty: currentBox.boxQty, isCustom: false });
+        currentBox = { items: [], boxQty: defaultBoxQty, isCustom: false };
+        currentTotal = 0;
+        currentColor = null;
+      }
+    };
+
+    allItems.forEach(item => {
+      let remaining = item.qty;
+      while (remaining > 0) {
+        const space = currentBox.boxQty - currentTotal;
+        if (space === 0) { flushBox(); }
+        const take = Math.min(remaining, currentBox.boxQty - currentTotal);
+        if (take > 0) {
+          currentBox.items.push({ size: item.size, qty: take, styleNum: item.styleNum, color: item.color });
+          currentTotal += take;
+          remaining -= take;
+        }
+        if (currentTotal >= currentBox.boxQty) { flushBox(); }
+      }
+    });
+    flushBox(); // 마지막 박스 flush
 
     // 원본 스냅샷 저장 (renderPcrBoxes 전에 저장해야 isNewItem 체크가 정확함)
     window._pcrBoxesOriginal = JSON.parse(JSON.stringify(window._pcrBoxes));
@@ -7465,7 +7499,7 @@ function calcPcrBoxList(lines, wh) {
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf(s)+1)||99;
   const groups = {};
   lines.forEach(l => {
-    const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+    const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
     const key = (l.styles?.style_number||'') + '|||' + (l.color||'') + '|||' + ppb;
     if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
     const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
