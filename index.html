@@ -7673,23 +7673,15 @@ async function sendToZebraBrowserPrint(zplData, labelCount) {
 }
 
 async function doShipped(orderId, wh) {
-  // PIN 입력 → 직원 확인
-  const pin = prompt('담당자 PIN을 입력하세요:');
-  if (!pin) return;
-  const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
-  const emp = empRows?.[0];
-  if (!emp) { alert('❌ PIN이 올바르지 않습니다.'); return; }
-  if (!['admin','manager','warehouse'].includes(emp.role)) { alert('❌ 권한이 없습니다. (Warehouse Manager 이상 필요)'); return; }
-
   _shippedOrderId = orderId;
   _shippedWh = wh;
-  _shippedEmp = emp;
+  _shippedEmp = null;
 
   // 오더 정보 표시
   const orderCard = allOrderStatusData?.find(o => o.id === orderId);
   if (orderCard) {
     document.getElementById('modal-shipped-info').innerHTML =
-      `<b>${orderCard.order_number}</b> — ${orderCard.customer_name} &nbsp;|&nbsp; PO# ${orderCard.customer_po||'—'} &nbsp;|&nbsp; 담당: <b>${emp.name}</b>`;
+      `<b>${orderCard.order_number}</b> — ${orderCard.customer_name} &nbsp;|&nbsp; PO# ${orderCard.customer_po||'—'}`;
   }
 
   // 기본값 세팅
@@ -7848,6 +7840,15 @@ async function confirmBatchShip() {
 async function confirmShipped() {
   const shipDate = document.getElementById('ship-date-inp').value;
   if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
+
+  // PIN 확인
+  const pin = prompt('담당자 PIN을 입력하세요:');
+  if (!pin) return;
+  const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = empRows?.[0];
+  if (!emp) { alert('❌ PIN이 올바르지 않습니다.'); return; }
+  if (!['admin','manager','warehouse'].includes(emp.role)) { alert('❌ 권한이 없습니다.'); return; }
+  _shippedEmp = emp;
 
   document.getElementById('modal-shipped').style.display = 'none';
 
