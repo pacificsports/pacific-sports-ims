@@ -8510,10 +8510,11 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
 
   const renderPlSection = (sectionLines, whLabel, whColor, sectionWh) => {
     if (!sectionLines.length) return '';
-    const sorted = [...sectionLines].sort((a,b) => {
+    const sorted = [...sectionLines].filter(l => (l.qty_pieces||0) > 0).sort((a,b) => {
       const ca = (a.color||'').localeCompare(b.color||'');
       return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
     });
+    if (!sorted.length) return '';
 
     // Summary table
     const rows = sorted.map(l => {
@@ -8528,6 +8529,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
       const fullBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
       // 이 창고 배분 총 pcs = full box pcs + partial pcs
       const whTotalPcs = fullBoxes * ppb + pcrPcs;
+      if (whTotalPcs === 0) return '';
       const pcrBoxes = pcrPcs > 0 ? Math.ceil(pcrPcs / ppb) : 0;
       const pcrDisplay = pcrPcs > 0
         ? pcrPcs + ' pcs' + (pcrBoxes > 0 ? '<br><span style="font-size:10px;color:#9ca3af;">'+pcrBoxes+' box</span>' : '')
