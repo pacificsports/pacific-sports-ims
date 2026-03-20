@@ -2080,7 +2080,7 @@ async function loadScInventory() {
     const normColor = (row.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
     const styleNum = row.styles?.style_number || row.style_number || '';
     const key = `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-    const qty = row.qty_on_hand || 0;
+    const qty = Math.max(0, (row.qty_on_hand || 0) - (row.qty_committed || 0)); // available qty
     const loc = row.location || '';
     const rcvDate = row.received_date || (row.created_at ? row.created_at.slice(0,10) : null);
     const entry = { qty, location: loc || '—' };
@@ -2709,8 +2709,9 @@ async function loadStyleColorGrid() {
     if (!whMap[wh]) whMap[wh] = {};
     const sz = (r.size || '').toUpperCase();
     if (!whMap[wh][sz]) whMap[wh][sz] = { qty: 0, bins: [] };
-    whMap[wh][sz].qty += (r.qty_on_hand || 0);
-    if (r.location) whMap[wh][sz].bins.push({ loc: r.location, qty: r.qty_on_hand });
+    const availQty = Math.max(0, (r.qty_on_hand || 0) - (r.qty_committed || 0));
+    whMap[wh][sz].qty += availQty;
+    if (r.location) whMap[wh][sz].bins.push({ loc: r.location, qty: availQty });
   });
 
   // 총합 맵
