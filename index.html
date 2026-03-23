@@ -5130,6 +5130,7 @@ async function loadOrderStatus() {
             style="width:16px;height:16px;cursor:pointer;accent-color:#16a34a;">
           <label for="batch-cb-${o.id}-${wh}" style="font-size:10px;color:#6b7280;cursor:pointer;" onclick="event.stopPropagation()">Batch Ship 선택</label>
         </div>
+        <div id="batch-ship-card-btn-${o.id}-${wh}"></div>
         <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','${wh}')">📋 Print Packing List</button>
         <button class="btn btn-sm btn-green" style="width:100%;margin-top:4px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>
         <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','ready_to_ship','preparing')">↩ Back to Preparing</button>`:''}
@@ -7945,11 +7946,27 @@ async function doShipped(orderId, wh) {
 }
 
 function updateBatchShipCount() {
-  const checked = document.querySelectorAll('input[id^="batch-cb-"]:checked');
+  const checked = [...document.querySelectorAll('input[id^="batch-cb-"]:checked')];
   const btn = document.getElementById('batch-ship-btn');
   const countEl = document.getElementById('batch-ship-count');
   if (countEl) countEl.textContent = checked.length;
   if (btn) btn.style.display = checked.length > 0 ? 'flex' : 'none';
+
+  // 모든 카드 placeholder 초기화
+  document.querySelectorAll('[id^="batch-ship-card-btn-"]').forEach(el => el.innerHTML = '');
+
+  // 체크된 카드마다 Batch Ship 버튼 삽입
+  checked.forEach(cb => {
+    const [orderId, wh] = cb.value.split('|');
+    const placeholder = document.getElementById('batch-ship-card-btn-' + orderId + '-' + wh);
+    if (!placeholder) return;
+    const btnEl = document.createElement('button');
+    btnEl.className = 'btn btn-sm btn-green';
+    btnEl.style.cssText = 'width:100%;margin-top:4px;font-size:10px;font-weight:700;';
+    btnEl.textContent = '🚢 Batch Ship (' + checked.length + ')';
+    btnEl.onclick = (e) => { e.stopPropagation(); openBatchShipModal(); };
+    placeholder.appendChild(btnEl);
+  });
 }
 
 async function openBatchShipModal() {
