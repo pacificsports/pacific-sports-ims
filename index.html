@@ -8056,10 +8056,13 @@ async function openBatchShipModal(whFilter) {
   if (header) header.style.background = modalColor;
   const confirmBtn = document.getElementById('batch-ship-confirm-btn');
   if (confirmBtn) { confirmBtn.style.background = modalColor; confirmBtn.style.borderColor = modalColor; }
+  _batchShipEmp = null;
   const pinEl = document.getElementById('batch-ship-pin');
   if (pinEl) pinEl.value = '';
   const pinErr = document.getElementById('batch-ship-pin-error');
   if (pinErr) pinErr.textContent = '';
+  const approvedDiv = document.getElementById('batch-ship-pin-approved');
+  if (approvedDiv) approvedDiv.style.display = 'none';
   document.getElementById('modal-batch-ship').style.display = 'flex';
 }
 
@@ -8188,16 +8191,38 @@ function removeBolFile(fileName, el) {
   el.remove();
 }
 
+let _batchShipEmp = null;
+
+async function checkBatchPin(pin) {
+  const approvedDiv = document.getElementById('batch-ship-pin-approved');
+  const approvedName = document.getElementById('batch-ship-pin-name');
+  const pinError = document.getElementById('batch-ship-pin-error');
+  const confirmBtn = document.getElementById('batch-ship-confirm-btn');
+  if (approvedDiv) approvedDiv.style.display = 'none';
+  if (pinError) pinError.textContent = '';
+  _batchShipEmp = null;
+  if (pin.length < 4) return;
+  const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = empRows?.[0];
+  if (!emp || !['admin','supervisor','manager','warehouse'].includes(emp.role)) {
+    if (pinError) pinError.textContent = '❌ PIN이 올바르지 않습니다.';
+    return;
+  }
+  _batchShipEmp = emp;
+  if (approvedName) approvedName.textContent = emp.name + ' (' + emp.role + ')';
+  if (approvedDiv) approvedDiv.style.display = 'inline';
+  if (pinError) pinError.textContent = '';
+}
+
 async function confirmBatchShip() {
   const shipDate = document.getElementById('batch-ship-date').value;
   if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
-  const pin = document.getElementById('batch-ship-pin')?.value || '';
   const pinError = document.getElementById('batch-ship-pin-error');
-  if (pin.length < 4) { if (pinError) pinError.textContent = 'PIN 4자리를 입력하세요.'; return; }
-  const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
-  const emp = empRows?.[0];
-  if (!emp) { if (pinError) pinError.textContent = '❌ PIN이 올바르지 않습니다.'; return; }
-  if (!['admin','supervisor','manager','warehouse'].includes(emp.role)) { if (pinError) pinError.textContent = '❌ 권한이 없습니다.'; return; }
+  if (!_batchShipEmp) {
+    if (pinError) pinError.textContent = 'PIN을 먼저 입력하세요.';
+    return;
+  }
+  const emp = _batchShipEmp;
 
   const sendEmail = document.getElementById('batch-send-email').checked;
   document.getElementById('modal-batch-ship').style.display = 'none';
@@ -13164,8 +13189,9 @@ function showCreditHoldFlash(overAmt) {
         <input id="batch-ship-pin" type="password" maxlength="4" inputmode="numeric" autocomplete="off"
           placeholder="••••"
           style="width:90px;text-align:center;font-size:20px;letter-spacing:6px;font-family:'IBM Plex Mono',monospace;border:1.5px solid #d1d5db;border-radius:6px;padding:4px 8px;outline:none;"
-          oninput="this.value=this.value.replace(/[^0-9]/g,'');document.getElementById('batch-ship-pin-error').textContent='';"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'');checkBatchPin(this.value);"
           onfocus="this.style.borderColor='#1e40af'" onblur="this.style.borderColor='#d1d5db'">
+        <div id="batch-ship-pin-approved" style="font-size:12px;color:#15803d;font-weight:700;display:none;">✅ <span id="batch-ship-pin-name"></span></div>
         <div id="batch-ship-pin-error" style="font-size:11px;color:#dc2626;min-height:16px;"></div>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
