@@ -5079,14 +5079,34 @@ async function loadOrderStatus() {
         const pcrDone = o[whPre2+'pcr_complete_at'];
         const whBy = o[whPre2+'wh_complete_by'] || '';
         const pcrBy = o[whPre2+'pcr_complete_by'] || '';
+
+        // order_lines 기준으로 WH/Partial 버튼 필요 여부 결정
+        const prepLines = o.order_lines || [];
+        const prepWhLines = isSplit
+          ? prepLines.filter(l => wh === 'CA' ? (l.wh==='CA'||l.wh==='SC&CA') : (l.wh==='SC'||l.wh==='SC&CA'||!l.wh))
+          : prepLines;
+        const prepNeedsWh  = prepWhLines.some(l => (l.qty_boxes||0) > 0);
+        const prepNeedsPcr = prepWhLines.some(l => {
+          const allocObj = wh === 'CA'
+            ? (l.alloc_ca_detail || (l.wh==='CA' ? l.alloc_detail : null) || {})
+            : (l.wh!=='CA' ? l.alloc_detail : null) || {};
+          const hasPcrAlloc = Object.entries(allocObj).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0)>0);
+          return hasPcrAlloc || (l.qty_loose||0) > 0;
+        });
+
+        const whBtn = (prepNeedsWh || (!prepNeedsWh && !prepNeedsPcr))
+          ? `<button class="btn btn-sm" style="width:100%;font-size:10px;${whDone?'background:#f0fdf4;color:#15803d;border-color:#86efac;':'background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;'}" onclick="event.stopPropagation();openWhComplete('${o.id}','${wh}')">
+            ${whDone ? '✅ WH Done — '+whBy : '🏭 Warehouse Complete'}
+          </button>` : '';
+        const pcrBtn = prepNeedsPcr
+          ? `<button class="btn btn-sm" style="width:100%;font-size:10px;${pcrDone?'background:#f0fdf4;color:#15803d;border-color:#86efac;':'background:#fff7ed;color:#c2410c;border-color:#fdba74;'}" onclick="event.stopPropagation();openPcrComplete('${o.id}','${wh}')">
+            ${pcrDone ? '✅ PCR Done — '+pcrBy : '💻 Partial Complete'}
+          </button>` : '';
+
         return `
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
-          <button class="btn btn-sm" style="width:100%;font-size:10px;${whDone?'background:#f0fdf4;color:#15803d;border-color:#86efac;':'background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;'}" onclick="event.stopPropagation();openWhComplete('${o.id}','${wh}')">
-            ${whDone ? '✅ WH Done — '+whBy : '🏭 Warehouse Complete'}
-          </button>
-          <button class="btn btn-sm" style="width:100%;font-size:10px;${pcrDone?'background:#f0fdf4;color:#15803d;border-color:#86efac;':'background:#fff7ed;color:#c2410c;border-color:#fdba74;'}" onclick="event.stopPropagation();openPcrComplete('${o.id}','${wh}')">
-            ${pcrDone ? '✅ PCR Done — '+pcrBy : '💻 PC Room Complete'}
-          </button>
+          ${whBtn}
+          ${pcrBtn}
           <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','preparing','po_entered')">↩ Back to PO Entered</button>
         </div>`;
       })():''}
@@ -7102,7 +7122,7 @@ async function submitPcrComplete() {
   }).eq('id', _pcrCompleteOrderId);
 
   document.getElementById('pcr-complete-modal').style.display = 'none';
-  showToast('💻 PC Room Complete — ' + empName);
+  showToast('💻 Partial Complete — ' + empName);
 
   // 양쪽 다 완료됐으면 Ready to Ship으로
   await checkAndMoveToReady(_pcrCompleteOrderId, _pcrCompleteWh);
@@ -13216,7 +13236,7 @@ function showCreditHoldFlash(overAmt) {
   <div id="pcr-complete-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
     <div style="background:#fff;border-radius:12px;padding:28px;width:620px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div style="font-size:16px;font-weight:700;color:#c2410c;">💻 PC Room Complete</div>
+        <div style="font-size:16px;font-weight:700;color:#c2410c;">💻 Partial Complete</div>
         <button onclick="document.getElementById('pcr-complete-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
       </div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:16px;" id="pcr-complete-info"></div>
@@ -13252,7 +13272,7 @@ function showCreditHoldFlash(overAmt) {
       <div id="pcr-complete-emp-info" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 12px;font-size:12px;color:#15803d;margin-bottom:16px;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="document.getElementById('pcr-complete-modal').style.display='none'">취소</button>
-        <button class="btn" id="pcr-complete-btn" style="background:#c2410c;color:#fff;border-color:#c2410c;font-weight:700;" onclick="submitPcrComplete()" disabled>💻 PC Room Complete</button>
+        <button class="btn" id="pcr-complete-btn" style="background:#c2410c;color:#fff;border-color:#c2410c;font-weight:700;" onclick="submitPcrComplete()" disabled>💻 Partial Complete</button>
       </div>
     </div>
   </div>
