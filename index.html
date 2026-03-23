@@ -7498,7 +7498,7 @@ async function autoPrintAllAndClose() {
 
   // 모달 닫기
   closeModal('modal-pt-preview');
-  loadOrderStatus();
+  if (_ptOrderId) loadOrderStatus();
 
   // 잠깐 대기 후 Zebra 라벨 (프린트 창이 뜨고 나서)
   if (!order || !lines) return;
@@ -9508,58 +9508,60 @@ async function loadPickTickets() {
 }
 
 async function viewPickTicket(orderId, orderNum) {
-  // showPanel 대신 직접 패널 전환 — showPanel이 loadPickTickets()를 재호출해서 list view가 리셋되는 것 방지
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.ntab').forEach(t => t.classList.remove('active'));
-  const panelEl = document.getElementById('panel-picktickets');
-  if (panelEl) panelEl.classList.add('active');
-  const tabEl = document.getElementById('ntab-orderproc');
-  if (tabEl) tabEl.classList.add('active');
-  localStorage.setItem('last_panel', 'picktickets');
-  history.pushState(null, '', '#picktickets');
-  document.getElementById('pt-list-view').style.display = 'none';
-  document.getElementById('pt-detail-view').style.display = 'block';
-
+  // Order Documents 탭에서 호출 — Order Status와 동일한 modal-pt-preview 모달 사용
+  // status 변경은 하지 않음 (_ptOrderId = null 로 설정)
   const { data: order } = await db.from('orders')
     .select('*, warehouses(code,name)')
     .eq('id', orderId).single();
+  if (!order) { showToast('Order를 불러올 수 없습니다.', true); return; }
 
+  // WH 결정: split이면 SC 기준으로 먼저 보여줌 (SC&CA 오더는 두 티켓 따로 프린트)
+  const wh = order.wh_code === 'CA' ? 'CA' : 'SC';
+
+  // _ptOrderId = null → 모달 닫아도 status 변경 없음
+  _ptOrderId = null;
+  _ptWh = wh;
+  _ptTicketType = 'warehouse';
+
+  const titleEl = document.getElementById('pt-modal-title');
+  if (titleEl) titleEl.textContent = '🎫 Pick Ticket — ' + (order.order_number || orderNum);
+
+  // printPickTicket과 동일한 로직으로 enrichedLines 생성
   const { data: lines } = await db.from('order_lines')
-    .select('*, styles(style_number,description)')
+    .select('*, styles(style_number,description,box_qty)')
     .eq('order_id', orderId);
 
-  document.getElementById('pt-order-num').textContent = orderNum;
-  document.getElementById('pt-customer').textContent = order?.customer_name || '—';
-  document.getElementById('pt-po').textContent = order?.customer_po || '—';
-  document.getElementById('pt-ship').textContent = order?.ship_date || '—';
-  document.getElementById('pt-wh-name').textContent = 'Warehouse: ' + (order?.warehouses?.code || '') + ' — ' + (order?.warehouses?.name || '');
-  document.getElementById('pt-printed-date').textContent = 'Printed: ' + ds;
-  document.getElementById('pt-sum-wh').textContent = order?.warehouses?.code || '—';
+  const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const filteredLines = isSplit
+    ? (lines||[]).filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+    : (lines||[]);
 
-  let totalBoxes = 0, totalLoose = 0, totalPcs = 0;
-  const linesHtml = (lines||[]).map(l => {
-    const boxes = l.qty_boxes || 0;
-    const loose = l.qty_loose || 0;
-    totalBoxes += boxes;
-    totalLoose += loose;
-    totalPcs += l.qty_pieces;
-    return `<tr class="${loose>0?'highlight':''}">
-      <td class="left">${l.styles?.style_number||'—'}</td>
-      <td class="left">${l.color}</td>
-      <td>${l.size}</td>
-      <td style="font-weight:700">${l.location||'—'}</td>
-      <td style="font-weight:700;font-size:14px">${l.qty_pieces.toLocaleString()}</td>
-      <td>${l.pcs_per_box}</td>
-      <td style="background:#c8e6c9;font-weight:700;font-size:16px">${boxes}</td>
-      <td style="background:${loose>0?'#fff9c4':'#f9f9f9'};font-weight:700;font-size:16px">${loose}</td>
-      <td style="font-size:20px">□</td>
-    </tr>`;
-  }).join('');
+  const enrichedLines = filteredLines.map(l => {
+    const allocObj = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const mainBins = Object.entries(allocObj).filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'));
+    const pcrEntries = Object.entries(allocObj).filter(([k]) => k.includes('PCR|PCR'));
+    const mainLoc = mainBins.map(([k]) => k).join(', ') || l.location || '';
+    const pcrQty = pcrEntries.reduce((s,[,v]) => s+((typeof v==='object'?v.pcs:v)||0), 0);
+    const _effectiveAllocDetail = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const _effectiveAllocCaDetail = wh === 'CA' ? null : l.alloc_ca_detail;
+    return { ...l, location: mainLoc, _pcrQty: pcrQty, _pcrTransfers: [],
+      alloc_detail: _effectiveAllocDetail,
+      alloc_ca_detail: _effectiveAllocCaDetail };
+  });
 
-  document.getElementById('pt-lines-body').innerHTML = linesHtml || '<tr><td colspan="9" style="text-align:center;color:var(--text3)">No lines on this order</td></tr>';
-  document.getElementById('pt-sum-boxes').textContent = totalBoxes.toLocaleString();
-  document.getElementById('pt-sum-loose').textContent = totalLoose.toLocaleString();
-  document.getElementById('pt-sum-total').textContent = totalPcs.toLocaleString();
+  const allPcrTransfers = [];
+  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, 'warehouse');
+
+  const boxLabelBtn = document.getElementById('btn-print-box-labels');
+  if (boxLabelBtn) boxLabelBtn.style.display = 'none';
+
+  window._ptCurrentOrder = order;
+  window._ptCurrentLines = enrichedLines;
+  document.getElementById('modal-pt-preview').style.display = 'flex';
 }
 
 function printTicket() {
@@ -12816,7 +12818,7 @@ function showCreditHoldFlash(overAmt) {
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 닫기</button>
       <button class="btn" id="btn-print-box-labels" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="printBoxLabels()">🏷 Reprint Box Labels (Zebra)</button>
-      <button class="btn" style="background:#374151;color:#fff;border-color:#374151;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');loadOrderStatus();">🖨️ Pick Ticket Only</button>
+      <button class="btn" style="background:#374151;color:#fff;border-color:#374151;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');if(_ptOrderId)loadOrderStatus();">🖨️ Pick Ticket Only</button>
       <button class="btn btn-primary" onclick="autoPrintAllAndClose()">🖨️ Print + Labels</button>
     </div>
   </div>
