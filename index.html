@@ -7986,8 +7986,9 @@ function updateBatchShipCount() {
     if (!placeholder) return;
     const btnEl = document.createElement('button');
     btnEl.className = 'btn btn-sm';
-    btnEl.style.cssText = 'width:100%;margin-top:4px;font-size:10px;font-weight:700;background:#1d4ed8;color:#fff;border-color:#1d4ed8;';
     const cardWh = cb.value.split('|')[1];
+    const cardColor = cardWh === 'CA' ? '#ea580c' : '#1e40af';
+    btnEl.style.cssText = 'width:100%;margin-top:4px;font-size:10px;font-weight:700;background:' + cardColor + ';color:#fff;border-color:' + cardColor + ';';
     const cardCount = checked.filter(c => c.value.endsWith('|' + cardWh)).length;
     btnEl.textContent = '🚢 Batch Ship ' + cardWh + ' (' + cardCount + ')';
     btnEl.onclick = (e) => { e.stopPropagation(); openBatchShipModal(cardWh); };
@@ -8046,9 +8047,15 @@ async function openBatchShipModal(whFilter) {
   const ltlApplyAll = document.getElementById('batch-ltl-apply-all');
   if (ltlApplyAll) ltlApplyAll.checked = false;
   _bolFileData = null;
+  _bolFilesData = [];
   document.getElementById('batch-bol-file-input').value = '';
-  document.getElementById('batch-bol-placeholder').style.display = 'block';
-  document.getElementById('batch-bol-preview').style.display = 'none';
+  document.getElementById('batch-bol-file-list').innerHTML = '';
+  // WH별 색상 적용
+  const modalColor = whFilter === 'CA' ? '#ea580c' : '#1e40af';
+  const header = document.getElementById('batch-ship-modal-header');
+  if (header) header.style.background = modalColor;
+  const confirmBtn = document.getElementById('batch-ship-confirm-btn');
+  if (confirmBtn) { confirmBtn.style.background = modalColor; confirmBtn.style.borderColor = modalColor; }
   document.getElementById('modal-batch-ship').style.display = 'flex';
 }
 
@@ -8153,17 +8160,28 @@ function applyLtlToChecked() {
   });
 }
 
+let _bolFilesData = [];
 function handleBatchBolFileSelect(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    _bolFileData = { base64: e.target.result.split(',')[1], mimeType: file.type, fileName: file.name };
-    document.getElementById('batch-bol-placeholder').style.display = 'none';
-    document.getElementById('batch-bol-preview').style.display = 'block';
-    document.getElementById('batch-bol-file-name').textContent = file.name;
-  };
-  reader.readAsDataURL(file);
+  const files = [...input.files];
+  if (!files.length) return;
+  const list = document.getElementById('batch-bol-file-list');
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      _bolFilesData.push({ base64: e.target.result.split(',')[1], mimeType: file.type, fileName: file.name });
+      const item = document.createElement('div');
+      item.style.cssText = 'display:flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:5px 10px;font-size:11px;';
+      item.innerHTML = '✅ <span style="font-weight:600;color:#15803d;">' + file.name + '</span>'
+        + '<button onclick="removeBolFile('' + file.name + '',this.parentElement)" style="margin-left:auto;background:none;border:none;cursor:pointer;color:#6b7280;font-size:13px;">✕</button>';
+      list.appendChild(item);
+    };
+    reader.readAsDataURL(file);
+  });
+  input.value = '';
+}
+function removeBolFile(fileName, el) {
+  _bolFilesData = _bolFilesData.filter(f => f.fileName !== fileName);
+  el.remove();
 }
 
 async function confirmBatchShip() {
@@ -8225,6 +8243,8 @@ async function confirmBatchShip() {
   document.querySelectorAll('input[id^="batch-cb-"]:checked').forEach(cb => cb.checked = false);
   updateBatchShipCount();
   _bolFileData = null;
+  _bolFilesData = [];
+  document.getElementById('batch-bol-file-list').innerHTML = '';
   showToast('✅ ' + successCount + '건 Shipped 완료!');
 }
 
@@ -13076,7 +13096,7 @@ function showCreditHoldFlash(overAmt) {
 <!-- ── Batch Ship 모달 ── -->
 <div id="modal-batch-ship" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:12px;width:620px;max-width:95vw;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-    <div style="padding:18px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#16a34a;border-radius:12px 12px 0 0;position:sticky;top:0;z-index:1;">
+    <div id="batch-ship-modal-header" style="padding:18px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#1e40af;border-radius:12px 12px 0 0;position:sticky;top:0;z-index:1;">
       <div style="font-size:15px;font-weight:700;color:#fff;">🚛 Batch Ship</div>
       <button onclick="document.getElementById('modal-batch-ship').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fff;">✕</button>
     </div>
@@ -13113,20 +13133,16 @@ function showCreditHoldFlash(overAmt) {
       <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">📦 PO별 운송 정보</div>
       <div id="batch-po-rows" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;"></div>
 
-      <!-- BOL 업로드 -->
+      <!-- BOL 업로드 — 멀티 파일 -->
       <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">📄 BOL 업로드 (선택사항)</div>
-      <div style="border:2px dashed #d1d5db;border-radius:8px;padding:14px;text-align:center;cursor:pointer;background:#fafafa;margin-bottom:16px;"
+      <div style="border:2px dashed #d1d5db;border-radius:8px;padding:14px;text-align:center;cursor:pointer;background:#fafafa;margin-bottom:8px;"
         onclick="document.getElementById('batch-bol-file-input').click()">
-        <div id="batch-bol-placeholder">
-          <div style="font-size:22px;">📸</div>
-          <div style="font-size:12px;font-weight:600;color:#374151;">사진 또는 PDF 업로드</div>
-          <div style="font-size:10px;color:#9ca3af;margin-top:2px;">클릭 · JPG, PNG, PDF</div>
-        </div>
-        <div id="batch-bol-preview" style="display:none;">
-          <div style="font-size:12px;font-weight:600;color:#16a34a;">✅ <span id="batch-bol-file-name"></span></div>
-        </div>
+        <div style="font-size:22px;">📸</div>
+        <div style="font-size:12px;font-weight:600;color:#374151;">사진 또는 PDF 업로드</div>
+        <div style="font-size:10px;color:#9ca3af;margin-top:2px;">클릭 · JPG, PNG, PDF · 여러 파일 가능</div>
       </div>
-      <input type="file" id="batch-bol-file-input" accept="image/*,application/pdf" style="display:none;" onchange="handleBatchBolFileSelect(this)">
+      <div id="batch-bol-file-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px;"></div>
+      <input type="file" id="batch-bol-file-input" accept="image/*,application/pdf" multiple style="display:none;" onchange="handleBatchBolFileSelect(this)">
 
       <!-- 이메일 -->
       <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;">
@@ -13139,7 +13155,7 @@ function showCreditHoldFlash(overAmt) {
 
     <div style="padding:12px 24px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;background:#fff;border-radius:0 0 12px 12px;">
       <button class="btn" onclick="document.getElementById('modal-batch-ship').style.display='none'">취소</button>
-      <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="confirmBatchShip()">🚛 전체 Shipped 확정</button>
+      <button class="btn" id="batch-ship-confirm-btn" style="background:#1e40af;color:#fff;border-color:#1e40af;font-weight:700;" onclick="confirmBatchShip()">🚛 전체 Shipped 확정</button>
     </div>
   </div>
 </div>
