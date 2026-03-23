@@ -7985,10 +7985,16 @@ async function openBatchShipModal() {
     const label = o ? (o.order_number + ' — ' + o.customer_name + ' (PO# ' + (o.customer_po||'—') + ')') : orderId;
     const uid = orderId + '_' + wh;
     return '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:4px;">'
-      + '<div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">' + label + '</div>'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+      + '<label style="display:flex;align-items:center;gap:4px;cursor:pointer;flex-shrink:0;padding:3px 8px;background:#e0f2fe;border:1px solid #bae6fd;border-radius:5px;" title="LTL 공통 정보 적용">'
+      + '<input type="checkbox" id="bpo-ltl-apply-' + uid + '" style="width:13px;height:13px;accent-color:#0369a1;cursor:pointer;" onchange="applyLtlToChecked()">'
+      + '<span style="font-size:10px;color:#0369a1;font-weight:700;white-space:nowrap;">공통 LTL</span>'
+      + '</label>'
+      + '<div style="font-size:12px;font-weight:700;color:#374151;">' + label + '</div>'
+      + '</div>'
       + '<div style="display:grid;grid-template-columns:120px 1fr 1fr;gap:8px;align-items:end;">'
       + '<div><div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Carrier</div>'
-      + '<select id="bpo-carrier-' + uid + '" class="fi" style="width:100%;font-size:11px;" onchange="toggleBpoFields(\'' + uid + '\')">'
+      + '<select id="bpo-carrier-' + uid + '" class="fi" style="width:100%;font-size:11px;" onchange="toggleBpoFields(\'' + uid + '\')">' 
       + '<option value="">선택...</option><option value="UPS">UPS</option><option value="FedEx">FedEx</option>'
       + '<option value="LTL">LTL</option><option value="Will Call">Will Call</option><option value="Other">Other</option>'
       + '</select></div>'
@@ -8001,8 +8007,6 @@ async function openBatchShipModal() {
 
   document.getElementById('batch-po-rows').innerHTML = rowsHtml;
   document.getElementById('batch-ship-date').value = new Date().toISOString().slice(0,10);
-  const ltlWrap = document.getElementById('batch-ltl-common-wrap');
-  if (ltlWrap) ltlWrap.style.display = 'none';
   const ltlFreight = document.getElementById('batch-ltl-freight');
   const ltlPro = document.getElementById('batch-ltl-pro');
   if (ltlFreight) ltlFreight.value = '';
@@ -8020,27 +8024,35 @@ function toggleBpoFields(uid) {
   const trackingLabel = document.getElementById('bpo-tracking-label-' + uid);
   if (freightWrap) freightWrap.style.display = carrier === 'LTL' ? 'block' : 'none';
   if (trackingLabel) trackingLabel.textContent = carrier === 'LTL' ? 'PRO #' : 'Tracking #';
-  const hasLtl = (window._batchShipItems||[]).some(({ orderId, wh }) => {
-    const u = orderId + '_' + wh;
-    return document.getElementById('bpo-carrier-' + u)?.value === 'LTL';
-  });
-  const ltlWrap = document.getElementById('batch-ltl-common-wrap');
-  if (ltlWrap) ltlWrap.style.display = hasLtl ? 'block' : 'none';
+  // LTL 선택 시 해당 row 공통 LTL 체크박스 자동 체크
+  if (carrier === 'LTL') {
+    const applyChk = document.getElementById('bpo-ltl-apply-' + uid);
+    if (applyChk) { applyChk.checked = true; applyLtlToChecked(); }
+  }
 }
 
-function applyLtlToAll() {
+// 공통 LTL 체크된 PO에만 공통 정보 실시간 적용
+function applyLtlToChecked() {
   const freight = document.getElementById('batch-ltl-freight')?.value || '';
   const pro = document.getElementById('batch-ltl-pro')?.value || '';
   (window._batchShipItems||[]).forEach(({ orderId, wh }) => {
     const uid = orderId + '_' + wh;
-    if (document.getElementById('bpo-carrier-' + uid)?.value === 'LTL') {
-      const freightEl = document.getElementById('bpo-freight-' + uid);
-      const trackingEl = document.getElementById('bpo-tracking-' + uid);
-      if (freightEl) freightEl.value = freight;
-      if (trackingEl) trackingEl.value = pro;
+    const applyChk = document.getElementById('bpo-ltl-apply-' + uid);
+    if (!applyChk?.checked) return;
+    // carrier를 LTL로 자동 세팅
+    const carrierEl = document.getElementById('bpo-carrier-' + uid);
+    if (carrierEl && carrierEl.value !== 'LTL') {
+      carrierEl.value = 'LTL';
+      const freightWrap = document.getElementById('bpo-freight-wrap-' + uid);
+      if (freightWrap) freightWrap.style.display = 'block';
+      const trackingLabel = document.getElementById('bpo-tracking-label-' + uid);
+      if (trackingLabel) trackingLabel.textContent = 'PRO #';
     }
+    const freightEl = document.getElementById('bpo-freight-' + uid);
+    const trackingEl = document.getElementById('bpo-tracking-' + uid);
+    if (freightEl) freightEl.value = freight;
+    if (trackingEl) trackingEl.value = pro;
   });
-  showToast('✅ LTL 정보 적용 완료');
 }
 
 function handleBatchBolFileSelect(input) {
@@ -12961,20 +12973,19 @@ function showCreditHoldFlash(overAmt) {
         <input type="date" id="batch-ship-date" class="fi" style="width:180px;"/>
       </div>
 
-      <!-- LTL 공통 정보 -->
-      <div id="batch-ltl-common-wrap" style="display:none;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:14px 16px;margin-bottom:16px;">
-        <div style="font-size:11px;font-weight:700;color:#0369a1;margin-bottom:10px;">🚚 LTL 공통 정보</div>
+      <!-- LTL 공통 정보 — 항상 표시 -->
+      <div id="batch-ltl-common-wrap" style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:14px 16px;margin-bottom:16px;">
+        <div style="font-size:11px;font-weight:700;color:#0369a1;margin-bottom:10px;">🚚 LTL 공통 정보 <span style="font-size:10px;font-weight:400;color:#6b7280;">— 각 PO에서 체크박스로 적용</span></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
           <div>
             <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Freight Company</label>
-            <input type="text" id="batch-ltl-freight" class="fi" placeholder="XPO, SAIA, ODFL..." style="width:100%;"/>
+            <input type="text" id="batch-ltl-freight" class="fi" placeholder="XPO, SAIA, ODFL..." style="width:100%;" oninput="applyLtlToChecked()"/>
           </div>
           <div>
             <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>
-            <input type="text" id="batch-ltl-pro" class="fi" placeholder="PRO Number" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>
+            <input type="text" id="batch-ltl-pro" class="fi" placeholder="PRO Number" style="width:100%;font-family:'IBM Plex Mono',monospace;" oninput="applyLtlToChecked()"/>
           </div>
         </div>
-        <button onclick="applyLtlToAll()" style="margin-top:10px;padding:5px 14px;background:#0369a1;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">↓ LTL 선택된 PO에 모두 적용</button>
       </div>
 
       <!-- PO별 운송 정보 -->
