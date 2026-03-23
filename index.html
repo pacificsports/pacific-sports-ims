@@ -53,7 +53,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 .pin-btn:active{background:#d1d5db;}
 .ntab{height:34px;padding:0 10px;font-size:11px;color:rgba(255,255,255,0.6);cursor:pointer;display:flex;align-items:center;gap:4px;border-radius:6px 6px 0 0;border:1px solid transparent;border-bottom:none;transition:all 0.15s;white-space:nowrap;}
 .ntab-dropdown{position:relative;}
-.ntab-dd{display:none;position:absolute;top:34px;left:0;background:#1e293b;border:1px solid rgba(255,255,255,0.15);border-radius:0 6px 6px 6px;min-width:180px;z-index:99999;box-shadow:0 8px 24px rgba(0,0,0,0.4);}
+.ntab-dd{display:none;position:fixed;background:#1e293b;border:1px solid rgba(255,255,255,0.15);border-radius:0 6px 6px 6px;min-width:180px;z-index:99999;box-shadow:0 8px 24px rgba(0,0,0,0.4);}
 .ntab-dd div{padding:9px 14px;font-size:11px;color:rgba(255,255,255,0.8);cursor:pointer;white-space:nowrap;transition:background 0.1s;}
 .ntab-dd div:hover{background:rgba(255,255,255,0.1);color:#fff;}
 .ntab-dd div:first-child{border-radius:0 6px 0 0;}
@@ -1945,9 +1945,22 @@ async function loadMasterData() {
 // ══════════════════════════════════
 // PANEL SWITCHING
 // ══════════════════════════════════
+function _positionDropdown(dd, triggerId) {
+  const trigger = document.getElementById(triggerId);
+  if (!trigger || !dd) return;
+  const rect = trigger.getBoundingClientRect();
+  dd.style.top = rect.bottom + 'px';
+  dd.style.left = rect.left + 'px';
+}
+const _ddTriggerMap = {
+  'dd-orderproc': 'ntab-orderproc',
+  'dd-inventory': 'ntab-inventory'
+};
 function showDropdown(id) {
   const dd = document.getElementById(id);
-  if (dd) dd.style.display = 'block';
+  if (!dd) return;
+  _positionDropdown(dd, _ddTriggerMap[id] || id);
+  dd.style.display = 'block';
 }
 function hideDropdown(id) {
   const dd = document.getElementById(id);
@@ -1957,10 +1970,11 @@ function toggleDropdown(id) {
   const dd = document.getElementById(id);
   if (!dd) return;
   const isVisible = dd.style.display === 'block';
-  // 다른 드롭다운 닫기
   document.querySelectorAll('.ntab-dd').forEach(d => d.style.display = 'none');
-  // 현재 것 토글
-  if (!isVisible) dd.style.display = 'block';
+  if (!isVisible) {
+    _positionDropdown(dd, _ddTriggerMap[id] || id);
+    dd.style.display = 'block';
+  }
 }
 
 function showPanel(name, el, subview = null, fromPopstate = false) {
@@ -12681,6 +12695,28 @@ function printInNewWindow(html) {
       th, td { padding: 6px 8px; }
     </style>
   </head><body>${html}
+
+// 바깥 클릭 시 드롭다운 닫기
+document.addEventListener('click', function(e) {
+  const isInsideDropdown = e.target.closest('.ntab-dd');
+  const isInsideTrigger = e.target.closest('.ntab-dropdown');
+  if (!isInsideDropdown && !isInsideTrigger) {
+    document.querySelectorAll('.ntab-dd').forEach(d => d.style.display = 'none');
+  }
+});
+
+<!-- ── Floating Dropdowns (position:fixed, outside navtabs overflow) ── -->
+<div class="ntab-dd" id="dd-orderproc">
+  <div onclick="showPanel('picktickets',document.getElementById('ntab-orderproc'));hideDropdown('dd-orderproc')">🎫 Pick Tickets</div>
+  <div onclick="showPanel('packinglists',document.getElementById('ntab-orderproc'));hideDropdown('dd-orderproc')">📦 Packing Lists</div>
+  <div onclick="showPanel('invoice',document.getElementById('ntab-orderproc'));hideDropdown('dd-orderproc')">🧾 Invoices</div>
+</div>
+<div class="ntab-dd" id="dd-inventory">
+  <div onclick="showPanel('inventory',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🔍 Search by Item</div>
+  <div onclick="showPanel('receiving',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">📥 Receiving</div>
+  <div onclick="showPanel('intransit',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🚛 In Transit</div>
+  <div onclick="showPanel('styles',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">👕 Styles</div>
+</div>
 </body></html>`);
   w.document.close();
   w.focus();
