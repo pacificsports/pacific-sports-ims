@@ -7462,20 +7462,39 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
 
   if (!toEmail) return { ok: false, error: 'No customer email' };
 
-  // order_lines 가져오기
+  // order_lines 가져오기 — style → color → size 정렬
   const { data: lines } = await db.from('order_lines')
     .select('*, styles(style_number)')
-    .eq('order_id', order.id);
+    .eq('order_id', order.id)
+    .order('color', { ascending: true })
+    .order('size', { ascending: true });
 
-  const lineItems = (lines||[]).map(l => ({
-    style: l.styles?.style_number || '',
-    color: l.color || '',
-    size: l.size || '',
-    qty: l.qty_pieces || 0
-  }));
+  const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+  const lineItems = (lines||[])
+    .sort((a, b) => {
+      const styleA = a.styles?.style_number || '';
+      const styleB = b.styles?.style_number || '';
+      if (styleA !== styleB) return styleA.localeCompare(styleB);
+      const colorA = (a.color||'').toUpperCase();
+      const colorB = (b.color||'').toUpperCase();
+      if (colorA !== colorB) return colorA.localeCompare(colorB);
+      const sizeA = SIZE_ORDER.indexOf((a.size||'').toUpperCase());
+      const sizeB = SIZE_ORDER.indexOf((b.size||'').toUpperCase());
+      return (sizeA === -1 ? 99 : sizeA) - (sizeB === -1 ? 99 : sizeB);
+    })
+    .map(l => ({
+      style: l.styles?.style_number || '',
+      color: l.color || '',
+      size: l.size || '',
+      qty: l.qty_pieces || 0
+    }));
+
+  // BOL 멀티 파일 배열 구성 (_bolFilesData 우선, 없으면 단일 bolData)
+  const bolFilesArr = (_bolFilesData && _bolFilesData.length > 0)
+    ? _bolFilesData.map(f => ({ base64: f.base64, mime: f.mimeType, filename: f.fileName }))
+    : (bolData ? [{ base64: bolData.base64, mime: bolData.mimeType, filename: bolData.fileName }] : []);
 
   const payload = {
-    order_number: order.order_number,
     customer_name: order.customer_name,
     customer_po: order.customer_po || '',
     customer_email: toEmail,
@@ -7487,9 +7506,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     wh: shippingInfo.wh || 'SC',
     lines: lineItems,
     pl_html: plHtml || '',
-    bol_base64: bolData?.base64 || null,
-    bol_mime: bolData?.mimeType || null,
-    bol_filename: bolData?.fileName || null,
+    bol_files: bolFilesArr,
     cc: ccEmail
   };
 
