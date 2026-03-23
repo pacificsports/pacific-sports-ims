@@ -5100,13 +5100,20 @@ async function loadOrderStatus() {
           </button>` : '';
         const pcrBtn = prepNeedsPcr
           ? `<button class="btn btn-sm" style="width:100%;font-size:10px;${pcrDone?'background:#f0fdf4;color:#15803d;border-color:#86efac;':'background:#fff7ed;color:#c2410c;border-color:#fdba74;'}" onclick="event.stopPropagation();openPcrComplete('${o.id}','${wh}')">
-            ${pcrDone ? '✅ PCR Done — '+pcrBy : '💻 Partial Complete'}
+            ${pcrDone ? '✅ Partial Done — '+pcrBy : '💻 Partial Preparing'}
           </button>` : '';
+
+        // 필요한 것들이 모두 완료됐는지 확인 → Packing List Ready 버튼
+        const whOk2  = !prepNeedsWh  || !!whDone;
+        const pcrOk2 = !prepNeedsPcr || !!pcrDone;
+        const allDone = whOk2 && pcrOk2;
+        const plReadyBtn = allDone ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>` : '';
 
         return `
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
           ${whBtn}
           ${pcrBtn}
+          ${plReadyBtn}
           <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','preparing','po_entered')">↩ Back to PO Entered</button>
         </div>`;
       })():''}
@@ -7122,41 +7129,18 @@ async function submitPcrComplete() {
   }).eq('id', _pcrCompleteOrderId);
 
   document.getElementById('pcr-complete-modal').style.display = 'none';
-  showToast('💻 Partial Complete — ' + empName);
+  showToast('💻 Partial Preparing — ' + empName);
 
   // 양쪽 다 완료됐으면 Ready to Ship으로
   await checkAndMoveToReady(_pcrCompleteOrderId, _pcrCompleteWh);
   loadOrderStatus();
 }
 
-// ── WH + PCR 둘 다 완료됐는지 확인 → Ready to Ship 이동
+// ── WH + Partial 완료 여부만 체크 — 자동 이동 없이 카드에 버튼 표시
+// (실제 이동은 매니저가 Packing List Ready 버튼 클릭 시)
 async function checkAndMoveToReady(orderId, wh) {
-  const whPre = wh === 'CA' ? 'ca_' : 'sc_';
-  const { data: o } = await db.from('orders')
-    .select('sc_wh_complete_at,sc_pcr_complete_at,ca_wh_complete_at,ca_pcr_complete_at,wh_code,is_split_warehouse,status,sc_status,ca_status')
-    .eq('id', orderId).single();
-  if (!o) return;
-
-  const whDone  = o[whPre+'wh_complete_at'];
-  const pcrDone = o[whPre+'pcr_complete_at'];
-
-  if (!whDone) return; // WH 완료 안 됐으면 패스
-
-  // Partial pcs 있는 라인이 있는지 확인
-  const { data: lines } = await db.from('order_lines').select('qty_pieces,pcs_per_box,wh').eq('order_id', orderId);
-  const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
-  const relevantLines = isSplit
-    ? (lines||[]).filter(l => wh === 'CA' ? l.wh === 'CA' : (l.wh === 'SC' || !l.wh))
-    : (lines||[]);
-  const hasPartial = relevantLines.some(l => (l.qty_pieces||0) % (l.pcs_per_box||72) > 0);
-
-  // Partial pcs 없으면 WH만 완료돼도 Ready to Ship
-  // Partial pcs 있으면 PCR도 완료돼야 Ready to Ship
-  if (!hasPartial || pcrDone) {
-    // Ready to Ship은 Manager PIN 확인 후에 처리 (preparationComplete에서)
-    showToast('🚀 ' + wh + ' 완료! Packing List를 확인하고 Ready to Ship으로 이동하세요.');
-    await preparationComplete(orderId, wh);
-  }
+  // 완료 후 카드 새로고침만 — 버튼 표시는 renderCard에서 처리
+  // 토스트는 submit 함수에서 이미 표시함
 }
 
 // ── 2단계: Preparation Complete → Packing List → Ready to Ship
@@ -13236,7 +13220,7 @@ function showCreditHoldFlash(overAmt) {
   <div id="pcr-complete-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
     <div style="background:#fff;border-radius:12px;padding:28px;width:620px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div style="font-size:16px;font-weight:700;color:#c2410c;">💻 Partial Complete</div>
+        <div style="font-size:16px;font-weight:700;color:#c2410c;">💻 Partial Preparing</div>
         <button onclick="document.getElementById('pcr-complete-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
       </div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:16px;" id="pcr-complete-info"></div>
@@ -13272,7 +13256,7 @@ function showCreditHoldFlash(overAmt) {
       <div id="pcr-complete-emp-info" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 12px;font-size:12px;color:#15803d;margin-bottom:16px;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="document.getElementById('pcr-complete-modal').style.display='none'">취소</button>
-        <button class="btn" id="pcr-complete-btn" style="background:#c2410c;color:#fff;border-color:#c2410c;font-weight:700;" onclick="submitPcrComplete()" disabled>💻 Partial Complete</button>
+        <button class="btn" id="pcr-complete-btn" style="background:#c2410c;color:#fff;border-color:#c2410c;font-weight:700;" onclick="submitPcrComplete()" disabled>✅ Complete</button>
       </div>
     </div>
   </div>
