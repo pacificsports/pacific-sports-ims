@@ -6166,25 +6166,24 @@ async function updateWhStatus(orderId, wh, newStatus) {
 // ── 1단계: Pick Ticket 프린트 → Preparing
 // ── WH / PC Room 타입별 픽티켓 프린트
 async function printPickTicketType(orderId, wh, ticketType) {
-  // printed_at 기록 (프린트 이력)
-  const whPre = wh === 'CA' ? 'ca_' : 'sc_';
-  const field = whPre + (ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at');
-  await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
-
-  // 픽티켓 모달 열기 — _ptOrderId 세팅해서 실제 프린트 컨텍스트 표시
-  // Preparing 이동은 모달에서 실제로 Print 버튼을 눌렀을 때만
+  // 모달만 열기 — printed_at 기록과 Preparing 이동은 실제 Print 버튼 클릭 시
   _ptOrderId = orderId;
   _ptWh = wh;
   _ptTicketType = ticketType;
   await printPickTicket(orderId, wh, ticketType);
-  loadOrderStatus(); // 카드의 프린트됨 뱃지 업데이트
 }
 
-// 실제 프린트 후 Preparing 이동 체크 (모달 Print 버튼에서 호출)
+// 실제 프린트 후 printed_at 기록 + Preparing 이동 체크 (모달 Print 버튼에서 호출)
 async function checkAndMoveToPreparing() {
   const orderId = _ptOrderId;
   const wh = _ptWh;
+  const ticketType = _ptTicketType;
   if (!orderId || !wh) return;
+
+  // 실제로 프린트했을 때 printed_at 기록
+  const whPre = wh === 'CA' ? 'ca_' : 'sc_';
+  const field = whPre + (ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at');
+  await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
 
   const { data: updated } = await db.from('orders')
     .select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, status, sc_status, ca_status, wh_code, is_split_warehouse')
