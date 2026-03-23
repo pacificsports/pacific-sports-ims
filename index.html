@@ -7470,24 +7470,68 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     .order('size', { ascending: true });
 
   const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
-  const lineItems = (lines||[])
-    .sort((a, b) => {
-      const styleA = a.styles?.style_number || '';
-      const styleB = b.styles?.style_number || '';
-      if (styleA !== styleB) return styleA.localeCompare(styleB);
-      const colorA = (a.color||'').toUpperCase();
-      const colorB = (b.color||'').toUpperCase();
-      if (colorA !== colorB) return colorA.localeCompare(colorB);
-      const sizeA = SIZE_ORDER.indexOf((a.size||'').toUpperCase());
-      const sizeB = SIZE_ORDER.indexOf((b.size||'').toUpperCase());
-      return (sizeA === -1 ? 99 : sizeA) - (sizeB === -1 ? 99 : sizeB);
-    })
-    .map(l => ({
+
+  // 현재 WH 배송 PL에서 포함된 라인 키 추출 (체크마크용)
+  const currentWh = shippingInfo.wh || 'SC';
+  const plLineKeys = new Set();
+  if (plHtml) {
+    // plHtml에서 style+color+size 추출 (buildPackingListHtml이 data-key 속성 사용 시)
+    // 대신 alloc_detail에서 현재 WH 할당 있는 라인 키로 판단
+  }
+
+  const sortedLines = (lines||[]).sort((a, b) => {
+    const styleA = a.styles?.style_number || '';
+    const styleB = b.styles?.style_number || '';
+    if (styleA !== styleB) return styleA.localeCompare(styleB);
+    const colorA = (a.color||'').toUpperCase();
+    const colorB = (b.color||'').toUpperCase();
+    if (colorA !== colorB) return colorA.localeCompare(colorB);
+    const sizeA = SIZE_ORDER.indexOf((a.size||'').toUpperCase());
+    const sizeB = SIZE_ORDER.indexOf((b.size||'').toUpperCase());
+    return (sizeA === -1 ? 99 : sizeA) - (sizeB === -1 ? 99 : sizeB);
+  });
+
+  const isSplitOrder = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+
+  const lineItems = sortedLines.map(l => {
+    // SC 수량: alloc_detail에서 non-PCR bins 합산
+    const allocSC = l.alloc_detail || {};
+    const allocCA = l.alloc_ca_detail || {};
+
+    // alloc_detail value는 {pcs: N} 또는 숫자 N (boxes 필드 없음)
+    const allocPcs = (alloc, excludeKeys=[]) =>
+      Object.entries(alloc)
+        .filter(([k]) => !excludeKeys.some(ex => k.includes(ex)))
+        .reduce((s,[,v]) => s + ((typeof v==='object' ? v.pcs||0 : v)||0), 0);
+
+    const scQty = allocPcs(allocSC, ['TRANSFER']);
+    const caQty = allocPcs(allocCA, ['TRANSFER']);
+
+    const backQty = l.qty_backordered || 0;
+
+    // 해당 WH 이번 배송에 포함됐는지 (alloc 수량 > 0)
+    const scShipped = scQty > 0;
+    const caShipped = caQty > 0;
+
+    // 이전 배송 기록 (sc_shipped_at / ca_shipped_at)
+    const scPrevShipped = !!order.sc_shipped_at;
+    const caPrevShipped = !!order.ca_shipped_at;
+
+    return {
       style: l.styles?.style_number || '',
       color: l.color || '',
       size: l.size || '',
-      qty: l.qty_pieces || 0
-    }));
+      qty: l.qty_pieces || 0,
+      sc_qty: scQty,
+      ca_qty: caQty,
+      back_qty: backQty,
+      sc_shipped: scShipped,
+      ca_shipped: caShipped,
+      sc_prev_shipped: scPrevShipped,
+      ca_prev_shipped: caPrevShipped,
+      is_split: isSplitOrder
+    };
+  });
 
   // BOL 멀티 파일 배열 구성 (_bolFilesData 우선, 없으면 단일 bolData)
   const bolFilesArr = (_bolFilesData && _bolFilesData.length > 0)
@@ -8402,6 +8446,7 @@ async function _doShippedCore(emp) {
 
   // WH별 status 업데이트
   await updateWhStatus(orderId, wh || 'SC', 'shipped');
+  const whShippedAtField = wh === 'CA' ? 'ca_shipped_at' : 'sc_shipped_at';
   await db.from('orders').update({
     ship_date: shipDate,
     invoice_number: invoiceNumber,
@@ -8409,7 +8454,8 @@ async function _doShippedCore(emp) {
     tracking_number: tracking || null,
     pickup_company: freightCarrier || null,
     ship_note: shipNote || null,
-    shipped_by: _shippedEmp?.name || null
+    shipped_by: _shippedEmp?.name || null,
+    [whShippedAtField]: new Date().toISOString()
   }).eq('id', orderId);
 
   // Back Order가 있으면 별도 Back Order 레코드 생성
@@ -8479,7 +8525,10 @@ async function _doShippedCore(emp) {
       }
     });
     const plHtml = buildPackingListHtml(order, filteredLines, false, wh || 'SC');
-    const result = await sendShippedEmail(order, shippingInfo, plHtml, _bolFileData);
+    shippingInfo.wh = wh || 'SC';
+    // 최신 order 재조회 (sc_shipped_at / ca_shipped_at 포함)
+    const { data: freshOrder } = await db.from('orders').select('*').eq('id', orderId).single();
+    const result = await sendShippedEmail(freshOrder || order, shippingInfo, plHtml, _bolFileData);
     if (result.ok) {
       showToast('✅ 이메일 발송 완료!');
       // DB에 발송 기록
