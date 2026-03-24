@@ -788,11 +788,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </select>
       </div>
 
-      <!-- 통합 타임라인 보드: 단일 CSS grid, KPI + 카드 모두 동일 컬럼 -->
-      <div id="os-kanban" style="overflow-x:auto;">
-        <!-- 전체가 하나의 6컬럼 grid -->
-        <div id="os-board-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;min-width:900px;">
-          <!-- KPI 헤더 셀 6개 (JS가 innerHTML로 교체) -->
+      <!-- KPI 바 — sticky 고정 -->
+      <div style="position:sticky;top:0;z-index:50;background:var(--bg);padding-bottom:6px;">
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;min-width:900px;">
           <div id="os-kpi-0" style="background:#f8fafc;border:2px solid #e2e8f0;border-top:3px solid #6b7280;border-radius:8px;padding:10px 14px;cursor:pointer;" onclick="osFilterStatus('po_entered')">
             <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;">📥 PO Entered</div>
             <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-entered">—</div>
@@ -826,6 +824,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-invoiced">—</div>
           </div>
 
+        </div>
+      </div>
+      <!-- 칸반 카드 영역 — 스크롤 가능 -->
+      <div id="os-kanban" style="overflow-x:auto;">
+        <div id="os-board-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;min-width:900px;">
           <!-- 카드 셀들 (JS가 동적으로 append) -->
           <div id="os-rows-container" style="display:contents;"></div>
         </div>
@@ -5167,9 +5170,8 @@ async function loadOrderStatus() {
 
   // row 기반 렌더링
   const grid = document.getElementById('os-board-grid');
-  // 기존 카드 셀 제거 (KPI 6개는 유지)
-  const toRemove = grid ? Array.from(grid.children).slice(5) : [];
-  toRemove.forEach(el => el.remove());
+  // 기존 카드 셀 전체 제거 (KPI는 별도 div에 있음)
+  if (grid) grid.innerHTML = '';
 
   if (grid) {
     // 정렬: urgent 먼저, 그 다음 created_at 오래된 순
@@ -5767,12 +5769,13 @@ async function loadBackOrders() {
     return true;
   });
 
-  // BO 오더만 (원래 backordered/partial인 것들)
+  // BO 오더 — backordered/partial 상태이거나 -BO suffix가 있는 오더
+  const isBoOrder = o => ['backordered','partial'].includes(o.status) || o.order_number?.includes('-BO');
   const boOrders = filtered.filter(o => ['backordered','partial'].includes(o.status));
-  const preparingOrders = filtered.filter(o => o.status === 'preparing' && o.order_number.includes('-BO'));
-  const readyOrders = filtered.filter(o => o.status === 'ready_to_ship' && o.order_number.includes('-BO'));
-  const shippedOrders = filtered.filter(o => o.status === 'shipped' && o.order_number.includes('-BO'));
-  const invoicedOrders = filtered.filter(o => o.status === 'invoiced' && o.order_number.includes('-BO'));
+  const preparingOrders = filtered.filter(o => o.status === 'preparing' && isBoOrder(o));
+  const readyOrders = filtered.filter(o => o.status === 'ready_to_ship' && isBoOrder(o));
+  const shippedOrders = filtered.filter(o => o.status === 'shipped' && isBoOrder(o));
+  const invoicedOrders = filtered.filter(o => o.status === 'invoiced' && isBoOrder(o));
 
   // KPI 업데이트
   document.getElementById('bo-kpi-backorder').textContent = boOrders.length;
