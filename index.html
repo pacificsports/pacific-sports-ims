@@ -7441,10 +7441,59 @@ let _shippedEmp = null;
 
 function toggleShipTrackingLabel() {
   const carrier = document.getElementById('ship-carrier')?.value || '';
-  const label = document.getElementById('ship-tracking-label');
   const freightWrap = document.getElementById('ship-freight-carrier-wrap');
-  if (label) label.textContent = carrier === 'LTL' ? 'PRO #' : 'Tracking #';
   if (freightWrap) freightWrap.style.display = carrier === 'LTL' ? 'block' : 'none';
+
+  const trackingWrap = document.getElementById('ship-tracking-wrap');
+  if (!trackingWrap) return;
+
+  // carrier 바뀌면 tracking 필드 초기화
+  if (carrier === 'Will Call') {
+    trackingWrap.innerHTML =
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
+      '<div><label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Picked Up By</label>' +
+      '<input type="text" id="ship-pickup-by" class="fi" placeholder="이름" style="width:100%;"/></div>' +
+      '<div><label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Pick Up Date</label>' +
+      '<input type="date" id="ship-pickup-date" class="fi" style="width:100%;"/></div>' +
+      '</div>';
+  } else if (carrier === 'UPS' || carrier === 'FedEx') {
+    trackingWrap.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
+      '<label style="font-size:11px;font-weight:600;color:#374151;">Tracking #</label>' +
+      '<button type="button" onclick="addShipTrackingField()" style="font-size:10px;color:#1d4ed8;background:none;border:none;cursor:pointer;font-weight:600;padding:0;">+ Add</button>' +
+      '</div>' +
+      '<div id="ship-tracking-list">' +
+      '<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" style="width:100%;margin-bottom:4px;font-family:'IBM Plex Mono',monospace;"/>' +
+      '</div>';
+  } else if (carrier === 'LTL') {
+    trackingWrap.innerHTML =
+      '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>' +
+      '<input type="text" id="ship-tracking" class="fi" placeholder="PRO Number" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>';
+  } else if (carrier === 'Other') {
+    trackingWrap.innerHTML =
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
+      '<div><label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Carrier Name</label>' +
+      '<input type="text" id="ship-other-carrier" class="fi" placeholder="Carrier 이름" style="width:100%;"/></div>' +
+      '<div><label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Tracking #</label>' +
+      '<input type="text" id="ship-tracking" class="fi" placeholder="Tracking #" style="width:100%;font-family:'IBM Plex Mono',monospace;"/></div>' +
+      '</div>';
+  } else {
+    trackingWrap.innerHTML =
+      '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="ship-tracking-label">Tracking # / PRO #</label>' +
+      '<input type="text" id="ship-tracking" class="fi" placeholder="예: 1Z999AA10123456784" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>';
+  }
+}
+
+function addShipTrackingField() {
+  const list = document.getElementById('ship-tracking-list');
+  if (!list) return;
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.className = 'fi ship-tracking-input';
+  inp.placeholder = 'Tracking #';
+  inp.style.cssText = "width:100%;margin-bottom:4px;font-family:'IBM Plex Mono',monospace;";
+  list.appendChild(inp);
+  inp.focus();
 }
 
 let _bolFileData = null; // { base64, mimeType, fileName }
@@ -8019,10 +8068,12 @@ async function doShipped(orderId, wh) {
   // 기본값 세팅
   document.getElementById('ship-date-inp').value = new Date().toISOString().slice(0,10);
   document.getElementById('ship-carrier').value = '';
-  document.getElementById('ship-tracking').value = '';
   if (document.getElementById('ship-freight-carrier')) document.getElementById('ship-freight-carrier').value = '';
   if (document.getElementById('ship-freight-carrier-wrap')) document.getElementById('ship-freight-carrier-wrap').style.display = 'none';
   document.getElementById('ship-note').value = '';
+  // tracking wrap 초기 상태로 복원
+  const shipTrackWrap = document.getElementById('ship-tracking-wrap');
+  if (shipTrackWrap) shipTrackWrap.innerHTML = '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="ship-tracking-label">Tracking # / PRO #</label><input type="text" id="ship-tracking" class="fi" placeholder="예: 1Z999AA10123456784" style="width:100%;font-family:\'IBM Plex Mono\',monospace;"/>';
 
   // BOL 업로드 초기화
   _bolFileData = null;
@@ -8385,7 +8436,28 @@ async function confirmShipped() {
 async function _doShippedCore(emp) {
   const shipDate = document.getElementById('ship-date-inp').value;
   const carrier = document.getElementById('ship-carrier').value;
-  const tracking = document.getElementById('ship-tracking').value;
+  // UPS/FedEx는 다중 tracking, Will Call은 pickup 정보, 나머지는 단일 tracking
+  let tracking = '';
+  if (carrier === 'UPS' || carrier === 'FedEx') {
+    const inputs = document.querySelectorAll('.ship-tracking-input');
+    tracking = [...inputs].map(i => i.value.trim()).filter(Boolean).join(', ');
+  } else if (carrier === 'Will Call') {
+    const pickupBy = document.getElementById('ship-pickup-by')?.value || '';
+    const pickupDate = document.getElementById('ship-pickup-date')?.value || '';
+    tracking = '';
+    const existingNote = document.getElementById('ship-note')?.value || '';
+    const willCallNote = 'Will Call — Picked up by: ' + pickupBy + (pickupDate ? ' on ' + pickupDate : '');
+    if (document.getElementById('ship-note')) document.getElementById('ship-note').value = [willCallNote, existingNote].filter(Boolean).join(' | ');
+  } else if (carrier === 'Other') {
+    const otherName = document.getElementById('ship-other-carrier')?.value || '';
+    tracking = document.getElementById('ship-tracking')?.value || '';
+    if (otherName && document.getElementById('ship-note')) {
+      const existingNote = document.getElementById('ship-note').value;
+      document.getElementById('ship-note').value = ['Carrier: ' + otherName, existingNote].filter(Boolean).join(' | ');
+    }
+  } else {
+    tracking = document.getElementById('ship-tracking')?.value || '';
+  }
   const shipNote = document.getElementById('ship-note').value;
   const freightCarrier = document.getElementById('ship-freight-carrier')?.value || '';
   const orderId = _shippedOrderId;
@@ -13343,7 +13415,7 @@ function showCreditHoldFlash(overAmt) {
             <input type="text" id="ship-freight-carrier" class="fi" placeholder="XPO, SAIA, ODFL..." style="width:100%;"/>
           </div>
         </div>
-        <div>
+        <div id="ship-tracking-wrap">
           <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="ship-tracking-label">Tracking # / PRO #</label>
           <input type="text" id="ship-tracking" class="fi" placeholder="예: 1Z999AA10123456784" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>
         </div>
