@@ -3336,7 +3336,7 @@ const lines = [...poLines].sort((a, b) => {
 
   // ═══ PICK TICKET ═══
   setEl('pt-from-addr', addrHtml(fromAddr), 'innerHTML');
-  setEl('pt-ref', order.order_number);
+  setEl('pt-ref', order.customer_po || order.order_number);
   setEl('pt-date2', dateStr);
   setEl('pt-sold-to', `<strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}`, 'innerHTML');
   setEl('pt-ship-to2', addrHtml(shipAddr), 'innerHTML');
@@ -3420,7 +3420,7 @@ const lines = [...poLines].sort((a, b) => {
   setEl('pt-transfer-alert', needTransfer > 0 ? `⚠️ ${needTransfer}건` : '✅ 없음', 'innerHTML');
 
   // ═══ TRANSFER ORDER ═══
-  setEl('tf-ref', order.order_number);
+  setEl('tf-ref', order.customer_po || order.order_number);
   setEl('tf-date', dateStr);
   const tfNone = document.getElementById('transfer-none');
   const tfDoc = document.getElementById('transfer-doc');
@@ -3436,7 +3436,7 @@ const lines = [...poLines].sort((a, b) => {
   // ═══ PACKING LIST ═══ (Customer PO 탭에는 없을 수 있음 — 안전하게 처리)
   const plSet = (id, val, prop='textContent') => { const el = document.getElementById(id); if(el) el[prop]=val; };
   plSet('pl-from-addr', addrHtml(fromAddr), 'innerHTML');
-  plSet('pl-ref', order.order_number);
+  plSet('pl-ref', order.customer_po || order.order_number);
   plSet('pl-date', dateStr);
   plSet('pl-sold-to', `<strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}`, 'innerHTML');
   plSet('pl-ship-to', addrHtml(shipAddr), 'innerHTML');
@@ -4359,7 +4359,7 @@ let inv = [];
       <thead><tr><th>Order #</th><th>Customer</th><th>PO #</th><th>Warehouse</th><th>Ship Date</th><th>Status</th><th>Action</th></tr></thead>
       <tbody>${ords.map(o => `
         <tr>
-          <td class="mono">${o.order_number}</td>
+
           <td>${o.customer_name}</td>
           <td class="mono">${o.customer_po||'—'}</td>
           <td>${o.wh_code==='SC&CA'||o.is_split_warehouse ? '<span class="loc-sc">SC</span> <span class="loc-ca">CA</span>' : o.warehouses?.code==='CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>'}</td>
@@ -4799,7 +4799,7 @@ function renderCustomerPOTable() {
                        : '<span style="font-size:10px;color:#9ca3af;">—</span>';
         const rowBg = o.priority === 'urgent' ? 'background:#fff5f5;' : '';
         return `<tr style="cursor:pointer;${rowBg}" onclick="openPODetail('${o.id}')">
-          <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
+
           <td style="font-weight:600">${o.customer_name}</td>
           <td class="mono">${o.customer_po || '—'}</td>
           <td>${whBadge}</td>
@@ -5068,7 +5068,6 @@ async function loadOrderStatus() {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
         <div>
           <div style="font-size:10px;color:#6b7280;">${o.customer_name}</div>
-          <div style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
           <div style="display:flex;gap:4px;align-items:center;">
@@ -5543,7 +5542,7 @@ async function openReturnModal(orderId) {
   if (!order || !lines) return;
 
   document.getElementById('return-order-info').innerHTML =
-    '<b>'+order.order_number+'</b> — '+order.customer_name+' &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
+    '<b>'+order.customer_name+'</b> &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
   document.getElementById('return-date').value = new Date().toISOString().slice(0,10);
   document.getElementById('return-notes').value = '';
 
@@ -5853,8 +5852,7 @@ async function loadBackOrders() {
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
             <div>
               <div style="font-size:10px;color:#6b7280;">${o.customer_name}</div>
-              <div style="font-size:11px;font-weight:700;color:var(--primary);font-family:'IBM Plex Mono',monospace;">${o.order_number}</div>
-            </div>
+                </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
               ${whBadge}
               <div style="font-size:10px;font-weight:800;font-family:'IBM Plex Mono',monospace;padding:2px 7px;border-radius:5px;background:#fff;color:#111827;border:1.5px solid #1f2937;">PO# ${o.customer_po||'—'}</div>
@@ -5927,7 +5925,7 @@ async function renderBackOrderSection(backOrders) {
               ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fef2f2;color:#dc2626;">🔴 Full Backorder</span>'
               : '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fff7ed;color:#ea580c;">🟠 Partial</span>';
             return `<tr style="background:${o.status==='backordered'?'#fff8f8':'#fffdf5'};">
-              <td class="mono" style="font-weight:700;color:var(--primary)">${o.order_number}</td>
+    
               <td style="font-weight:600">${o.customer_name}</td>
               <td class="mono">${o.customer_po || '—'}</td>
               <td>${whBadge}</td>
@@ -5969,7 +5967,7 @@ async function openPartialShip(orderId) {
     .eq('order_id', orderId);
 
   document.getElementById('partial-ship-order-info').textContent =
-    `${order.order_number} — ${order.customer_name}  |  PO# ${order.customer_po || '—'}`;
+    `${order.customer_name}  |  PO# ${order.customer_po || '—'}`;
 
   document.getElementById('partial-ship-date').value = new Date().toISOString().slice(0,10);
 
@@ -6370,7 +6368,7 @@ async function openWhComplete(orderId, wh) {
   if (!order || !lines) return;
 
   document.getElementById('wh-complete-info').innerHTML =
-    '<b>'+order.order_number+'</b> — '+order.customer_name+' &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
+    '<b>'+order.customer_name+'</b> &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
 
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const filteredLines = isSplit
@@ -6485,7 +6483,7 @@ async function openPcrComplete(orderId, wh) {
   if (!order || !lines) return;
 
   document.getElementById('pcr-complete-info').innerHTML =
-    '<b>'+order.order_number+'</b> — '+order.customer_name+' &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
+    '<b>'+order.customer_name+'</b> &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
 
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const filteredLines = isSplit
@@ -8096,7 +8094,7 @@ async function doShipped(orderId, wh) {
   const orderCard = allOrderStatusData?.find(o => o.id === orderId);
   if (orderCard) {
     document.getElementById('modal-shipped-info').innerHTML =
-      `<b>${orderCard.order_number}</b> — ${orderCard.customer_name} &nbsp;|&nbsp; PO# ${orderCard.customer_po||'—'}`;
+      `<b>${orderCard.customer_name}</b> &nbsp;|&nbsp; PO# ${orderCard.customer_po||'—'}`;
   }
 
   // 기본값 세팅 (null-safe)
@@ -8187,7 +8185,7 @@ async function openBatchShipModal(whFilter) {
   // PO별 행 렌더링
   const rowsHtml = items.map(({ orderId, wh }) => {
     const o = (allOrderStatusData||[]).find(o => o.id === orderId);
-    const label = o ? (o.order_number + ' — ' + o.customer_name + ' (PO# ' + (o.customer_po||'—') + ')') : orderId;
+    const label = o ? (o.customer_name + ' — PO# ' + (o.customer_po||'—')) : orderId;
     const uid = orderId + '_' + wh;
     return '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:4px;">'
       + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
@@ -8664,7 +8662,7 @@ async function _doShippedCore(emp) {
       showToast(`🚚 Shipped! Back Order ${boNum} 생성됨 (${totalBackQty.toLocaleString()} pcs)`);
     }
   } else {
-    showToast(`🚚 ${order.order_number} Shipped 완료!`);
+    showToast(`🚚 PO# ${order.customer_po||order.order_number} Shipped 완료!`);
   }
 
   // 이메일 발송
@@ -9045,7 +9043,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
       </div>
       <div style="text-align:right;">
         <div style="font-size:22px;font-weight:800;color:#064e22;">PICK TICKET</div>
-        <div style="font-size:11px;color:#555;margin-top:2px;">Ref: <strong>${order.order_number}</strong></div>
+        <div style="font-size:11px;color:#555;margin-top:2px;">PO#: <strong>${order.customer_po||'—'}</strong></div>
         <div style="font-size:11px;color:#555;">Date: ${dateStr}</div>
       </div>
     </div>
@@ -9339,7 +9337,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       </div>
       <div style="text-align:right;">
         <div style="font-size:22px;font-weight:800;color:#0891b2;">PACKING LIST</div>
-        <div style="font-size:11px;color:#555;">Ref: <strong>${order.order_number}</strong></div>
+        <div style="font-size:11px;color:#555;">PO#: <strong>${order.customer_po||'—'}</strong></div>
         <div style="font-size:11px;color:#555;">Date: ${dateStr}</div>
       </div>
     </div>
@@ -9420,7 +9418,7 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
     </tr>`;
   }).filter(Boolean).join('');
 
-  const fromAddr = '1605 South Guignard Parkway\nSumter, SC 29150\nTel: (803) 000-0000';
+  const fromAddr = '1605 South Guignard Parkway\nSumter, SC 29150\nTel: (803) 760-6251';
   const signatureBlock = signatureData ? `
     <div style="margin-top:4px;">
       <img src="${signatureData}" style="max-height:60px;border:1px solid #e5e7eb;border-radius:4px;background:#fff;padding:2px;">
@@ -9437,7 +9435,7 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
         <div style="font-size:24px;font-weight:800;color:#0f2744;letter-spacing:1px;">BILL OF LADING</div>
         <div style="font-size:11px;color:#555;margin-top:4px;"><b>BOL #:</b> ${bolNum}</div>
         <div style="font-size:11px;color:#555;"><b>Date:</b> ${dateStr}</div>
-        <div style="font-size:11px;color:#555;"><b>Order #:</b> ${order.order_number||'—'}</div>
+        <div style="font-size:11px;color:#555;"><b>PO #:</b> ${order.customer_po||'—'}</div>
       </div>
     </div>
 
@@ -9650,7 +9648,7 @@ async function openBackOrderDetail(orderId) {
   const order = allOrders.find(o => o.id === orderId);
   if (!order) return;
 
-  document.getElementById('bo-modal-title').textContent = `🔴 Back Order — ${order.order_number}`;
+  document.getElementById('bo-modal-title').textContent = `🔴 Back Order — PO# ${order.customer_po||order.order_number}`;
   document.getElementById('bo-fulfill-btn').style.display = 'none';
   document.getElementById('bo-cancel-btn').style.display = 'none';
   document.getElementById('bo-fulfill-section').style.display = 'none';
@@ -10026,7 +10024,7 @@ async function loadPackingLists() {
       const whBadge = wh==='CA'?'<span class="loc-ca">CA</span>':wh==='SC'?'<span class="loc-sc">SC</span>':'—';
       return `<tr style="cursor:pointer;" onclick="openInvoice('${o.id||''}')">
         <td class="mono" style="font-weight:700;color:var(--primary)">${pt.ticket_number||'—'}</td>
-        <td class="mono">${o.order_number||'—'}</td>
+  
         <td style="font-weight:600">${o.customer_name||'—'}</td>
         <td class="mono">${o.customer_po||'—'}</td>
         <td>${whBadge}</td>
