@@ -7599,6 +7599,42 @@ function printSignedBol() {
   }, 200);
 }
 
+function saveAndAttachBol() {
+  // Preview 먼저 생성
+  previewSignedBol();
+
+  const content = document.getElementById('bol-preview-content').innerHTML;
+  if (!content) { alert('먼저 Preview를 확인해주세요.'); return; }
+
+  // HTML → base64
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(content);
+  let binary = '';
+  bytes.forEach(b => binary += String.fromCharCode(b));
+  const base64 = btoa(binary);
+
+  const po = _bolOrder?.customer_po || 'BOL';
+  const wh = _shippedWh || 'SC';
+  const fileName = `BOL_PO${po}_${wh}.html`;
+
+  // _bolFilesDataSingle에 추가 (이메일 첨부용)
+  _bolFilesDataSingle.push({ base64, mimeType: 'text/html', fileName });
+  _bolFileData = { base64, mimeType: 'text/html', fileName };
+
+  // BOL 파일 목록 UI 업데이트
+  const list = document.getElementById('bol-file-list');
+  if (list) {
+    const item = document.createElement('div');
+    item.style.cssText = 'display:flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:5px 10px;font-size:11px;';
+    item.innerHTML = '✅ <span style="font-weight:600;color:#15803d;">' + fileName + '</span>'
+      + ' <span style="font-size:10px;color:#6b7280;">(Created BOL)</span>';
+    list.appendChild(item);
+  }
+
+  document.getElementById('modal-signed-bol').style.display = 'none';
+  showToast('✅ BOL 첨부 완료! Shipped 확정 시 이메일에 포함됩니다.');
+}
+
 // ── 3단계: Mark as Shipped → 재고 차감 + Back Order 처리
 let _shippedOrderId = null;
 let _shippedWh = null;
@@ -14034,8 +14070,9 @@ function showCreditHoldFlash(overAmt) {
     <!-- Footer -->
     <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;background:#fff;border-radius:0 0 12px 12px;flex-shrink:0;">
       <button class="btn" onclick="document.getElementById('modal-signed-bol').style.display='none'">닫기</button>
-      <button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2;" onclick="previewSignedBol()">👁 Preview BOL</button>
-      <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="printSignedBol()">🖨️ Print BOL</button>
+      <button class="btn" style="background:#0891b2;color:#fff;border-color:#0891b2;" onclick="previewSignedBol()">👁 Preview</button>
+      <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="printSignedBol()">🖨️ Print</button>
+      <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="saveAndAttachBol()">✅ Save & Attach</button>
     </div>
   </div>
 </div>
