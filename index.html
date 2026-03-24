@@ -5837,6 +5837,7 @@ async function loadBackOrders() {
 
         const switchBtn = col === 'backorder' ? `
           <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
+            <button class="btn btn-sm" style="font-size:9px;background:#f8fafc;color:#374151;border-color:#d1d5db;" onclick="event.stopPropagation();showBoDetail('${o.id}')">📋 Detail</button>
             ${!isCA ? `<button class="btn btn-sm" style="font-size:9px;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();switchBoWh('${o.id}','CA')">↔ CA로 변경</button>` : `<button class="btn btn-sm" style="font-size:9px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();switchBoWh('${o.id}','SC')">↔ SC로 변경</button>`}
             <button class="btn btn-sm" style="font-size:9px;background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;" onclick="event.stopPropagation();startBackOrder('${o.id}','${wh}')">▶ Start Order</button>
             <button class="btn btn-sm" style="font-size:9px;background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();cancelBackOrder('${o.id}','${o.order_number}')">✕ Cancel</button>
@@ -5878,6 +5879,79 @@ async function loadBackOrders() {
       grid.appendChild(cell);
     });
   }
+}
+
+async function showBoDetail(orderId) {
+  const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
+  const { data: lines } = await db.from('order_lines')
+    .select('*, styles(style_number)')
+    .eq('order_id', orderId)
+    .gt('qty_backordered', 0)
+    .order('color');
+
+  if (!order || !lines) return;
+
+  const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+  const sorted = [...(lines||[])].sort((a,b) => {
+    const sa = a.styles?.style_number||'', sb = b.styles?.style_number||'';
+    if (sa!==sb) return sa.localeCompare(sb);
+    const ca = (a.color||'').toUpperCase(), cb = (b.color||'').toUpperCase();
+    if (ca!==cb) return ca.localeCompare(cb);
+    return (SIZE_ORDER.indexOf(a.size?.toUpperCase())||99) - (SIZE_ORDER.indexOf(b.size?.toUpperCase())||99);
+  });
+
+  const totalBack = sorted.reduce((s,l) => s+(l.qty_backordered||0), 0);
+  const rows = sorted.map(l => `
+    <tr>
+      <td style="padding:7px 12px;font-family:'IBM Plex Mono',monospace;font-size:12px;">#${l.styles?.style_number||'—'}</td>
+      <td style="padding:7px 12px;font-size:12px;">${l.color||'—'}</td>
+      <td style="padding:7px 12px;text-align:center;font-size:12px;">${l.size||'—'}</td>
+      <td style="padding:7px 12px;text-align:center;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</td>
+      <td style="padding:7px 12px;text-align:center;font-size:11px;color:#6b7280;">${(l.qty_pieces||0).toLocaleString()} pcs</td>
+    </tr>`).join('');
+
+  const createdDate = new Date(order.created_at).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+  const hoursAgo = Math.floor((Date.now()-new Date(order.created_at).getTime())/3600000);
+  const daysAgo = Math.floor(hoursAgo/24);
+  const elapsed = daysAgo>0 ? `${daysAgo}d ${hoursAgo%24}h ago` : `${hoursAgo}h ago`;
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:560px;max-width:95vw;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div style="padding:18px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:#fff;z-index:1;">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:#111827;">📋 Back Order Detail</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">${order.customer_name} · PO# ${order.customer_po||'—'}</div>
+        </div>
+        <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+      </div>
+      <div style="padding:18px 24px;">
+        <div style="display:flex;gap:16px;margin-bottom:16px;font-size:12px;">
+          <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 16px;flex:1;text-align:center;">
+            <div style="color:#9ca3af;font-size:10px;text-transform:uppercase;margin-bottom:2px;">Back Order Qty</div>
+            <div style="font-size:22px;font-weight:900;color:#dc2626;">${totalBack.toLocaleString()}<span style="font-size:12px;font-weight:500;color:#dc2626;"> pcs</span></div>
+          </div>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 16px;flex:1;text-align:center;">
+            <div style="color:#9ca3af;font-size:10px;text-transform:uppercase;margin-bottom:2px;">Back Ordered</div>
+            <div style="font-size:13px;font-weight:700;color:#374151;">${createdDate}</div>
+            <div style="font-size:11px;color:#d97706;font-weight:600;">${elapsed}</div>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead><tr style="background:#f1f5f9;">
+            <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;">Style</th>
+            <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;">Color</th>
+            <th style="padding:8px 12px;text-align:center;font-size:11px;color:#6b7280;">Size</th>
+            <th style="padding:8px 12px;text-align:center;font-size:11px;color:#dc2626;">Back Order</th>
+            <th style="padding:8px 12px;text-align:center;font-size:11px;color:#6b7280;">Original Qty</th>
+          </tr></thead>
+          <tbody style="border:1px solid #f3f4f6;">${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
 }
 
 async function switchBoWh(orderId, newWh) {
