@@ -5903,8 +5903,17 @@ async function showBoDetail(orderId) {
   // 캐시된 lines 우선 사용
   const cachedLines = window._boLinesCache?.[orderId] || [];
 
-  // qty_backordered > 0인 라인만 필터
-  let boLines = cachedLines.filter(l => (l.qty_backordered||0) > 0);
+  // qty_backordered > 0인 라인만 필터 (null 제외)
+  let boLines = cachedLines.filter(l => l.qty_backordered > 0);
+
+  // qty_backordered가 null이지만 qty_filled가 있으면 qty_pieces - qty_filled 로 계산
+  if (!boLines.length && cachedLines.length) {
+    boLines = cachedLines.filter(l => {
+      const filled = l.qty_filled || 0;
+      const total = l.qty_pieces || 0;
+      return filled < total; // 출고 못 한 수량이 있는 라인
+    });
+  }
 
   // 캐시에 없거나 qty_backordered가 없으면 DB에서 직접 조회
   if (!boLines.length) {
@@ -5943,8 +5952,14 @@ async function showBoDetail(orderId) {
     return;
   }
 
-  // qty_backordered가 있으면 그것을, 없으면 qty_pieces
-  const getBoQty = l => (l.qty_backordered||0) > 0 ? l.qty_backordered : (l.qty_pieces||0);
+  // qty_backordered가 있으면 그것을, 없으면 qty_pieces - qty_filled, 그것도 없으면 qty_pieces
+  const getBoQty = l => {
+    if (l.qty_backordered > 0) return l.qty_backordered;
+    const filled = l.qty_filled || 0;
+    const total = l.qty_pieces || 0;
+    if (filled > 0 && filled < total) return total - filled;
+    return total;
+  };
 
   const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
   const sorted = [...boLines].sort((a,b) => {
