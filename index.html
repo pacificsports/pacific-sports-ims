@@ -7417,9 +7417,17 @@ function previewSignedBol() {
   const tracking = document.getElementById('ship-tracking')?.value || '';
   const pickupCompany = document.getElementById('ship-pickup-company')?.value || '';
   const shipDate = document.getElementById('ship-date-inp')?.value || '';
+  const truckNum = document.getElementById('bol-truck-num')?.value || '';
+  const weight = document.getElementById('bol-weight')?.value || '';
+  const freightClass = document.getElementById('bol-freight-class')?.value || '';
+  const nmfc = document.getElementById('bol-nmfc')?.value || '';
+  const specialInstructions = document.getElementById('bol-special-instructions')?.value || '';
+  const freightCarrier = document.getElementById('ship-freight-carrier')?.value || '';
 
   const sigData = (_bolHasSig && _bolSigCanvas) ? _bolSigCanvas.toDataURL('image/png') : null;
-  const shipInfo = { carrier, tracking, pickupCompany, driverName, signDate, shipDate };
+  const shipInfo = { carrier, tracking, pickupCompany, driverName, signDate, shipDate,
+    truckNum, weight, freightClass, nmfc, specialInstructions, freightCarrier,
+    wh: _shippedWh || 'SC' };
 
   const html = buildBolHtml(_bolOrder, _bolLines, shipInfo, sigData);
   document.getElementById('bol-preview-content').innerHTML = html;
@@ -9375,26 +9383,42 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
     return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
   });
 
-  // 총 수량, 박스 계산
+  // 실제 출고 수량 계산 (alloc_detail 기준, WH 파라미터로 SC/CA 구분)
+  const bolWh = shipInfo?.wh || 'SC';
   let totalPcs = 0, totalBoxes = 0;
   const rows = sorted.map(l => {
-    const pcs = l.qty_pieces || 0;
-    const alloc = l.alloc_detail || {};
+    const isCA = bolWh === 'CA';
+    const alloc = isCA ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
     const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
-    const boxes = Object.entries(alloc)
+
+    // Full box pcs (non-PCR)
+    const fullBoxPcs = Object.entries(alloc)
+      .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+      .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0)*ppb + (v.partial||0) : (v||0)), 0);
+    const fullBoxes = Object.entries(alloc)
       .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? v.boxes||0 : Math.floor((v||0)/ppb)), 0);
-    totalPcs += pcs;
-    totalBoxes += boxes;
+
+    // PCR/partial pcs
+    const pcrPcs = Object.entries(alloc)
+      .filter(([k]) => k.includes('PCR|PCR'))
+      .reduce((s,[,v]) => s + (typeof v==='object' ? v.pcs||0 : (v||0)), 0);
+
+    const shipPcs = fullBoxPcs + pcrPcs;
+    if (shipPcs === 0) return ''; // 출고 수량 없는 라인 제외
+
+    totalPcs += shipPcs;
+    totalBoxes += fullBoxes + (pcrPcs > 0 ? 1 : 0);
+
     return `<tr style="border-bottom:1px solid #e5e7eb;">
       <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
       <td style="padding:6px 8px;font-size:11px;">${l.styles?.description||''}</td>
       <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
-      <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${pcs.toLocaleString()}</td>
-      <td style="padding:6px 8px;font-size:11px;text-align:center;">${boxes > 0 ? boxes : '—'}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${shipPcs.toLocaleString()}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:center;">${fullBoxes > 0 ? fullBoxes + (pcrPcs > 0 ? '+1' : '') : (pcrPcs > 0 ? '1' : '—')}</td>
     </tr>`;
-  }).join('');
+  }).filter(Boolean).join('');
 
   const fromAddr = '1605 South Guignard Parkway\nSumter, SC 29150\nTel: (803) 000-0000';
   const signatureBlock = signatureData ? `
@@ -9433,8 +9457,9 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
         <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Carrier Info</div>
         <div style="font-size:11px;color:#374151;">
           <div><b>Carrier:</b> ${shipInfo?.carrier||'—'}</div>
+          ${shipInfo?.freightCarrier ? `<div><b>Freight Co.:</b> ${shipInfo.freightCarrier}</div>` : ''}
           <div><b>PRO/Tracking:</b> ${shipInfo?.tracking||'—'}</div>
-          <div><b>Pickup Co.:</b> ${shipInfo?.pickupCompany||'—'}</div>
+          ${shipInfo?.truckNum ? `<div><b>Truck/Trailer #:</b> ${shipInfo.truckNum}</div>` : ''}
           <div><b>PO #:</b> ${order.customer_po||'—'}</div>
         </div>
       </div>
@@ -9445,9 +9470,15 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px;">
         <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Total Pieces</div><div style="font-weight:700;font-size:16px;">${totalPcs.toLocaleString()}</div></div>
         <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Total Boxes</div><div style="font-weight:700;font-size:16px;">${totalBoxes}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Total Weight</div><div style="font-weight:700;font-size:16px;">${shipInfo?.weight ? shipInfo.weight + ' lbs' : '—'}</div></div>
         <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${dateStr}</div></div>
         <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'Prepaid'}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Freight Class</div><div style="font-weight:700;">${shipInfo?.freightClass ? 'Class ' + shipInfo.freightClass : '—'}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">NMFC #</div><div style="font-weight:700;">${shipInfo?.nmfc||'—'}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Special Handling</div><div style="font-weight:600;font-size:10px;">${shipInfo?.specialInstructions ? '⚠️ See below' : '—'}</div></div>
       </div>
+      ${shipInfo?.specialInstructions ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e5e7eb;font-size:11px;"><b>Special Instructions:</b> ${shipInfo.specialInstructions}</div>` : ''}
+    </div>
     </div>
 
     <!-- Line Items -->
@@ -13807,7 +13838,7 @@ function showCreditHoldFlash(overAmt) {
     <div style="flex:1;overflow-y:auto;">
       <!-- Signature Panel -->
       <div id="bol-panel-sign" style="padding:20px;">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
           <div>
             <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Driver Name <span style="color:#dc2626">*</span></label>
             <input id="bol-driver-name" class="fi" type="text" placeholder="Full name" style="font-size:13px;">
@@ -13816,6 +13847,37 @@ function showCreditHoldFlash(overAmt) {
             <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Date / Time</label>
             <input id="bol-sign-date" class="fi" type="text" style="font-size:13px;">
           </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Truck / Trailer #</label>
+            <input id="bol-truck-num" class="fi" type="text" placeholder="e.g. TRK-4821" style="font-size:13px;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Total Weight (lbs)</label>
+            <input id="bol-weight" class="fi" type="text" placeholder="e.g. 1,240" style="font-size:13px;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Freight Class</label>
+            <select id="bol-freight-class" class="fi" style="font-size:13px;">
+              <option value="">Select...</option>
+              <option value="50">Class 50</option>
+              <option value="55">Class 55</option>
+              <option value="60">Class 60</option>
+              <option value="65">Class 65</option>
+              <option value="70">Class 70</option>
+              <option value="77.5">Class 77.5</option>
+              <option value="85">Class 85</option>
+              <option value="92.5">Class 92.5</option>
+              <option value="100">Class 100</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">NMFC #</label>
+            <input id="bol-nmfc" class="fi" type="text" placeholder="e.g. 100220" style="font-size:13px;">
+          </div>
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Special Instructions</label>
+          <textarea id="bol-special-instructions" class="fi" rows="2" placeholder="e.g. Deliver to dock B, call before delivery..." style="font-size:12px;resize:none;width:100%;"></textarea>
         </div>
         <!-- Canvas Signature Area -->
         <div style="margin-bottom:12px;">
