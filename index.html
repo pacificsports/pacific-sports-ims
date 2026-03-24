@@ -7566,8 +7566,6 @@ function previewSignedBol() {
   const driverName = document.getElementById('bol-driver-name').value.trim();
   const signDate = document.getElementById('bol-sign-date').value;
   const carrier = document.getElementById('ship-carrier')?.value || '';
-  const tracking = document.getElementById('ship-tracking')?.value || '';
-  const pickupCompany = document.getElementById('ship-pickup-company')?.value || '';
   const shipDate = document.getElementById('ship-date-inp')?.value || '';
   const truckNum = document.getElementById('bol-truck-num')?.value || '';
   const weight = document.getElementById('bol-weight')?.value || '';
@@ -7575,6 +7573,25 @@ function previewSignedBol() {
   const nmfc = document.getElementById('bol-nmfc')?.value || '';
   const specialInstructions = document.getElementById('bol-special-instructions')?.value || '';
   const freightCarrier = document.getElementById('ship-freight-carrier')?.value || '';
+
+  // carrier별 tracking 수집
+  let tracking = '';
+  if (carrier === 'UPS' || carrier === 'FedEx') {
+    const inputs = document.querySelectorAll('.ship-tracking-input');
+    tracking = [...inputs].map(i => i.value.trim()).filter(Boolean).join(', ');
+  } else if (carrier === 'LTL') {
+    tracking = document.getElementById('ship-tracking')?.value || '';
+  } else if (carrier === 'Will Call') {
+    const pickupBy = document.getElementById('ship-pickup-by')?.value || '';
+    const pickupDate = document.getElementById('ship-pickup-date')?.value || '';
+    tracking = [pickupBy, pickupDate].filter(Boolean).join(' / ');
+  } else if (carrier === 'Other') {
+    tracking = document.getElementById('ship-tracking')?.value || '';
+  } else {
+    tracking = document.getElementById('ship-tracking')?.value || '';
+  }
+
+  const pickupCompany = document.getElementById('ship-pickup-company')?.value || '';
 
   const sigData = (_bolHasSig && _bolSigCanvas) ? _bolSigCanvas.toDataURL('image/png') : null;
   const shipInfo = { carrier, tracking, pickupCompany, driverName, signDate, shipDate,
@@ -9609,8 +9626,11 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
         <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Carrier Info</div>
         <div style="font-size:11px;color:#374151;">
           <div><b>Carrier:</b> ${shipInfo?.carrier||'—'}</div>
-          ${shipInfo?.freightCarrier ? `<div><b>Freight Co.:</b> ${shipInfo.freightCarrier}</div>` : ''}
-          <div><b>PRO/Tracking:</b> ${shipInfo?.tracking||'—'}</div>
+          ${shipInfo?.carrier === 'LTL' && shipInfo?.freightCarrier ? `<div><b>Freight Co.:</b> ${shipInfo.freightCarrier}</div>` : ''}
+          ${shipInfo?.carrier === 'LTL' && shipInfo?.tracking ? `<div><b>PRO #:</b> ${shipInfo.tracking}</div>` : ''}
+          ${(shipInfo?.carrier === 'UPS' || shipInfo?.carrier === 'FedEx') && shipInfo?.tracking ? `<div><b>Tracking #:</b> ${shipInfo.tracking}</div>` : ''}
+          ${shipInfo?.carrier === 'Will Call' && shipInfo?.tracking ? `<div><b>Picked Up By / Date:</b> ${shipInfo.tracking}</div>` : ''}
+          ${shipInfo?.carrier === 'Other' && shipInfo?.tracking ? `<div><b>Tracking #:</b> ${shipInfo.tracking}</div>` : ''}
           ${shipInfo?.truckNum ? `<div><b>Truck/Trailer #:</b> ${shipInfo.truckNum}</div>` : ''}
           <div><b>PO #:</b> ${order.customer_po||'—'}</div>
         </div>
