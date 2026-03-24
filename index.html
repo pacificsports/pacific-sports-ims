@@ -5885,29 +5885,39 @@ async function showBoDetail(orderId) {
   const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
   if (!order) { alert('오더 정보를 찾을 수 없습니다.'); return; }
 
-  // BO 오더 lines 조회 (이 오더 자체 lines)
+  // 1) 이 오더 자체 lines 조회
   let { data: lines } = await db.from('order_lines')
     .select('*, styles(style_number)')
     .eq('order_id', orderId)
     .order('color');
 
-  // lines가 없으면 parent_order_id의 lines에서 qty_backordered > 0인 것 조회
-  if (!lines?.length && order.parent_order_id) {
+  // 2) lines 중 qty_backordered > 0인 것만 필터
+  let boLines = (lines||[]).filter(l => (l.qty_backordered||0) > 0);
+
+  // 3) qty_backordered가 없으면 qty_pieces를 백오더 수량으로 사용
+  if (!boLines.length && lines?.length) {
+    boLines = lines; // 이 오더 자체가 BO 오더 — qty_pieces가 곧 백오더 수량
+  }
+
+  // 4) 그래도 없으면 parent_order_id의 lines에서 조회
+  if (!boLines.length && order.parent_order_id) {
     const { data: parentLines } = await db.from('order_lines')
       .select('*, styles(style_number)')
       .eq('order_id', order.parent_order_id)
       .gt('qty_backordered', 0)
       .order('color');
-    lines = parentLines;
+    boLines = parentLines || [];
   }
 
-  if (!lines?.length) {
+  if (!boLines.length) {
     alert('백오더 라인 정보를 찾을 수 없습니다.');
     return;
   }
 
+  const lines_to_use = boLines;
+
   const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
-  const sorted = [...(lines||[])].sort((a,b) => {
+  const sorted = [...lines_to_use].sort((a,b) => {
     const sa = a.styles?.style_number||'', sb = b.styles?.style_number||'';
     if (sa!==sb) return sa.localeCompare(sb);
     const ca = (a.color||'').toUpperCase(), cb = (b.color||'').toUpperCase();
@@ -5915,10 +5925,11 @@ async function showBoDetail(orderId) {
     return (SIZE_ORDER.indexOf(a.size?.toUpperCase())||99) - (SIZE_ORDER.indexOf(b.size?.toUpperCase())||99);
   });
 
-  // BO 오더 라인은 qty_pieces가 곧 백오더 수량
-  const totalBack = sorted.reduce((s,l) => s+(l.qty_backordered||l.qty_pieces||0), 0);
+  // qty_backordered가 있으면 그것을, 없으면 qty_pieces를 백오더 수량으로
+  const getBoQty = l => (l.qty_backordered||0) > 0 ? (l.qty_backordered||0) : (l.qty_pieces||0);
+  const totalBack = sorted.reduce((s,l) => s + getBoQty(l), 0);
   const rows = sorted.map(l => {
-    const backQty = l.qty_backordered || l.qty_pieces || 0;
+    const backQty = getBoQty(l);
     return `
     <tr style="border-bottom:1px solid #f3f4f6;">
       <td style="padding:7px 12px;font-family:'IBM Plex Mono',monospace;font-size:12px;">#${l.styles?.style_number||'—'}</td>
