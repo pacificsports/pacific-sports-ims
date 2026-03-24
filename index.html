@@ -5886,10 +5886,12 @@ async function showBoDetail(orderId) {
   const { data: lines } = await db.from('order_lines')
     .select('*, styles(style_number)')
     .eq('order_id', orderId)
-    .gt('qty_backordered', 0)
     .order('color');
 
-  if (!order || !lines) return;
+  if (!order || !lines?.length) {
+    alert('라인 정보가 없습니다.');
+    return;
+  }
 
   const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
   const sorted = [...(lines||[])].sort((a,b) => {
@@ -5900,15 +5902,18 @@ async function showBoDetail(orderId) {
     return (SIZE_ORDER.indexOf(a.size?.toUpperCase())||99) - (SIZE_ORDER.indexOf(b.size?.toUpperCase())||99);
   });
 
-  const totalBack = sorted.reduce((s,l) => s+(l.qty_backordered||0), 0);
-  const rows = sorted.map(l => `
-    <tr>
+  // BO 오더 라인은 qty_pieces가 곧 백오더 수량
+  const totalBack = sorted.reduce((s,l) => s+(l.qty_backordered||l.qty_pieces||0), 0);
+  const rows = sorted.map(l => {
+    const backQty = l.qty_backordered || l.qty_pieces || 0;
+    return `
+    <tr style="border-bottom:1px solid #f3f4f6;">
       <td style="padding:7px 12px;font-family:'IBM Plex Mono',monospace;font-size:12px;">#${l.styles?.style_number||'—'}</td>
       <td style="padding:7px 12px;font-size:12px;">${l.color||'—'}</td>
       <td style="padding:7px 12px;text-align:center;font-size:12px;">${l.size||'—'}</td>
-      <td style="padding:7px 12px;text-align:center;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</td>
-      <td style="padding:7px 12px;text-align:center;font-size:11px;color:#6b7280;">${(l.qty_pieces||0).toLocaleString()} pcs</td>
-    </tr>`).join('');
+      <td style="padding:7px 12px;text-align:center;font-weight:700;color:#dc2626;">${backQty.toLocaleString()} pcs</td>
+    </tr>`;
+  }).join('');
 
   const createdDate = new Date(order.created_at).toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
   const hoursAgo = Math.floor((Date.now()-new Date(order.created_at).getTime())/3600000);
@@ -5943,8 +5948,7 @@ async function showBoDetail(orderId) {
             <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;">Style</th>
             <th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;">Color</th>
             <th style="padding:8px 12px;text-align:center;font-size:11px;color:#6b7280;">Size</th>
-            <th style="padding:8px 12px;text-align:center;font-size:11px;color:#dc2626;">Back Order</th>
-            <th style="padding:8px 12px;text-align:center;font-size:11px;color:#6b7280;">Original Qty</th>
+            <th style="padding:8px 12px;text-align:center;font-size:11px;color:#dc2626;">Back Order Qty</th>
           </tr></thead>
           <tbody style="border:1px solid #f3f4f6;">${rows}</tbody>
         </table>
