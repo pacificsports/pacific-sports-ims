@@ -8996,6 +8996,10 @@ async function reviewAndSendInvoice(orderId, wh) {
   document.getElementById('modal-invoice-review').style.display = 'flex';
   const freightInput = document.getElementById('invoice-freight-amt');
   if (freightInput) freightInput.value = '0';
+  const pinInline = document.getElementById('invoice-pin-inline');
+  if (pinInline) pinInline.value = '';
+  const pinStatus = document.getElementById('invoice-pin-inline-status');
+  if (pinStatus) pinStatus.textContent = '';
   // 상태 저장 (freight 업데이트용)
   _invoiceCompanySettings = companySettings;
   _invoiceOrder = order;
@@ -9873,6 +9877,26 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     return renderSection(scLines, '-SC') + (caLines.length ? '<div style="page-break-before:always;margin-top:32px;">' + renderSection(caLines, '-CA') + '</div>' : '');
   }
   return renderSection(lines, '');
+}
+
+async function sendInvoiceWithPin() {
+  const pin = document.getElementById('invoice-pin-inline')?.value || '';
+  const status = document.getElementById('invoice-pin-inline-status');
+  if (pin.length < 4) {
+    if (status) { status.textContent = '❌ PIN 4자리 입력'; status.style.color = '#dc2626'; }
+    document.getElementById('invoice-pin-inline')?.focus();
+    return;
+  }
+  const { data: emps } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = emps?.[0];
+  if (!emp || !['manager','supervisor','admin'].includes(emp.role)) {
+    if (status) { status.textContent = '❌ PIN 오류'; status.style.color = '#dc2626'; }
+    document.getElementById('invoice-pin-inline').value = '';
+    document.getElementById('invoice-pin-inline')?.focus();
+    return;
+  }
+  if (status) { status.textContent = '✅ ' + emp.name; status.style.color = '#15803d'; }
+  sendInvoiceEmail();
 }
 
 function openInvoicePinModal() {
@@ -13881,7 +13905,7 @@ function showCreditHoldFlash(overAmt) {
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="invoice-review-content"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:space-between;align-items:center;background:#fff;flex-shrink:0;">
-      <div style="display:flex;align-items:center;gap:12px;flex:1;">
+      <div style="display:flex;align-items:center;gap:12px;flex:1;flex-wrap:wrap;">
         <div id="invoice-review-email-row" style="font-size:12px;color:#6b7280;">이메일 수신: <span id="invoice-review-email" style="font-weight:600;color:#111;"></span></div>
         <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
           <label style="color:#6b7280;white-space:nowrap;">Freight $</label>
@@ -13889,11 +13913,18 @@ function showCreditHoldFlash(overAmt) {
           <button class="btn btn-sm" onclick="updateInvoiceFreight()" style="font-size:11px;white-space:nowrap;">Apply</button>
           <button class="btn btn-sm" onclick="document.getElementById('invoice-freight-amt').value=0;updateInvoiceFreight();" style="font-size:11px;white-space:nowrap;color:#dc2626;border-color:#fca5a5;">✕ Clear</button>
         </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <label style="color:#6b7280;white-space:nowrap;">🔐 Manager PIN</label>
+          <input id="invoice-pin-inline" type="password" inputmode="numeric" maxlength="4" class="fi"
+            style="width:80px;font-size:13px;letter-spacing:6px;font-family:'IBM Plex Mono',monospace;padding:4px 8px;text-align:center;"
+            placeholder="····" oninput="this.value=this.value.replace(/[^0-9]/g,'');">
+          <span id="invoice-pin-inline-status" style="font-size:11px;color:#6b7280;"></span>
+        </div>
       </div>
-      <div style="display:flex;gap:8px;">
+      <div style="display:flex;gap:8px;flex-shrink:0;">
         <button id="invoice-review-cancel-btn" class="btn" onclick="closeModal('modal-invoice-review')">취소</button>
         <button class="btn" onclick="printInNewWindow(document.getElementById('invoice-review-content').innerHTML)">🖨️ Print</button>
-        <button id="invoice-review-send-btn" class="btn btn-primary" onclick="openInvoicePinModal()">📧 Send Invoice</button>
+        <button id="invoice-review-send-btn" class="btn btn-primary" onclick="sendInvoiceWithPin()">📧 Send Invoice</button>
       </div>
     </div>
   </div>
