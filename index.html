@@ -6377,18 +6377,20 @@ async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
   loadOrderStatus();
 }
 async function updateWhStatus(orderId, wh, newStatus) {
-  const isSplit = (wh === 'SC' || wh === 'CA');
+  const { data: o } = await db.from('orders').select('sc_status,ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
+  const isSplit = o?.is_split_warehouse || o?.wh_code === 'SC&CA';
+
   if (!isSplit) {
-    await db.from('orders').update({ status: newStatus }).eq('id', orderId);
+    // 싱글 WH 오더 — 메인 status + wh status 둘 다 업데이트
+    const col = wh === 'SC' ? 'sc_status' : 'ca_status';
+    await db.from('orders').update({ status: newStatus, [col]: newStatus }).eq('id', orderId);
     return;
   }
+  // Split 오더 — 해당 WH status만 업데이트, 둘 다 같으면 메인도 업데이트
   const col = wh === 'SC' ? 'sc_status' : 'ca_status';
-  // 상대방 status 확인
-  const { data: o } = await db.from('orders').select('sc_status,ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
-  const update = { [col]: newStatus };
-  // 둘 다 같은 status면 메인 status도 업데이트
   const otherCol = wh === 'SC' ? 'ca_status' : 'sc_status';
-  const otherStatus = o?.[otherCol] || o?.status;
+  const otherStatus = o?.[otherCol];
+  const update = { [col]: newStatus };
   if (otherStatus === newStatus) {
     update.status = newStatus;
   }
