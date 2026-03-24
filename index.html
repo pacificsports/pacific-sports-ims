@@ -8120,6 +8120,15 @@ async function doShipped(orderId, wh) {
   }
 
   document.getElementById('modal-shipped').style.display = 'flex';
+
+  // PIN 초기화
+  _shipEmpPin = null;
+  const shipPinEl = document.getElementById('ship-pin');
+  if (shipPinEl) shipPinEl.value = '';
+  const shipPinApproved = document.getElementById('ship-pin-approved');
+  if (shipPinApproved) shipPinApproved.style.display = 'none';
+  const shipPinError = document.getElementById('ship-pin-error');
+  if (shipPinError) shipPinError.textContent = '';
 }
 
 function updateBatchShipCount() {
@@ -8355,6 +8364,27 @@ function removeBolFile(fileName, el) {
 
 let _batchShipEmp = null;
 
+let _shipEmpPin = null; // Mark as Shipped PIN 인증된 직원
+
+async function checkShipPin(pin) {
+  const approvedDiv = document.getElementById('ship-pin-approved');
+  const approvedName = document.getElementById('ship-pin-name');
+  const pinError = document.getElementById('ship-pin-error');
+  if (approvedDiv) approvedDiv.style.display = 'none';
+  if (pinError) pinError.textContent = '';
+  _shipEmpPin = null;
+  if (pin.length < 4) return;
+  const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = empRows?.[0];
+  if (!emp || !['admin','supervisor','manager','warehouse'].includes(emp.role)) {
+    if (pinError) pinError.textContent = '❌ PIN이 올바르지 않습니다.';
+    return;
+  }
+  _shipEmpPin = emp;
+  if (approvedName) approvedName.textContent = emp.name + ' (' + emp.role + ')';
+  if (approvedDiv) approvedDiv.style.display = 'inline';
+}
+
 async function checkBatchPin(pin) {
   const approvedDiv = document.getElementById('batch-ship-pin-approved');
   const approvedName = document.getElementById('batch-ship-pin-name');
@@ -8446,16 +8476,18 @@ async function confirmShipped() {
   const shipDate = document.getElementById('ship-date-inp').value;
   if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
 
-  // PIN 확인
-  const pin = prompt('담당자 PIN을 입력하세요:');
-  if (!pin) return;
-  const { data: empRows } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
-  const emp = empRows?.[0];
-  if (!emp) { alert('❌ PIN이 올바르지 않습니다.'); return; }
-  if (!['admin','manager','warehouse'].includes(emp.role)) { alert('❌ 권한이 없습니다.'); return; }
+  // 인라인 PIN 체크
+  if (!_shipEmpPin) {
+    const pinError = document.getElementById('ship-pin-error');
+    if (pinError) pinError.textContent = 'PIN을 먼저 입력하세요.';
+    document.getElementById('ship-pin')?.focus();
+    return;
+  }
+  const emp = _shipEmpPin;
   _shippedEmp = emp;
 
   document.getElementById('modal-shipped').style.display = 'none';
+  _shipEmpPin = null;
   await _doShippedCore(emp);
 }
 
@@ -13486,10 +13518,22 @@ function showCreditHoldFlash(overAmt) {
       </div>
     </div>
 
-    <div style="padding:12px 24px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;background:#fff;border-radius:0 0 12px 12px;">
-      <button class="btn" onclick="document.getElementById('modal-shipped').style.display='none'">취소</button>
-      <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="openSignedBolModal()">📋 Create BOL</button>
-      <button class="btn btn-primary" id="btn-confirm-shipped" onclick="confirmShipped()" style="background:#16a34a;border-color:#16a34a;">🚛 Shipped 확정</button>
+    <div style="padding:12px 24px;border-top:1px solid #e5e7eb;background:#fff;border-radius:0 0 12px 12px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <div style="font-size:11px;font-weight:600;color:#374151;white-space:nowrap;">담당자 PIN <span style="color:#dc2626">*</span></div>
+        <input id="ship-pin" type="password" maxlength="4" inputmode="numeric" autocomplete="off"
+          placeholder=""
+          style="width:90px;text-align:center;font-size:20px;letter-spacing:6px;font-family:'IBM Plex Mono',monospace;border:1.5px solid #d1d5db;border-radius:6px;padding:4px 8px;outline:none;"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'');checkShipPin(this.value);"
+          onfocus="this.style.borderColor='#16a34a'" onblur="this.style.borderColor='#d1d5db'">
+        <div id="ship-pin-approved" style="font-size:12px;color:#15803d;font-weight:700;display:none;">Shipping Approved by: <span id="ship-pin-name" style="color:#15803d;font-weight:700;"></span></div>
+        <div id="ship-pin-error" style="font-size:11px;color:#dc2626;min-height:16px;"></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn" onclick="document.getElementById('modal-shipped').style.display='none'">취소</button>
+        <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="openSignedBolModal()">📋 Create BOL</button>
+        <button class="btn btn-primary" id="btn-confirm-shipped" onclick="confirmShipped()" style="background:#16a34a;border-color:#16a34a;">🚛 Shipped 확정</button>
+      </div>
     </div>
   </div>
 </div>
