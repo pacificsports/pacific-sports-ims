@@ -5906,16 +5906,7 @@ async function showBoDetail(orderId) {
   // qty_backordered > 0인 라인만 필터 (null 제외)
   let boLines = cachedLines.filter(l => l.qty_backordered > 0);
 
-  // qty_backordered가 null이지만 qty_filled가 있으면 qty_pieces - qty_filled 로 계산
-  if (!boLines.length && cachedLines.length) {
-    boLines = cachedLines.filter(l => {
-      const filled = l.qty_filled || 0;
-      const total = l.qty_pieces || 0;
-      return filled < total; // 출고 못 한 수량이 있는 라인
-    });
-  }
-
-  // 캐시에 없거나 qty_backordered가 없으면 DB에서 직접 조회
+  // DB에서 직접 조회 시도
   if (!boLines.length) {
     const { data: linesWithBO } = await db.from('order_lines')
       .select('*, styles(style_number)')
@@ -5925,25 +5916,33 @@ async function showBoDetail(orderId) {
     boLines = linesWithBO || [];
   }
 
-  // parent_order_id 탐색
-  if (!boLines.length && order.parent_order_id) {
-    const { data: parentLines } = await db.from('order_lines')
-      .select('*, styles(style_number)')
-      .eq('order_id', order.parent_order_id)
-      .gt('qty_backordered', 0)
-      .order('color');
-    boLines = parentLines || [];
+  // BO 오더에 lines가 없으면 order_number에서 -BO 제거해 원본 오더 찾기
+  if (!boLines.length) {
+    const origOrderNum = (order.order_number||'').replace(/-BO$/, '');
+    let origId = order.parent_order_id;
+    if (!origId && origOrderNum !== order.order_number) {
+      const { data: origOrders } = await db.from('orders')
+        .select('id').eq('order_number', origOrderNum).limit(1);
+      origId = origOrders?.[0]?.id;
+    }
+    if (origId) {
+      const { data: origLines } = await db.from('order_lines')
+        .select('*, styles(style_number)')
+        .eq('order_id', origId)
+        .gt('qty_backordered', 0)
+        .order('color');
+      boLines = origLines || [];
+    }
   }
 
-  // 마지막 수단: qty_pieces 사용 (별도 생성된 BO 오더)
+  // 마지막 수단: 캐시나 DB에서 qty_pieces 기반
   if (!boLines.length && cachedLines.length) {
     boLines = cachedLines.filter(l => (l.qty_pieces||0) > 0);
   }
   if (!boLines.length) {
     const { data: allLines } = await db.from('order_lines')
       .select('*, styles(style_number)')
-      .eq('order_id', orderId)
-      .order('color');
+      .eq('order_id', orderId).order('color');
     boLines = (allLines||[]).filter(l => (l.qty_pieces||0) > 0);
   }
 
