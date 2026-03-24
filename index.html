@@ -5885,29 +5885,16 @@ async function showBoDetail(orderId) {
   const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
   if (!order) { alert('오더 정보를 찾을 수 없습니다.'); return; }
 
-  // 1) 이 오더 자체 lines 조회
-  let { data: lines } = await db.from('order_lines')
+  // 전략 1: 이 오더 lines에서 qty_backordered > 0인 것
+  const { data: linesWithBO } = await db.from('order_lines')
     .select('*, styles(style_number)')
     .eq('order_id', orderId)
+    .gt('qty_backordered', 0)
     .order('color');
 
-  // 2) lines 중 qty_backordered > 0인 것만 필터
-  let boLines = (lines||[]).filter(l => (l.qty_backordered||0) > 0);
+  let boLines = linesWithBO || [];
 
-  console.log('showBoDetail debug:', {
-    orderId,
-    totalLines: lines?.length,
-    boLinesCount: boLines.length,
-    parent_order_id: order.parent_order_id,
-    sampleLine: lines?.[0] ? {qty_pieces: lines[0].qty_pieces, qty_backordered: lines[0].qty_backordered} : null
-  });
-
-  // 3) qty_backordered가 없으면 qty_pieces를 백오더 수량으로 사용
-  if (!boLines.length && lines?.length) {
-    boLines = lines; // 이 오더 자체가 BO 오더 — qty_pieces가 곧 백오더 수량
-  }
-
-  // 4) 그래도 없으면 parent_order_id의 lines에서 조회
+  // 전략 2: qty_backordered가 없으면 parent_order_id 탐색
   if (!boLines.length && order.parent_order_id) {
     const { data: parentLines } = await db.from('order_lines')
       .select('*, styles(style_number)')
@@ -5917,15 +5904,25 @@ async function showBoDetail(orderId) {
     boLines = parentLines || [];
   }
 
+  // 전략 3: 그래도 없으면 이 오더 전체 lines를 BO qty로 간주 (별도 생성된 BO 오더)
+  if (!boLines.length) {
+    const { data: allLines } = await db.from('order_lines')
+      .select('*, styles(style_number)')
+      .eq('order_id', orderId)
+      .order('color');
+    boLines = (allLines || []).filter(l => (l.qty_pieces||0) > 0);
+  }
+
   if (!boLines.length) {
     alert('백오더 라인 정보를 찾을 수 없습니다.');
     return;
   }
 
-  const lines_to_use = boLines;
+  // qty_backordered가 있으면 그것을, 없으면 qty_pieces
+  const getBoQty = l => (l.qty_backordered||0) > 0 ? l.qty_backordered : (l.qty_pieces||0);
 
   const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
-  const sorted = [...lines_to_use].sort((a,b) => {
+  const sorted = [...boLines].sort((a,b) => {
     const sa = a.styles?.style_number||'', sb = b.styles?.style_number||'';
     if (sa!==sb) return sa.localeCompare(sb);
     const ca = (a.color||'').toUpperCase(), cb = (b.color||'').toUpperCase();
@@ -5934,7 +5931,6 @@ async function showBoDetail(orderId) {
   });
 
   // qty_backordered가 있으면 그것을, 없으면 qty_pieces를 백오더 수량으로
-  const getBoQty = l => (l.qty_backordered||0) > 0 ? (l.qty_backordered||0) : (l.qty_pieces||0);
   const totalBack = sorted.reduce((s,l) => s + getBoQty(l), 0);
   const rows = sorted.map(l => {
     const backQty = getBoQty(l);
