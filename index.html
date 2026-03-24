@@ -7496,30 +7496,53 @@ function addShipTrackingField() {
   inp.focus();
 }
 
-let _bolFileData = null; // { base64, mimeType, fileName }
+let _bolFileData = null; // 하위 호환 (단일)
+let _bolFilesDataSingle = []; // Mark as Shipped 멀티 파일
 
 function handleBolFileSelect(input) {
-  const file = input.files[0];
-  if (!file) return;
-  processBolFile(file);
+  const files = [...input.files];
+  if (!files.length) return;
+  files.forEach(processBolFile);
+  input.value = '';
 }
 
 function handleBolDrop(event) {
-  const file = event.dataTransfer.files[0];
-  if (!file) return;
-  processBolFile(file);
+  const files = [...event.dataTransfer.files];
+  if (!files.length) return;
+  files.forEach(processBolFile);
 }
 
 function processBolFile(file) {
   const reader = new FileReader();
   reader.onload = (e) => {
     const base64 = e.target.result.split(',')[1];
-    _bolFileData = { base64, mimeType: file.type, fileName: file.name };
-    document.getElementById('bol-upload-placeholder').style.display = 'none';
-    document.getElementById('bol-upload-preview').style.display = 'block';
-    document.getElementById('bol-file-name').textContent = file.name;
+    _bolFileData = { base64, mimeType: file.type, fileName: file.name }; // 하위 호환
+    _bolFilesDataSingle.push({ base64, mimeType: file.type, fileName: file.name });
+    // 파일 목록 UI 업데이트
+    const list = document.getElementById('bol-file-list');
+    if (list) {
+      const item = document.createElement('div');
+      item.style.cssText = 'display:flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:5px 10px;font-size:11px;';
+      item.innerHTML = '✅ <span style="font-weight:600;color:#15803d;">' + file.name + '</span>'
+        + '<button data-fname="' + file.name + '" onclick="removeSingleBolFile(this.dataset.fname,this.parentElement)" style="margin-left:auto;background:none;border:none;cursor:pointer;color:#6b7280;font-size:13px;">✕</button>';
+      list.appendChild(item);
+    }
+    // 구버전 placeholder 숨기기 (있으면)
+    const ph = document.getElementById('bol-upload-placeholder');
+    const pv = document.getElementById('bol-upload-preview');
+    if (ph) ph.style.display = 'none';
+    if (pv) pv.style.display = 'block';
+    const fnEl = document.getElementById('bol-file-name');
+    if (fnEl) fnEl.textContent = file.name;
   };
   reader.readAsDataURL(file);
+}
+
+function removeSingleBolFile(fileName, el) {
+  _bolFilesDataSingle = _bolFilesDataSingle.filter(f => f.fileName !== fileName);
+  if (_bolFilesDataSingle.length === 0) _bolFileData = null;
+  else _bolFileData = _bolFilesDataSingle[_bolFilesDataSingle.length - 1];
+  el.remove();
 }
 
 async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
@@ -7601,9 +7624,12 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
   });
 
   // BOL 멀티 파일 배열 구성 (_bolFilesData 우선, 없으면 단일 bolData)
-  const bolFilesArr = (_bolFilesData && _bolFilesData.length > 0)
-    ? _bolFilesData.map(f => ({ base64: f.base64, mime: f.mimeType, filename: f.fileName }))
-    : (bolData ? [{ base64: bolData.base64, mime: bolData.mimeType, filename: bolData.fileName }] : []);
+  // _bolFilesDataSingle(단일 모달) 또는 _bolFilesData(배치) 또는 단일 bolData
+  const bolFilesArr = (bolData?._multi)
+    ? bolData._multi.map(f => ({ base64: f.base64, mime: f.mimeType, filename: f.fileName }))
+    : (_bolFilesData && _bolFilesData.length > 0)
+      ? _bolFilesData.map(f => ({ base64: f.base64, mime: f.mimeType, filename: f.fileName }))
+      : (bolData ? [{ base64: bolData.base64, mime: bolData.mimeType, filename: bolData.fileName }] : []);
 
   const payload = {
     customer_name: order.customer_name,
@@ -8077,6 +8103,9 @@ async function doShipped(orderId, wh) {
 
   // BOL 업로드 초기화
   _bolFileData = null;
+  _bolFilesDataSingle = [];
+  const bolListEl = document.getElementById('bol-file-list');
+  if (bolListEl) bolListEl.innerHTML = '';
   document.getElementById('bol-file-input').value = '';
   document.getElementById('bol-upload-placeholder').style.display = 'block';
   document.getElementById('bol-upload-preview').style.display = 'none';
@@ -8626,7 +8655,11 @@ async function _doShippedCore(emp) {
     const plHtml = buildPackingListHtml(order, filteredLines, false, wh || 'SC', shippingInfo, shippingInfo.note || '');
     // 최신 order 재조회 (sc_shipped_at / ca_shipped_at 포함)
     const { data: freshOrder } = await db.from('orders').select('*').eq('id', orderId).single();
-    const result = await sendShippedEmail(freshOrder || order, shippingInfo, plHtml, _bolFileData);
+    // 멀티 파일이 있으면 _bolFilesDataSingle 사용
+    const bolForEmail = _bolFilesDataSingle.length > 0
+      ? { _multi: _bolFilesDataSingle }
+      : _bolFileData;
+    const result = await sendShippedEmail(freshOrder || order, shippingInfo, plHtml, bolForEmail);
     if (result.ok) {
       showToast('✅ 이메일 발송 완료!');
       // DB에 발송 기록
@@ -8637,6 +8670,7 @@ async function _doShippedCore(emp) {
   }
 
   _bolFileData = null;
+  _bolFilesDataSingle = [];
   loadOrderStatus();
 }
 
@@ -13427,22 +13461,17 @@ function showCreditHoldFlash(overAmt) {
 
       <!-- BOL 업로드 -->
       <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">📄 BOL 업로드 (선택사항)</div>
-      <div id="bol-upload-area" style="border:2px dashed #d1d5db;border-radius:8px;padding:20px;text-align:center;cursor:pointer;background:#fafafa;margin-bottom:20px;transition:all 0.2s;"
+      <div id="bol-upload-area" style="border:2px dashed #d1d5db;border-radius:8px;padding:14px;text-align:center;cursor:pointer;background:#fafafa;margin-bottom:8px;transition:all 0.2s;"
         onclick="document.getElementById('bol-file-input').click()"
         ondragover="event.preventDefault();this.style.borderColor='#6366f1';this.style.background='#eef2ff'"
         ondragleave="this.style.borderColor='#d1d5db';this.style.background='#fafafa'"
         ondrop="event.preventDefault();this.style.borderColor='#d1d5db';this.style.background='#fafafa';handleBolDrop(event)">
-        <div id="bol-upload-placeholder">
-          <div style="font-size:28px;margin-bottom:6px;">📸</div>
-          <div style="font-size:13px;font-weight:600;color:#374151;">사진 또는 PDF 업로드</div>
-          <div style="font-size:11px;color:#9ca3af;margin-top:4px;">클릭하거나 드래그 · JPG, PNG, PDF</div>
-        </div>
-        <div id="bol-upload-preview" style="display:none;">
-          <div style="font-size:13px;font-weight:600;color:#16a34a;">✅ <span id="bol-file-name"></span></div>
-          <div style="font-size:11px;color:#6b7280;margin-top:4px;">클릭해서 변경</div>
-        </div>
+        <div style="font-size:22px;">📸</div>
+        <div style="font-size:12px;font-weight:600;color:#374151;">사진 또는 PDF 업로드</div>
+        <div style="font-size:10px;color:#9ca3af;margin-top:2px;">클릭하거나 드래그 · JPG, PNG, PDF · 여러 파일 가능</div>
       </div>
-      <input type="file" id="bol-file-input" accept="image/*,application/pdf" style="display:none;" onchange="handleBolFileSelect(this)">
+      <div id="bol-file-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px;"></div>
+      <input type="file" id="bol-file-input" accept="image/*,application/pdf" multiple style="display:none;" onchange="handleBolFileSelect(this)">
 
       <!-- 이메일 발송 -->
       <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">📧 고객 이메일 발송</div>
