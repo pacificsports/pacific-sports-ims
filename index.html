@@ -7228,7 +7228,7 @@ async function preparationComplete(orderId, wh) {
     pro: document.getElementById('pl-pro')?.value || ''
   };
   if (plShipInfo.pro) plShipInfo.tracking = plShipInfo.pro;
-  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC', plShipInfo);
+  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC', plShipInfo, document.getElementById('ship-note')?.value || '');
   document.getElementById('modal-pl-preview').style.display = 'flex';
 
   // Mark as Shipped 후 운송정보가 있으면 PL에 표시
@@ -7566,6 +7566,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     freight_company: shippingInfo.freightCarrier || '',
     total_pcs: order.total_pcs || 0,
     wh: shippingInfo.wh || 'SC',
+    note: shippingInfo.note || order.ship_note || '',
     lines: lineItems,
     pl_html: plHtml || '',
     bol_files: bolFilesArr,
@@ -8114,6 +8115,10 @@ async function openBatchShipModal(whFilter) {
       + '<div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Tracking #</div>'
       + '<input type="text" id="bpo-tracking-' + uid + '" class="fi" placeholder="Tracking / PRO #" style="width:100%;font-size:11px;font-family:IBM Plex Mono,monospace;">'
       + '</div>'
+      + '<div style="margin-top:8px;">'
+      + '<div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">📝 메모 (이메일에 포함)</div>'
+      + '<textarea id="bpo-note-' + uid + '" class="fi" rows="2" placeholder="거래처에 전달할 내용..." style="width:100%;font-size:11px;resize:none;"></textarea>'
+      + '</div>'
       + '</div>';
   }).join('');
 
@@ -8338,10 +8343,12 @@ async function confirmBatchShip() {
     _shippedOrderId = orderId;
     _shippedWh = wh;
     _shippedEmp = emp;
+    const bpoNote = document.getElementById('bpo-note-' + uid)?.value || '';
+    const finalNote = [shipNote, bpoNote].filter(Boolean).join(' | ');
     document.getElementById('ship-date-inp').value = shipDate;
     document.getElementById('ship-carrier').value = carrier;
     document.getElementById('ship-tracking').value = tracking;
-    document.getElementById('ship-note').value = shipNote;
+    document.getElementById('ship-note').value = finalNote;
     if (document.getElementById('ship-freight-carrier')) document.getElementById('ship-freight-carrier').value = freight;
     if (document.getElementById('ship-send-email')) document.getElementById('ship-send-email').checked = sendEmail;
 
@@ -8543,7 +8550,8 @@ async function _doShippedCore(emp) {
       }
     });
     shippingInfo.wh = wh || 'SC';
-    const plHtml = buildPackingListHtml(order, filteredLines, false, wh || 'SC', shippingInfo);
+    shippingInfo.note = document.getElementById('ship-note')?.value || '';
+    const plHtml = buildPackingListHtml(order, filteredLines, false, wh || 'SC', shippingInfo, shippingInfo.note || '');
     // 최신 order 재조회 (sc_shipped_at / ca_shipped_at 포함)
     const { data: freshOrder } = await db.from('orders').select('*').eq('id', orderId).single();
     const result = await sendShippedEmail(freshOrder || order, shippingInfo, plHtml, _bolFileData);
@@ -8912,7 +8920,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
 // ═══════════════════════════════════════════════════════
 // Packing List HTML 빌더
 // ═══════════════════════════════════════════════════════
-function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo) {
+function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, note) {
   const dateStr = new Date().toLocaleDateString();
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
@@ -9198,6 +9206,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo) {
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date || new Date().toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'})}</div></div>
     </div>
     <!-- Shipping Info -->
+    ${note ? `<div style="margin-bottom:12px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:11px;"><span style="font-weight:700;color:#d97706;">📝 Note:</span> ${note}</div>` : ''}
     ${(() => {
       if (!shippingInfo || !shippingInfo.carrier) return '';
       const isLtl = shippingInfo.carrier === 'LTL';
