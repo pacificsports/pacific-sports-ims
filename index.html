@@ -5764,6 +5764,21 @@ async function loadBackOrders() {
     .in('status', ['backordered','partial','preparing','ready_to_ship','shipped','invoiced'])
     .order('created_at', { ascending: false });
 
+  // BO 오더들의 order_lines도 미리 로드 (Detail 창용)
+  const boOrderIds = (orders||[]).filter(o => ['backordered','partial'].includes(o.status)).map(o => o.id);
+  let boLinesMap = {};
+  if (boOrderIds.length > 0) {
+    const { data: allBoLines } = await db.from('order_lines')
+      .select('*, styles(style_number)')
+      .in('order_id', boOrderIds)
+      .order('color');
+    (allBoLines||[]).forEach(l => {
+      if (!boLinesMap[l.order_id]) boLinesMap[l.order_id] = [];
+      boLinesMap[l.order_id].push(l);
+    });
+  }
+  window._boLinesCache = boLinesMap;
+
   const filtered = (orders||[]).filter(o => {
     if (whFilter === 'SC') return o.wh_code !== 'CA';
     if (whFilter === 'CA') return o.wh_code === 'CA';
@@ -5885,16 +5900,23 @@ async function showBoDetail(orderId) {
   const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
   if (!order) { alert('오더 정보를 찾을 수 없습니다.'); return; }
 
-  // 전략 1: 이 오더 lines에서 qty_backordered > 0인 것
-  const { data: linesWithBO } = await db.from('order_lines')
-    .select('*, styles(style_number)')
-    .eq('order_id', orderId)
-    .gt('qty_backordered', 0)
-    .order('color');
+  // 캐시된 lines 우선 사용
+  const cachedLines = window._boLinesCache?.[orderId] || [];
 
-  let boLines = linesWithBO || [];
+  // qty_backordered > 0인 라인만 필터
+  let boLines = cachedLines.filter(l => (l.qty_backordered||0) > 0);
 
-  // 전략 2: qty_backordered가 없으면 parent_order_id 탐색
+  // 캐시에 없거나 qty_backordered가 없으면 DB에서 직접 조회
+  if (!boLines.length) {
+    const { data: linesWithBO } = await db.from('order_lines')
+      .select('*, styles(style_number)')
+      .eq('order_id', orderId)
+      .gt('qty_backordered', 0)
+      .order('color');
+    boLines = linesWithBO || [];
+  }
+
+  // parent_order_id 탐색
   if (!boLines.length && order.parent_order_id) {
     const { data: parentLines } = await db.from('order_lines')
       .select('*, styles(style_number)')
@@ -5904,13 +5926,16 @@ async function showBoDetail(orderId) {
     boLines = parentLines || [];
   }
 
-  // 전략 3: 그래도 없으면 이 오더 전체 lines를 BO qty로 간주 (별도 생성된 BO 오더)
+  // 마지막 수단: qty_pieces 사용 (별도 생성된 BO 오더)
+  if (!boLines.length && cachedLines.length) {
+    boLines = cachedLines.filter(l => (l.qty_pieces||0) > 0);
+  }
   if (!boLines.length) {
     const { data: allLines } = await db.from('order_lines')
       .select('*, styles(style_number)')
       .eq('order_id', orderId)
       .order('color');
-    boLines = (allLines || []).filter(l => (l.qty_pieces||0) > 0);
+    boLines = (allLines||[]).filter(l => (l.qty_pieces||0) > 0);
   }
 
   if (!boLines.length) {
