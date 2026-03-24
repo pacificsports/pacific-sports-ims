@@ -5132,7 +5132,13 @@ async function loadOrderStatus() {
         const prepWhLines = isSplit
           ? prepLines.filter(l => wh === 'CA' ? (l.wh==='CA'||l.wh==='SC&CA') : (l.wh==='SC'||l.wh==='SC&CA'||!l.wh))
           : prepLines;
-        const prepNeedsWh  = prepWhLines.some(l => (l.qty_boxes||0) > 0);
+        const prepNeedsWh  = prepWhLines.some(l => {
+          if ((l.qty_boxes||0) > 0) return true;
+          const allocObj = wh === 'CA'
+            ? (l.alloc_ca_detail || (l.wh==='CA' ? l.alloc_detail : null) || {})
+            : (l.wh!=='CA' ? l.alloc_detail : null) || {};
+          return Object.keys(allocObj).some(k => k.includes('TRANSFER|'));
+        });
         const prepNeedsPcr = prepWhLines.some(l => {
           const allocObj = wh === 'CA'
             ? (l.alloc_ca_detail || (l.wh==='CA' ? l.alloc_detail : null) || {})
@@ -5161,11 +5167,17 @@ async function loadOrderStatus() {
         const allDone = whOk2 && pcrOk2;
         const plReadyBtn = allDone ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>` : '';
 
+        const whPrinted2  = o[whPre2+'warehouse_printed_at'];
+        const pcrPrinted2 = o[whPre2+'pcroom_printed_at'];
+        const reprintWh  = prepNeedsWh  ? `<button class="btn btn-sm" style="width:100%;font-size:9px;background:#f8fafc;color:#64748b;border-color:#cbd5e1;" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">🖨️ Reprint WH Ticket</button>` : '';
+        const reprintPcr = prepNeedsPcr ? `<button class="btn btn-sm" style="width:100%;font-size:9px;background:#f8fafc;color:#64748b;border-color:#cbd5e1;" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">🖨️ Reprint Partial Ticket</button>` : '';
+
         return `
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
           ${whBtn}
           ${pcrBtn}
           ${plReadyBtn}
+          <div style="display:flex;gap:4px;">${reprintWh}${reprintPcr}</div>
           <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','preparing','po_entered')">↩ Back to PO Entered</button>
         </div>`;
       })():''}
