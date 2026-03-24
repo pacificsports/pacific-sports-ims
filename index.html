@@ -47,7 +47,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 .logout-btn:hover{background:rgba(255,255,255,0.2);}
 
 /* NAV TABS */
-.navtabs{background:#1e4d8c;display:flex;padding:0 12px;gap:2px;flex-shrink:0;overflow-x:auto;scrollbar-width:none;}
+.navtabs{background:#1e4d8c;display:flex;padding:0 12px;gap:2px;flex-shrink:0;overflow-x:auto;scrollbar-width:none;position:sticky;top:0;z-index:100;}
 .pin-btn{padding:14px;font-size:18px;font-weight:600;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;cursor:pointer;transition:background 0.1s;width:100%;}
 .pin-btn:hover{background:#e5e7eb;}
 .pin-btn:active{background:#d1d5db;}
@@ -7210,7 +7210,15 @@ async function preparationComplete(orderId, wh) {
     });
   }
 
-  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC');
+  // shipping 정보 수집해서 PL에 반영
+  const plShipInfo = {
+    carrier: document.getElementById('pl-carrier')?.value || document.getElementById('ship-carrier')?.value || '',
+    tracking: document.getElementById('pl-tracking')?.value || document.getElementById('ship-tracking')?.value || '',
+    freightCarrier: document.getElementById('pl-ltl-carrier')?.value || document.getElementById('ship-freight-carrier')?.value || '',
+    pro: document.getElementById('pl-pro')?.value || ''
+  };
+  if (plShipInfo.pro) plShipInfo.tracking = plShipInfo.pro;
+  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC', plShipInfo);
   document.getElementById('modal-pl-preview').style.display = 'flex';
 
   // Mark as Shipped 후 운송정보가 있으면 PL에 표시
@@ -8524,8 +8532,8 @@ async function _doShippedCore(emp) {
         return true;
       }
     });
-    const plHtml = buildPackingListHtml(order, filteredLines, false, wh || 'SC');
     shippingInfo.wh = wh || 'SC';
+    const plHtml = buildPackingListHtml(order, filteredLines, false, wh || 'SC', shippingInfo);
     // 최신 order 재조회 (sc_shipped_at / ca_shipped_at 포함)
     const { data: freshOrder } = await db.from('orders').select('*').eq('id', orderId).single();
     const result = await sendShippedEmail(freshOrder || order, shippingInfo, plHtml, _bolFileData);
@@ -8894,7 +8902,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
 // ═══════════════════════════════════════════════════════
 // Packing List HTML 빌더
 // ═══════════════════════════════════════════════════════
-function buildPackingListHtml(order, lines, isSplit, whFilter) {
+function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo) {
   const dateStr = new Date().toLocaleDateString();
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
@@ -9179,8 +9187,22 @@ function buildPackingListHtml(order, lines, isSplit, whFilter) {
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship To</div><div style="font-weight:700;">${order.ship_addr||order.customer_name}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date || new Date().toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'})}</div></div>
     </div>
-    <!-- Shipping Info (동적으로 업데이트됨) -->
-    <div id="pl-shipping-info" style="display:none;margin-bottom:12px;padding:8px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;font-size:11px;"></div>
+    <!-- Shipping Info -->
+    ${(() => {
+      if (!shippingInfo || !shippingInfo.carrier) return '';
+      const isLtl = shippingInfo.carrier === 'LTL';
+      const isWillCall = shippingInfo.carrier === 'Will Call';
+      let rows = '<div style="font-weight:700;color:#0369a1;margin-bottom:4px;">🚚 Shipping Information</div>';
+      rows += '<div style="display:flex;gap:24px;flex-wrap:wrap;">';
+      rows += '<span><span style="color:#6b7280;">Carrier:</span> <strong>' + shippingInfo.carrier + '</strong></span>';
+      if (isLtl && shippingInfo.freightCarrier) rows += '<span><span style="color:#6b7280;">Freight Co.:</span> <strong>' + shippingInfo.freightCarrier + '</strong></span>';
+      if (isLtl && shippingInfo.tracking) rows += '<span><span style="color:#6b7280;">PRO #:</span> <strong>' + shippingInfo.tracking + '</strong></span>';
+      if (!isLtl && !isWillCall && shippingInfo.tracking) rows += '<span><span style="color:#6b7280;">Tracking #:</span> <strong>' + shippingInfo.tracking + '</strong></span>';
+      if (isWillCall && shippingInfo.pickupBy) rows += '<span><span style="color:#6b7280;">Picked Up By:</span> <strong>' + shippingInfo.pickupBy + '</strong></span>';
+      if (isWillCall && shippingInfo.pickupDate) rows += '<span><span style="color:#6b7280;">Pick Up Date:</span> <strong>' + shippingInfo.pickupDate + '</strong></span>';
+      rows += '</div>';
+      return '<div style="margin-bottom:12px;padding:8px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;font-size:11px;">' + rows + '</div>';
+    })()}
     ${body}
   </div>`;
 }
