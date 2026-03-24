@@ -5070,7 +5070,13 @@ async function loadOrderStatus() {
           .reduce((ss, [,v]) => ss + ((typeof v === 'object' ? v.pcs : v) || 0), 0);
       }, 0);
       const totalLoose = whLines.reduce((s, l) => s + (l.qty_loose || 0), 0);
-      const hasWh  = totalBoxes > 0;
+      const totalTransfers = whLines.reduce((s, l) => {
+        const allocObj = wh === 'CA'
+          ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+          : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+        return s + Object.keys(allocObj).filter(k => k.includes('TRANSFER|')).length;
+      }, 0);
+      const hasWh  = totalBoxes > 0 || totalTransfers > 0;
       const hasPcr = totalPcr > 0 || totalLoose > 0;
 
       const whBtn = hasWh ? `<button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${whPrinted?'#f0fdf4':'#fff'};color:${whPrinted?'#15803d':'#374151'};border-color:${whPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${whPrinted?'✅ WH 프린트됨':'🏭 WH Ticket'}</button>` : '';
@@ -6433,7 +6439,14 @@ async function checkAndMoveToPreparing() {
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
     : lines;
 
-  const needsWh = whLines.some(l => (l.qty_boxes || 0) > 0);
+  const needsWh = whLines.some(l => {
+    if ((l.qty_boxes || 0) > 0) return true;
+    // PCR TRANSFER (warehouse bin → PC Room) 있으면 WH 티켓 필요
+    const allocObj = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    return Object.keys(allocObj).some(k => k.includes('TRANSFER|'));
+  });
   const needsPcr = whLines.some(l => {
     const allocObj = wh === 'CA'
       ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
@@ -6448,10 +6461,14 @@ async function checkAndMoveToPreparing() {
   const pcrOk = !needsPcr || !!pcrPrinted;
 
   const whStatus = wh === 'CA' ? (updated.ca_status || updated.status) : (updated.sc_status || updated.status);
-  if (whOk && pcrOk && ['po_entered','open','credit_hold'].includes(whStatus)) {
+  if (whOk && pcrOk && ['po_entered','open','credit_hold','preparing'].includes(whStatus)) {
     await updateWhStatus(orderId, wh, 'preparing');
     showToast(`📦 ${wh} 프린트 완료 — Preparing으로 이동!`);
     loadOrderStatus();
+  } else if (!whOk) {
+    showToast('⚠️ WH Pick Ticket도 프린트해야 Preparing으로 이동합니다.');
+  } else if (!pcrOk) {
+    showToast('⚠️ Partial Pick Ticket도 프린트해야 Preparing으로 이동합니다.');
   }
 }
 
