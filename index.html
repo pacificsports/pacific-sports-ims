@@ -7657,6 +7657,15 @@ async function openSignedBolModal() {
 
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+
+  // ship_addr 없으면 customer 테이블에서 가져오기
+  if (order && !order.ship_addr && order.customer_id) {
+    const { data: cust } = await db.from('customers').select('address,city,state,zip').eq('id', order.customer_id).single();
+    if (cust) {
+      order.ship_addr = [cust.address, [cust.city, cust.state, cust.zip].filter(Boolean).join(', ')].filter(Boolean).join('\n');
+    }
+  }
+
   _bolOrder = order;
   _bolLines = lines || [];
 
@@ -7766,8 +7775,17 @@ function previewSignedBol() {
   }
 
   const sigData = (_bolHasSig && _bolSigCanvas) ? _bolSigCanvas.toDataURL('image/png') : null;
+  // UPS/FedEx: 박스별 weight 합산, 아니면 ship-weight 입력값
+  let weight = '';
+  if (carrier === 'UPS' || carrier === 'FedEx') {
+    const weightInputs = document.querySelectorAll('.ship-weight-input');
+    const total = [...weightInputs].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+    if (total > 0) weight = total.toFixed(1);
+  } else {
+    weight = document.getElementById('ship-weight')?.value || '';
+  }
   const shipInfo = { carrier, tracking, driverName, signDate, shipDate, freightCarrier,
-    wh: _shippedWh || 'SC' };
+    weight, wh: _shippedWh || 'SC' };
 
   const html = buildBolHtml(_bolOrder, _bolLines, shipInfo, sigData);
   document.getElementById('bol-preview-content').innerHTML = html;
@@ -7842,13 +7860,15 @@ function toggleShipTrackingLabel() {
       '</div>';
   } else if (carrier === 'UPS' || carrier === 'FedEx') {
     trackingWrap.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
-      '<label style="font-size:11px;font-weight:600;color:#374151;">Tracking #</label>' +
-      '<button type="button" onclick="addShipTrackingField()" style="font-size:10px;color:#1d4ed8;background:none;border:none;cursor:pointer;font-weight:600;padding:0;">+ Add</button>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+      '<label style="font-size:11px;font-weight:600;color:#374151;">Tracking # &amp; Weight per Box</label>' +
+      '<button type="button" onclick="addShipTrackingField()" style="font-size:10px;color:#1d4ed8;background:none;border:none;cursor:pointer;font-weight:600;padding:0;">+ Add Box</button>' +
       '</div>' +
       '<div id="ship-tracking-list">' +
-      '<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" style="width:100%;margin-bottom:4px;font-family:IBM Plex Mono,monospace;"/>' +
-      '</div>';
+      '<div style="display:grid;grid-template-columns:1fr 100px;gap:6px;margin-bottom:4px;">' +
+      '<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" style="font-family:IBM Plex Mono,monospace;"/>' +
+      '<input type="number" class="fi ship-weight-input" placeholder="lbs" min="0" step="0.1"/>' +
+      '</div></div>';
   } else if (carrier === 'LTL') {
     trackingWrap.innerHTML =
       '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>' +
@@ -7871,13 +7891,13 @@ function toggleShipTrackingLabel() {
 function addShipTrackingField() {
   const list = document.getElementById('ship-tracking-list');
   if (!list) return;
-  const inp = document.createElement('input');
-  inp.type = 'text';
-  inp.className = 'fi ship-tracking-input';
-  inp.placeholder = 'Tracking #';
-  inp.style.cssText = "width:100%;margin-bottom:4px;font-family:'IBM Plex Mono',monospace;";
-  list.appendChild(inp);
-  inp.focus();
+  const row = document.createElement('div');
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 100px;gap:6px;margin-bottom:4px;';
+  row.innerHTML =
+    '<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" style="font-family:\'IBM Plex Mono\',monospace;">' +
+    '<input type="number" class="fi ship-weight-input" placeholder="lbs" min="0" step="0.1">';
+  list.appendChild(row);
+  row.querySelector('.ship-tracking-input').focus();
 }
 
 let _bolFileData = null; // 하위 호환 (단일)
@@ -8603,6 +8623,10 @@ async function openBatchShipModal(whFilter) {
       + '<div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Tracking #</div>'
       + '<input type="text" id="bpo-tracking-' + uid + '" class="fi" placeholder="Tracking / PRO #" style="width:100%;font-size:11px;font-family:IBM Plex Mono,monospace;">'
       + '</div>'
+      + '<div style="width:100%;">'
+      + '<div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">Weight (lbs)</div>'
+      + '<input type="number" id="bpo-weight-' + uid + '" class="fi" placeholder="예: 45" min="0" step="0.1" style="width:100%;font-size:11px;">'
+      + '</div>'
       + '<div style="margin-top:8px;">'
       + '<div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">📝 메모 (이메일에 포함)</div>'
       + '<textarea id="bpo-note-' + uid + '" class="fi" rows="2" placeholder="거래처에 전달할 내용..." style="width:100%;font-size:11px;resize:none;"></textarea>'
@@ -8657,12 +8681,14 @@ function toggleBpoFields(uid) {
     } else if (carrier === 'UPS' || carrier === 'FedEx') {
       trackingWrap.innerHTML =
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">'
-        + '<span style="font-size:10px;color:#6b7280;font-weight:600;">Tracking #</span>'
+        + '<span style="font-size:10px;color:#6b7280;font-weight:600;">Tracking # &amp; Weight per Box</span>'
         + '</div>'
         + '<div id="bpo-tracking-list-' + uid + '">'
-        + '<input type="text" class="fi bpo-tracking-input-' + uid + '" placeholder="Tracking #" style="width:100%;font-size:11px;margin-bottom:4px;font-family:IBM Plex Mono,monospace;">'
-        + '</div>'
-        + '<button type="button" onclick="addTrackingField(\'' + uid + '\')" style="margin-top:4px;font-size:10px;color:#1d4ed8;background:none;border:none;cursor:pointer;font-weight:600;padding:0;">+ Add Tracking #</button>';
+        + '<div style="display:grid;grid-template-columns:1fr 80px;gap:4px;margin-bottom:4px;">'
+        + '<input type="text" class="fi bpo-tracking-input-' + uid + '" placeholder="Tracking #" style="font-size:11px;font-family:IBM Plex Mono,monospace;">'
+        + '<input type="number" class="fi bpo-weight-box-input-' + uid + '" placeholder="lbs" min="0" step="0.1" style="font-size:11px;">'
+        + '</div></div>'
+        + '<button type="button" onclick="addTrackingField(\'' + uid + '\')" style="margin-top:4px;font-size:10px;color:#1d4ed8;background:none;border:none;cursor:pointer;font-weight:600;padding:0;">+ Add Box</button>';
     } else if (carrier === 'LTL') {
       trackingWrap.innerHTML =
         '<div style="font-size:10px;color:#6b7280;margin-bottom:3px;font-weight:600;">PRO #</div>'
@@ -8693,13 +8719,13 @@ function toggleBpoFields(uid) {
 function addTrackingField(uid) {
   const list = document.getElementById('bpo-tracking-list-' + uid);
   if (!list) return;
-  const inp = document.createElement('input');
-  inp.type = 'text';
-  inp.className = 'fi bpo-tracking-input-' + uid;
-  inp.placeholder = 'Tracking #';
-  inp.style.cssText = 'width:100%;font-size:11px;margin-bottom:4px;font-family:IBM Plex Mono,monospace;';
-  list.appendChild(inp);
-  inp.focus();
+  const row = document.createElement('div');
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 80px;gap:4px;margin-bottom:4px;';
+  row.innerHTML =
+    '<input type="text" class="fi bpo-tracking-input-' + uid + '" placeholder="Tracking #" style="font-size:11px;font-family:\'IBM Plex Mono\',monospace;">' +
+    '<input type="number" class="fi bpo-weight-box-input-' + uid + '" placeholder="lbs" min="0" step="0.1" style="font-size:11px;">';
+  list.appendChild(row);
+  row.querySelector('.bpo-tracking-input-' + uid).focus();
 }
 
 // 모든 PO에 LTL 일괄 적용
@@ -8719,11 +8745,11 @@ function applyLtlToAll() {
 function applyLtlToChecked() {
   const freight = document.getElementById('batch-ltl-freight')?.value || '';
   const pro = document.getElementById('batch-ltl-pro')?.value || '';
+  const weight = document.getElementById('batch-ltl-weight')?.value || '';
   (window._batchShipItems||[]).forEach(({ orderId, wh }) => {
     const uid = orderId + '_' + wh;
     const applyChk = document.getElementById('bpo-ltl-apply-' + uid);
     if (!applyChk?.checked) return;
-    // carrier를 LTL로 자동 세팅
     const carrierEl = document.getElementById('bpo-carrier-' + uid);
     if (carrierEl && carrierEl.value !== 'LTL') {
       carrierEl.value = 'LTL';
@@ -8734,8 +8760,10 @@ function applyLtlToChecked() {
     }
     const freightEl = document.getElementById('bpo-freight-' + uid);
     const trackingEl = document.getElementById('bpo-tracking-' + uid);
+    const weightEl = document.getElementById('bpo-weight-' + uid);
     if (freightEl) freightEl.value = freight;
     if (trackingEl) trackingEl.value = pro;
+    if (weightEl) weightEl.value = weight;
   });
 }
 
@@ -8834,6 +8862,7 @@ async function confirmBatchShip() {
     // carrier별 tracking 데이터 수집
     let tracking = '';
     let shipNote = '';
+    let bpoWeightCalc = '';
     if (carrier === 'Will Call') {
       const pickupBy = document.getElementById('bpo-pickup-by-' + uid)?.value || '';
       const pickupDate = document.getElementById('bpo-pickup-date-' + uid)?.value || '';
@@ -8841,6 +8870,9 @@ async function confirmBatchShip() {
     } else if (carrier === 'UPS' || carrier === 'FedEx') {
       const inputs = document.querySelectorAll('.bpo-tracking-input-' + uid);
       tracking = [...inputs].map(i => i.value.trim()).filter(Boolean).join(', ');
+      const wInputs = document.querySelectorAll('.bpo-weight-box-input-' + uid);
+      const total = [...wInputs].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+      if (total > 0) bpoWeightCalc = total.toFixed(1);
     } else if (carrier === 'Other') {
       const otherCarrierName = document.getElementById('bpo-other-carrier-' + uid)?.value || '';
       tracking = document.getElementById('bpo-tracking-' + uid)?.value || '';
@@ -8854,10 +8886,12 @@ async function confirmBatchShip() {
     _shippedEmp = emp;
     const bpoNote = document.getElementById('bpo-note-' + uid)?.value || '';
     const finalNote = [shipNote, bpoNote].filter(Boolean).join(' | ');
+    const bpoWeight = bpoWeightCalc || document.getElementById('bpo-weight-' + uid)?.value || document.getElementById('batch-ltl-weight')?.value || '';
     document.getElementById('ship-date-inp').value = shipDate;
     document.getElementById('ship-carrier').value = carrier;
     document.getElementById('ship-tracking').value = tracking;
     document.getElementById('ship-note').value = finalNote;
+    if (document.getElementById('ship-weight')) document.getElementById('ship-weight').value = bpoWeight;
     if (document.getElementById('ship-freight-carrier')) document.getElementById('ship-freight-carrier').value = freight;
     if (document.getElementById('ship-send-email')) document.getElementById('ship-send-email').checked = sendEmail;
 
@@ -9064,7 +9098,15 @@ async function _doShippedCore(emp) {
   if (sendEmail) {
     showToast('📧 이메일 발송 중...');
     const freightCarrier = document.getElementById('ship-freight-carrier')?.value || '';
-    const shippingInfo = { carrier, tracking, freightCarrier };
+    let weight = '';
+    if (carrier === 'UPS' || carrier === 'FedEx') {
+      const weightInputs = document.querySelectorAll('.ship-weight-input');
+      const total = [...weightInputs].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+      if (total > 0) weight = total.toFixed(1);
+    } else {
+      weight = document.getElementById('ship-weight')?.value || '';
+    }
+    const shippingInfo = { carrier, tracking, freightCarrier, weight };
 
     // Packing List HTML 생성
     const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
@@ -9821,7 +9863,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
 // ═══════════════════════════════════════════════════════
 function buildBolHtml(order, lines, shipInfo, signatureData) {
   const dateStr = shipInfo?.shipDate || new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
-  const bolNum = 'BOL-' + (order.order_number || '').replace(/[^A-Z0-9]/g,'') + '-' + Date.now().toString().slice(-4);
+  const bolNum = (order.customer_po || order.order_number || '').replace(/[^A-Z0-9]/gi,'-').replace(/-+/g,'-').replace(/^-|-$/g,'') + '-' + new Date().toISOString().slice(2,10).replace(/-/g,'');
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
   const sorted = [...lines].sort((a,b) => {
@@ -14220,7 +14262,7 @@ function showCreditHoldFlash(overAmt) {
             <span style="font-size:10px;font-weight:700;color:#fff;white-space:nowrap;">모든 PO에 적용</span>
           </label>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
           <div>
             <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Freight Company</label>
             <input type="text" id="batch-ltl-freight" class="fi" placeholder="XPO, SAIA, ODFL..." style="width:100%;" oninput="applyLtlToChecked();if(document.getElementById('batch-ltl-apply-all')?.checked)applyLtlToAll()"/>
@@ -14228,6 +14270,10 @@ function showCreditHoldFlash(overAmt) {
           <div>
             <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>
             <input type="text" id="batch-ltl-pro" class="fi" placeholder="PRO Number" style="width:100%;font-family:'IBM Plex Mono',monospace;" oninput="applyLtlToChecked();if(document.getElementById('batch-ltl-apply-all')?.checked)applyLtlToAll()"/>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Total Weight (lbs)</label>
+            <input type="number" id="batch-ltl-weight" class="fi" placeholder="예: 120" min="0" step="0.1" style="width:100%;" oninput="applyLtlToChecked();if(document.getElementById('batch-ltl-apply-all')?.checked)applyLtlToAll()"/>
           </div>
         </div>
       </div>
@@ -14312,6 +14358,10 @@ function showCreditHoldFlash(overAmt) {
         <div id="ship-tracking-wrap">
           <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="ship-tracking-label">Tracking # / PRO #</label>
           <input type="text" id="ship-tracking" class="fi" placeholder="예: 1Z999AA10123456784" style="width:100%;font-family:'IBM Plex Mono',monospace;"/>
+        </div>
+        <div id="ship-weight-wrap">
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Total Weight (lbs)</label>
+          <input type="number" id="ship-weight" class="fi" placeholder="예: 45" min="0" step="0.1" style="width:100%;"/>
         </div>
         <div>
           <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">메모</label>
