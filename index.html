@@ -12145,8 +12145,13 @@ const custName = (d.customer_name||'').toLowerCase().trim();
     document.getElementById('inv-cust-sel').value = matchedCust.id;
     window._custPrefWh = matchedCust.preferred_warehouse || 'SC';
     if (matchedCust.terms) document.getElementById('inv-cust-terms').value = matchedCust.terms;
-    if (matchedCust.bill_address) document.getElementById('inv-bill-addr').value = matchedCust.bill_address;
-    if (matchedCust.ship_address) document.getElementById('inv-ship-addr').value = matchedCust.ship_address;
+    // 주소: 엑셀에서 온 것 우선, 없으면 customers DB 값 사용
+    const billFromExcel = d.bill_to_address || d.billing_address || '';
+    const shipFromExcel = d.ship_to_address || d.shipping_address || '';
+    const billFromDb = matchedCust.bill_address || matchedCust.address || '';
+    const shipFromDb = matchedCust.ship_address || matchedCust.bill_address || matchedCust.address || '';
+    document.getElementById('inv-bill-addr').value = billFromExcel || billFromDb;
+    document.getElementById('inv-ship-addr').value = shipFromExcel || shipFromDb;
   }
   // AUTO 처리
   let _applyPrefWh = window._custPrefWh || 'SC';
@@ -12244,9 +12249,10 @@ function onCustSelChange(sel) {
   const custId = sel.value;
   if (!custId) return;
   const cust = customers.find(c => c.id === custId);
+  console.log('onCustSelChange:', custId, cust);
   if (!cust) return;
   // 거래처 이름 표시
-  const nameEl = document.getElementById('inv-cust-name');
+  const nameEl = document.getElementById('inv-cust');
   if (nameEl) nameEl.value = cust.name || '';
   // Terms 자동 채우기
   if (cust.terms) {
@@ -12256,12 +12262,11 @@ function onCustSelChange(sel) {
   // Bill To / Ship To 주소 자동 채우기
   const billEl = document.getElementById('inv-bill-addr');
   const shipEl = document.getElementById('inv-ship-addr');
-  if (billEl && (cust.bill_address || cust.address)) {
-    billEl.value = cust.bill_address || cust.address || '';
-  }
-  if (shipEl && (cust.ship_address || cust.bill_address || cust.address)) {
-    shipEl.value = cust.ship_address || cust.bill_address || cust.address || '';
-  }
+  const billAddr = cust.bill_address || cust.address || '';
+  const shipAddr = cust.ship_address || cust.bill_address || cust.address || '';
+  console.log('addresses:', { billAddr, shipAddr });
+  if (billEl) billEl.value = billAddr;
+  if (shipEl) shipEl.value = shipAddr;
   // 선호 창고 설정
   if (cust.preferred_warehouse) window._custPrefWh = cust.preferred_warehouse;
 }
