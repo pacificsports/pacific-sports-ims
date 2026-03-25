@@ -790,7 +790,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <option value="CA">CA — Eastvale</option>
           </select>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;min-width:900px;">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;min-width:700px;">
           <div id="os-kpi-0" style="background:#f8fafc;border:2px solid #e2e8f0;border-top:3px solid #6b7280;border-radius:8px;padding:10px 14px;cursor:pointer;" onclick="osFilterStatus('po_entered')">
             <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;">📥 PO Entered</div>
             <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-entered">—</div>
@@ -816,12 +816,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             </div>
           </div>
           <div id="os-kpi-3" style="background:#f0fdf4;border:2px solid #bbf7d0;border-top:3px solid #16a34a;border-radius:8px;padding:10px 14px;cursor:pointer;" onclick="osFilterStatus('shipped')">
-            <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase;">🚚 Shipped</div>
+            <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase;">🚚 Shipped & Invoiced</div>
             <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-shipped">—</div>
-          </div>
-          <div id="os-kpi-4" style="background:#f5f3ff;border:2px solid #ddd6fe;border-top:3px solid #7c3aed;border-radius:8px;padding:10px 14px;cursor:pointer;" onclick="showPanel('completed', document.querySelector('.ntab[onclick*=\"completed\"]'))">
-            <div style="font-size:10px;font-weight:700;color:#7c3aed;text-transform:uppercase;">🧾 Invoiced</div>
-            <div style="font-size:22px;font-weight:800;color:#111827;margin-top:2px;" id="os-kpi-invoiced">—</div>
           </div>
 
         </div>
@@ -4923,7 +4919,7 @@ async function loadOrderStatus() {
 
   const { data } = await db.from('orders')
     .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail)')
-    .not('status', 'in', '("cancelled")')
+    .not('status', 'in', '("cancelled","completed")')
     .order('created_at', { ascending: false });
 
   let orders = data || [];
@@ -4997,8 +4993,7 @@ async function loadOrderStatus() {
     entered:   sortByUrgency(allCards.filter(c => statusMatch(c, ['po_entered','open','credit_hold','rejected']))),
     preparing: sortByUrgency(allCards.filter(c => statusMatch(c, ['preparing']))),
     ready:     sortByUrgency(allCards.filter(c => statusMatch(c, ['ready_to_ship']))),
-    shipped:   allCards.filter(c => statusMatch(c, ['shipped'])),
-    invoiced:  [], // invoiced는 Completed 탭으로 이동
+    shipped:   allCards.filter(c => statusMatch(c, ['shipped','invoiced'])),
     backorder: sortByUrgency(allCards.filter(c => statusMatch(c, ['backordered','partial']))),
   };
 
@@ -5007,7 +5002,7 @@ async function loadOrderStatus() {
   document.getElementById('os-kpi-preparing').textContent = [...new Set(cols.preparing.map(c=>c.id))].length;
   document.getElementById('os-kpi-ready').textContent     = [...new Set(cols.ready.map(c=>c.id))].length;
   document.getElementById('os-kpi-shipped').textContent   = [...new Set(cols.shipped.map(c=>c.id))].length;
-  document.getElementById('os-kpi-invoiced').textContent  = [...new Set(cols.invoiced.map(c=>c.id))].length;
+  const osKpiInv = document.getElementById('os-kpi-invoiced'); if (osKpiInv) osKpiInv.textContent = 0;
   const backorderCount = [...new Set(cols.backorder.map(c=>c.id))].length;
   const osKpiBo2 = document.getElementById('os-kpi-backorder'); if (osKpiBo2) osKpiBo2.textContent = backorderCount;
   const backWrap = document.getElementById('os-kpi-backorder-wrap');
@@ -5047,7 +5042,7 @@ async function loadOrderStatus() {
   const CA_BORDER = '#ea580c';
 
   // ── Row 기반 타임라인 렌더링
-  const COLS = ['entered','preparing','ready','shipped','invoiced','backorder'];
+  const COLS = ['entered','preparing','ready','shipped','backorder'];
 
   // 카드 HTML 생성 함수
   function makeCardHtml(o, col) {
@@ -5237,7 +5232,10 @@ async function loadOrderStatus() {
         <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','${wh}')">📋 Print Packing List</button>
         <button class="btn btn-sm btn-green" style="width:100%;margin-top:4px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>
         <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','ready_to_ship','preparing')">↩ Back to Preparing</button>`:''}
-      ${col==='shipped'?`<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>`:''}
+      ${col==='shipped'? (o._status === 'invoiced'
+        ? `<div style="width:100%;margin-top:8px;font-size:10px;background:#f0fdf4;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:5px 8px;text-align:center;font-weight:600;">✅ Invoice Sent</div>`
+        : `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>`)
+      :''}
       ${col==='backorder'?`
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
           <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="event.stopPropagation();startBackOrder('${o.id}','SC')">▶ Start Order — SC</button>
@@ -5253,7 +5251,7 @@ async function loadOrderStatus() {
     if (card._status === 'preparing') return 'preparing';
     if (card._status === 'ready_to_ship') return 'ready';
     if (card._status === 'shipped') return 'shipped';
-    if (card._status === 'invoiced') return 'invoiced';
+    if (card._status === 'invoiced') return 'shipped'; // invoiced도 shipped 컬럼에 표시
     if (['backordered','partial'].includes(card._status)) return 'backorder';
     return 'entered';
   }
@@ -5773,7 +5771,7 @@ async function loadCompleted() {
 
   const { data: orders } = await db.from('orders')
     .select('*, warehouses(code,name)')
-    .in('status', ['invoiced','cancelled'])
+    .in('status', ['invoiced','completed','cancelled'])
     .order('created_at', { ascending: false });
 
   _completedOrders = orders || [];
@@ -5787,7 +5785,7 @@ async function loadCompleted() {
     returnsMap[r.order_id].count++;
   });
 
-  const invoiced = _completedOrders.filter(function(o) { return o.status === 'invoiced'; });
+  const invoiced = _completedOrders.filter(function(o) { return o.status === 'invoiced' || o.status === 'completed'; });
   const cancelled = _completedOrders.filter(function(o) { return o.status === 'cancelled'; });
   const totalRevenue = invoiced.reduce(function(s,o) { return s + (o.total_amount||0); }, 0);
 
@@ -9250,7 +9248,7 @@ async function sendInvoiceEmail() {
   const btn = document.querySelector('#modal-invoice-review .btn-primary');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 발송 중...'; }
 
-  await updateWhStatus(_invoiceOrderId, _invoiceWh || 'SC', 'invoiced');
+  await updateWhStatus(_invoiceOrderId, _invoiceWh || 'SC', 'completed');
 
   try {
     const { data: order } = await db.from('orders').select('*').eq('id', _invoiceOrderId).single();
@@ -14368,12 +14366,12 @@ function showCreditHoldFlash(overAmt) {
 
 <!-- ── Mark as Shipped 모달 ── -->
 <div id="modal-shipped" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:12px;width:520px;max-width:95vw;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-    <div style="padding:20px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:#fff;z-index:1;">
+  <div style="background:#fff;border-radius:12px;width:520px;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:20px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
       <div style="font-size:16px;font-weight:700;color:#111827;">🚛 Mark as Shipped</div>
       <button onclick="document.getElementById('modal-shipped').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
     </div>
-    <div style="padding:20px 24px;">
+    <div style="padding:20px 24px;overflow-y:auto;flex:1;">
       <div id="modal-shipped-info" style="font-size:12px;color:#6b7280;margin-bottom:16px;padding:8px 12px;background:#f9fafb;border-radius:6px;"></div>
 
       <!-- 출고 정보 -->
@@ -14443,7 +14441,7 @@ function showCreditHoldFlash(overAmt) {
       </div>
     </div>
 
-    <div style="padding:12px 24px;border-top:1px solid #e5e7eb;background:#fff;border-radius:0 0 12px 12px;">
+    <div style="padding:12px 24px;border-top:1px solid #e5e7eb;background:#fff;border-radius:0 0 12px 12px;flex-shrink:0;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
         <div style="font-size:11px;font-weight:600;color:#374151;white-space:nowrap;">담당자 PIN <span style="color:#dc2626">*</span></div>
         <input id="ship-pin" type="password" maxlength="4" inputmode="numeric" autocomplete="off"
