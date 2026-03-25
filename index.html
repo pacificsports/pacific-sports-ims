@@ -12173,10 +12173,31 @@ function applyPoPreview() {
   // 거래처 정보 채우기
   const _setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
   // inv-cust removed
+
+  // 주소에서 거래처 이름 첫 줄 제거 함수
+  const cleanAddr = (addr, custNm) => {
+    if (!addr) return '';
+    const lines = addr.split('\n');
+    const cn = (custNm||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const fl = (lines[0]||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    if (cn && cn.length >= 4 && (fl.includes(cn.slice(0,6)) || cn.includes(fl.slice(0,6)))) {
+      return lines.slice(1).join('\n').trim();
+    }
+    return addr.trim();
+  };
+
+  const rawBill = d.bill_to_address || d.ship_to_address || '';
+  const rawShip = d.ship_to_address || '';
+  const cleanedBill = cleanAddr(rawBill, d.customer_name);
+  const cleanedShip = cleanAddr(rawShip, d.customer_name);
+
+  const billEl = document.getElementById('inv-bill-addr');
+  const shipEl = document.getElementById('inv-ship-addr');
+  if (billEl) { billEl.value = cleanedBill; autoResizeTextarea(billEl); }
+  if (shipEl) { shipEl.value = cleanedShip; autoResizeTextarea(shipEl); }
+
   _setVal('inv-cust-po', d.po_number || '');
   _setVal('inv-cust-terms', d.terms || 'N30');
-  _setVal('inv-bill-addr', d.bill_to_address || d.ship_to_address || '');
-  _setVal('inv-ship-addr', d.ship_to_address || '');
   if (d.due_date) _setVal('inv-ship-date-inp', d.due_date);
 
   // customers DB에서 매칭 시도
@@ -12196,14 +12217,12 @@ const custName = (d.customer_name||'').toLowerCase().trim();
     window._custPrefWh = matchedCust.preferred_warehouse || 'SC';
     if (matchedCust.terms) document.getElementById('inv-cust-terms').value = matchedCust.terms;
     // 주소: 엑셀에서 온 것 우선, 없으면 customers DB 값 사용
-    const billFromExcel = d.bill_to_address || d.billing_address || '';
-    const shipFromExcel = d.ship_to_address || d.shipping_address || '';
+    const billFromExcel = cleanAddr(d.bill_to_address || d.billing_address || '', d.customer_name);
+    const shipFromExcel = cleanAddr(d.ship_to_address || d.shipping_address || '', d.customer_name);
     const billFromDb = matchedCust.bill_address || matchedCust.address || '';
     const shipFromDb = matchedCust.ship_address || matchedCust.bill_address || matchedCust.address || '';
-    document.getElementById('inv-bill-addr').value = billFromExcel || billFromDb;
-    document.getElementById('inv-ship-addr').value = shipFromExcel || shipFromDb;
-    autoResizeTextarea(document.getElementById('inv-bill-addr'));
-    autoResizeTextarea(document.getElementById('inv-ship-addr'));
+    if (billEl) { billEl.value = billFromExcel || billFromDb; autoResizeTextarea(billEl); }
+    if (shipEl) { shipEl.value = shipFromExcel || shipFromDb; autoResizeTextarea(shipEl); }
   }
   // AUTO 처리
   let _applyPrefWh = window._custPrefWh || 'SC';
