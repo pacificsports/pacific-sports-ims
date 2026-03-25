@@ -8094,6 +8094,17 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
       ? _bolFilesData.map(f => ({ base64: f.base64, mime: f.mimeType, filename: f.fileName }))
       : (bolData ? [{ base64: bolData.base64, mime: bolData.mimeType, filename: bolData.fileName }] : []);
 
+  // 박스/팔레트 수 계산
+  const totalBoxesShipped = (() => {
+    const carrier = shippingInfo.carrier || '';
+    if (carrier === 'UPS' || carrier === 'FedEx') {
+      const inputs = document.querySelectorAll('.ship-tracking-input');
+      return inputs.length || 0;
+    }
+    return 0;
+  })();
+  const totalPalletsShipped = shippingInfo.pallets || 0;
+
   const payload = {
     customer_name: order.customer_name,
     customer_po: order.customer_po || '',
@@ -8103,6 +8114,8 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     tracking_number: shippingInfo.tracking || '',
     freight_company: shippingInfo.freightCarrier || '',
     total_pcs: order.total_pcs || 0,
+    total_boxes: totalBoxesShipped || null,
+    total_pallets: totalPalletsShipped || null,
     wh: shippingInfo.wh || 'SC',
     note: shippingInfo.note || order.ship_note || '',
     lines: lineItems,
