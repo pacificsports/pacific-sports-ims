@@ -5843,6 +5843,8 @@ function renderCompletedTable(orders, returnsMap) {
       '<td style="text-align:center">'+(o.total_pcs||0).toLocaleString()+'</td>'+
       '<td style="font-weight:700;color:var(--primary)">'+((_currentEmployee&&['admin','supervisor'].includes(_currentEmployee.role))?'$'+(o.total_amount||0).toLocaleString():'—')+'</td>'+
       '<td style="font-size:11px;color:#6b7280;">'+(o.created_at||'').slice(0,10)+'</td>'+
+      '<td style="font-size:11px;color:#374151;font-weight:600;">'+(o.shipped_at||o.sc_shipped_at||o.ca_shipped_at ? (o.shipped_at||o.sc_shipped_at||o.ca_shipped_at).slice(0,10) : '—')+'</td>'+
+      '<td style="font-size:11px;color:#7c3aed;font-weight:600;">'+(o.invoiced_at ? o.invoiced_at.slice(0,10) : '—')+'</td>'+
       '<td>'+statusChipHtml+'</td>'+
       '<td>'+retBadge+'</td>'+
       '<td style="white-space:nowrap;">'+
@@ -5855,7 +5857,7 @@ function renderCompletedTable(orders, returnsMap) {
   document.getElementById('completed-table-wrap').innerHTML =
     '<table class="tbl"><thead><tr>'+
     '<th>Customer</th><th>PO #</th><th>WH</th>'+
-    '<th>Total Pcs</th><th>Amount</th><th>Date</th><th>Status</th><th>Returns</th><th></th>'+
+    '<th>Total Pcs</th><th>Amount</th><th>Rcvd</th><th>Shipped</th><th>Invoiced</th><th>Status</th><th>Returns</th><th></th>'+
     '</tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
@@ -7662,19 +7664,26 @@ async function openSignedBolModal() {
 
   // ship_addr / ship_address 둘 다 체크, 없으면 customer 테이블에서 가져오기
   if (order) {
+    console.log('BOL order raw:', { ship_addr: order.ship_addr, ship_address: order.ship_address, customer_id: order.customer_id, customer_name: order.customer_name });
     order.ship_addr = order.ship_addr || order.ship_address || '';
     if (!order.ship_addr.trim() && order.customer_id) {
       const { data: cust } = await db.from('customers').select('address,city,state,zip,ship_address').eq('id', order.customer_id).single();
+      console.log('BOL customer fallback:', cust);
       if (cust) {
         const addr = cust.ship_address || cust.address || '';
         const cityLine = [cust.city, cust.state, cust.zip].filter(Boolean).join(', ');
         order.ship_addr = [addr, cityLine].filter(Boolean).join('\n');
       }
     }
+    console.log('BOL final ship_addr:', order.ship_addr);
   }
 
   _bolOrder = order;
   _bolLines = lines || [];
+
+  // 서명 상태 완전 초기화
+  _bolHasSig = false;
+  _bolDrawing = false;
 
   // 날짜 기본값
   document.getElementById('bol-sign-date').value =
@@ -7685,10 +7694,10 @@ async function openSignedBolModal() {
   // 모달 열기
   document.getElementById('modal-signed-bol').style.display = 'flex';
 
-  // BOL 즉시 렌더링 + canvas 초기화
+  // BOL 렌더링 + canvas 초기화 (initBolCanvas 먼저 → canvas cloneNode 후 previewSignedBol)
   requestAnimationFrame(() => {
-    previewSignedBol();
     initBolCanvas();
+    previewSignedBol();
   });
 }
 
@@ -7739,10 +7748,10 @@ function getBolPos(e, canvas) {
 
 function bolTouchStart(e) { e.preventDefault(); _bolDrawing = true; const p = getBolPos(e, _bolSigCanvas); _bolSigCtx.beginPath(); _bolSigCtx.moveTo(p.x, p.y); hideBolPlaceholder(); }
 function bolTouchMove(e) { e.preventDefault(); if (!_bolDrawing) return; const p = getBolPos(e, _bolSigCanvas); _bolSigCtx.lineTo(p.x, p.y); _bolSigCtx.stroke(); _bolHasSig = true; }
-function bolTouchEnd(e) { e.preventDefault(); _bolDrawing = false; updateBolSigStatus(); }
+function bolTouchEnd(e) { e.preventDefault(); _bolDrawing = false; updateBolSigStatus(); previewSignedBol(); }
 function bolMouseDown(e) { _bolDrawing = true; const p = getBolPos(e, _bolSigCanvas); _bolSigCtx.beginPath(); _bolSigCtx.moveTo(p.x, p.y); hideBolPlaceholder(); }
 function bolMouseMove(e) { if (!_bolDrawing) return; const p = getBolPos(e, _bolSigCanvas); _bolSigCtx.lineTo(p.x, p.y); _bolSigCtx.stroke(); _bolHasSig = true; }
-function bolMouseUp() { _bolDrawing = false; if (_bolHasSig) updateBolSigStatus(); }
+function bolMouseUp() { _bolDrawing = false; if (_bolHasSig) { updateBolSigStatus(); previewSignedBol(); } }
 
 function hideBolPlaceholder() {
   const ph = document.getElementById('bol-sig-placeholder');
@@ -9093,6 +9102,7 @@ async function _doShippedCore(emp) {
     pickup_company: freightCarrier || null,
     ship_note: shipNote || null,
     shipped_by: _shippedEmp?.name || null,
+    shipped_at: new Date().toISOString(),
     [whShippedAtField]: new Date().toISOString()
   }).eq('id', orderId);
 
@@ -9206,10 +9216,24 @@ async function reviewAndSendInvoice(orderId, wh) {
   const companySettings = {};
   (settingsRows||[]).forEach(s => { companySettings[s.key] = s.value; });
 
-  // customer # / salesperson 로드
+  // customer # / salesperson + 주소 fallback 로드
   if (order.customer_id) {
-    const { data: custData } = await db.from('customers').select('customer_no,salesperson').eq('id', order.customer_id).single();
-    if (custData) { order.customer_no = custData.customer_no; order.salesperson = custData.salesperson; }
+    const { data: custData } = await db.from('customers').select('customer_no,salesperson,address,city,state,zip,ship_address,bill_address').eq('id', order.customer_id).single();
+    if (custData) {
+      order.customer_no = custData.customer_no;
+      order.salesperson = custData.salesperson;
+      // 주소 fallback
+      order.ship_addr = order.ship_addr || order.ship_address || custData.ship_address || custData.address || '';
+      if (order.ship_addr && custData.city) {
+        const cityLine = [custData.city, custData.state, custData.zip].filter(Boolean).join(', ');
+        if (!order.ship_addr.includes(custData.city)) order.ship_addr = order.ship_addr + '\n' + cityLine;
+      }
+      order.bill_addr = order.bill_addr || order.bill_address || custData.bill_address || custData.address || '';
+      if (order.bill_addr && custData.city) {
+        const cityLine = [custData.city, custData.state, custData.zip].filter(Boolean).join(', ');
+        if (!order.bill_addr.includes(custData.city)) order.bill_addr = order.bill_addr + '\n' + cityLine;
+      }
+    }
   }
 
   _invoiceOrderId = orderId;
@@ -9244,6 +9268,7 @@ async function reviewAndSendInvoice(orderId, wh) {
   if (pinInline) pinInline.value = '';
   const pinStatus = document.getElementById('invoice-pin-inline-status');
   if (pinStatus) pinStatus.textContent = '';
+  window._invoiceApprovedEmp = null;
   const sendBtn = document.getElementById('invoice-review-send-btn');
   if (sendBtn) {
     sendBtn.onclick = sendInvoiceWithPin;
@@ -9263,6 +9288,15 @@ async function sendInvoiceEmail() {
   if (!_invoiceOrderId) return;
   const btn = document.querySelector('#modal-invoice-review .btn-primary');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 발송 중...'; }
+
+  const now = new Date().toISOString();
+
+  // completed 상태로 변경 + invoiced_at 저장 (shipped_at 없으면 같이 저장)
+  const { data: currentOrder } = await db.from('orders').select('shipped_at, invoiced_at').eq('id', _invoiceOrderId).single();
+  await db.from('orders').update({
+    invoiced_at: now,
+    shipped_at: currentOrder?.shipped_at || now,
+  }).eq('id', _invoiceOrderId);
 
   await updateWhStatus(_invoiceOrderId, _invoiceWh || 'SC', 'completed');
 
@@ -9927,6 +9961,7 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
     const isCA = bolWh === 'CA';
     const alloc = isCA ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
     const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
+    console.log('BOL line:', l.color, l.size, 'alloc:', JSON.stringify(alloc), 'ppb:', ppb);
 
     // Full box pcs (non-PCR)
     const fullBoxPcs = Object.entries(alloc)
@@ -10143,31 +10178,37 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
   return renderSection(lines, '');
 }
 
-async function sendInvoiceWithPin() {
+async function verifyInvoicePinInline() {
   const pin = document.getElementById('invoice-pin-inline')?.value || '';
   const status = document.getElementById('invoice-pin-inline-status');
-  if (pin.length < 4) {
-    if (status) { status.textContent = '❌ PIN 4자리 입력'; status.style.color = '#dc2626'; }
-    document.getElementById('invoice-pin-inline')?.focus();
-    return;
-  }
+  if (pin.length < 4) return;
   const { data: emps } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
   const emp = emps?.[0];
   if (!emp || !['manager','supervisor','admin'].includes(emp.role)) {
     if (status) { status.textContent = '❌ PIN 오류'; status.style.color = '#dc2626'; }
     document.getElementById('invoice-pin-inline').value = '';
     document.getElementById('invoice-pin-inline')?.focus();
+    window._invoiceApprovedEmp = null;
     return;
   }
+  window._invoiceApprovedEmp = emp;
   if (status) { status.textContent = '✅ Approved by: ' + emp.name; status.style.color = '#15803d'; status.style.fontWeight = '600'; }
-  // PIN 확인 완료 — Send Invoice 버튼 활성화 상태 유지, 수동으로 다시 클릭
-  const sendBtn = document.getElementById('invoice-review-send-btn');
-  if (sendBtn) {
-    sendBtn.onclick = sendInvoiceEmail;
-    sendBtn.textContent = '📧 Send Invoice →';
-    sendBtn.style.background = '#15803d';
-    sendBtn.style.borderColor = '#15803d';
+}
+
+async function sendInvoiceWithPin() {
+  // PIN 먼저 체크
+  if (!window._invoiceApprovedEmp) {
+    const pin = document.getElementById('invoice-pin-inline')?.value || '';
+    const status = document.getElementById('invoice-pin-inline-status');
+    if (pin.length < 4) {
+      if (status) { status.textContent = '❌ PIN을 먼저 입력하세요'; status.style.color = '#dc2626'; }
+      document.getElementById('invoice-pin-inline')?.focus();
+      return;
+    }
+    await verifyInvoicePinInline();
+    if (!window._invoiceApprovedEmp) return;
   }
+  await sendInvoiceEmail();
 }
 
 function openInvoicePinModal() {
@@ -11384,39 +11425,56 @@ function playCashRegister() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const now = ctx.currentTime;
-    // 딸깍 소리
-    const clickFreqs = [[0, 800, 0.6],[0.04, 1200, 0.5],[0.08, 1600, 0.6],[0.12, 2200, 0.7],[0.16, 3000, 0.8],[0.20, 2200, 0.5]];
-    clickFreqs.forEach(([t, freq, vol]) => {
+    const duration = 5.0;
+
+    // 코인 떨어지는 소리 — 랜덤하게 계속 쏟아짐
+    const coinTimes = [];
+    for (let t = 0; t < duration; t += 0.0) {
+      coinTimes.push(t);
+      // 처음엔 빠르게, 나중엔 점점 느려짐
+      const speed = t < 1 ? 0.04 : t < 2.5 ? 0.07 : t < 4 ? 0.12 : 0.22;
+      t += speed + Math.random() * 0.03;
+    }
+
+    coinTimes.forEach(t => {
+      const freq = 1800 + Math.random() * 1400; // 1800~3200Hz 랜덤
+      const vol = 0.15 + Math.random() * 0.35;
+
+      // 코인 딸랑 소리 (짧고 높은 금속음)
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain); gain.connect(ctx.destination);
-      osc.type = 'square';
+      osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, now + t);
-      gain.gain.setValueAtTime(vol, now + t);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + t + 0.12);
-      osc.start(now + t); osc.stop(now + t + 0.15);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.7, now + t + 0.08);
+      gain.gain.setValueAtTime(0, now + t);
+      gain.gain.linearRampToValueAtTime(vol, now + t + 0.005);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + t + 0.09);
+      osc.start(now + t); osc.stop(now + t + 0.1);
+
+      // 두번째 하모닉 (금속 질감)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2); gain2.connect(ctx.destination);
+      osc2.type = 'square';
+      osc2.frequency.setValueAtTime(freq * 1.5, now + t);
+      gain2.gain.setValueAtTime(0, now + t);
+      gain2.gain.linearRampToValueAtTime(vol * 0.3, now + t + 0.003);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + t + 0.05);
+      osc2.start(now + t); osc2.stop(now + t + 0.06);
     });
-    // 치칭~ 높은 여운 (길게)
-    const bell = ctx.createOscillator();
-    const bellGain = ctx.createGain();
-    bell.connect(bellGain); bellGain.connect(ctx.destination);
-    bell.type = 'sine';
-    bell.frequency.setValueAtTime(2800, now + 0.25);
-    bell.frequency.exponentialRampToValueAtTime(2200, now + 1.5);
-    bellGain.gain.setValueAtTime(0, now + 0.25);
-    bellGain.gain.linearRampToValueAtTime(0.6, now + 0.28);
-    bellGain.gain.exponentialRampToValueAtTime(0.001, now + 1.8);
-    bell.start(now + 0.25); bell.stop(now + 1.85);
-    // 낮은 보조음
-    const bass = ctx.createOscillator();
-    const bassGain = ctx.createGain();
-    bass.connect(bassGain); bassGain.connect(ctx.destination);
-    bass.type = 'sine';
-    bass.frequency.setValueAtTime(1400, now + 0.25);
-    bass.frequency.exponentialRampToValueAtTime(1000, now + 1.2);
-    bassGain.gain.setValueAtTime(0.3, now + 0.25);
-    bassGain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
-    bass.start(now + 0.25); bass.stop(now + 1.25);
+
+    // 배경 저음 윙윙 (슬롯머신 느낌)
+    const hum = ctx.createOscillator();
+    const humGain = ctx.createGain();
+    hum.connect(humGain); humGain.connect(ctx.destination);
+    hum.type = 'sawtooth';
+    hum.frequency.setValueAtTime(120, now);
+    humGain.gain.setValueAtTime(0.08, now);
+    humGain.gain.setValueAtTime(0.08, now + duration - 0.5);
+    humGain.gain.linearRampToValueAtTime(0, now + duration);
+    hum.start(now); hum.stop(now + duration);
+
   } catch(e) { console.warn('Audio not available:', e); }
 }
 
@@ -14166,7 +14224,7 @@ function printInNewWindow(html) {
     <div style="font-size:12px;color:#6b7280;margin-bottom:20px;">Invoice 발송 전 Manager PIN을 입력해주세요.</div>
     <input id="invoice-pin-input" type="password" inputmode="numeric" maxlength="4" class="fi"
       style="width:100%;text-align:center;font-size:24px;letter-spacing:10px;font-family:'IBM Plex Mono',monospace;margin-bottom:8px;"
-      placeholder="····" oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyInvoicePin();">
+      placeholder="" oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyInvoicePin();">
     <div id="invoice-pin-error" style="color:#dc2626;font-size:12px;min-height:16px;margin-bottom:16px;text-align:center;"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;">
       <button class="btn" onclick="document.getElementById('modal-invoice-pin').style.display='none';">취소</button>
@@ -14508,7 +14566,7 @@ function showCreditHoldFlash(overAmt) {
           <label style="color:#6b7280;white-space:nowrap;">🔐 Manager PIN</label>
           <input id="invoice-pin-inline" type="password" inputmode="numeric" maxlength="4" class="fi"
             style="width:80px;font-size:13px;letter-spacing:6px;font-family:'IBM Plex Mono',monospace;padding:4px 8px;text-align:center;"
-            placeholder="····" oninput="this.value=this.value.replace(/[^0-9]/g,'');">
+            placeholder="" oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyInvoicePinInline();">
           <span id="invoice-pin-inline-status" style="font-size:11px;color:#6b7280;"></span>
         </div>
       </div>
