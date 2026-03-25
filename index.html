@@ -335,7 +335,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       maxlength="4"
       inputmode="numeric"
       pattern="[0-9]*"
-      placeholder="· · · ·"
+      placeholder=""
       autocomplete="off"
     />
     <div class="login-error" id="login-error"></div>
@@ -7662,18 +7662,22 @@ async function openSignedBolModal() {
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
 
-  // ship_addr / ship_address 둘 다 체크, 없으면 customer 테이블에서 가져오기
+  // ship_addr / ship_address / customer 테이블 순으로 fallback
   if (order) {
-    console.log('BOL order raw:', { ship_addr: order.ship_addr, ship_address: order.ship_address, customer_id: order.customer_id, customer_name: order.customer_name });
-    order.ship_addr = order.ship_addr || order.ship_address || '';
-    if (!order.ship_addr.trim() && order.customer_id) {
-      const { data: cust } = await db.from('customers').select('address,city,state,zip,ship_address').eq('id', order.customer_id).single();
-      console.log('BOL customer fallback:', cust);
+    const rawAddr = order.ship_addr || order.ship_address || '';
+    console.log('BOL raw addr:', rawAddr, '| customer_id:', order.customer_id);
+    if (!rawAddr.trim() && order.customer_id) {
+      const { data: cust } = await db.from('customers')
+        .select('ship_address, bill_address, address, city, state, zip')
+        .eq('id', order.customer_id).single();
+      console.log('BOL cust:', cust);
       if (cust) {
-        const addr = cust.ship_address || cust.address || '';
+        const addrLine = cust.ship_address || cust.bill_address || cust.address || '';
         const cityLine = [cust.city, cust.state, cust.zip].filter(Boolean).join(', ');
-        order.ship_addr = [addr, cityLine].filter(Boolean).join('\n');
+        order.ship_addr = [addrLine, cityLine].filter(Boolean).join('\n');
       }
+    } else {
+      order.ship_addr = rawAddr;
     }
     console.log('BOL final ship_addr:', order.ship_addr);
   }
@@ -9980,8 +9984,8 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
     if (shipPcs === 0) return ''; // 출고 수량 없는 라인 제외
 
     totalPcs += shipPcs;
-    // qty_boxes가 있으면 그걸 우선 사용 (혼합 박스 반영), 없으면 alloc 계산값
-    const lineBoxes = (l.qty_boxes != null && l.qty_boxes > 0) ? l.qty_boxes : (fullBoxes + (pcrPcs > 0 ? Math.ceil(pcrPcs / ppb) : 0));
+    const pcrBoxes = pcrPcs > 0 ? Math.ceil(pcrPcs / ppb) : 0;
+    const lineBoxes = fullBoxes + pcrBoxes;
     totalBoxes += lineBoxes;
 
     return `<tr style="border-bottom:1px solid #e5e7eb;">
@@ -9990,7 +9994,7 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
       <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${shipPcs.toLocaleString()}</td>
-      <td style="padding:6px 8px;font-size:11px;text-align:center;">${fullBoxes > 0 ? fullBoxes + (pcrPcs > 0 ? '+1' : '') : (pcrPcs > 0 ? '1' : '—')}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:center;">${lineBoxes > 0 ? lineBoxes : '—'}</td>
     </tr>`;
   }).filter(Boolean).join('');
 
@@ -12234,6 +12238,32 @@ function updateCustomerSelects() {
     sel.innerHTML += `<option value="${c.id}">${c.name}</option>`;
   });
   sel.value = cur;
+}
+
+function onCustSelChange(sel) {
+  const custId = sel.value;
+  if (!custId) return;
+  const cust = customers.find(c => c.id === custId);
+  if (!cust) return;
+  // 거래처 이름 표시
+  const nameEl = document.getElementById('inv-cust-name');
+  if (nameEl) nameEl.value = cust.name || '';
+  // Terms 자동 채우기
+  if (cust.terms) {
+    const termsEl = document.getElementById('inv-cust-terms');
+    if (termsEl) termsEl.value = cust.terms;
+  }
+  // Bill To / Ship To 주소 자동 채우기
+  const billEl = document.getElementById('inv-bill-addr');
+  const shipEl = document.getElementById('inv-ship-addr');
+  if (billEl && (cust.bill_address || cust.address)) {
+    billEl.value = cust.bill_address || cust.address || '';
+  }
+  if (shipEl && (cust.ship_address || cust.bill_address || cust.address)) {
+    shipEl.value = cust.ship_address || cust.bill_address || cust.address || '';
+  }
+  // 선호 창고 설정
+  if (cust.preferred_warehouse) window._custPrefWh = cust.preferred_warehouse;
 }
 
 
@@ -14674,7 +14704,7 @@ function showCreditHoldFlash(overAmt) {
       </table>
       <div style="margin-bottom:16px;">
         <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">담당자 PIN <span style="color:#dc2626">*</span></label>
-        <input id="wh-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="· · · ·" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyWhCompletePin()">
+        <input id="wh-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyWhCompletePin()">
         <div id="wh-complete-pin-error" style="color:#dc2626;font-size:11px;min-height:16px;margin-top:4px;"></div>
       </div>
       <div id="wh-complete-emp-info" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 12px;font-size:12px;color:#15803d;margin-bottom:16px;"></div>
@@ -14712,14 +14742,14 @@ function showCreditHoldFlash(overAmt) {
         <div id="pcr-approval-pending-section" style="display:none;">
           <div style="font-size:11px;color:#92400e;margin-bottom:8px;">⏳ 승인 요청됨 — Manager가 확인 후 승인해주세요</div>
           <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Manager PIN 입력 (승인 후)</label>
-          <input id="pcr-manager-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="· · · ·" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyPcrManagerPin()">
+          <input id="pcr-manager-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyPcrManagerPin()">
           <div id="pcr-manager-pin-error" style="color:#dc2626;font-size:11px;min-height:16px;margin-top:4px;"></div>
           <div id="pcr-manager-pin-ok" style="display:none;font-size:11px;color:#15803d;margin-top:4px;"></div>
         </div>
       </div>
       <div style="margin-bottom:16px;">
         <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">담당자 PIN <span style="color:#dc2626">*</span></label>
-        <input id="pcr-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="· · · ·" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyPcrCompletePin()">
+        <input id="pcr-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyPcrCompletePin()">
         <div id="pcr-complete-pin-error" style="color:#dc2626;font-size:11px;min-height:16px;margin-top:4px;"></div>
       </div>
       <div id="pcr-complete-emp-info" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 12px;font-size:12px;color:#15803d;margin-bottom:16px;"></div>
