@@ -824,9 +824,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
       <!-- 칸반 카드 영역 — 스크롤 가능 -->
       <div id="os-kanban" style="overflow-x:auto;isolation:isolate;">
-        <div id="os-board-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;min-width:900px;">
-          <!-- 카드 셀들 (JS가 동적으로 append) -->
-          <div id="os-rows-container" style="display:contents;"></div>
+        <div id="os-board-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;min-width:700px;align-items:start;">
+          <div id="os-col-card-entered" style="display:flex;flex-direction:column;gap:8px;"></div>
+          <div id="os-col-card-preparing" style="display:flex;flex-direction:column;gap:8px;"></div>
+          <div id="os-col-card-ready" style="display:flex;flex-direction:column;gap:8px;"></div>
+          <div id="os-col-card-shipped" style="display:flex;flex-direction:column;gap:8px;"></div>
         </div>
       </div>
       <!-- 기존 col div 유지 (JS 호환용, 숨김) -->
@@ -5256,13 +5258,16 @@ async function loadOrderStatus() {
     return 'entered';
   }
 
-  // row 기반 렌더링
-  const grid = document.getElementById('os-board-grid');
-  // 기존 카드 셀 전체 제거 (KPI는 별도 div에 있음)
-  if (grid) grid.innerHTML = '';
+  // 컬럼별 독립 div에 카드 렌더링
+  const colDivs = {
+    entered:   document.getElementById('os-col-card-entered'),
+    preparing: document.getElementById('os-col-card-preparing'),
+    ready:     document.getElementById('os-col-card-ready'),
+    shipped:   document.getElementById('os-col-card-shipped'),
+  };
+  Object.values(colDivs).forEach(d => { if (d) d.innerHTML = ''; });
 
-  if (grid) {
-    // 정렬: urgent 먼저, 그 다음 created_at 오래된 순
+  if (colDivs.entered) {
     const mainCards = allCards
       .filter(c => !['backordered','partial'].includes(c._status))
       .sort((a, b) => {
@@ -5272,16 +5277,20 @@ async function loadOrderStatus() {
         return new Date(a.created_at) - new Date(b.created_at);
       });
 
-    // 각 카드를 5개 셀로 분해하여 grid에 직접 append
-    const allCols = ['entered','preparing','ready','shipped','invoiced'];
     mainCards.forEach(card => {
       const cardCol = getColForCard(card);
-      allCols.forEach(col => {
-        const cell = document.createElement('div');
-        cell.style.cssText = 'min-height:60px;';
-        if (col === cardCol) cell.innerHTML = makeCardHtml(card, col);
-        grid.appendChild(cell);
-      });
+      const targetDiv = colDivs[cardCol];
+      if (!targetDiv) return;
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = makeCardHtml(card, cardCol);
+      if (wrapper.firstChild) targetDiv.appendChild(wrapper.firstChild);
+    });
+
+    // 빈 컬럼에 빈 상태 표시
+    Object.entries(colDivs).forEach(([col, div]) => {
+      if (div && div.children.length === 0) {
+        div.innerHTML = '<div style="font-size:11px;color:#9ca3af;padding:12px;text-align:center;">—</div>';
+      }
     });
 
     // 배치 선택 상태 복원
