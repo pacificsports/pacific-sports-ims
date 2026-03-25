@@ -5167,17 +5167,16 @@ async function loadOrderStatus() {
         const allDone = whOk2 && pcrOk2;
         const plReadyBtn = allDone ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>` : '';
 
-        const whPrinted2  = o[whPre2+'warehouse_printed_at'];
-        const pcrPrinted2 = o[whPre2+'pcroom_printed_at'];
-        const reprintWh  = prepNeedsWh  ? `<button class="btn btn-sm" style="width:100%;font-size:9px;background:#f8fafc;color:#64748b;border-color:#cbd5e1;" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">🖨️ Reprint WH Ticket</button>` : '';
-        const reprintPcr = prepNeedsPcr ? `<button class="btn btn-sm" style="width:100%;font-size:9px;background:#f8fafc;color:#64748b;border-color:#cbd5e1;" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">🖨️ Reprint Partial Ticket</button>` : '';
+        const reprintBtn = (prepNeedsWh || prepNeedsPcr)
+          ? `<button class="btn btn-sm" style="width:100%;font-size:9px;background:#f8fafc;color:#64748b;border-color:#cbd5e1;" onclick="event.stopPropagation();reprintPickTicketAll('${o.id}','${wh}')">🖨️ Reprint Pick Ticket & Labels</button>`
+          : '';
 
         return `
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
           ${whBtn}
           ${pcrBtn}
           ${plReadyBtn}
-          <div style="display:flex;gap:4px;">${reprintWh}${reprintPcr}</div>
+          ${reprintBtn}
           <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','preparing','po_entered')">↩ Back to PO Entered</button>
         </div>`;
       })():''}
@@ -6551,12 +6550,20 @@ async function printPickTicket(orderId, wh, ticketType) {
   const allPcrTransfers = enrichedLines.flatMap(l => (l._pcrTransfers||[]).map(t => ({ ...t, color: l.color, size: l.size, styleNum: l.styles?.style_number||'' })));
 
   document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, ticketType);
-  // 모든 Ticket 타입에 Box Labels 버튼 표시 (warehouse = full case, pcroom = partial)
-  const boxLabelBtn = document.getElementById('btn-print-box-labels');
-  if (boxLabelBtn) {
-    boxLabelBtn.style.display = 'inline-flex';
-    boxLabelBtn.textContent = ticketType === 'pcroom' ? '🏷 Print Box Labels (Zebra)' : '🏷 Print Case Labels (Zebra)';
-  }
+
+  // 버튼 표시 - WH full case 버튼과 Partial 버튼 각각 데이터 있을 때만 표시
+  const hasFullCases = enrichedLines.some(l => {
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    return Object.entries(alloc).some(([k,v]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|') && (typeof v==='object'?v.boxes||0:Math.floor((v||0)/(l.pcs_per_box||l.styles?.box_qty||72)))>0);
+  });
+  const hasPartial = enrichedLines.some(l => {
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    return Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0)>0);
+  });
+  const partialBtn = document.getElementById('btn-print-partial-labels');
+  const fullCaseBtn = document.getElementById('btn-print-fullcase-labels');
+  if (partialBtn) partialBtn.style.display = hasPartial ? 'inline-flex' : 'none';
+  if (fullCaseBtn) fullCaseBtn.style.display = hasFullCases ? 'inline-flex' : 'none';
   window._ptCurrentOrder = order;
   window._ptCurrentLines = enrichedLines;
   document.getElementById('modal-pt-preview').style.display = 'flex';
@@ -8033,11 +8040,11 @@ async function printPackingListFromCard(orderId, whFilter) {
 // BOX LABEL — Zebra ZPL (ZP450, 4x6 inch)
 // ══════════════════════════════════════════════════════
 async function autoPrintAllAndClose() {
-  // 모달 닫기 전에 데이터 미리 저장
   const order = window._ptCurrentOrder;
   const lines = window._ptCurrentLines;
   const wh = _ptWh;
   const ticketType = _ptTicketType;
+  const orderId = _ptOrderId;
   const html = document.getElementById('pt-preview-content').innerHTML;
 
   // Pick Ticket 프린트
@@ -8047,7 +8054,7 @@ async function autoPrintAllAndClose() {
   closeModal('modal-pt-preview');
   await checkAndMoveToPreparing();
 
-  // 잠깐 대기 후 Zebra 라벨 (프린트 창이 뜨고 나서)
+  // Zebra 라벨
   if (!order || !lines) return;
   await new Promise(r => setTimeout(r, 800));
 
@@ -8055,16 +8062,28 @@ async function autoPrintAllAndClose() {
     ? calcWarehouseBoxList(lines, wh, order)
     : calcPcrBoxList(lines, wh);
 
-  if (allBoxes.length === 0) return;
+  if (allBoxes.length > 0) {
+    const totalBoxes = allBoxes.length;
+    const zplAll = allBoxes.map(box =>
+      ticketType === 'warehouse'
+        ? buildCaseLabelZpl(box, box.boxNum, totalBoxes, order)
+        : buildBoxLabelZpl(box, totalBoxes, order)
+    ).join('\n');
+    await sendToZebraBrowserPrint(zplAll, totalBoxes);
+  }
 
-  const totalBoxes = allBoxes.length;
-  const zplAll = allBoxes.map(box =>
-    ticketType === 'warehouse'
-      ? buildCaseLabelZpl(box, box.boxNum, totalBoxes, order)
-      : buildBoxLabelZpl(box, totalBoxes, order)
-  ).join('\n');
-
-  await sendToZebraBrowserPrint(zplAll, totalBoxes);
+  // WH 티켓 후 PCR도 필요하면 자동으로 PCR 모달 열기 (reprint 흐름)
+  if (ticketType === 'warehouse' && orderId) {
+    const { data: checkLines } = await db.from('order_lines').select('qty_loose, alloc_detail, alloc_ca_detail, wh').eq('order_id', orderId);
+    const needsPcr = (checkLines||[]).some(l => {
+      const alloc = wh==='CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+      return Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0)>0) || (l.qty_loose||0)>0;
+    });
+    if (needsPcr) {
+      await new Promise(r => setTimeout(r, 600));
+      await printPickTicket(orderId, wh, 'pcroom');
+    }
+  }
 }
 
 // Pick Ticket 프린트 시 자동으로 전체 라벨 출력 (선택 모달 없음)
@@ -8091,22 +8110,20 @@ async function autoPrintBoxLabels() {
   await sendToZebraBrowserPrint(zplAll, totalBoxes);
 }
 
-async function printBoxLabels() {
+async function printBoxLabelsByType(type) {
   const order = window._ptCurrentOrder;
   const lines = window._ptCurrentLines;
   const wh = _ptWh;
-  const ticketType = _ptTicketType;
   if (!order || !lines) { showToast('❌ 오더 정보 없음'); return; }
-
-  // 박스 목록 계산
-  const allBoxes = ticketType === 'warehouse'
+  const allBoxes = type === 'warehouse'
     ? calcWarehouseBoxList(lines, wh, order)
     : calcPcrBoxList(lines, wh);
-
   if (allBoxes.length === 0) { showToast('❌ 박스 없음'); return; }
+  openBoxSelectModal(allBoxes, order, type);
+}
 
-  // 선택 모달 표시
-  openBoxSelectModal(allBoxes, order, ticketType);
+async function printBoxLabels() {
+  await printBoxLabelsByType(_ptTicketType);
 }
 
 function calcWarehouseBoxList(lines, wh, order) {
@@ -9981,6 +9998,37 @@ async function verifyInvoicePin() {
   sendInvoiceEmail();
 }
 
+// Preparing 카드 → Reprint Pick Ticket & Labels
+// WH 티켓이 필요하면 WH 먼저, PCR 필요하면 PCR 티켓 모달 열기
+// 사용자가 각 모달에서 Print + Labels 누르면 됨
+async function reprintPickTicketAll(orderId, wh) {
+  const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
+  const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+  if (!order || !lines) return;
+
+  const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const whLines = isSplit
+    ? lines.filter(l => wh === 'CA' ? (l.wh==='CA'||l.wh==='SC&CA') : (l.wh==='SC'||l.wh==='SC&CA'||!l.wh))
+    : lines;
+
+  const needsWh = whLines.some(l => {
+    if ((l.qty_boxes||0) > 0) return true;
+    const alloc = wh==='CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    return Object.keys(alloc).some(k => k.includes('TRANSFER|'));
+  });
+  const needsPcr = whLines.some(l => {
+    const alloc = wh==='CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    return Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0)>0) || (l.qty_loose||0)>0;
+  });
+
+  // WH 있으면 WH 먼저, 없으면 PCR로 바로
+  if (needsWh) {
+    await printPickTicket(orderId, wh, 'warehouse');
+  } else if (needsPcr) {
+    await printPickTicket(orderId, wh, 'pcroom');
+  }
+}
+
 async function markShipped(orderId) { doShipped(orderId); }
 async function approveAndInvoice(orderId) { reviewAndSendInvoice(orderId); }
 
@@ -10485,8 +10533,10 @@ async function viewPickTicket(orderId, orderNum) {
   const allPcrTransfers = [];
   document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, 'warehouse');
 
-  const boxLabelBtn = document.getElementById('btn-print-box-labels');
-  if (boxLabelBtn) boxLabelBtn.style.display = 'none';
+  const partialBtn2 = document.getElementById('btn-print-partial-labels');
+  const fullCaseBtn2 = document.getElementById('btn-print-fullcase-labels');
+  if (partialBtn2) partialBtn2.style.display = 'none';
+  if (fullCaseBtn2) fullCaseBtn2.style.display = 'inline-flex';
 
   window._ptCurrentOrder = order;
   window._ptCurrentLines = enrichedLines;
@@ -13821,9 +13871,8 @@ function showCreditHoldFlash(overAmt) {
       <button class="modal-close" style="color:#fff;" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">×</button>
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pt-preview-content"></div>
-    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
+    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 닫기</button>
-      <button class="btn" id="btn-print-box-labels" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="printBoxLabels()">🏷 Reprint Box Labels (Zebra)</button>
       <button class="btn" style="background:#374151;color:#fff;border-color:#374151;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');checkAndMoveToPreparing();">🖨️ Pick Ticket Only</button>
       <button class="btn btn-primary" onclick="autoPrintAllAndClose()">🖨️ Print + Labels</button>
     </div>
