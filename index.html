@@ -7567,6 +7567,9 @@ async function preparationComplete(orderId, wh) {
     plConfirmBtn.style.borderColor = '';
   }
   window._plApprovedEmp = null;
+  // Total Boxes 초기화
+  const boxField = document.getElementById('ship-total-boxes');
+  if (boxField) { boxField.value = ''; boxField.style.background = '#f1f5f9'; }
   document.getElementById('modal-pl-preview').style.display = 'flex';
 
   // Mark as Shipped 후 운송정보가 있으면 PL에 표시
@@ -7818,8 +7821,9 @@ function previewSignedBol() {
     ? (() => { const wi = document.querySelectorAll('.ship-weight-input'); const t = [...wi].reduce((s,i)=>s+(parseFloat(i.value)||0),0); return t>0?t.toFixed(1):''; })()
     : document.getElementById('ship-weight')?.value || '';
   const freightClass = document.getElementById('ship-freight-class')?.value || '70';
+  const totalBoxes = document.getElementById('ship-total-boxes')?.value || trackingCount || '';
   const shipInfo = { carrier, tracking, driverName, signDate, shipDate, freightCarrier,
-    weight, freightClass, wh: _shippedWh || 'SC' };
+    weight, freightClass, totalBoxes, wh: _shippedWh || 'SC' };
 
   const html = buildBolHtml(_bolOrder, _bolLines, shipInfo, sigData);
   document.getElementById('bol-preview-content').innerHTML = html;
@@ -7960,6 +7964,9 @@ function sumShipWeights() {
   const total = [...inputs].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
   const weightField = document.getElementById('ship-weight');
   if (weightField) weightField.value = total > 0 ? total.toFixed(1) : '';
+  // 박스 수 = tracking 개수
+  const boxField = document.getElementById('ship-total-boxes');
+  if (boxField) boxField.value = inputs.length || '';
 }
 
 let _bolFileData = null; // 하위 호환 (단일)
@@ -10021,8 +10028,6 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
     if (shipPcs === 0) return '';
 
     totalPcs += shipPcs;
-    totalPcrPcs += pcrPcs;
-    totalBoxes += fullBoxes;
 
     return `<tr style="border-bottom:1px solid #e5e7eb;">
       <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
@@ -10030,14 +10035,12 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
       <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${shipPcs.toLocaleString()}</td>
-      <td style="padding:6px 8px;font-size:11px;text-align:center;">${fullBoxes > 0 ? fullBoxes : (pcrPcs > 0 ? 'partial' : '—')}</td>
     </tr>`;
   }).filter(Boolean).join('');
 
-  // PCR pcs → 박스 수 (전체 PCR을 ppb로 나눔)
-  // 각 사이즈별 ppb가 다를 수 있으나 BOL은 합산 기준
-  const pcrBoxes = totalPcrPcs > 0 ? Math.ceil(totalPcrPcs / (sorted[0] ? (sorted[0].pcs_per_box || sorted[0].styles?.box_qty || 60) : 60)) : 0;
-  totalBoxes += pcrBoxes;
+  // Total Boxes: shipInfo에서 전달된 값 우선, 없으면 tracking 개수
+  const trackingCount = shipInfo?.tracking ? shipInfo.tracking.split(',').filter(t => t.trim()).length : 0;
+  totalBoxes = parseInt(shipInfo?.totalBoxes) || trackingCount || totalBoxes;
 
   const fromAddr = '1605 South Guignard Parkway\nSumter, SC 29150\nTel: (803) 760-6251';
   const signatureBlock = signatureData ? `
@@ -10112,7 +10115,6 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
           <th style="padding:7px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Color</th>
           <th style="padding:7px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Size</th>
           <th style="padding:7px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Qty (Pcs)</th>
-          <th style="padding:7px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Boxes</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -10120,7 +10122,6 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
         <tr style="background:#f1f5f9;font-weight:700;">
           <td colspan="4" style="padding:8px;text-align:right;font-size:12px;">TOTAL:</td>
           <td style="padding:8px;text-align:center;font-size:13px;">${totalPcs.toLocaleString()} pcs</td>
-          <td style="padding:8px;text-align:center;font-size:13px;">${totalBoxes} boxes</td>
         </tr>
       </tfoot>
     </table>
@@ -14591,6 +14592,10 @@ function showCreditHoldFlash(overAmt) {
         <div id="ship-weight-wrap">
           <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Total Weight (lbs)</label>
           <input type="number" id="ship-weight" class="fi" placeholder="예: 45" min="0" step="0.1" style="width:100%;"/>
+        </div>
+        <div id="ship-boxes-wrap">
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Total Boxes</label>
+          <input type="number" id="ship-total-boxes" class="fi" placeholder="자동" min="1" step="1" style="width:100%;background:#f1f5f9;"/>
         </div>
         <div>
           <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Freight Class</label>
