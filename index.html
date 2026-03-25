@@ -6411,7 +6411,7 @@ async function updateWhStatus(orderId, wh, newStatus) {
 // ── 1단계: Pick Ticket 프린트 → Preparing
 // ── WH / PC Room 타입별 픽티켓 프린트
 async function printPickTicketType(orderId, wh, ticketType) {
-  // 모달만 열기 — printed_at 기록과 Preparing 이동은 실제 Print 버튼 클릭 시
+  window._ptIsReprint = false;
   _ptOrderId = orderId;
   _ptWh = wh;
   _ptTicketType = ticketType;
@@ -6497,7 +6497,9 @@ async function printPickTicket(orderId, wh, ticketType) {
   _ptWh = wh || 'SC';
   _ptTicketType = ticketType || 'warehouse';
   const titleEl = document.getElementById('pt-modal-title');
-  if (titleEl) titleEl.textContent = ticketType === 'pcroom' ? '💻 Partial Pick Ticket' : '🏭 Warehouse Pick Ticket';
+  if (titleEl) titleEl.textContent = window._ptIsReprint
+    ? '🖨️ Pick Ticket'
+    : (ticketType === 'pcroom' ? '💻 Partial Pick Ticket' : '🏭 Warehouse Pick Ticket');
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
   // wh에 해당하는 라인 필터 (SC&CA 라인도 포함)
@@ -6545,19 +6547,20 @@ async function printPickTicket(orderId, wh, ticketType) {
 
   document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, ticketType);
 
-  // 버튼 표시 - WH full case 버튼과 Partial 버튼 각각 데이터 있을 때만 표시
+  // WH Labels Only 버튼 - full case 있을 때만
   const hasFullCases = enrichedLines.some(l => {
     const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
     return Object.entries(alloc).some(([k,v]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|') && (typeof v==='object'?v.boxes||0:Math.floor((v||0)/(l.pcs_per_box||l.styles?.box_qty||72)))>0);
   });
+  // Partial Labels Only 버튼 - PCR partial 있을 때만
   const hasPartial = enrichedLines.some(l => {
     const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
     return Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0)>0);
   });
-  const partialBtn = document.getElementById('btn-print-partial-labels');
-  const fullCaseBtn = document.getElementById('btn-print-fullcase-labels');
-  if (partialBtn) partialBtn.style.display = hasPartial ? 'inline-flex' : 'none';
-  if (fullCaseBtn) fullCaseBtn.style.display = hasFullCases ? 'inline-flex' : 'none';
+  const whLabelsBtn = document.getElementById('btn-wh-labels-only');
+  const partialLabelsBtn = document.getElementById('btn-partial-labels-only');
+  if (whLabelsBtn) whLabelsBtn.style.display = hasFullCases ? 'inline-flex' : 'none';
+  if (partialLabelsBtn) partialLabelsBtn.style.display = hasPartial ? 'inline-flex' : 'none';
   window._ptCurrentOrder = order;
   window._ptCurrentLines = enrichedLines;
   document.getElementById('modal-pt-preview').style.display = 'flex';
@@ -10034,6 +10037,7 @@ async function reprintPickTicketAll(orderId, wh) {
   });
 
   // WH 있으면 WH 먼저, 없으면 PCR로 바로
+  window._ptIsReprint = true;
   if (needsWh) {
     await printPickTicket(orderId, wh, 'warehouse');
   } else if (needsPcr) {
@@ -10545,10 +10549,10 @@ async function viewPickTicket(orderId, orderNum) {
   const allPcrTransfers = [];
   document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, 'warehouse');
 
-  const partialBtn2 = document.getElementById('btn-print-partial-labels');
-  const fullCaseBtn2 = document.getElementById('btn-print-fullcase-labels');
-  if (partialBtn2) partialBtn2.style.display = 'none';
-  if (fullCaseBtn2) fullCaseBtn2.style.display = 'inline-flex';
+  const whLabelsBtn2 = document.getElementById('btn-wh-labels-only');
+  const partialLabelsBtn2 = document.getElementById('btn-partial-labels-only');
+  if (whLabelsBtn2) whLabelsBtn2.style.display = 'inline-flex';
+  if (partialLabelsBtn2) partialLabelsBtn2.style.display = 'none';
 
   window._ptCurrentOrder = order;
   window._ptCurrentLines = enrichedLines;
@@ -13885,7 +13889,8 @@ function showCreditHoldFlash(overAmt) {
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pt-preview-content"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 닫기</button>
-      <button class="btn" id="btn-labels-only" style="background:#f1f5f9;color:#475569;border-color:#cbd5e1;" onclick="printLabelsOnly()">🏷 Labels Only</button>
+      <button class="btn" id="btn-wh-labels-only" style="display:none;background:#fff1f2;color:#be123c;border-color:#fda4af;" onclick="printBoxLabelsByType('warehouse')">🏷 WH Labels Only</button>
+      <button class="btn" id="btn-partial-labels-only" style="display:none;background:#f0fdfa;color:#0f766e;border-color:#5eead4;" onclick="printBoxLabelsByType('pcroom')">🏷 Partial Labels Only</button>
       <button class="btn" style="background:#374151;color:#fff;border-color:#374151;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');checkAndMoveToPreparing();">🖨️ Pick Ticket Only</button>
       <button class="btn btn-primary" onclick="autoPrintAllAndClose()">🖨️ Print + Labels</button>
     </div>
