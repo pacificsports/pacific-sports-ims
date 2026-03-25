@@ -7540,6 +7540,18 @@ async function preparationComplete(orderId, wh) {
   };
   if (plShipInfo.pro) plShipInfo.tracking = plShipInfo.pro;
   document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC', plShipInfo, document.getElementById('ship-note')?.value || '');
+  // 인라인 PIN 초기화
+  const plPinInline = document.getElementById('pl-pin-inline');
+  if (plPinInline) plPinInline.value = '';
+  const plPinStatus = document.getElementById('pl-pin-inline-status');
+  if (plPinStatus) plPinStatus.textContent = '';
+  const plConfirmBtn = document.getElementById('pl-confirm-btn');
+  if (plConfirmBtn) {
+    plConfirmBtn.onclick = verifyPlInlinePin;
+    plConfirmBtn.textContent = '✅ Confirm — Move to Ready to Ship';
+    plConfirmBtn.style.background = '';
+    plConfirmBtn.style.borderColor = '';
+  }
   document.getElementById('modal-pl-preview').style.display = 'flex';
 
   // Mark as Shipped 후 운송정보가 있으면 PL에 표시
@@ -7563,44 +7575,45 @@ async function preparationComplete(orderId, wh) {
 let _plWh = 'SC';
 
 function openPlConfirmPin() {
-  const modal = document.getElementById('modal-pl-confirm-pin');
-  const input = document.getElementById('pl-confirm-pin-input');
-  const err = document.getElementById('pl-confirm-pin-error');
-  if (input) { input.value = ''; input.style.borderColor = '#e5e7eb'; }
-  if (err) err.textContent = '';
-  if (modal) {
-    modal.style.display = 'flex';
-    setTimeout(() => input?.focus(), 100);
+  // 인라인 PIN으로 대체됨 - 하위 호환성
+}
+
+async function verifyPlInlinePin() {
+  const pin = document.getElementById('pl-pin-inline')?.value || '';
+  const status = document.getElementById('pl-pin-inline-status');
+  if (pin.length < 4) {
+    if (status) { status.textContent = '❌ PIN 4자리 입력'; status.style.color = '#dc2626'; }
+    document.getElementById('pl-pin-inline')?.focus();
+    return;
+  }
+  const { data: emps } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = emps?.[0];
+  if (!emp || !['manager','supervisor','admin'].includes(emp.role)) {
+    if (status) { status.textContent = '❌ PIN 오류'; status.style.color = '#dc2626'; }
+    document.getElementById('pl-pin-inline').value = '';
+    document.getElementById('pl-pin-inline')?.focus();
+    return;
+  }
+  if (status) { status.textContent = '✅ Approved by: ' + emp.name; status.style.color = '#15803d'; }
+  // 버튼 초록으로 변경 후 수동 클릭 대기
+  const btn = document.getElementById('pl-confirm-btn');
+  if (btn) {
+    btn.onclick = doPlConfirm;
+    btn.textContent = '✅ Confirm → Ready to Ship';
+    btn.style.background = '#15803d';
+    btn.style.borderColor = '#15803d';
   }
 }
 
-async function verifyPlConfirmPin() {
-  const input = document.getElementById('pl-confirm-pin-input');
-  const err = document.getElementById('pl-confirm-pin-error');
-  const pin = input?.value || '';
-  if (pin.length < 4) return;
-
-  const { data: emps } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
-  const emp = emps?.[0];
-  if (!emp || !['manager','owner','admin'].includes(emp.role)) {
-    if (err) err.textContent = '❌ Manager PIN이 올바르지 않습니다.';
-    if (input) { input.value = ''; input.style.borderColor = '#fca5a5'; setTimeout(() => { input.style.borderColor = '#e5e7eb'; input.focus(); }, 1000); }
-    return;
-  }
-
-  // 확인 완료 → Ready to Ship 처리
-  document.getElementById('modal-pl-confirm-pin').style.display = 'none';
+async function confirmMoveToReady() {
   closeModal('modal-pl-preview');
   if (!_plOrderId) return;
   const orderId = _plOrderId;
   const wh = _plWh;
   _plOrderId = null;
   await updateWhStatus(orderId, wh, 'ready_to_ship');
-  await db.from('orders').update({
-    prepared_by: emp.name,
-    prepared_at: new Date().toISOString()
-  }).eq('id', orderId);
-  showToast('✅ Ready to Ship — 확인: ' + emp.name);
+  await db.from('orders').update({ prepared_at: new Date().toISOString() }).eq('id', orderId);
+  showToast('✅ Ready to Ship으로 이동!');
   loadOrderStatus();
 }
 
@@ -14155,28 +14168,20 @@ function showCreditHoldFlash(overAmt) {
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pl-preview-content"></div>
 
-    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
-      <button class="btn" onclick="if(confirm('Packing List를 확인하지 않고 닫으시겠습니까?')) { _plOrderId=null; closeModal('modal-pl-preview'); }">취소</button>
-      <button class="btn" style="background:#0891b2;color:#fff;" onclick="printInNewWindow(document.getElementById('pl-preview-content').innerHTML)">🖨️ Print Packing List</button>
-      <button class="btn btn-green" onclick="openPlConfirmPin()">✅ Confirm — Move to Ready to Ship</button>
+    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:space-between;align-items:center;flex-wrap:wrap;background:#fff;flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <label style="font-size:12px;color:#6b7280;white-space:nowrap;">🔐 Manager PIN</label>
+        <input id="pl-pin-inline" type="password" inputmode="numeric" maxlength="4" class="fi"
+          style="width:80px;font-size:13px;letter-spacing:6px;font-family:'IBM Plex Mono',monospace;padding:4px 8px;text-align:center;"
+          placeholder="····" oninput="this.value=this.value.replace(/[^0-9]/g,'');">
+        <span id="pl-pin-inline-status" style="font-size:11px;font-weight:600;color:#6b7280;"></span>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="if(confirm('Packing List를 확인하지 않고 닫으시겠습니까?')) { _plOrderId=null; closeModal('modal-pl-preview'); }">취소</button>
+        <button class="btn" style="background:#0891b2;color:#fff;" onclick="printInNewWindow(document.getElementById('pl-preview-content').innerHTML)">🖨️ Print Packing List</button>
+        <button id="pl-confirm-btn" class="btn btn-green" onclick="verifyPlInlinePin()">✅ Confirm — Move to Ready to Ship</button>
+      </div>
     </div>
-  </div>
-</div>
-
-<!-- ── PL Confirm PIN 모달 ── -->
-<div id="modal-pl-confirm-pin" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:16px;padding:28px 32px;width:340px;max-width:95vw;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-    <div style="font-size:22px;margin-bottom:8px;">✅</div>
-    <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:4px;">Ready to Ship 확인</div>
-    <div style="font-size:13px;color:#6b7280;margin-bottom:20px;">Manager PIN을 입력하세요</div>
-    <input id="pl-confirm-pin-input" type="password" maxlength="4" inputmode="numeric"
-      placeholder="" autocomplete="off"
-      style="width:160px;height:52px;border:2px solid #e5e7eb;border-radius:10px;text-align:center;font-size:28px;letter-spacing:8px;font-family:'IBM Plex Mono',monospace;outline:none;transition:border-color 0.15s;"
-      oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyPlConfirmPin()"
-      onfocus="this.style.borderColor='#0891b2'"
-      onblur="this.style.borderColor='#e5e7eb'">
-    <div id="pl-confirm-pin-error" style="color:#dc2626;font-size:12px;min-height:18px;margin-top:8px;"></div>
-    <button onclick="document.getElementById('modal-pl-confirm-pin').style.display='none'" style="margin-top:16px;width:100%;padding:10px;background:#f9fafb;color:#6b7280;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;cursor:pointer;">취소</button>
   </div>
 </div>
 
