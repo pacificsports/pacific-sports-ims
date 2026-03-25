@@ -1198,6 +1198,13 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <div style="font-size:10px;color:#6b7280;">알람 없음</div>
             </div>
           </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:12px 16px;border:2px solid #e5e7eb;border-radius:8px;cursor:pointer;flex:1;min-width:140px;" id="building-opt-ca">
+            <input type="radio" name="building-select" value="ca" style="width:16px;height:16px;accent-color:#ea580c;">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#111827;">🏭 CA Warehouse</div>
+              <div style="font-size:10px;color:#6b7280;">CA Pick Ticket 프린트 시 꺼짐</div>
+            </div>
+          </label>
         </div>
         <div id="building-current" style="margin-top:10px;font-size:11px;color:#6b7280;"></div>
       </div>
@@ -7867,8 +7874,19 @@ function toggleShipTrackingLabel() {
       '<div id="ship-tracking-list">' +
       '<div style="display:grid;grid-template-columns:1fr 100px;gap:6px;margin-bottom:4px;">' +
       '<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" style="font-family:IBM Plex Mono,monospace;"/>' +
-      '<input type="number" class="fi ship-weight-input" placeholder="lbs" min="0" step="0.1"/>' +
+      '<input type="number" class="fi ship-weight-input" placeholder="lbs" min="0" step="0.1" oninput="sumShipWeights()"/>' +
       '</div></div>';
+    // Total Weight 필드를 읽기 전용 + 자동합산 표시로 변경
+    const weightField = document.getElementById('ship-weight');
+    if (weightField) {
+      weightField.readOnly = true;
+      weightField.style.background = '#f1f5f9';
+      weightField.style.color = '#374151';
+      weightField.placeholder = '자동 합산';
+      weightField.value = '';
+    }
+    const weightLabel = weightField?.previousElementSibling;
+    if (weightLabel) weightLabel.textContent = 'Total Weight (lbs) — 자동 합산';
   } else if (carrier === 'LTL') {
     trackingWrap.innerHTML =
       '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>' +
@@ -7885,6 +7903,16 @@ function toggleShipTrackingLabel() {
     trackingWrap.innerHTML =
       '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;" id="ship-tracking-label">Tracking # / PRO #</label>' +
       '<input type="text" id="ship-tracking" class="fi" placeholder="예: 1Z999AA10123456784" style="width:100%;font-family:IBM Plex Mono,monospace;"/>';
+    // weight 필드 수동 입력으로 복원
+    const weightField = document.getElementById('ship-weight');
+    if (weightField) {
+      weightField.readOnly = false;
+      weightField.style.background = '';
+      weightField.style.color = '';
+      weightField.placeholder = '예: 45';
+    }
+    const weightLabel = weightField?.previousElementSibling;
+    if (weightLabel) weightLabel.textContent = 'Total Weight (lbs)';
   }
 }
 
@@ -7895,9 +7923,16 @@ function addShipTrackingField() {
   row.style.cssText = 'display:grid;grid-template-columns:1fr 100px;gap:6px;margin-bottom:4px;';
   row.innerHTML =
     '<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" style="font-family:\'IBM Plex Mono\',monospace;">' +
-    '<input type="number" class="fi ship-weight-input" placeholder="lbs" min="0" step="0.1">';
+    '<input type="number" class="fi ship-weight-input" placeholder="lbs" min="0" step="0.1" oninput="sumShipWeights()">';
   list.appendChild(row);
   row.querySelector('.ship-tracking-input').focus();
+}
+
+function sumShipWeights() {
+  const inputs = document.querySelectorAll('.ship-weight-input');
+  const total = [...inputs].reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+  const weightField = document.getElementById('ship-weight');
+  if (weightField) weightField.value = total > 0 ? total.toFixed(1) : '';
 }
 
 let _bolFileData = null; // 하위 호환 (단일)
@@ -10219,11 +10254,10 @@ function updateBuildingUI() {
   const val = getBuildingSetting();
   const radio = document.querySelector(`input[name="building-select"][value="${val}"]`);
   if (radio) radio.checked = true;
-  const labels = { wh: '🏭 Warehouse', pcr: '💻 PC Room', office: '🏢 Office (알람 없음)' };
+  const labels = { wh: '🏭 Warehouse', pcr: '💻 PC Room', office: '🏢 Office (알람 없음)', ca: '🏭 CA Warehouse' };
   const el = document.getElementById('building-current');
   if (el) el.textContent = `현재 설정: ${labels[val] || '미설정'}`;
-  // 테두리 강조
-  ['wh','pcr','office'].forEach(b => {
+  ['wh','pcr','office','ca'].forEach(b => {
     const lbl = document.getElementById(`building-opt-${b}`);
     if (lbl) lbl.style.borderColor = b === val ? '#1d4ed8' : '#e5e7eb';
   });
@@ -10300,8 +10334,9 @@ async function checkUrgentAlarms() {
 
   // 이 빌딩에서 아직 확인 안 된 오더 필터
   const unacked = urgentOrders.filter(o => {
-    if (building === 'wh') return !o.urgent_wh_ack_at;
-    if (building === 'pcr') return !o.urgent_pcr_ack_at;
+    if (building === 'wh') return !o.urgent_wh_ack_at && (o.wh_code !== 'CA');
+    if (building === 'pcr') return !o.urgent_pcr_ack_at && (o.wh_code !== 'CA');
+    if (building === 'ca') return (!o.urgent_wh_ack_at || !o.urgent_pcr_ack_at) && (o.wh_code === 'CA' || o.wh_code === 'SC&CA');
     return false;
   });
 
@@ -10345,18 +10380,28 @@ async function startUrgentAlarmWatch() {
 }
 
 async function markWhTicketPrinted(orderId) {
-  // WH 픽티켓 프린트 시 WH 알람 ack
-  const { data: o } = await db.from('orders').select('priority, urgent_wh_ack_at').eq('id', orderId).single();
-  if (o?.priority === 'urgent' && !o?.urgent_wh_ack_at) {
-    await ackUrgentAlarm(orderId, 'wh');
+  const { data: o } = await db.from('orders').select('priority, wh_code, urgent_wh_ack_at, urgent_pcr_ack_at').eq('id', orderId).single();
+  if (!o || o.priority !== 'urgent') return;
+  const isCA = o.wh_code === 'CA';
+  if (isCA) {
+    // CA는 어느 쪽 프린트든 둘 다 ack
+    if (!o.urgent_wh_ack_at) await ackUrgentAlarm(orderId, 'wh');
+    if (!o.urgent_pcr_ack_at) await ackUrgentAlarm(orderId, 'pcr');
+  } else {
+    if (!o.urgent_wh_ack_at) await ackUrgentAlarm(orderId, 'wh');
   }
 }
 
 async function markPcrTicketPrinted(orderId) {
-  // Partial 픽티켓 프린트 시 PCR 알람 ack
-  const { data: o } = await db.from('orders').select('priority, urgent_pcr_ack_at').eq('id', orderId).single();
-  if (o?.priority === 'urgent' && !o?.urgent_pcr_ack_at) {
-    await ackUrgentAlarm(orderId, 'pcr');
+  const { data: o } = await db.from('orders').select('priority, wh_code, urgent_wh_ack_at, urgent_pcr_ack_at').eq('id', orderId).single();
+  if (!o || o.priority !== 'urgent') return;
+  const isCA = o.wh_code === 'CA';
+  if (isCA) {
+    // CA는 어느 쪽 프린트든 둘 다 ack
+    if (!o.urgent_wh_ack_at) await ackUrgentAlarm(orderId, 'wh');
+    if (!o.urgent_pcr_ack_at) await ackUrgentAlarm(orderId, 'pcr');
+  } else {
+    if (!o.urgent_pcr_ack_at) await ackUrgentAlarm(orderId, 'pcr');
   }
 }
 
