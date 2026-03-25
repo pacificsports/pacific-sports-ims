@@ -3501,7 +3501,18 @@ const lines = [...poLines].sort((a, b) => {
   plSet('pl-ref', order.customer_po || order.order_number);
   plSet('pl-date', dateStr);
   plSet('pl-sold-to', `<strong>${order.customer_name}</strong><br>${addrHtml(billAddr)}`, 'innerHTML');
-  plSet('pl-ship-to', `<strong>${order.customer_name || ''}</strong>${shipAddr ? '<br>' + addrHtml(shipAddr.replace(order.customer_name || '', '').replace(/^\s*[\n,]+/, '').trim()) : ''}`, 'innerHTML');
+  const shipAddrClean = (() => {
+    if (!shipAddr) return '';
+    const lines = shipAddr.split('\n');
+    const custNameNorm = (order.customer_name||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const firstLineNorm = (lines[0]||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    // 첫 줄이 거래처 이름과 유사하면 제거
+    if (custNameNorm && (firstLineNorm.includes(custNameNorm.slice(0,6)) || custNameNorm.includes(firstLineNorm.slice(0,6)))) {
+      return lines.slice(1).join('\n').trim();
+    }
+    return shipAddr;
+  })();
+  plSet('pl-ship-to', `<strong>${order.customer_name || ''}</strong>${shipAddrClean ? '<br>' + addrHtml(shipAddrClean) : ''}`, 'innerHTML');
   plSet('pl-po', order.customer_po || '—');
   plSet('pl-via', '—');
   plSet('pl-fob', fob);
@@ -9940,7 +9951,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;font-size:11px;">
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Customer</div><div style="font-weight:700;">${order.customer_name}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">PO #</div><div style="font-weight:700;">${order.customer_po||'—'}</div></div>
-      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship To</div><div style="font-weight:700;">${order.customer_name||'—'}</div><div style="font-weight:400;color:#374151;margin-top:2px;line-height:1.4;">${(order.ship_addr||'').replace(/\n/g,'<br>')||''}</div></div>
+      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship To</div><div style="font-weight:700;">${order.customer_name||'—'}</div><div style="font-weight:400;color:#374151;margin-top:2px;line-height:1.4;">${(() => { const addr = order.ship_addr||''; const lines = addr.split('\n'); const cn = (order.customer_name||'').toLowerCase().replace(/[^a-z0-9]/g,''); const fl = (lines[0]||'').toLowerCase().replace(/[^a-z0-9]/g,''); const clean = (cn && (fl.includes(cn.slice(0,6)) || cn.includes(fl.slice(0,6)))) ? lines.slice(1).join('\n').trim() : addr; return clean.replace(/\n/g,'<br>'); })()}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date || new Date().toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'})}</div></div>
     </div>
     <!-- Shipping Info -->
