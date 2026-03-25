@@ -10001,6 +10001,24 @@ async function verifyInvoicePin() {
 // Preparing 카드 → Reprint Pick Ticket & Labels
 // WH 티켓이 필요하면 WH 먼저, PCR 필요하면 PCR 티켓 모달 열기
 // 사용자가 각 모달에서 Print + Labels 누르면 됨
+// 라벨만 따로 프린트 (픽티켓 없이)
+async function printLabelsOnly() {
+  const order = window._ptCurrentOrder;
+  const lines = window._ptCurrentLines;
+  const wh = _ptWh;
+  const ticketType = _ptTicketType;
+  if (!order || !lines) { showToast('❌ 오더 정보 없음'); return; }
+
+  const allBoxes = ticketType === 'warehouse'
+    ? calcWarehouseBoxList(lines, wh, order)
+    : calcPcrBoxList(lines, wh);
+
+  if (allBoxes.length === 0) { showToast('❌ 라벨 출력할 박스 없음'); return; }
+
+  // 선택 모달 열기 (몇 번 박스부터 프린트할지 선택 가능)
+  openBoxSelectModal(allBoxes, order, ticketType);
+}
+
 async function reprintPickTicketAll(orderId, wh) {
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
@@ -13873,6 +13891,7 @@ function showCreditHoldFlash(overAmt) {
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pt-preview-content"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="_ptOrderId=null;_ptWh=null;closeModal('modal-pt-preview')">✕ 닫기</button>
+      <button class="btn" id="btn-labels-only" style="background:#f1f5f9;color:#475569;border-color:#cbd5e1;" onclick="printLabelsOnly()">🏷 Labels Only</button>
       <button class="btn" style="background:#374151;color:#fff;border-color:#374151;" onclick="printInNewWindow(document.getElementById('pt-preview-content').innerHTML);closeModal('modal-pt-preview');checkAndMoveToPreparing();">🖨️ Pick Ticket Only</button>
       <button class="btn btn-primary" onclick="autoPrintAllAndClose()">🖨️ Print + Labels</button>
     </div>
