@@ -6799,15 +6799,13 @@ async function openPcrComplete(orderId, wh) {
         .forEach(s => allItems.push({ size: s.size, qty: s.qty, styleNum: g.styleNum, color: g.color, boxQty: g.boxQty }));
     });
 
-    // 박스 채우기 — 현재 박스가 차면 새 박스
+    // 박스 채우기 — 같은 사이즈끼리 먼저, 박스 꽉 찰 때만 다음 박스로
     const defaultBoxQty = sortedGroups[0]?.boxQty || 60;
     let currentBox = { items: [], boxQty: defaultBoxQty, isCustom: false };
     let currentTotal = 0;
-    let currentColor = null;
 
     const flushBox = () => {
       if (currentBox.items.length > 0) {
-        // 박스의 주 색상 = 가장 많은 색상
         const colorTotals = {};
         currentBox.items.forEach(i => { colorTotals[i.color] = (colorTotals[i.color]||0) + i.qty; });
         const mainColor = Object.entries(colorTotals).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
@@ -6815,11 +6813,14 @@ async function openPcrComplete(orderId, wh) {
         window._pcrBoxes.push({ boxNum: globalBoxNum++, styleNum: mainStyle, color: mainColor, items: [...currentBox.items], boxQty: currentBox.boxQty, isCustom: false });
         currentBox = { items: [], boxQty: defaultBoxQty, isCustom: false };
         currentTotal = 0;
-        currentColor = null;
       }
     };
 
     allItems.forEach(item => {
+      // 현재 박스에 다른 사이즈가 있으면 새 박스 시작
+      if (currentBox.items.length > 0 && currentBox.items[currentBox.items.length - 1].size !== item.size) {
+        flushBox();
+      }
       let remaining = item.qty;
       while (remaining > 0) {
         const space = currentBox.boxQty - currentTotal;
@@ -6833,7 +6834,7 @@ async function openPcrComplete(orderId, wh) {
         if (currentTotal >= currentBox.boxQty) { flushBox(); }
       }
     });
-    flushBox(); // 마지막 박스 flush
+    flushBox();
 
     // 원본 스냅샷 저장 (renderPcrBoxes 전에 저장해야 isNewItem 체크가 정확함)
     window._pcrBoxesOriginal = JSON.parse(JSON.stringify(window._pcrBoxes));
