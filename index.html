@@ -1171,6 +1171,41 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
           <div>
+            <div style="font-size:14px;font-weight:700;color:#111827;">🏢 이 컴퓨터 위치 설정</div>
+            <div style="font-size:11px;color:#6b7280;margin-top:2px;">Urgent PO 알람을 받을 빌딩을 선택하세요. 브라우저에 저장됩니다.</div>
+          </div>
+          <button class="btn btn-primary" onclick="saveBuildingSetting()">💾 저장</button>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;padding:12px 16px;border:2px solid #e5e7eb;border-radius:8px;cursor:pointer;flex:1;min-width:140px;" id="building-opt-wh">
+            <input type="radio" name="building-select" value="wh" style="width:16px;height:16px;accent-color:#1d4ed8;">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#111827;">🏭 Warehouse</div>
+              <div style="font-size:10px;color:#6b7280;">WH Pick Ticket 알람</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:12px 16px;border:2px solid #e5e7eb;border-radius:8px;cursor:pointer;flex:1;min-width:140px;" id="building-opt-pcr">
+            <input type="radio" name="building-select" value="pcr" style="width:16px;height:16px;accent-color:#7c3aed;">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#111827;">💻 PC Room</div>
+              <div style="font-size:10px;color:#6b7280;">Partial Pick Ticket 알람</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:12px 16px;border:2px solid #e5e7eb;border-radius:8px;cursor:pointer;flex:1;min-width:140px;" id="building-opt-office">
+            <input type="radio" name="building-select" value="office" style="width:16px;height:16px;accent-color:#6b7280;">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#111827;">🏢 Office</div>
+              <div style="font-size:10px;color:#6b7280;">알람 없음</div>
+            </div>
+          </label>
+        </div>
+        <div id="building-current" style="margin-top:10px;font-size:11px;color:#6b7280;"></div>
+      </div>
+
+      <!-- Invoice 설정 섹션 -->
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <div>
             <div style="font-size:14px;font-weight:700;color:#111827;">🧾 Invoice Settings</div>
             <div style="font-size:11px;color:#6b7280;margin-top:2px;">Send Payment To 및 Return Policy 설정</div>
           </div>
@@ -1911,6 +1946,10 @@ async function startAppWithEmployee(emp) {
 
   await loadMasterData();
 
+  // 빌딩 알람 워치 시작
+  updateBuildingUI();
+  startUrgentAlarmWatch();
+
   setTimeout(() => {
     const allowedPanels = ROLE_TABS[emp.role] || ROLE_TABS.staff;
     const hash = window.location.hash.slice(1);
@@ -2079,7 +2118,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'receiving') loadReceivingHistory();
   if (name === 'intransit') loadInTransit();
   if (name === 'completed') loadCompleted();
-  if (name === 'settings') { loadSettings(); loadManagerApprovals(); }
+  if (name === 'settings') { loadSettings(); loadManagerApprovals(); updateBuildingUI(); }
 }
 
 // ══════════════════════════════════
@@ -6436,6 +6475,10 @@ async function checkAndMoveToPreparing() {
   const field = whPre + (ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at');
   await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
 
+  // Urgent 알람 ack
+  if (ticketType === 'warehouse') await markWhTicketPrinted(orderId);
+  else await markPcrTicketPrinted(orderId);
+
   const { data: updated } = await db.from('orders')
     .select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, status, sc_status, ca_status, wh_code, is_split_warehouse')
     .eq('id', orderId).single();
@@ -10079,6 +10122,175 @@ async function reprintPickTicketAll(orderId, wh) {
     await printPickTicket(orderId, wh, 'warehouse');
   } else if (needsPcr) {
     await printPickTicket(orderId, wh, 'pcroom');
+  }
+}
+
+// ══════════════════════════════════
+// BUILDING ALARM SYSTEM
+// ══════════════════════════════════
+let _urgentAlarmInterval = null;
+let _urgentAlarmCtx = null;
+let _urgentAlarmOrders = new Set();
+let _buildingRealtimeSub = null;
+
+function getBuildingSetting() {
+  return localStorage.getItem('ps_building') || 'office';
+}
+
+function saveBuildingSetting() {
+  const val = document.querySelector('input[name="building-select"]:checked')?.value;
+  if (!val) { showToast('❌ 빌딩을 선택해주세요'); return; }
+  localStorage.setItem('ps_building', val);
+  const labels = { wh: '🏭 Warehouse', pcr: '💻 PC Room', office: '🏢 Office' };
+  showToast(`✅ ${labels[val]}로 설정됨`);
+  updateBuildingUI();
+  // 알람 재시작
+  stopUrgentAlarm();
+  startUrgentAlarmWatch();
+}
+
+function updateBuildingUI() {
+  const val = getBuildingSetting();
+  const radio = document.querySelector(`input[name="building-select"][value="${val}"]`);
+  if (radio) radio.checked = true;
+  const labels = { wh: '🏭 Warehouse', pcr: '💻 PC Room', office: '🏢 Office (알람 없음)' };
+  const el = document.getElementById('building-current');
+  if (el) el.textContent = `현재 설정: ${labels[val] || '미설정'}`;
+  // 테두리 강조
+  ['wh','pcr','office'].forEach(b => {
+    const lbl = document.getElementById(`building-opt-${b}`);
+    if (lbl) lbl.style.borderColor = b === val ? '#1d4ed8' : '#e5e7eb';
+  });
+}
+
+function playUrgentAlarmLoop() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    _urgentAlarmCtx = ctx;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 5; i++) {
+      const t = now + i * 0.65;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(500, t);
+      osc.frequency.linearRampToValueAtTime(950, t + 0.3);
+      osc.frequency.linearRampToValueAtTime(500, t + 0.6);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.5, t + 0.05);
+      gain.gain.setValueAtTime(0.5, t + 0.55);
+      gain.gain.linearRampToValueAtTime(0, t + 0.65);
+      osc.start(t); osc.stop(t + 0.65);
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2); gain2.connect(ctx.destination);
+      osc2.type = 'square';
+      osc2.frequency.setValueAtTime(250, t);
+      osc2.frequency.linearRampToValueAtTime(475, t + 0.3);
+      osc2.frequency.linearRampToValueAtTime(250, t + 0.6);
+      gain2.gain.setValueAtTime(0, t);
+      gain2.gain.linearRampToValueAtTime(0.2, t + 0.05);
+      gain2.gain.setValueAtTime(0.2, t + 0.55);
+      gain2.gain.linearRampToValueAtTime(0, t + 0.65);
+      osc2.start(t); osc2.stop(t + 0.65);
+    }
+  } catch(e) {}
+}
+
+function stopUrgentAlarm() {
+  if (_urgentAlarmInterval) { clearInterval(_urgentAlarmInterval); _urgentAlarmInterval = null; }
+  try { if (_urgentAlarmCtx) { _urgentAlarmCtx.close(); _urgentAlarmCtx = null; } } catch(e) {}
+  _urgentAlarmOrders.clear();
+  // 알람 배너 제거
+  const banner = document.getElementById('urgent-alarm-banner');
+  if (banner) banner.remove();
+}
+
+function showUrgentAlarmBanner(orders) {
+  let banner = document.getElementById('urgent-alarm-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'urgent-alarm-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999998;background:#dc2626;color:#fff;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;font-weight:700;font-size:13px;animation:overdue-blink 0.8s infinite;';
+    document.body.appendChild(banner);
+  }
+  const names = orders.map(o => o.customer_name + ' (PO# ' + (o.customer_po||'') + ')').join(', ');
+  banner.innerHTML = `<span>🚨 URGENT PO 접수! — ${names}</span><button onclick="stopUrgentAlarm()" style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:4px 10px;border-radius:6px;cursor:pointer;font-weight:700;">✕ 닫기</button>`;
+}
+
+async function checkUrgentAlarms() {
+  const building = getBuildingSetting();
+  if (building === 'office') return;
+
+  // 미확인 urgent 오더 조회
+  let query = db.from('orders')
+    .select('id, customer_name, customer_po, priority, status, urgent_wh_ack_at, urgent_pcr_ack_at')
+    .eq('priority', 'urgent')
+    .in('status', ['po_entered', 'open', 'preparing']);
+
+  const { data: urgentOrders } = await query;
+  if (!urgentOrders) return;
+
+  // 이 빌딩에서 아직 확인 안 된 오더 필터
+  const unacked = urgentOrders.filter(o => {
+    if (building === 'wh') return !o.urgent_wh_ack_at;
+    if (building === 'pcr') return !o.urgent_pcr_ack_at;
+    return false;
+  });
+
+  if (unacked.length > 0) {
+    unacked.forEach(o => _urgentAlarmOrders.add(o.id));
+    showUrgentAlarmBanner(unacked);
+    if (!_urgentAlarmInterval) {
+      playUrgentAlarmLoop();
+      _urgentAlarmInterval = setInterval(playUrgentAlarmLoop, 4000);
+    }
+  } else {
+    if (_urgentAlarmOrders.size > 0) stopUrgentAlarm();
+  }
+}
+
+async function ackUrgentAlarm(orderId, building) {
+  const col = building === 'wh' ? 'urgent_wh_ack_at' : 'urgent_pcr_ack_at';
+  await db.from('orders').update({ [col]: new Date().toISOString() }).eq('id', orderId);
+}
+
+async function startUrgentAlarmWatch() {
+  const building = getBuildingSetting();
+  if (building === 'office') return;
+
+  // 즉시 체크
+  await checkUrgentAlarms();
+
+  // Supabase Realtime 구독
+  if (_buildingRealtimeSub) { db.removeChannel(_buildingRealtimeSub); }
+  _buildingRealtimeSub = db.channel('urgent-alarm')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, async (payload) => {
+      const o = payload.new || {};
+      if (o.priority === 'urgent') await checkUrgentAlarms();
+      // ack 업데이트 감지 시 알람 체크
+      if (payload.old?.urgent_wh_ack_at !== payload.new?.urgent_wh_ack_at ||
+          payload.old?.urgent_pcr_ack_at !== payload.new?.urgent_pcr_ack_at) {
+        await checkUrgentAlarms();
+      }
+    })
+    .subscribe();
+}
+
+async function markWhTicketPrinted(orderId) {
+  // WH 픽티켓 프린트 시 WH 알람 ack
+  const { data: o } = await db.from('orders').select('priority, urgent_wh_ack_at').eq('id', orderId).single();
+  if (o?.priority === 'urgent' && !o?.urgent_wh_ack_at) {
+    await ackUrgentAlarm(orderId, 'wh');
+  }
+}
+
+async function markPcrTicketPrinted(orderId) {
+  // Partial 픽티켓 프린트 시 PCR 알람 ack
+  const { data: o } = await db.from('orders').select('priority, urgent_pcr_ack_at').eq('id', orderId).single();
+  if (o?.priority === 'urgent' && !o?.urgent_pcr_ack_at) {
+    await ackUrgentAlarm(orderId, 'pcr');
   }
 }
 
