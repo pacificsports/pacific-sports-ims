@@ -3682,8 +3682,8 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
     status: 'reserved',
     is_reserve: true,
     total_pcs: totalPcs, total_amount: totalAmt,
-    bill_address: document.getElementById('inv-bill-addr')?.value || '',
-    ship_address: document.getElementById('inv-ship-addr')?.value || '',
+    bill_addr: document.getElementById('inv-bill-addr')?.value || '',
+    ship_addr: document.getElementById('inv-ship-addr')?.value || '',
     terms: document.getElementById('inv-cust-terms')?.value || 'N30',
     created_by: currentUser.email
   }).select().single();
@@ -7660,11 +7660,16 @@ async function openSignedBolModal() {
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
 
-  // ship_addr 없으면 customer 테이블에서 가져오기
-  if (order && !order.ship_addr && order.customer_id) {
-    const { data: cust } = await db.from('customers').select('address,city,state,zip').eq('id', order.customer_id).single();
-    if (cust) {
-      order.ship_addr = [cust.address, [cust.city, cust.state, cust.zip].filter(Boolean).join(', ')].filter(Boolean).join('\n');
+  // ship_addr / ship_address 둘 다 체크, 없으면 customer 테이블에서 가져오기
+  if (order) {
+    order.ship_addr = order.ship_addr || order.ship_address || '';
+    if (!order.ship_addr.trim() && order.customer_id) {
+      const { data: cust } = await db.from('customers').select('address,city,state,zip,ship_address').eq('id', order.customer_id).single();
+      if (cust) {
+        const addr = cust.ship_address || cust.address || '';
+        const cityLine = [cust.city, cust.state, cust.zip].filter(Boolean).join(', ');
+        order.ship_addr = [addr, cityLine].filter(Boolean).join('\n');
+      }
     }
   }
 
@@ -9940,8 +9945,9 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
     if (shipPcs === 0) return ''; // 출고 수량 없는 라인 제외
 
     totalPcs += shipPcs;
-    const pcrBoxes = pcrPcs > 0 ? Math.ceil(pcrPcs / ppb) : 0;
-    totalBoxes += fullBoxes + pcrBoxes;
+    // qty_boxes가 있으면 그걸 우선 사용 (혼합 박스 반영), 없으면 alloc 계산값
+    const lineBoxes = (l.qty_boxes != null && l.qty_boxes > 0) ? l.qty_boxes : (fullBoxes + (pcrPcs > 0 ? Math.ceil(pcrPcs / ppb) : 0));
+    totalBoxes += lineBoxes;
 
     return `<tr style="border-bottom:1px solid #e5e7eb;">
       <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
@@ -9970,7 +9976,7 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
         <div style="font-size:24px;font-weight:800;color:#0f2744;letter-spacing:1px;">BILL OF LADING</div>
         <div style="font-size:11px;color:#555;margin-top:4px;"><b>BOL #:</b> ${bolNum}</div>
         <div style="font-size:11px;color:#555;"><b>Date:</b> ${dateStr}</div>
-        <div style="font-size:11px;color:#555;"><b>PO #:</b> ${order.customer_po||'—'}</div>
+        <div style="font-size:13px;color:#0f2744;font-weight:800;margin-top:2px;"><b>PO #:</b> ${order.customer_po||'—'}</div>
       </div>
     </div>
 
