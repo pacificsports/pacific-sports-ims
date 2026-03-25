@@ -2283,7 +2283,7 @@ async function openInvoicePreview(orderId) {
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
     : lines;
 
-  const invoiceNum = order.invoice_number || order.order_number;
+  const invoiceNum = order.invoice_number || ('INV-' + new Date().getFullYear() + '-' + (order.order_number||'').replace(/[^0-9]/g,'').slice(-4).padStart(4,'0'));
   document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, invoiceNum);
 
   // View 모드 — 이메일 row, Send 버튼 숨기고 타이틀 변경
@@ -9249,7 +9249,14 @@ async function reviewAndSendInvoice(orderId, wh) {
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
     : lines;
 
-  const invoiceNum = order.invoice_number || order.order_number;
+  let invoiceNum = order.invoice_number;
+  if (!invoiceNum) {
+    const invYear = new Date().getFullYear();
+    const { data: lastInvOrders } = await db.from('orders').select('invoice_number').like('invoice_number', `INV-${invYear}-%`).order('invoice_number', { ascending: false }).limit(1);
+    const lastSeq = lastInvOrders?.[0]?.invoice_number ? parseInt(lastInvOrders[0].invoice_number.split('-')[2]) || 0 : 0;
+    invoiceNum = `INV-${invYear}-${String(lastSeq + 1).padStart(4, '0')}`;
+    await db.from('orders').update({ invoice_number: invoiceNum }).eq('id', order.id);
+  }
   const invShipInfo = {
     carrier: order.carrier || '',
     tracking: order.tracking_number || '',
@@ -9960,33 +9967,39 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
 
   // 실제 출고 수량 계산 (alloc_detail 기준, WH 파라미터로 SC/CA 구분)
   const bolWh = shipInfo?.wh || 'SC';
+  // PCR 박스 수: 픽티켓에서 계산된 _pcrBoxes가 있으면 그 수 사용
+  const pcrBoxCount = (window._pcrBoxes && window._pcrBoxes.length > 0) ? window._pcrBoxes.length : null;
+
   let totalPcs = 0, totalBoxes = 0;
+  // 전체 PCR pcs 합산 (박스 수 계산용)
+  let totalPcrPcs = 0;
   const rows = sorted.map(l => {
     const isCA = bolWh === 'CA';
     const alloc = isCA ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
     const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
     console.log('BOL line:', l.color, l.size, 'alloc:', JSON.stringify(alloc), 'ppb:', ppb);
 
-    // Full box pcs (non-PCR)
+    // Full boxes: alloc의 WH 항목에서 boxes 값 합산
+    const fullBoxes = Object.entries(alloc)
+      .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+      .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0) : Math.floor((v||0)/ppb)), 0);
+
+    // Full box pcs
     const fullBoxPcs = Object.entries(alloc)
       .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0)*ppb + (v.partial||0) : (v||0)), 0);
-    const fullBoxes = Object.entries(alloc)
-      .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
-      .reduce((s,[,v]) => s + (typeof v==='object' ? v.boxes||0 : Math.floor((v||0)/ppb)), 0);
 
-    // PCR/partial pcs
+    // PCR partial pcs
     const pcrPcs = Object.entries(alloc)
       .filter(([k]) => k.includes('PCR|PCR'))
-      .reduce((s,[,v]) => s + (typeof v==='object' ? v.pcs||0 : (v||0)), 0);
+      .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
 
     const shipPcs = fullBoxPcs + pcrPcs;
-    if (shipPcs === 0) return ''; // 출고 수량 없는 라인 제외
+    if (shipPcs === 0) return '';
 
     totalPcs += shipPcs;
-    const pcrBoxes = pcrPcs > 0 ? Math.ceil(pcrPcs / ppb) : 0;
-    const lineBoxes = fullBoxes + pcrBoxes;
-    totalBoxes += lineBoxes;
+    totalPcrPcs += pcrPcs;
+    totalBoxes += fullBoxes;
 
     return `<tr style="border-bottom:1px solid #e5e7eb;">
       <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
@@ -9994,9 +10007,14 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
       <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${shipPcs.toLocaleString()}</td>
-      <td style="padding:6px 8px;font-size:11px;text-align:center;">${lineBoxes > 0 ? lineBoxes : '—'}</td>
+      <td style="padding:6px 8px;font-size:11px;text-align:center;">${fullBoxes > 0 ? fullBoxes : (pcrPcs > 0 ? 'partial' : '—')}</td>
     </tr>`;
   }).filter(Boolean).join('');
+
+  // PCR pcs → 박스 수 (전체 PCR을 ppb로 나눔)
+  // 각 사이즈별 ppb가 다를 수 있으나 BOL은 합산 기준
+  const pcrBoxes = totalPcrPcs > 0 ? Math.ceil(totalPcrPcs / (sorted[0] ? (sorted[0].pcs_per_box || sorted[0].styles?.box_qty || 60) : 60)) : 0;
+  totalBoxes += pcrBoxes;
 
   const fromAddr = '1605 South Guignard Parkway\nSumter, SC 29150\nTel: (803) 760-6251';
   const signatureBlock = signatureData ? `
