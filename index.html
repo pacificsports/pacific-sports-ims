@@ -6799,42 +6799,92 @@ async function openPcrComplete(orderId, wh) {
         .forEach(s => allItems.push({ size: s.size, qty: s.qty, styleNum: g.styleNum, color: g.color, boxQty: g.boxQty }));
     });
 
-    // 박스 채우기 — 같은 사이즈끼리 먼저, 박스 꽉 찰 때만 다음 박스로
     const defaultBoxQty = sortedGroups[0]?.boxQty || 60;
-    let currentBox = { items: [], boxQty: defaultBoxQty, isCustom: false };
-    let currentTotal = 0;
 
-    const flushBox = () => {
-      if (currentBox.items.length > 0) {
+    const buildBoxesFromAllocation = (allocBoxes) => {
+      window._pcrBoxes = [];
+      let boxNum = 1;
+      allocBoxes.forEach(box => {
+        const items = box.items.map(i => ({
+          size: i.size, qty: i.qty,
+          styleNum: allItems.find(a => a.size === i.size)?.styleNum || '',
+          color: allItems.find(a => a.size === i.size)?.color || ''
+        }));
         const colorTotals = {};
-        currentBox.items.forEach(i => { colorTotals[i.color] = (colorTotals[i.color]||0) + i.qty; });
+        items.forEach(i => { colorTotals[i.color] = (colorTotals[i.color]||0) + i.qty; });
         const mainColor = Object.entries(colorTotals).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
-        const mainStyle = currentBox.items[0]?.styleNum || '';
-        window._pcrBoxes.push({ boxNum: globalBoxNum++, styleNum: mainStyle, color: mainColor, items: [...currentBox.items], boxQty: currentBox.boxQty, isCustom: false });
-        currentBox = { items: [], boxQty: defaultBoxQty, isCustom: false };
-        currentTotal = 0;
-      }
+        window._pcrBoxes.push({ boxNum: boxNum++, styleNum: items[0]?.styleNum||'', color: mainColor, items, boxQty: defaultBoxQty, isCustom: false });
+      });
     };
 
-    allItems.forEach(item => {
-      // 현재 박스에 다른 사이즈가 있으면 새 박스 시작
-      if (currentBox.items.length > 0 && currentBox.items[currentBox.items.length - 1].size !== item.size) {
-        flushBox();
-      }
-      let remaining = item.qty;
-      while (remaining > 0) {
-        const space = currentBox.boxQty - currentTotal;
-        if (space === 0) { flushBox(); }
-        const take = Math.min(remaining, currentBox.boxQty - currentTotal);
-        if (take > 0) {
-          currentBox.items.push({ size: item.size, qty: take, styleNum: item.styleNum, color: item.color });
-          currentTotal += take;
-          remaining -= take;
+    const buildBoxesFallback = () => {
+      // fallback: 사이즈별로 박스 채우기
+      window._pcrBoxes = [];
+      let currentBox = { items: [], boxQty: defaultBoxQty, isCustom: false };
+      let currentTotal = 0;
+      let boxNum = 1;
+      const flushBox = () => {
+        if (currentBox.items.length > 0) {
+          const colorTotals = {};
+          currentBox.items.forEach(i => { colorTotals[i.color] = (colorTotals[i.color]||0) + i.qty; });
+          const mainColor = Object.entries(colorTotals).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
+          window._pcrBoxes.push({ boxNum: boxNum++, styleNum: currentBox.items[0]?.styleNum||'', color: mainColor, items: [...currentBox.items], boxQty: currentBox.boxQty, isCustom: false });
+          currentBox = { items: [], boxQty: defaultBoxQty, isCustom: false };
+          currentTotal = 0;
         }
-        if (currentTotal >= currentBox.boxQty) { flushBox(); }
+      };
+      allItems.forEach(item => {
+        if (currentBox.items.length > 0 && currentBox.items[currentBox.items.length-1].size !== item.size) flushBox();
+        let remaining = item.qty;
+        while (remaining > 0) {
+          if (currentBox.boxQty - currentTotal === 0) flushBox();
+          const take = Math.min(remaining, currentBox.boxQty - currentTotal);
+          if (take > 0) { currentBox.items.push({ size: item.size, qty: take, styleNum: item.styleNum, color: item.color }); currentTotal += take; remaining -= take; }
+          if (currentTotal >= currentBox.boxQty) flushBox();
+        }
+      });
+      flushBox();
+    };
+
+    // Claude AI로 박스 배치 최적화
+    try {
+      const sizeSummary = allItems.map(i => `${i.size}: ${i.qty}pcs`).join(', ');
+      const aiResponse = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{
+            role: 'user',
+            content: `You are a warehouse packing expert. Pack these garment sizes into boxes optimally.
+Box capacity: ${defaultBoxQty} pcs per box.
+Sizes to pack: ${sizeSummary}
+
+Rules:
+1. Minimize total number of boxes
+2. Same size in same box preferred, but mix sizes when it reduces box count
+3. Never exceed ${defaultBoxQty} pcs per box
+4. Only mix different sizes in a box if it fills the box better (reduces total boxes)
+5. Keep same-size items together within a box (don't split a size across multiple boxes unless necessary)
+
+Respond ONLY with valid JSON, no other text:
+{"boxes":[{"items":[{"size":"S","qty":30},{"size":"M","qty":30}]},{"items":[{"size":"L","qty":58}]}]}`
+          }]
+        })
+      });
+      const aiData = await aiResponse.json();
+      const aiText = aiData.content?.[0]?.text || '';
+      const parsed = JSON.parse(aiText.replace(/```json|```/g,'').trim());
+      if (parsed.boxes && Array.isArray(parsed.boxes)) {
+        buildBoxesFromAllocation(parsed.boxes);
+      } else {
+        buildBoxesFallback();
       }
-    });
-    flushBox();
+    } catch(e) {
+      console.warn('AI box allocation failed, using fallback:', e);
+      buildBoxesFallback();
+    }
 
     // 원본 스냅샷 저장 (renderPcrBoxes 전에 저장해야 isNewItem 체크가 정확함)
     window._pcrBoxesOriginal = JSON.parse(JSON.stringify(window._pcrBoxes));
