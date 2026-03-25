@@ -824,11 +824,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
       <!-- 칸반 카드 영역 — 스크롤 가능 -->
       <div id="os-kanban" style="overflow-x:auto;isolation:isolate;">
-        <div id="os-board-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;min-width:700px;align-items:start;">
-          <div id="os-col-card-entered" style="display:flex;flex-direction:column;gap:8px;"></div>
-          <div id="os-col-card-preparing" style="display:flex;flex-direction:column;gap:8px;"></div>
-          <div id="os-col-card-ready" style="display:flex;flex-direction:column;gap:8px;"></div>
-          <div id="os-col-card-shipped" style="display:flex;flex-direction:column;gap:8px;"></div>
+        <div id="os-board-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;min-width:700px;">
+          <div id="os-rows-container" style="display:contents;"></div>
         </div>
       </div>
       <!-- 기존 col div 유지 (JS 호환용, 숨김) -->
@@ -5257,16 +5254,11 @@ async function loadOrderStatus() {
     return 'entered';
   }
 
-  // 컬럼별 독립 div에 카드 렌더링
-  const colDivs = {
-    entered:   document.getElementById('os-col-card-entered'),
-    preparing: document.getElementById('os-col-card-preparing'),
-    ready:     document.getElementById('os-col-card-ready'),
-    shipped:   document.getElementById('os-col-card-shipped'),
-  };
-  Object.values(colDivs).forEach(d => { if (d) d.innerHTML = ''; });
+  // row 기반 그리드 렌더링
+  const grid = document.getElementById('os-board-grid');
+  if (grid) grid.innerHTML = '';
 
-  if (colDivs.entered) {
+  if (grid) {
     const mainCards = allCards
       .filter(c => !['backordered','partial'].includes(c._status))
       .sort((a, b) => {
@@ -5276,19 +5268,18 @@ async function loadOrderStatus() {
         return new Date(a.created_at) - new Date(b.created_at);
       });
 
+    const allCols = ['entered','preparing','ready','shipped'];
     mainCards.forEach(card => {
       const cardCol = getColForCard(card);
-      const targetDiv = colDivs[cardCol];
-      if (!targetDiv) return;
-      const html = makeCardHtml(card, cardCol);
-      if (html) targetDiv.insertAdjacentHTML('beforeend', html);
-    });
-
-    // 빈 컬럼에 빈 상태 표시
-    Object.entries(colDivs).forEach(([col, div]) => {
-      if (div && div.children.length === 0) {
-        div.innerHTML = '<div style="font-size:11px;color:#9ca3af;padding:12px;text-align:center;">—</div>';
-      }
+      allCols.forEach(col => {
+        const cell = document.createElement('div');
+        if (col === cardCol) {
+          cell.innerHTML = makeCardHtml(card, col);
+        } else {
+          cell.style.cssText = 'height:0;overflow:hidden;padding:0;margin:0;';
+        }
+        grid.appendChild(cell);
+      });
     });
 
     // 배치 선택 상태 복원
