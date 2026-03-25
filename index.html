@@ -632,7 +632,6 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                     <select class="fsel" id="inv-cust-sel" onchange="onCustSelChange(this)" style="margin-bottom:4px;">
                       <option value="">— Select Customer —</option>
                     </select>
-                    <input class="fi" id="inv-cust" placeholder="또는 직접 입력..." style="font-size:11px;"/>
                   </div>
                   <div class="ff"><label>Customer PO #</label><input class="fi" id="inv-cust-po" placeholder="e.g. PO-12345"/></div>
                   <div class="ff">
@@ -648,8 +647,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   </div>
                 </div>
                 <div class="fgrid fg2">
-                  <div class="ff"><label>Bill To Address</label><textarea class="fi" id="inv-bill-addr" rows="2" placeholder="Billing address..." style="resize:vertical;font-size:11px;"></textarea></div>
-                  <div class="ff"><label>Ship To Address</label><textarea class="fi" id="inv-ship-addr" rows="2" placeholder="Same as bill to if blank" style="resize:vertical;font-size:11px;"></textarea></div>
+                  <div class="ff"><label>Bill To Address</label><textarea class="fi" id="inv-bill-addr" rows="2" placeholder="Billing address..." style="resize:vertical;font-size:11px;" oninput="autoResizeTextarea(this)"></textarea></div>
+                  <div class="ff"><label>Ship To Address</label><textarea class="fi" id="inv-ship-addr" rows="2" placeholder="Same as bill to if blank" style="resize:vertical;font-size:11px;" oninput="autoResizeTextarea(this)"></textarea></div>
                 </div>
               </div>
             </div>
@@ -2432,7 +2431,7 @@ async function openInvoice(orderId, skipPushState = false) {
 
   // 폼 필드 채우기
   const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
-  setVal('inv-cust', order.customer_name);
+  // inv-cust removed - using dropdown
   setVal('inv-cust-po', order.customer_po);
   setVal('inv-ship-date-inp', order.ship_date);
   setVal('inv-bill-addr', order.bill_addr);
@@ -3251,7 +3250,7 @@ function liveRenderDocs() {
   // Customer PO 탭 entry view에서는 문서 프리뷰 렌더 안 함
   const entryView = document.getElementById('po-entry-view');
   if (entryView && entryView.style.display !== 'none') return;
-  const cust = document.getElementById('inv-cust')?.value || '';
+  const custSelEl = document.getElementById('inv-cust-sel'); const cust = (custSelEl?.value ? (customers.find(c=>c.id===custSelEl.value)?.name||'') : '') || '';
   const po = document.getElementById('inv-cust-po')?.value || '';
   const terms = document.getElementById('inv-cust-terms')?.value || 'N30';
   const billAddr = document.getElementById('inv-bill-addr')?.value || '';
@@ -3806,7 +3805,7 @@ async function saveInvoice() {
 }
 
 async function _doSaveInvoice() {
-  const cust    = document.getElementById('inv-cust')?.value.trim();
+  const custSelEl2 = document.getElementById('inv-cust-sel'); const cust = (custSelEl2?.value ? (customers.find(c=>c.id===custSelEl2.value)?.name||'') : '');
   const po      = document.getElementById('inv-cust-po')?.value.trim();
   const whId    = document.getElementById('inv-wh-sel')?.value;
   const shipDate = document.getElementById('inv-ship-date-inp')?.value;
@@ -12162,7 +12161,7 @@ function applyPoPreview() {
 
   // 거래처 정보 채우기
   const _setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
-  _setVal('inv-cust', d.customer_name || '');
+  // inv-cust removed
   _setVal('inv-cust-po', d.po_number || '');
   _setVal('inv-cust-terms', d.terms || 'N30');
   _setVal('inv-bill-addr', d.bill_to_address || d.ship_to_address || '');
@@ -12192,6 +12191,8 @@ const custName = (d.customer_name||'').toLowerCase().trim();
     const shipFromDb = matchedCust.ship_address || matchedCust.bill_address || matchedCust.address || '';
     document.getElementById('inv-bill-addr').value = billFromExcel || billFromDb;
     document.getElementById('inv-ship-addr').value = shipFromExcel || shipFromDb;
+    autoResizeTextarea(document.getElementById('inv-bill-addr'));
+    autoResizeTextarea(document.getElementById('inv-ship-addr'));
   }
   // AUTO 처리
   let _applyPrefWh = window._custPrefWh || 'SC';
@@ -12285,15 +12286,17 @@ function updateCustomerSelects() {
   sel.value = cur;
 }
 
+function autoResizeTextarea(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
+
 function onCustSelChange(sel) {
   const custId = sel.value;
   if (!custId) return;
   const cust = customers.find(c => c.id === custId);
   console.log('onCustSelChange:', custId, cust);
   if (!cust) return;
-  // 거래처 이름 표시
-  const nameEl = document.getElementById('inv-cust');
-  if (nameEl) nameEl.value = cust.name || '';
   // Terms 자동 채우기
   if (cust.terms) {
     const termsEl = document.getElementById('inv-cust-terms');
@@ -12305,8 +12308,8 @@ function onCustSelChange(sel) {
   const billAddr = cust.bill_address || cust.address || '';
   const shipAddr = cust.ship_address || cust.bill_address || cust.address || '';
   console.log('addresses:', { billAddr, shipAddr });
-  if (billEl) billEl.value = billAddr;
-  if (shipEl) shipEl.value = shipAddr;
+  if (billEl) { billEl.value = billAddr; autoResizeTextarea(billEl); }
+  if (shipEl) { shipEl.value = shipAddr; autoResizeTextarea(shipEl); }
   // 선호 창고 설정
   if (cust.preferred_warehouse) window._custPrefWh = cust.preferred_warehouse;
 }
@@ -12352,13 +12355,11 @@ function autoFillCustomer() {
   if (!custId) return;
   const c = customers.find(x => x.id === custId);
   if (!c) return;
-  const nameEl = document.getElementById('inv-cust');
   const billEl = document.getElementById('inv-bill-addr');
   const shipEl = document.getElementById('inv-ship-addr');
   const termsEl = document.getElementById('inv-cust-terms');
-  if (nameEl) nameEl.value = c.name;
-  if (billEl) billEl.value = c.bill_address || '';
-  if (shipEl) shipEl.value = c.ship_address || '';
+  if (billEl) { billEl.value = c.bill_address || ''; autoResizeTextarea(billEl); }
+  if (shipEl) { shipEl.value = c.ship_address || ''; autoResizeTextarea(shipEl); }
   if (termsEl) termsEl.value = c.terms || 'N30';
   // 우선 창고 저장
   window._custPrefWh = c.preferred_warehouse || 'SC';
@@ -13798,7 +13799,7 @@ function applyAllocBoth() {
 function saveDraft() {
   try {
     const draft = {
-      cust: document.getElementById('inv-cust')?.value || '',
+      cust: (()=>{ const s=document.getElementById('inv-cust-sel'); return s?.value?(customers.find(c=>c.id===s.value)?.name||''):''; })(),
       custPo: document.getElementById('inv-cust-po')?.value || '',
       whId: document.getElementById('inv-wh-sel')?.value || '',
       shipDate: document.getElementById('inv-ship-date-inp')?.value || '',
@@ -13824,7 +13825,7 @@ function loadDraft() {
     if (poLines.length === 0) return false;
 
     // 헤더 복원
-    if (draft.cust) { const el = document.getElementById('inv-cust'); if(el) el.value = draft.cust; }
+    if (draft.cust) { /* inv-cust removed */ }
     if (draft.custPo) { const el = document.getElementById('inv-cust-po'); if(el) el.value = draft.custPo; }
     if (draft.whId) { const el = document.getElementById('inv-wh-sel'); if(el) el.value = draft.whId; }
     if (draft.shipDate) { const el = document.getElementById('inv-ship-date-inp'); if(el) el.value = draft.shipDate; }
