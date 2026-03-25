@@ -9163,7 +9163,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
 
   // ── Box Allocation 계산 함수 (Style+Color+PPB 단위)
   function calcBoxAllocation(pcrLines) {
-    // Style+Color+PPB 그룹으로 묶기 (ppb가 다른 사이즈는 같은 박스에 섞지 않음)
+    // Style+Color+PPB 그룹으로 묶기
     const groups = {};
     pcrLines.forEach(l => {
       const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
@@ -9172,10 +9172,9 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
       groups[key].sizes.push({ size: l.size||'', qty: l._pcrQty || 0 });
     });
 
-    const result = []; // { styleNum, color, boxes: [{boxNum, items:[{size,qty}]}] }
+    const result = [];
     let globalBoxNum = 1;
 
-    // ppb 큰 것 먼저 처리 (72 → 48 순서)
     Object.values(groups).sort((a,b) => b.boxQty - a.boxQty).forEach(g => {
       const boxQty = g.boxQty;
       const sizes = g.sizes.filter(s => s.qty > 0).sort((a,b) => sizeOrd(a.size) - sizeOrd(b.size));
@@ -9186,18 +9185,18 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
       let currentTotal = 0;
 
       sizes.forEach(s => {
+        // 현재 박스에 다른 사이즈가 이미 있으면 새 박스 시작
+        // (같은 사이즈끼리만 한 박스에 — 단, 박스가 꽉 차야 다음 박스로)
+        if (currentBox.items.length > 0 && currentBox.items[currentBox.items.length - 1].size !== s.size) {
+          boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items] });
+          currentBox = { items: [] };
+          currentTotal = 0;
+        }
+
         let remaining = s.qty;
         while (remaining > 0) {
           const space = boxQty - currentTotal;
-          // 현재 박스에 이 사이즈 전체가 들어가는지 확인
-          // 들어가지 않고 현재 박스에 다른 사이즈가 이미 있으면 새 박스로
-          if (remaining > space && currentTotal > 0) {
-            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items] });
-            currentBox = { items: [] };
-            currentTotal = 0;
-          }
-          const space2 = boxQty - currentTotal;
-          const take = Math.min(remaining, space2);
+          const take = Math.min(remaining, space);
           if (take > 0) {
             currentBox.items.push({ size: s.size, qty: take });
             currentTotal += take;
@@ -9210,6 +9209,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
           }
         }
       });
+
       if (currentBox.items.length > 0) {
         boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items] });
       }
