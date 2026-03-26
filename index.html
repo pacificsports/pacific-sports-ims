@@ -5603,45 +5603,58 @@ async function restoreOrderInventory(orderId) {
   };
 
   for (const line of lines) {
-    // 이 라인의 PCR Transfer 실제 이동 여부
-    const lineTransferred = line.pcr_transferred ?? false;
+    // pcr_transfer_status: { 'SC-TRANSFER|1J-17': true, 'CA-TRANSFER|2A-05': false }
+    const transferStatus = line.pcr_transfer_status || {};
+
+    // SC alloc
+    const scAlloc = line.alloc_detail || {};
+    // CA alloc
+    const caAlloc = line.alloc_ca_detail || {};
+
+    // SC-PCR 수량이 transfer됐는지 — SC-TRANSFER key 중 true인 게 하나라도 있으면
+    const scTransferDone = Object.entries(transferStatus)
+      .some(([k, v]) => k.startsWith('SC-TRANSFER|') && v === true);
+    const caTransferDone = Object.entries(transferStatus)
+      .some(([k, v]) => k.startsWith('CA-TRANSFER|') && v === true);
 
     // alloc_detail (SC bins)
-    for (const [key, val] of Object.entries(line.alloc_detail || {})) {
+    for (const [key, val] of Object.entries(scAlloc)) {
       if (key.includes('TRANSFER|')) continue;
+      // val.pcs가 전체 수량 (boxes*ppb + partial = pcs로 저장됨)
       const pcs = typeof val === 'object' ? (val.pcs||0) : (val||0);
       if (pcs <= 0) continue;
       const isScPcr = key.includes('PCR|PCR');
-      const wh = isScPcr ? 'SC-PCR' : 'SC';
+      const whBin = isScPcr ? 'SC-PCR' : 'SC';
       const loc = isScPcr ? 'PCR' : key;
-      const matches = invByLocation[wh+'|'+loc] || [];
+      const matches = invByLocation[whBin+'|'+loc] || [];
+      const wasTransferred = isScPcr && scTransferDone;
       let remaining = pcs;
       for (const inv of matches) {
         if (remaining <= 0) break;
         const release = Math.min(remaining, inv.qty_committed||0);
         if (release > 0) {
-          // PCR 항목이고 실제로 옮겨졌으면 qty_on_hand도 복구 (PCR → WH로 다시)
-          addRestore(inv.id, release, isScPcr && lineTransferred ? release : 0);
+          addRestore(inv.id, release, wasTransferred ? release : 0);
           remaining -= release;
         }
       }
     }
 
     // alloc_ca_detail (CA bins)
-    for (const [key, val] of Object.entries(line.alloc_ca_detail || {})) {
+    for (const [key, val] of Object.entries(caAlloc)) {
       if (key.includes('TRANSFER|')) continue;
       const pcs = typeof val === 'object' ? (val.pcs||0) : (val||0);
       if (pcs <= 0) continue;
       const isCaPcr = key.includes('PCR|PCR');
-      const wh = isCaPcr ? 'CA-PCR' : 'CA';
+      const whBin = isCaPcr ? 'CA-PCR' : 'CA';
       const loc = isCaPcr ? 'PCR' : key;
-      const matches = invByLocation[wh+'|'+loc] || [];
+      const matches = invByLocation[whBin+'|'+loc] || [];
+      const wasTransferred = isCaPcr && caTransferDone;
       let remaining = pcs;
       for (const inv of matches) {
         if (remaining <= 0) break;
         const release = Math.min(remaining, inv.qty_committed||0);
         if (release > 0) {
-          addRestore(inv.id, release, isCaPcr && lineTransferred ? release : 0);
+          addRestore(inv.id, release, wasTransferred ? release : 0);
           remaining -= release;
         }
       }
@@ -7701,12 +7714,15 @@ async function openPcrTransferConfirm(orderId, wh) {
     const allocObj = isCA
       ? (l.alloc_ca_detail || (l.wh==='CA' ? l.alloc_detail : null) || {})
       : (l.wh!=='CA' ? l.alloc_detail : null) || {};
+    const prevStatus = l.pcr_transfer_status || {};
     Object.entries(allocObj).forEach(([k, v]) => {
       if (!k.includes('TRANSFER|')) return;
       const fromBin = k.replace(/^(SC-TRANSFER|CA-TRANSFER)\|/, '');
       const pcs = typeof v === 'object' ? (v.pcs||0) : (v||0);
       const boxes = typeof v === 'object' ? (v.boxes||0) : 0;
       if (pcs > 0 || boxes > 0) {
+        // 이전에 저장된 status 있으면 그걸로, 없으면 기본 true
+        const prevChecked = k in prevStatus ? prevStatus[k] : true;
         transferItems.push({
           lineId: l.id,
           allocKey: k,
@@ -7716,7 +7732,7 @@ async function openPcrTransferConfirm(orderId, wh) {
           fromBin,
           pcs,
           boxes,
-          transferred: l.pcr_transferred ?? true // 기본 체크
+          transferred: prevChecked
         });
       }
     });
@@ -7773,16 +7789,20 @@ async function savePcrTransferConfirm() {
   const wh = window._pcrTransferWh;
   const now = new Date().toISOString();
 
-  // 라인별 pcr_transferred 업데이트
-  const lineGroups = {};
+  // 라인별 {allocKey: transferred} 맵 구성
+  // e.g. { lineId123: { 'SC-TRANSFER|1J-17': true, 'CA-TRANSFER|2A-05': false } }
+  const lineMap = {};
   items.forEach((item, idx) => {
     const checked = document.getElementById('pcr-tr-' + idx)?.checked ?? false;
-    if (!lineGroups[item.lineId]) lineGroups[item.lineId] = { transferred: false };
-    if (checked) lineGroups[item.lineId].transferred = true;
+    if (!lineMap[item.lineId]) lineMap[item.lineId] = {};
+    lineMap[item.lineId][item.allocKey] = checked;
   });
 
-  for (const [lineId, data] of Object.entries(lineGroups)) {
-    await db.from('order_lines').update({ pcr_transferred: data.transferred }).eq('id', lineId);
+  // 각 라인에 pcr_transfer_status JSON 저장
+  for (const [lineId, statusMap] of Object.entries(lineMap)) {
+    await db.from('order_lines').update({
+      pcr_transfer_status: statusMap
+    }).eq('id', lineId);
   }
 
   // orders에 확인 완료 timestamp 저장
