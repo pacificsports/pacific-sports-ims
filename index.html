@@ -12000,57 +12000,36 @@ function playNewOrderChime() {
 // ── Urgent PO 사이렌 (앰뷸런스 - 5회 반복, 더 강하게)
 function playUrgentSiren() {
   try {
+    const audio = new Audio('/_No_Mistake__Move_Fast_.wav');
+    audio.volume = 0.9;
+    audio.play().catch(() => _playUrgentSirenFallback());
+  } catch(e) { _playUrgentSirenFallback(); }
+}
+
+function _playUrgentSirenFallback() {
+  try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const now = ctx.currentTime;
-
-    // 공습경보 사이렌 — 우~~~~~앙 (느리고 길게 스윕)
-    // 사이클: 낮→높→낮 x 2회 (총 6초)
     const sweepTimes = [
-      { start: 200, end: 900,  t: now + 0.0,  dur: 1.5 },  // 우~~~~
-      { start: 900, end: 200,  t: now + 1.5,  dur: 1.5 },  // 앙~~~~
-      { start: 200, end: 900,  t: now + 3.0,  dur: 1.5 },  // 우~~~~
-      { start: 900, end: 200,  t: now + 4.5,  dur: 1.5 },  // 앙~~~~
+      { start: 200, end: 900, t: now + 0.0, dur: 1.5 },
+      { start: 900, end: 200, t: now + 1.5, dur: 1.5 },
+      { start: 200, end: 900, t: now + 3.0, dur: 1.5 },
+      { start: 900, end: 200, t: now + 4.5, dur: 1.5 },
     ];
-
     sweepTimes.forEach(({ start, end, t, dur }) => {
-      // 메인 사이렌 (두꺼운 sawtooth)
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+      const osc = ctx.createOscillator(); const gain = ctx.createGain();
       osc.connect(gain); gain.connect(ctx.destination);
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(start, t);
       osc.frequency.linearRampToValueAtTime(end, t + dur);
       gain.gain.setValueAtTime(t === now ? 0 : 0.55, t);
       if (t === now) gain.gain.linearRampToValueAtTime(0.55, t + 0.3);
-      if (t === now + 4.5) {
-        gain.gain.setValueAtTime(0.55, t + 1.2);
-        gain.gain.linearRampToValueAtTime(0, t + dur);
-      } else {
-        gain.gain.setValueAtTime(0.55, t + dur);
-      }
+      if (t === now + 4.5) { gain.gain.setValueAtTime(0.55, t + 1.2); gain.gain.linearRampToValueAtTime(0, t + dur); }
+      else { gain.gain.setValueAtTime(0.55, t + dur); }
       osc.start(t); osc.stop(t + dur + 0.05);
-
-      // 하모닉 (두께감 — 옥타브 아래)
-      const osc2 = ctx.createOscillator();
-      const gain2 = ctx.createGain();
-      osc2.connect(gain2); gain2.connect(ctx.destination);
-      osc2.type = 'square';
-      osc2.frequency.setValueAtTime(start / 2, t);
-      osc2.frequency.linearRampToValueAtTime(end / 2, t + dur);
-      gain2.gain.setValueAtTime(t === now ? 0 : 0.18, t);
-      if (t === now) gain2.gain.linearRampToValueAtTime(0.18, t + 0.3);
-      if (t === now + 4.5) {
-        gain2.gain.setValueAtTime(0.18, t + 1.2);
-        gain2.gain.linearRampToValueAtTime(0, t + dur);
-      } else {
-        gain2.gain.setValueAtTime(0.18, t + dur);
-      }
-      osc2.start(t); osc2.stop(t + dur + 0.05);
     });
-
-  } catch(e) { console.warn('Audio not available:', e); }
+  } catch(e) {}
 }
-
 
 // ── Invoice 발송 돈소리 (치칭! 캐쉬레지스터)
 function playCashRegister() {
