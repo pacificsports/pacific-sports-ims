@@ -3810,18 +3810,19 @@ async function saveInvoice() {
   });
 
   if (hasPcrPartial) {
-    // 박스 배정 확인 모달 먼저 띄우기
+    // SC부터 배정 시작
+    window._boxAssignCurrentWh = 'SC';
     openBoxAssignModal();
     return;
   }
 
-  // PCR partial 없으면 바로 저장
-  _doSaveWithBoxAlloc(null);
+  _doSaveWithBoxAlloc(null, null);
 }
 
 // 박스 배정 확인 없이 바로 저장 (PCR partial 없는 경우)
-async function _doSaveWithBoxAlloc(boxAlloc) {
-  window._pendingBoxAlloc = boxAlloc;
+async function _doSaveWithBoxAlloc(scBoxAlloc, caBoxAlloc) {
+  window._pendingScBoxAlloc = scBoxAlloc;
+  window._pendingCaBoxAlloc = caBoxAlloc;
   if (_savingInProgress) return;
   _savingInProgress = true;
   const isUrgentSave = document.getElementById('inv-priority')?.value === 'urgent';
@@ -4132,11 +4133,13 @@ async function _doSaveInvoice() {
       priority: document.getElementById('inv-priority')?.value || 'normal',
       created_by: _currentEmployee?.name || '',
       ...(window._uploadedPoPdfBase64 ? { po_file: window._uploadedPoPdfBase64 } : {}),
-      ...(window._pendingBoxAlloc ? { sc_pcr_box_allocation: window._pendingBoxAlloc } : {})
+      ...(window._pendingScBoxAlloc ? { sc_pcr_box_allocation: window._pendingScBoxAlloc } : {}),
+      ...(window._pendingCaBoxAlloc ? { ca_pcr_box_allocation: window._pendingCaBoxAlloc } : {})
     }).select().single();
     order = newOrder; error = insertErr;
     if (error) { alert('Error saving order: ' + error.message); return; }
-    window._pendingBoxAlloc = null;
+    window._pendingScBoxAlloc = null;
+    window._pendingCaBoxAlloc = null;
   }
   if (_creditHold) {
     // 백그라운드로 이메일 발송 (await 제거 - 느린 이메일 때문에 저장 지연 방지)
@@ -6997,122 +7000,148 @@ async function openPcrComplete(orderId, wh) {
 function renderPcrBoxes() {
   const container = document.getElementById('pcr-complete-lines');
   const boxes = window._pcrBoxes || [];
-  const styleOptsList = (window.styles||[]).map(function(s){ return '<option value="'+s.style_number+'">'; }).join('');
+  if (!boxes.length) { container.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;">배정할 Partial 수량 없음</div>'; return; }
 
-  let html = '';
-  for (let bi = 0; bi < boxes.length; bi++) {
-    const box = boxes[bi];
-    const total = box.items.reduce(function(s,i){ return s+(i.qty||0); }, 0);
-    const isCustom = box.isCustom;
+  const PARTIAL_BOX_QTY = 60;
 
-    let rowsHtml = '<div style="display:flex;align-items:center;padding:5px 14px;background:#f8fafc;border-bottom:1px solid #e5e7eb;">'
-      + '<div style="min-width:44px;"></div>'
-      + '<div style="min-width:100px;margin-right:12px;"></div>'
-      + '<div style="min-width:36px;"></div>'
-      + '<div style="width:60px;text-align:center;font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;">준비</div>'
-      + '<div style="margin:0 10px;font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;">오더</div>'
-      + '</div>';
-    for (let ii = 0; ii < box.items.length; ii++) {
-      const item = box.items[ii];
-      const origItem = window._pcrBoxesOriginal && window._pcrBoxesOriginal[bi] && window._pcrBoxesOriginal[bi].items ? window._pcrBoxesOriginal[bi].items[ii] : undefined;
-      const origQty = origItem !== undefined ? origItem.qty : null;
-      const isNewItem = origItem === undefined;
-      const changed = !isNewItem && item.qty !== origQty;
+  // 전체 unique 사이즈 목록 (style+color+size 조합)
+  const rowKeys = [];
+  const rowMap = {}; // key → { styleNum, color, size, totalQty }
+  boxes.forEach(box => {
+    box.items.forEach(item => {
+      const key = `${item.styleNum||''}|||${item.color||''}|||${item.size||''}`;
+      if (!rowMap[key]) {
+        rowMap[key] = { styleNum: item.styleNum||'', color: item.color||'', size: item.size||'', totalQty: 0 };
+        rowKeys.push(key);
+      }
+    });
+  });
 
-      const itemStyleNum = item.styleNum || box.styleNum || '';
-      const itemColor = item.color || box.color || '';
-      const qtyColor = changed ? '#dc2626' : '#111827';
-      const refQty = origQty !== null ? origQty : item.qty;
-      const defectId = 'pcr-defect-box-'+bi+'-'+ii;
+  // 각 row의 totalQty = 원본 배정 총합
+  const origBoxes = window._pcrBoxesOriginal || boxes;
+  origBoxes.forEach(box => {
+    box.items.forEach(item => {
+      const key = `${item.styleNum||''}|||${item.color||''}|||${item.size||''}`;
+      if (rowMap[key]) rowMap[key].totalQty += (item.qty||0);
+    });
+  });
 
-      // X button only for newly added items
-      const delBtn = isNewItem
-        ? '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" style="background:none;border:none;color:#d1d5db;cursor:pointer;font-size:13px;padding:0 0 0 8px;line-height:1;">&#x2715;</button>'
-        : '';
+  const sizeOrd = s => (['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'].indexOf(s)+1)||99;
+  rowKeys.sort((a,b) => {
+    const ra = rowMap[a], rb = rowMap[b];
+    const sc = (ra.styleNum||'').localeCompare(rb.styleNum||'');
+    if (sc !== 0) return sc;
+    const cc = (ra.color||'').localeCompare(rb.color||'');
+    if (cc !== 0) return cc;
+    return sizeOrd(ra.size) - sizeOrd(rb.size);
+  });
 
-      rowsHtml += '<div style="border-bottom:1px solid #f1f5f9;">'
-        // Main row
-        + '<div style="display:flex;align-items:center;padding:9px 14px;gap:0;">'
-        + '<span style="font-size:12px;font-weight:800;color:#1e3a8a;font-family:IBM Plex Mono,monospace;min-width:44px;">'+itemStyleNum+'</span>'
-        + '<span style="font-size:12px;color:#374151;min-width:100px;margin-right:12px;">'+itemColor+'</span>'
-        + '<span style="font-size:13px;font-weight:800;color:#1e3a8a;font-family:IBM Plex Mono,monospace;min-width:36px;">'+item.size+'</span>'
-        + '<input type="number" min="0" value="'+item.qty+'" onchange="updatePcrBoxItem('+bi+','+ii+',this.value);checkPcrChanges()" style="width:60px;height:32px;border:1px solid '+(changed?'#fca5a5':'#e5e7eb')+';border-radius:6px;text-align:center;font-size:15px;font-weight:800;font-family:IBM Plex Mono,monospace;color:'+qtyColor+';background:'+(changed?'#fff5f5':'#f9fafb')+';">'
-        + '<span style="font-size:12px;margin:0 10px;white-space:nowrap;color:#9ca3af;">/ <b style="color:'+(changed?'#dc2626':'#6b7280')+'">'+refQty+'</b> pcs</span>'
-        + '<div style="flex:1;"></div>'
-        // Defect toggle button
-        + '<button onclick="togglePcrDefectRow('+bi+','+ii+')" id="defect-btn-'+bi+'-'+ii+'" style="font-size:11px;color:#9ca3af;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:3px 8px;cursor:pointer;white-space:nowrap;">불량 입력</button>'
-        + delBtn
-        + '</div>'
-        // Defect row (hidden by default)
-        + '<div id="pcr-defect-row-'+bi+'-'+ii+'" style="display:none;padding:8px 14px 10px;background:#fef2f2;gap:8px;align-items:center;flex-wrap:wrap;">'
-        + '<span style="font-size:11px;font-weight:700;color:#dc2626;">⚠️ 불량</span>'
-        + '<div style="display:flex;align-items:center;gap:6px;">'
-        + '<span style="font-size:10px;color:#6b7280;font-weight:600;">Total</span>'
-        + '<input type="number" min="0" value="0" id="'+defectId+'" style="width:48px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;" oninput="pcrDefectStyle(this)">'
-        + '</div>'
-        + '<div style="display:flex;align-items:center;gap:6px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Shade</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Hole</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Stain</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Other</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
-        + '<input type="text" id="pcr-other-note-box-'+bi+'-'+ii+'" placeholder="&#xC774;&#xC720;..." style="width:90px;height:28px;border:1px solid #fecaca;border-radius:4px;padding:0 6px;font-size:11px;">'
-        + '</div>'
-        + '</div>'
-        + '</div>';
-    }
+  // 박스 수 (+ 추가 버튼용 빈 박스 슬롯)
+  const numBoxes = boxes.length;
 
-    // Add item form
-    let addFormHtml = '';
-    if (box.addingItem) {
-      addFormHtml = '<div style="padding:8px 14px;background:#f8fafc;border-top:1px solid #e5e7eb;">'
-        + '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">'
-        + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">STYLE</div>'
-        + '<input list="pcr-style-opts-'+bi+'" id="pcr-add-style-'+bi+'" placeholder="1368" style="width:68px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 5px;font-size:12px;font-weight:700;">'
-        + '<datalist id="pcr-style-opts-'+bi+'">'+styleOptsList+'</datalist></div>'
-        + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">COLOR</div>'
-        + '<input id="pcr-add-color-'+bi+'" placeholder="Navy Htr" style="width:100px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 5px;font-size:12px;"></div>'
-        + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">SIZE</div>'
-        + '<select id="pcr-add-size-'+bi+'" style="width:62px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 3px;font-size:12px;">'
-        + '<option value="">-</option><option>XS</option><option>S</option><option>M</option><option>L</option><option>XL</option>'
-        + '<option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>'
-        + '<option>2T</option><option>3T</option><option>4T</option><option>5T</option>'
-        + '<option>YS</option><option>YM</option><option>YL</option><option>YXL</option></select></div>'
-        + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">QTY</div>'
-        + '<input type="number" id="pcr-add-qty-'+bi+'" min="1" placeholder="0" style="width:52px;height:28px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-size:12px;font-weight:700;"></div>'
-        + '<button onclick="confirmPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 12px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">&#x2713; &#xCD94;&#xAC00;</button>'
-        + '<button onclick="cancelPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 8px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:4px;font-size:12px;cursor:pointer;">&#xCDE8;&#xC18C;</button>'
-        + '</div></div>';
-    }
-
-    const addBtnHtml = !box.addingItem
-      ? '<div style="padding:6px 14px;">'
-        + '<button onclick="addPcrBoxItemInline('+bi+')" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #bfdbfe;border-radius:4px;padding:3px 10px;cursor:pointer;">+ &#xC544;&#xC774;&#xD15C; &#xCD94;&#xAC00;</button>'
-        + '</div>'
-      : '';
-
-    const deleteBoxBtn = isCustom
-      ? '<button onclick="removePcrBox('+bi+')" style="background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:13px;padding:0;line-height:1;">&#x1F5D1;</button>'
-      : '';
-
-    html += '<div style="border:1px solid #e2e8f0;border-radius:10px;margin-bottom:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04);">'
-      + '<div style="background:#1e3a8a;padding:9px 14px;display:flex;justify-content:space-between;align-items:center;">'
-      + '<div style="display:flex;align-items:center;gap:8px;">'
-      + '<span style="font-size:11px;font-weight:800;color:#fff;font-family:IBM Plex Mono,monospace;letter-spacing:1px;">BOX '+box.boxNum+'</span>'
-      + (isCustom ? '<span style="font-size:9px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:3px;font-weight:700;">&#xCD94;&#xAC00;</span>' : '')
-      + '</div>'
-      + '<div style="display:flex;align-items:center;gap:8px;">'
-      + '<span style="font-size:12px;font-weight:800;color:#93c5fd;font-family:IBM Plex Mono,monospace;">'+total+' pcs</span>'
-      + deleteBoxBtn + '</div></div>'
-      + rowsHtml
-      + addFormHtml
-      + addBtnHtml
-      + '</div>';
+  // 헤더 행
+  let headerCells = `
+    <th style="padding:8px 10px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Style</th>
+    <th style="padding:8px 10px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;">Color</th>
+    <th style="padding:8px 10px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;">Size</th>
+    <th style="padding:8px 10px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Total Qty</th>`;
+  for (let bi = 0; bi < numBoxes; bi++) {
+    const boxTotal = boxes[bi].items.reduce((s,i) => s+(i.qty||0), 0);
+    const overFull = boxTotal > PARTIAL_BOX_QTY;
+    const full = boxTotal === PARTIAL_BOX_QTY;
+    const color = overFull ? '#dc2626' : full ? '#15803d' : '#1e3a8a';
+    headerCells += `<th style="padding:8px 6px;text-align:center;font-size:11px;background:#1e3a8a;border-bottom:2px solid #1e3a8a;min-width:70px;">
+      <div style="color:#fff;font-weight:800;font-family:'IBM Plex Mono',monospace;">BOX ${bi+1}</div>
+      <div style="color:${overFull?'#fca5a5':full?'#86efac':'#93c5fd'};font-size:10px;margin-top:2px;">${boxTotal}/${PARTIAL_BOX_QTY}</div>
+    </th>`;
   }
+  headerCells += `<th style="padding:8px 6px;text-align:center;background:#f8fafc;border-bottom:2px solid #e5e7eb;min-width:40px;">
+    <button onclick="addPcrBox()" style="font-size:11px;color:#1d4ed8;background:#eff6ff;border:1px dashed #bfdbfe;border-radius:4px;padding:3px 8px;cursor:pointer;white-space:nowrap;">+ 박스</button>
+  </th>`;
 
-  html += '<button onclick="addPcrBox()" style="width:100%;padding:10px;border:2px dashed #bfdbfe;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;margin-top:4px;">&#x1F4E6; + &#xBC15;&#xC2A4; &#xCD94;&#xAC00;</button>';
+  // 데이터 행
+  let dataRows = '';
+  rowKeys.forEach(key => {
+    const row = rowMap[key];
+    // 각 박스에서 이 row의 수량
+    let rowAssigned = 0;
+    let cells = '';
+    for (let bi = 0; bi < numBoxes; bi++) {
+      const box = boxes[bi];
+      const itemIdx = box.items.findIndex(i =>
+        `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === key
+      );
+      const qty = itemIdx >= 0 ? (box.items[itemIdx].qty||0) : 0;
+      rowAssigned += qty;
+      cells += `<td style="padding:4px 6px;text-align:center;border-bottom:1px solid #f3f4f6;">
+        <input type="number" min="0" value="${qty}"
+          oninput="updatePcrGrid(${bi},'${key.replace(/'/g,"\\'")}',this.value)"
+          style="width:58px;height:30px;border:1px solid ${qty>0?'#bfdbfe':'#e5e7eb'};border-radius:5px;text-align:center;font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${qty>0?'#1e3a8a':'#9ca3af'};background:${qty>0?'#eff6ff':'#fafafa'};">
+      </td>`;
+    }
+    const remaining = row.totalQty - rowAssigned;
+    const remainColor = remaining > 0 ? '#dc2626' : remaining < 0 ? '#dc2626' : '#15803d';
+    const remainBg = remaining !== 0 ? '#fef2f2' : '#f0fdf4';
+    dataRows += `<tr>
+      <td style="padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;border-bottom:1px solid #f3f4f6;white-space:nowrap;">${row.styleNum}</td>
+      <td style="padding:8px 10px;font-size:11px;border-bottom:1px solid #f3f4f6;white-space:nowrap;">${row.color}</td>
+      <td style="padding:8px 10px;font-size:12px;font-weight:800;text-align:center;border-bottom:1px solid #f3f4f6;font-family:'IBM Plex Mono',monospace;">${row.size}</td>
+      <td style="padding:8px 10px;text-align:center;border-bottom:1px solid #f3f4f6;">
+        <span style="font-weight:700;font-size:13px;">${row.totalQty}</span>
+        ${remaining !== 0 ? `<div style="font-size:9px;font-weight:700;color:${remainColor};background:${remainBg};border-radius:3px;padding:1px 4px;margin-top:2px;white-space:nowrap;">${remaining>0?'남은 '+remaining:'초과 '+Math.abs(remaining)}</div>` : `<div style="font-size:9px;color:#15803d;">✓</div>`}
+      </td>
+      ${cells}
+      <td style="border-bottom:1px solid #f3f4f6;"></td>
+    </tr>`;
+  });
 
-  container.innerHTML = html;
+  // 합계 행
+  let totalCells = `
+    <td colspan="3" style="padding:8px 10px;text-align:right;font-size:11px;font-weight:700;color:#6b7280;background:#f8fafc;border-top:2px solid #e5e7eb;">TOTAL</td>
+    <td style="padding:8px 10px;text-align:center;background:#f8fafc;border-top:2px solid #e5e7eb;font-weight:800;">
+      ${rowKeys.reduce((s,k)=>s+rowMap[k].totalQty,0)}
+    </td>`;
+  for (let bi = 0; bi < numBoxes; bi++) {
+    const boxTotal = boxes[bi].items.reduce((s,i)=>s+(i.qty||0),0);
+    const over = boxTotal > PARTIAL_BOX_QTY;
+    const full = boxTotal === PARTIAL_BOX_QTY;
+    totalCells += `<td style="padding:8px 6px;text-align:center;background:#f8fafc;border-top:2px solid #e5e7eb;">
+      <span style="font-weight:900;font-size:13px;color:${over?'#dc2626':full?'#15803d':'#1e3a8a'}">${boxTotal}</span>
+      ${over?'<div style="font-size:9px;color:#dc2626;">초과!</div>':full?'<div style="font-size:9px;color:#15803d;">✓ Full</div>':''}
+    </td>`;
+  }
+  totalCells += `<td style="background:#f8fafc;border-top:2px solid #e5e7eb;"></td>`;
+
+  container.innerHTML = `
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr>${headerCells}</tr></thead>
+        <tbody>${dataRows}</tbody>
+        <tfoot><tr>${totalCells}</tr></tfoot>
+      </table>
+    </div>`;
   checkPcrChanges();
+}
+
+function updatePcrGrid(bi, rowKey, val) {
+  const qty = parseInt(val) || 0;
+  const box = window._pcrBoxes[bi];
+  if (!box) return;
+  const [styleNum, color, size] = rowKey.split('|||');
+  const idx = box.items.findIndex(i =>
+    `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === rowKey
+  );
+  if (qty === 0) {
+    if (idx >= 0) box.items.splice(idx, 1);
+  } else {
+    if (idx >= 0) {
+      box.items[idx].qty = qty;
+    } else {
+      box.items.push({ styleNum, color, size, qty });
+    }
+  }
+  // 헤더와 합계만 업데이트 (전체 재렌더 없이)
+  renderPcrBoxes();
 }
 
 function pcrDefectStyle(el) {
@@ -7844,95 +7873,69 @@ async function savePcrTransferConfirm() {
 
 function openBoxAssignModal() {
   const sizeOrd = s => (['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'].indexOf(s)+1)||99;
-  const groups = {};
 
-  // poLines에서 SC PCR partial 수량 집계
+  // 현재 wh 기준으로 PCR partial 집계
+  // SC&CA 스플릿이면 SC 먼저, 그 다음 저장 후 CA는 별도 진행
+  const whFilter = window._boxAssignCurrentWh || 'SC';
+  const groups = {};
   poLines.forEach(l => {
+    const lineWh = l.wh || 'SC';
+    const isScLine = lineWh === 'SC' || lineWh === 'SC&CA' || !l.wh;
+    const isCaLine = lineWh === 'CA' || lineWh === 'SC&CA';
+    if (whFilter === 'SC' && !isScLine) return;
+    if (whFilter === 'CA' && !isCaLine) return;
     const loose = l.loose ?? (l.qty % (l.ppb||72));
     if (!loose) return;
-    const isLarge = ['3XL','4XL','5XL','XXXL'].includes((l.size||'').toUpperCase());
-    const ppb = 60; // Partial box는 항상 60 고정
-    const key = `${l.styleNum||''}|||${l.color||''}|||${ppb}`;
-    if (!groups[key]) groups[key] = { styleNum: l.styleNum||'', color: l.color||'', sizes: [], boxQty: ppb };
-    groups[key].sizes.push({ size: l.size||'', qty: loose, styleNum: l.styleNum||'', color: l.color||'' });
+    const key = `${l.styleNum||''}|||${l.color||''}|||60`;
+    if (!groups[key]) groups[key] = { styleNum:l.styleNum||'', color:l.color||'', sizes:[], boxQty:60 };
+    groups[key].sizes.push({ size:l.size||'', qty:loose, styleNum:l.styleNum||'', color:l.color||'' });
   });
 
   if (!Object.keys(groups).length) {
-    _doSaveWithBoxAlloc(null);
+    _doSaveWithBoxAlloc(null, null);
     return;
   }
 
-  // 색상별 총량 계산
   const colorOrder = {};
   Object.values(groups).forEach(g => {
-    const total = g.sizes.reduce((s,x) => s+x.qty, 0);
-    if (!colorOrder[g.color]) colorOrder[g.color] = 0;
-    colorOrder[g.color] += total;
+    colorOrder[g.color] = (colorOrder[g.color]||0) + g.sizes.reduce((s,x)=>s+x.qty,0);
   });
-
-  const sortedGroups = Object.values(groups).sort((a,b) => (colorOrder[b.color]||0) - (colorOrder[a.color]||0));
   const allItems = [];
-  sortedGroups.forEach(g => {
-    g.sizes.filter(s => s.qty > 0)
-      .sort((a,b) => sizeOrd(a.size) - sizeOrd(b.size))
-      .forEach(s => allItems.push({ size: s.size, qty: s.qty, styleNum: g.styleNum, color: g.color, boxQty: g.boxQty }));
+  Object.values(groups).sort((a,b)=>(colorOrder[b.color]||0)-(colorOrder[a.color]||0)).forEach(g => {
+    g.sizes.filter(s=>s.qty>0).sort((a,b)=>sizeOrd(a.size)-sizeOrd(b.size))
+      .forEach(s=>allItems.push({size:s.size,qty:s.qty,styleNum:g.styleNum,color:g.color}));
   });
 
-  const defaultBoxQty = 60;
   window._pcrBoxes = [];
-  window._pcrBoxesOriginal = null;
-  let boxNum = 1;
-
-  const pushBox = (items) => {
-    if (!items.length) return;
-    const ct = {};
-    items.forEach(i => { ct[i.color] = (ct[i.color]||0) + i.qty; });
-    const mainColor = Object.entries(ct).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
-    window._pcrBoxes.push({ boxNum: boxNum++, styleNum: items[0]?.styleNum||'', color: mainColor, items: [...items], boxQty: defaultBoxQty, isCustom: false });
-  };
-
-  const remaining = allItems.map(i => ({ ...i, left: i.qty }));
-  let i = 0;
+  const remaining = allItems.map(i=>({...i,left:i.qty}));
+  let boxNum=1, i=0;
   while (i < remaining.length) {
     const item = remaining[i];
-    if (item.left <= 0) { i++; continue; }
-    const boxItems = [];
-    let boxTotal = 0;
-    const take = Math.min(item.left, defaultBoxQty);
-    boxItems.push({ size: item.size, qty: take, styleNum: item.styleNum, color: item.color });
-    boxTotal += take;
-    item.left -= take;
-    if (boxTotal >= defaultBoxQty) { pushBox(boxItems); if (item.left === 0) i++; continue; }
-    if (item.left === 0) {
-      i++;
-      let j = i;
-      while (j < remaining.length && boxTotal < defaultBoxQty) {
-        const next = remaining[j];
-        if (next.left <= 0) { j++; continue; }
-        const space = defaultBoxQty - boxTotal;
-        if (next.left <= space) {
-          boxItems.push({ size: next.size, qty: next.left, styleNum: next.styleNum, color: next.color });
-          boxTotal += next.left; next.left = 0; j++;
-        } else {
-          // 쪼개서 넣기
-          boxItems.push({ size: next.size, qty: space, styleNum: next.styleNum, color: next.color });
-          boxTotal += space; next.left -= space; break;
-        }
+    if (item.left<=0){i++;continue;}
+    const boxItems=[]; let boxTotal=0;
+    const take=Math.min(item.left,60);
+    boxItems.push({size:item.size,qty:take,styleNum:item.styleNum,color:item.color});
+    boxTotal+=take; item.left-=take;
+    if(boxTotal>=60){window._pcrBoxes.push({boxNum:boxNum++,items:[...boxItems],boxQty:60,isCustom:false});if(item.left===0)i++;continue;}
+    if(item.left===0){
+      i++;let j=i;
+      while(j<remaining.length&&boxTotal<60){
+        const next=remaining[j];
+        if(next.left<=0){j++;continue;}
+        const space=60-boxTotal;
+        if(next.left<=space){boxItems.push({size:next.size,qty:next.left,styleNum:next.styleNum,color:next.color});boxTotal+=next.left;next.left=0;j++;}
+        else{boxItems.push({size:next.size,qty:space,styleNum:next.styleNum,color:next.color});boxTotal+=space;next.left-=space;break;}
       }
-      i = j;
+      i=j;
     }
-    pushBox(boxItems);
+    window._pcrBoxes.push({boxNum:boxNum++,items:[...boxItems],boxQty:60,isCustom:false});
   }
-
   window._pcrBoxesOriginal = JSON.parse(JSON.stringify(window._pcrBoxes));
-  window._pcrCompleteOrderId = null; // Save PO 모드 표시
-  window._pcrCompleteWh = 'SC';
 
-  // 모달 타이틀 변경
-  const modalHead = document.querySelector('#pcr-complete-modal .modal-head span, #pcr-complete-modal [style*="font-size:16px"]');
-
+  const isSplit = poLines.some(l=>l.wh==='CA'||l.wh==='SC&CA');
+  const whLabel = whFilter === 'CA' ? '🟠 CA' : '🟢 SC';
   document.getElementById('pcr-complete-info').innerHTML =
-    '📦 저장 전 박스 배정을 확인하세요. 수정이 필요하면 아래에서 변경하세요.';
+    `<div style="font-size:12px;color:#374151;">📦 <b>${whLabel}</b> 박스 배정 확인${isSplit?' (SC → 저장 → CA 순서)':''}</div>`;
   document.getElementById('pcr-complete-pin').value = '';
   document.getElementById('pcr-complete-pin-error').textContent = '';
   document.getElementById('pcr-complete-emp-info').style.display = 'none';
@@ -7945,14 +7948,19 @@ function openBoxAssignModal() {
 }
 
 async function confirmBoxAndSave() {
-  // 현재 _pcrBoxes 상태를 JSON으로 저장하고 PO 저장
   const boxAlloc = window._pcrBoxes ? JSON.parse(JSON.stringify(window._pcrBoxes)) : null;
-  window._pendingBoxAlloc = boxAlloc;
+  const wh = window._boxAssignCurrentWh || 'SC';
+  if (wh === 'SC') {
+    window._pendingScBoxAlloc = boxAlloc;
+    window._pendingCaBoxAlloc = null;
+  } else {
+    window._pendingCaBoxAlloc = boxAlloc;
+  }
   document.getElementById('pcr-complete-modal').style.display = 'none';
-  // 버튼 원상복구
   document.getElementById('pcr-complete-btn').textContent = '✅ Complete';
   document.getElementById('pcr-complete-btn').onclick = completePcrPrep;
-  _doSaveWithBoxAlloc(boxAlloc);
+  window._boxAssignCurrentWh = null;
+  _doSaveWithBoxAlloc(window._pendingScBoxAlloc, window._pendingCaBoxAlloc);
 }
 
 async function openSignedBolModal() {
@@ -15366,46 +15374,60 @@ function showCreditHoldFlash(overAmt) {
 
   <!-- PCR Complete 모달 -->
   <div id="pcr-complete-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
-    <div style="background:#fff;border-radius:12px;padding:28px;width:620px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div style="font-size:16px;font-weight:700;color:#c2410c;">💻 Partial Preparing</div>
-        <button onclick="document.getElementById('pcr-complete-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
-      </div>
-      <div style="font-size:12px;color:#6b7280;margin-bottom:16px;" id="pcr-complete-info"></div>
-      <div style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:10px 14px;font-size:11px;color:#92400e;margin-bottom:14px;">
-        💻 Partial pcs 준비 수량을 확인하세요. 불량이 있으면 아래에 입력해주세요.
-      </div>
-      <div id="pcr-complete-lines"></div>
-      <!-- Manager PIN (추가 박스 있을 때만 표시) -->
-      <div id="pcr-manager-pin-section" style="display:none;margin-bottom:16px;padding:12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;">
-        <div style="font-size:11px;font-weight:700;color:#92400e;margin-bottom:8px;">⚠️ 추가 박스가 있습니다 — Manager 승인 필요</div>
-        <!-- 승인 요청 전 -->
-        <div id="pcr-approval-request-section">
-          <button onclick="requestManagerApproval()"
-            style="padding:8px 18px;background:#d97706;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
-            📋 Request Approval
-          </button>
-          <div style="font-size:10px;color:#92400e;margin-top:6px;">Manager에게 승인 요청을 보냅니다.</div>
+    <div style="background:#fff;border-radius:12px;width:720px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+
+      <!-- 고정 헤더 -->
+      <div style="padding:20px 24px 14px;border-bottom:1px solid #e5e7eb;flex-shrink:0;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-size:16px;font-weight:700;color:#c2410c;">💻 Partial Preparing</div>
+          <button onclick="document.getElementById('pcr-complete-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
         </div>
-        <!-- 승인 대기 중 -->
-        <div id="pcr-approval-pending-section" style="display:none;">
-          <div style="font-size:11px;color:#92400e;margin-bottom:8px;">⏳ 승인 요청됨 — Manager가 확인 후 승인해주세요</div>
-          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Manager PIN 입력 (승인 후)</label>
-          <input id="pcr-manager-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyPcrManagerPin()">
-          <div id="pcr-manager-pin-error" style="color:#dc2626;font-size:11px;min-height:16px;margin-top:4px;"></div>
-          <div id="pcr-manager-pin-ok" style="display:none;font-size:11px;color:#15803d;margin-top:4px;"></div>
+        <div style="font-size:12px;color:#6b7280;" id="pcr-complete-info"></div>
+        <div style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:8px 12px;font-size:11px;color:#92400e;margin-top:10px;">
+          💻 Partial pcs 준비 수량을 확인하세요. 불량이 있으면 아래에 입력해주세요.
         </div>
       </div>
-      <div style="margin-bottom:16px;">
-        <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">담당자 PIN <span style="color:#dc2626">*</span></label>
-        <input id="pcr-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyPcrCompletePin()">
-        <div id="pcr-complete-pin-error" style="color:#dc2626;font-size:11px;min-height:16px;margin-top:4px;"></div>
+
+      <!-- 스크롤 영역 -->
+      <div style="flex:1;overflow-y:auto;padding:16px 24px;">
+        <div id="pcr-complete-lines"></div>
       </div>
-      <div id="pcr-complete-emp-info" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 12px;font-size:12px;color:#15803d;margin-bottom:16px;"></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button class="btn" onclick="document.getElementById('pcr-complete-modal').style.display='none'">취소</button>
-        <button class="btn" id="pcr-complete-btn" style="background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700;" onclick="submitPcrComplete()" disabled>✅ Complete</button>
+
+      <!-- 고정 푸터 -->
+      <div style="padding:14px 24px;border-top:1px solid #e5e7eb;flex-shrink:0;background:#fff;border-radius:0 0 12px 12px;">
+        <!-- Manager PIN -->
+        <div id="pcr-manager-pin-section" style="display:none;margin-bottom:12px;padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;">
+          <div style="font-size:11px;font-weight:700;color:#92400e;margin-bottom:8px;">⚠️ 추가 박스가 있습니다 — Manager 승인 필요</div>
+          <div id="pcr-approval-request-section">
+            <button onclick="requestManagerApproval()"
+              style="padding:6px 16px;background:#d97706;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
+              📋 Request Approval
+            </button>
+            <div style="font-size:10px;color:#92400e;margin-top:4px;">Manager에게 승인 요청을 보냅니다.</div>
+          </div>
+          <div id="pcr-approval-pending-section" style="display:none;">
+            <div style="font-size:11px;color:#92400e;margin-bottom:6px;">⏳ 승인 요청됨 — Manager가 확인 후 승인해주세요</div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Manager PIN 입력 (승인 후)</label>
+            <input id="pcr-manager-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:140px;text-align:center;" oninput="if(this.value.length===4) verifyPcrManagerPin()">
+            <div id="pcr-manager-pin-error" style="color:#dc2626;font-size:11px;min-height:16px;margin-top:4px;"></div>
+            <div id="pcr-manager-pin-ok" style="display:none;font-size:11px;color:#15803d;margin-top:4px;"></div>
+          </div>
+        </div>
+        <!-- 담당자 PIN + 버튼 -->
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <label style="font-size:11px;font-weight:600;color:#374151;white-space:nowrap;">담당자 PIN <span style="color:#dc2626">*</span></label>
+            <input id="pcr-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:110px;text-align:center;" oninput="if(this.value.length===4) verifyPcrCompletePin()">
+            <div id="pcr-complete-pin-error" style="color:#dc2626;font-size:11px;"></div>
+          </div>
+          <div id="pcr-complete-emp-info" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 10px;font-size:12px;color:#15803d;flex:1;"></div>
+          <div style="display:flex;gap:8px;margin-left:auto;">
+            <button class="btn" onclick="document.getElementById('pcr-complete-modal').style.display='none'">취소</button>
+            <button class="btn" id="pcr-complete-btn" style="background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700;" onclick="submitPcrComplete()" disabled>✅ Complete</button>
+          </div>
+        </div>
       </div>
+
     </div>
   </div>
 
