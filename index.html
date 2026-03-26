@@ -2283,7 +2283,7 @@ async function openInvoicePreview(orderId) {
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
     : lines;
 
-  const invoiceNum = order.invoice_number || ('INV-' + new Date().getFullYear() + '-' + (order.order_number||'').replace(/[^0-9]/g,'').slice(-4).padStart(4,'0'));
+  const invoiceNum = order.invoice_number || (String(new Date().getFullYear()) + '001');
   document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, invoiceNum);
 
   // View 모드 — 이메일 row, Send 버튼 숨기고 타이틀 변경
@@ -9321,15 +9321,14 @@ async function _doShippedCore(emp) {
   const invYear = new Date().getFullYear();
   const { data: lastInvOrders } = await db.from('orders')
     .select('invoice_number')
-    .like('invoice_number', `INV-${invYear}-%`)
+    .like('invoice_number', `${invYear}%`)
     .order('invoice_number', { ascending: false })
     .limit(1);
   let invSeq = 1;
   if (lastInvOrders?.length > 0) {
-    const parts = lastInvOrders[0].invoice_number.split('-');
-    invSeq = (parseInt(parts[parts.length - 1]) || 0) + 1;
+    invSeq = (parseInt((lastInvOrders[0].invoice_number || '').replace(String(invYear), '')) || 0) + 1;
   }
-  const invoiceNumber = `INV-${invYear}-${String(invSeq).padStart(4, '0')}`;
+  const invoiceNumber = `${invYear}${String(invSeq).padStart(3, '0')}`;
 
   // WH별 status 업데이트
   await updateWhStatus(orderId, wh || 'SC', 'shipped');
@@ -9488,9 +9487,9 @@ async function reviewAndSendInvoice(orderId, wh) {
   let invoiceNum = order.invoice_number;
   if (!invoiceNum) {
     const invYear = new Date().getFullYear();
-    const { data: lastInvOrders } = await db.from('orders').select('invoice_number').like('invoice_number', `INV-${invYear}-%`).order('invoice_number', { ascending: false }).limit(1);
-    const lastSeq = lastInvOrders?.[0]?.invoice_number ? parseInt(lastInvOrders[0].invoice_number.split('-')[2]) || 0 : 0;
-    invoiceNum = `INV-${invYear}-${String(lastSeq + 1).padStart(4, '0')}`;
+    const { data: lastInvOrders } = await db.from('orders').select('invoice_number').like('invoice_number', `${invYear}%`).order('invoice_number', { ascending: false }).limit(1);
+    const lastSeq = lastInvOrders?.[0]?.invoice_number ? parseInt(lastInvOrders[0].invoice_number.replace(String(invYear),'')) || 0 : 0;
+    invoiceNum = `${invYear}${String(lastSeq + 1).padStart(3, '0')}`;
     await db.from('orders').update({ invoice_number: invoiceNum }).eq('id', order.id);
   }
   const invShipInfo = {
@@ -10402,11 +10401,13 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     if (!sectionLines.length) return '';
     const freight = freightAmt || 0;
     const invNo = invoiceNum ? invoiceNum + (suffix||'') : '—';
-    const sorted = [...sectionLines].sort((a,b) => { const ca = (a.color||'').localeCompare(b.color||''); return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size); });
+    const sorted = [...sectionLines]
+      .filter(l => (l.qty_filled || 0) > 0)  // shipped 수량 있는 라인만 포함
+      .sort((a,b) => { const ca = (a.color||'').localeCompare(b.color||''); return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size); });
     let totalOrdered = 0, totalShipped = 0, totalAmt = 0;
     const rows = sorted.map(l => {
       const ordered = l.qty_pieces || 0;
-      const shipped = l.qty_filled || l.qty_pieces || 0;
+      const shipped = l.qty_filled || 0;  // qty_filled 없으면 0 (fallback X)
       const price = l.unit_price || 0;
       const amt = shipped * price;
       totalOrdered += ordered; totalShipped += shipped; totalAmt += amt;
