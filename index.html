@@ -7018,13 +7018,10 @@ function renderPcrBoxes() {
     });
   });
 
-  // 각 row의 totalQty = 원본 배정 총합
-  const origBoxes = window._pcrBoxesOriginal || boxes;
-  origBoxes.forEach(box => {
-    box.items.forEach(item => {
-      const key = `${item.styleNum||''}|||${item.color||''}|||${item.size||''}`;
-      if (rowMap[key]) rowMap[key].totalQty += (item.qty||0);
-    });
+  // 각 row의 totalQty = poLines에서 직접 읽기 (저장된 값 우선)
+  const totalQtyMap = window._pcrBoxesTotalQty || {};
+  Object.keys(rowMap).forEach(key => {
+    rowMap[key].totalQty = totalQtyMap[key] || 0;
   });
 
   const sizeOrd = s => (['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'].indexOf(s)+1)||99;
@@ -7922,9 +7919,9 @@ function openBoxAssignModal() {
   const isSplit = poLines.some(l => l.wh==='CA' || l.wh==='SC&CA');
 
   const buildBoxes = (whFilter) => {
-    // 배정해야 할 아이템 목록 수집 (qty=0, 빈 상태로)
     const allItems = [];
     const seen = new Set();
+    const totalQtyMap = {};
     poLines.forEach(l => {
       const lineWh = l.wh || 'SC';
       const isScLine = lineWh==='SC' || lineWh==='SC&CA' || !l.wh;
@@ -7934,31 +7931,39 @@ function openBoxAssignModal() {
       const loose = l.loose ?? (l.qty % (l.ppb||72));
       if (!loose) return;
       const key = `${l.styleNum||''}|||${l.color||''}|||${l.size||''}`;
+      totalQtyMap[key] = (totalQtyMap[key]||0) + loose;
       if (!seen.has(key)) {
         seen.add(key);
         allItems.push({ size:l.size||'', qty:loose, styleNum:l.styleNum||'', color:l.color||'' });
       }
     });
-    if (!allItems.length) return [];
+    if (!allItems.length) return { boxes: [], totalQtyMap: {} };
 
-    // 빈 박스 1개로 시작 (모든 아이템 qty=0)
     const emptyItems = allItems.map(i => ({ ...i, qty: 0 }));
-    return [{ boxNum:1, items: emptyItems, boxQty:60, isCustom:false }];
+    return {
+      boxes: [{ boxNum:1, items: emptyItems, boxQty:60, isCustom:false }],
+      totalQtyMap
+    };
   };
 
-  const scBoxes = buildBoxes('SC');
-  const caBoxes = isSplit ? buildBoxes('CA') : [];
+  const scResult = buildBoxes('SC');
+  const caResult = isSplit ? buildBoxes('CA') : { boxes: [], totalQtyMap: {} };
+  const scBoxes = scResult.boxes;
+  const caBoxes = caResult.boxes;
 
   if (!scBoxes.length && !caBoxes.length) { _doSaveWithBoxAlloc(null,null); return; }
 
   window._pcrBoxesSC = scBoxes;
   window._pcrBoxesCA = caBoxes;
-  // 원본은 전부 0인 빈 상태로 (변경 감지용)
   window._pcrBoxesOriginalSC = JSON.parse(JSON.stringify(scBoxes));
   window._pcrBoxesOriginalCA = JSON.parse(JSON.stringify(caBoxes));
+  // totalQty 맵 저장 (탭 전환 시 유지)
+  window._pcrBoxesTotalQtySC = scResult.totalQtyMap;
+  window._pcrBoxesTotalQtyCA = caResult.totalQtyMap;
   window._boxAssignCurrentWh = scBoxes.length ? 'SC' : 'CA';
   window._pcrBoxes = window._boxAssignCurrentWh==='SC' ? window._pcrBoxesSC : window._pcrBoxesCA;
   window._pcrBoxesOriginal = window._boxAssignCurrentWh==='SC' ? window._pcrBoxesOriginalSC : window._pcrBoxesOriginalCA;
+  window._pcrBoxesTotalQty = window._boxAssignCurrentWh==='SC' ? window._pcrBoxesTotalQtySC : window._pcrBoxesTotalQtyCA;
 
   const renderTabs = () => {
     const wh = window._boxAssignCurrentWh;
@@ -7994,13 +7999,13 @@ function openBoxAssignModal() {
 }
 
 function switchBoxTab(wh) {
-  // 현재 탭 _pcrBoxes 저장
   if (window._boxAssignCurrentWh==='SC') window._pcrBoxesSC = JSON.parse(JSON.stringify(window._pcrBoxes));
   else window._pcrBoxesCA = JSON.parse(JSON.stringify(window._pcrBoxes));
 
   window._boxAssignCurrentWh = wh;
   window._pcrBoxes = wh==='SC' ? window._pcrBoxesSC : window._pcrBoxesCA;
   window._pcrBoxesOriginal = wh==='SC' ? window._pcrBoxesOriginalSC : window._pcrBoxesOriginalCA;
+  window._pcrBoxesTotalQty = wh==='SC' ? window._pcrBoxesTotalQtySC : window._pcrBoxesTotalQtyCA;
 
   if (window._renderBoxAssignTabs) window._renderBoxAssignTabs();
   renderPcrBoxes();
