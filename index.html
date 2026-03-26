@@ -7909,8 +7909,9 @@ function toggleShipTrackingLabel() {
       '<span></span>' +
       '</div>' +
       '<div id="ship-tracking-list"></div>';
-    // 기본 1행 생성
-    generateShipTrackingRows(1);
+    // 기본 박스 수 (이미 계산된 값 or 1)
+    const preCalcBoxes = parseInt(document.getElementById('ship-total-boxes')?.value) || 1;
+    generateShipTrackingRows(preCalcBoxes);
     // Total Weight 자동합산
     const weightField = document.getElementById('ship-weight');
     if (weightField) {
@@ -8672,6 +8673,44 @@ async function doShipped(orderId, wh) {
   }
 
   document.getElementById('modal-shipped').style.display = 'flex';
+
+  // 실제 박스 수 계산 (order_lines alloc_detail 기반)
+  try {
+    const { data: lines } = await db.from('order_lines')
+      .select('alloc_detail, alloc_ca_detail, pcs_per_box, styles(box_qty)')
+      .eq('order_id', orderId);
+    if (lines && lines.length > 0) {
+      const isCA = wh === 'CA';
+      let totalFullBoxes = 0;
+      let totalPcrPcs = 0;
+      lines.forEach(l => {
+        const alloc = isCA ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
+        const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
+        Object.entries(alloc).forEach(([k, v]) => {
+          if (k.includes('TRANSFER|')) return;
+          if (k.toUpperCase().includes('PCR')) {
+            totalPcrPcs += typeof v === 'object' ? (v.pcs || 0) : (v || 0);
+          } else {
+            totalFullBoxes += typeof v === 'object' ? (v.boxes || 0) : Math.floor((v || 0) / ppb);
+          }
+        });
+      });
+      const ppbFirst = lines[0]?.pcs_per_box || lines[0]?.styles?.box_qty || 60;
+      const pcrBoxes = totalPcrPcs > 0 ? Math.ceil(totalPcrPcs / ppbFirst) : 0;
+      const calcBoxes = totalFullBoxes + pcrBoxes;
+      if (calcBoxes > 0) {
+        const boxField = document.getElementById('ship-total-boxes');
+        if (boxField) { boxField.value = calcBoxes; }
+        const boxCountEl = document.getElementById('ship-box-count');
+        if (boxCountEl) { boxCountEl.value = calcBoxes; }
+        // 현재 UPS/FedEx 선택돼 있으면 바로 행 생성
+        const carrier = document.getElementById('ship-carrier')?.value;
+        if (carrier === 'UPS' || carrier === 'FedEx') {
+          generateShipTrackingRows(calcBoxes);
+        }
+      }
+    }
+  } catch(e) { console.warn('Box count calc error:', e); }
 
   // PIN 초기화
   _shipEmpPin = null;
