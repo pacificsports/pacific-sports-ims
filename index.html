@@ -7033,6 +7033,7 @@ function renderPcrBoxes() {
     if (cc !== 0) return cc;
     return sizeOrd(ra.size) - sizeOrd(rb.size);
   });
+  window._pcrGridRowKeys = rowKeys; // Tab 네비게이션용
 
   // 박스 수 (+ 추가 버튼용 빈 박스 슬롯)
   const numBoxes = boxes.length;
@@ -7073,11 +7074,14 @@ function renderPcrBoxes() {
       );
       const qty = itemIdx >= 0 ? (box.items[itemIdx].qty||0) : 0;
       rowAssigned += qty;
+      const rowIdx = rowKeys.indexOf(key);
       cells += `<td style="padding:4px 6px;text-align:center;border-bottom:1px solid #f3f4f6;">
         <input type="number" min="0" value="${qty > 0 ? qty : ''}"
           placeholder="0"
+          id="pcr-cell-${bi}-${rowIdx}"
           onclick="this.select()"
           oninput="updatePcrGrid(${bi},'${key.replace(/'/g,"\\'")}',this.value)"
+          onkeydown="pcrGridKeyNav(event,${bi},${rowIdx},${numBoxes},${rowKeys.length})"
           style="width:58px;height:32px;border:1px solid ${qty>0?'#bfdbfe':'#e5e7eb'};border-radius:5px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${qty>0?'#1e3a8a':'#9ca3af'};background:${qty>0?'#eff6ff':'#fff'};-moz-appearance:textfield;" onfocus="this.style.borderColor='#3b82f6';this.style.outline='none'" onblur="this.style.borderColor=this.value&&parseInt(this.value)>0?'#bfdbfe':'#e5e7eb'">
       </td>`;
     }
@@ -7214,6 +7218,69 @@ function _updateRowTotals() {
 function _updateGridTotals() {
   _updateBoxHeaders();
   _updateRowTotals();
+}
+
+function pcrGridKeyNav(e, bi, rowIdx, numBoxes, numRows) {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+
+  const totalQtyMap = window._pcrBoxesTotalQty || {};
+  const boxes = window._pcrBoxes || [];
+  const rowKeys = window._pcrGridRowKeys || Object.keys(totalQtyMap);
+
+  if (e.shiftKey) {
+    // Shift+Tab: 이전 사이즈 같은 박스
+    let nextRowIdx = rowIdx - 1;
+    let nextBi = bi;
+    if (nextRowIdx < 0) {
+      nextRowIdx = numRows - 1;
+      nextBi = Math.max(0, bi - 1);
+    }
+    const nextEl = document.getElementById(`pcr-cell-${nextBi}-${nextRowIdx}`);
+    if (nextEl) { nextEl.focus(); nextEl.select(); }
+    return;
+  }
+
+  // Tab: 같은 박스(bi)의 다음 사이즈(rowIdx+1)로 세로 이동
+  let nextRowIdx = rowIdx + 1;
+  let nextBi = bi;
+
+  if (nextRowIdx >= numRows) {
+    // 이 박스의 마지막 사이즈 → 다음 박스 첫 사이즈로
+    nextBi = bi + 1;
+    nextRowIdx = 0;
+    if (nextBi >= numBoxes) {
+      nextBi = 0;
+      nextRowIdx = 0;
+    }
+  } else {
+    // 현재 사이즈가 완전히 배정됐으면 (남은 수량 0) → 다음 미배정 사이즈 BOX1으로 점프
+    const key = rowKeys[rowIdx];
+    const totalQty = totalQtyMap[key] || 0;
+    const assigned = boxes.reduce((s, box) => {
+      const item = box.items.find(i => `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === key);
+      return s + (item?.qty || 0);
+    }, 0);
+    if (assigned >= totalQty && totalQty > 0) {
+      // 배정 완료 → 다음 미배정 사이즈 BOX1 찾기
+      for (let r = rowIdx + 1; r < numRows; r++) {
+        const rKey = rowKeys[r];
+        const rTotal = totalQtyMap[rKey] || 0;
+        const rAssigned = boxes.reduce((s, box) => {
+          const item = box.items.find(i => `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === rKey);
+          return s + (item?.qty || 0);
+        }, 0);
+        if (rAssigned < rTotal) {
+          nextRowIdx = r;
+          nextBi = 0;
+          break;
+        }
+      }
+    }
+  }
+
+  const nextEl = document.getElementById(`pcr-cell-${nextBi}-${nextRowIdx}`);
+  if (nextEl) { nextEl.focus(); nextEl.select(); }
 }
 
 function pcrDefectStyle(el) {
