@@ -9689,39 +9689,55 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
       if (!sizes.length) return;
 
       const boxes = [];
-      let currentBox = { items: [] };
-      let currentTotal = 0;
+      // _pcrBoxes와 동일한 알고리즘: 전체가 들어올 때만 합치기
+      const remaining = sizes.map(s => ({ ...s, left: s.qty }));
+      let i = 0;
+      while (i < remaining.length) {
+        const item = remaining[i];
+        if (item.left <= 0) { i++; continue; }
 
-      sizes.forEach(s => {
-        // 현재 박스에 다른 사이즈가 이미 있으면 새 박스 시작
-        // (같은 사이즈끼리만 한 박스에 — 단, 박스가 꽉 차야 다음 박스로)
-        if (currentBox.items.length > 0 && currentBox.items[currentBox.items.length - 1].size !== s.size) {
-          boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items] });
-          currentBox = { items: [] };
-          currentTotal = 0;
+        const boxItems = [];
+        let boxTotal = 0;
+
+        // 현재 사이즈를 boxQty만큼 채우기
+        const take = Math.min(item.left, boxQty);
+        boxItems.push({ size: item.size, qty: take });
+        boxTotal += take;
+        item.left -= take;
+
+        // 꽉 찼으면 바로 닫기
+        if (boxTotal >= boxQty) {
+          boxes.push({ boxNum: globalBoxNum++, items: [...boxItems] });
+          if (item.left === 0) i++;
+          continue;
         }
 
-        let remaining = s.qty;
-        while (remaining > 0) {
-          const space = boxQty - currentTotal;
-          const take = Math.min(remaining, space);
-          if (take > 0) {
-            currentBox.items.push({ size: s.size, qty: take });
-            currentTotal += take;
-            remaining -= take;
+        // 현재 사이즈 소진 → 다음 사이즈들 공간만큼 합치기 (전체가 들어올 때만)
+        if (item.left === 0) {
+          i++;
+          let j = i;
+          while (j < remaining.length && boxTotal < boxQty) {
+            const next = remaining[j];
+            if (next.left <= 0) { j++; continue; }
+            const space = boxQty - boxTotal;
+            if (next.left <= space) {
+              // 전체가 들어옴 → 합치기
+              boxItems.push({ size: next.size, qty: next.left });
+              boxTotal += next.left;
+              next.left = 0;
+              j++;
+            } else {
+              // 다음 사이즈가 공간보다 많음 → 지금 박스 닫고 다음 박스로
+              break;
+            }
           }
-          if (currentTotal >= boxQty) {
-            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items] });
-            currentBox = { items: [] };
-            currentTotal = 0;
-          }
+          i = j;
         }
-      });
 
-      if (currentBox.items.length > 0) {
-        boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items] });
+        boxes.push({ boxNum: globalBoxNum++, items: [...boxItems] });
       }
-      result.push({ styleNum: g.styleNum, color: g.color, boxQty, boxes });
+
+      if (boxes.length) result.push({ styleNum: g.styleNum, color: g.color, boxQty, boxes });
     });
 
     return result;
