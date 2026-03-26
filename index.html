@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pacific Sports — Inventory Management</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
-</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -7839,74 +7840,100 @@ function printSignedBol() {
 }
 
 async function saveAndAttachBol() {
-  // Preview 먼저 생성
   previewSignedBol();
 
-  const content = document.getElementById('bol-preview-content').innerHTML;
-  if (!content) { alert('먼저 Preview를 확인해주세요.'); return; }
+  const content = document.getElementById('bol-preview-content');
+  if (!content || !content.innerHTML) { alert('먼저 Preview를 확인해주세요.'); return; }
 
   const po = _bolOrder?.customer_po || 'BOL';
   const wh = _shippedWh || 'SC';
 
-  // 버튼 로딩 표시
-  const saveBtn = document.querySelector('button[onclick="saveAndAttachBol()"]');
+  const saveBtn = document.querySelector('[onclick="saveAndAttachBol()"]');
   if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ PDF 변환 중...'; }
 
   try {
-    // worker.js를 통해 HTML → PDF 변환
-    const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
-      <style>body{margin:0;padding:16px;font-family:Arial,sans-serif;}</style>
-      </head><body>${content}</body></html>`;
+    // html2canvas + jsPDF로 브라우저에서 직접 PDF 생성
+    const { jsPDF } = window.jspdf;
 
-    const res = await fetch('https://po-confirm-email.hjbae.workers.dev/html-to-pdf', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ html: fullHtml })
+    const canvas = await html2canvas(content, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      windowWidth: 850
     });
 
-    let base64, mimeType, fileName;
+    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.pdf) {
-        base64 = data.pdf;
-        mimeType = 'application/pdf';
-        fileName = `BOL_PO${po}_${wh}.pdf`;
-      }
+    const pdfW = pdf.internal.pageSize.getWidth();
+    const pdfH = pdf.internal.pageSize.getHeight();
+    const margin = 0.4;
+    const printW = pdfW - margin * 2;
+    const printH = (canvas.height / canvas.width) * printW;
+
+    // 여러 페이지 처리
+    let yPos = margin;
+    let remainH = printH;
+    let srcY = 0;
+
+    while (remainH > 0) {
+      const pageH = Math.min(remainH, pdfH - margin * 2);
+      const srcH = (pageH / printH) * canvas.height;
+
+      // 현재 페이지 슬라이스
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = srcH;
+      const ctx = pageCanvas.getContext('2d');
+      ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
+      const pageImg = pageCanvas.toDataURL('image/jpeg', 0.95);
+
+      pdf.addImage(pageImg, 'JPEG', margin, yPos, printW, pageH);
+
+      remainH -= pageH;
+      srcY += srcH;
+      if (remainH > 0) { pdf.addPage(); yPos = margin; }
     }
 
-    // PDF 실패 시 HTML fallback
-    if (!base64) {
-      const encoder = new TextEncoder();
-      const bytes = encoder.encode(fullHtml);
-      let binary = '';
-      bytes.forEach(b => binary += String.fromCharCode(b));
-      base64 = btoa(binary);
-      mimeType = 'text/html';
-      fileName = `BOL_PO${po}_${wh}.html`;
-      console.warn('PDF 변환 실패 — HTML로 저장');
-    }
+    // base64 추출
+    const pdfBase64 = pdf.output('datauristring').split(',')[1];
+    const fileName = `BOL_PO${po}_${wh}.pdf`;
 
-    // _bolFilesDataSingle에 추가 (이메일 첨부용)
-    _bolFilesDataSingle.push({ base64, mimeType, fileName });
-    _bolFileData = { base64, mimeType, fileName };
+    _bolFilesDataSingle.push({ base64: pdfBase64, mimeType: 'application/pdf', fileName });
+    _bolFileData = { base64: pdfBase64, mimeType: 'application/pdf', fileName };
 
-    // BOL 파일 목록 UI 업데이트
     const list = document.getElementById('bol-file-list');
     if (list) {
       const item = document.createElement('div');
       item.style.cssText = 'display:flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:5px 10px;font-size:11px;';
-      const isPdf = mimeType === 'application/pdf';
-      item.innerHTML = '✅ <span style="font-weight:600;color:#15803d;">' + fileName + '</span>'
-        + ' <span style="font-size:10px;color:#6b7280;">(Created BOL' + (isPdf ? ' — PDF' : ' — HTML') + ')</span>';
+      item.innerHTML = `✅ <span style="font-weight:600;color:#15803d;">${fileName}</span> <span style="font-size:10px;color:#6b7280;">(Created BOL — PDF)</span>`;
       list.appendChild(item);
     }
 
     document.getElementById('modal-signed-bol').style.display = 'none';
-    showToast(mimeType === 'application/pdf' ? '✅ BOL PDF 첨부 완료!' : '⚠️ PDF 변환 실패 — HTML로 첨부됨');
+    showToast('✅ BOL PDF 첨부 완료!');
+
   } catch(e) {
-    console.error('saveAndAttachBol error:', e);
-    showToast('❌ BOL 저장 실패: ' + e.message);
+    console.error('BOL PDF error:', e);
+    // fallback: HTML
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(content.innerHTML);
+    let binary = ''; bytes.forEach(b => binary += String.fromCharCode(b));
+    const base64 = btoa(binary);
+    const fileName = `BOL_PO${po}_${wh}.html`;
+    _bolFilesDataSingle.push({ base64, mimeType: 'text/html', fileName });
+    _bolFileData = { base64, mimeType: 'text/html', fileName };
+    const list = document.getElementById('bol-file-list');
+    if (list) {
+      const item = document.createElement('div');
+      item.style.cssText = 'display:flex;align-items:center;gap:6px;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:5px 10px;font-size:11px;';
+      item.innerHTML = `⚠️ <span style="font-weight:600;color:#d97706;">${fileName}</span> <span style="font-size:10px;color:#6b7280;">(PDF 실패 — HTML)</span>`;
+      list.appendChild(item);
+    }
+    document.getElementById('modal-signed-bol').style.display = 'none';
+    showToast('⚠️ PDF 변환 실패 — HTML로 첨부됨');
   } finally {
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '✅ Save & Attach'; }
   }
