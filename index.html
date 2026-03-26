@@ -9898,14 +9898,13 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
       const cc = (a.color||'').localeCompare(b.color||'');
       return cc !== 0 ? cc : sizeOrd(a.size) - sizeOrd(b.size);
     });
-    // 2. WH Full Box 라인 (transfer는 별도 키로 저장되므로 그냥 bin pcs로 계산)
+    // 2. WH Full Box 라인 (WH bin에 수량 있는 라인 전부)
     const whLines = sectionLines.filter(l => {
       const alloc = l.alloc_detail || {};
-      const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
       return Object.entries(alloc).some(([k,v]) => {
         if (k.toUpperCase().includes('PCR') || k.includes('TRANSFER|')) return false;
         const pcs = typeof v === 'object' ? (v.pcs||0) : (v||0);
-        return Math.floor(pcs / ppb) > 0;
+        return pcs > 0;
       });
     }).sort((a,b) => {
       const cc = (a.color||'').localeCompare(b.color||'');
@@ -9971,7 +9970,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
             <th style="padding:6px 8px;text-align:left;font-size:10px;color:#14532d;text-transform:uppercase;border-bottom:1px solid #bbf7d0;">Style</th>
             <th style="padding:6px 8px;text-align:left;font-size:10px;color:#14532d;text-transform:uppercase;border-bottom:1px solid #bbf7d0;">Color</th>
             <th style="padding:6px 8px;text-align:center;font-size:10px;color:#14532d;text-transform:uppercase;border-bottom:1px solid #bbf7d0;">Size</th>
-            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#14532d;text-transform:uppercase;border-bottom:1px solid #bbf7d0;">Boxes</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#14532d;text-transform:uppercase;border-bottom:1px solid #bbf7d0;">QTY</th>
           </tr></thead>
           <tbody>
             ${whLines.flatMap(l => {
@@ -9981,17 +9980,20 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
               if (!binEntries.length) return [];
               return binEntries.flatMap(([bin, detail]) => {
                 const allocPcs = typeof detail==='object' ? (detail.pcs||0) : (detail||0);
-                // transfer는 별도 키로 저장되므로 여기서 빼지 않음
-                const fullPcs = allocPcs;
-                if (fullPcs <= 0) return [];
-                const fullBoxes = Math.floor(fullPcs / ppb);
-                if (fullBoxes <= 0) return [];
+                if (allocPcs <= 0) return [];
+                const fullBoxes = Math.floor(allocPcs / ppb);
+                const partialPcs = allocPcs % ppb;
+                // 박스 수 표시: full box있으면 "N boxes", partial만 있으면 "N pcs"
+                const qtyDisplay = fullBoxes > 0
+                  ? (partialPcs > 0 ? `${fullBoxes} boxes + ${partialPcs} pcs` : `${fullBoxes}`)
+                  : `${partialPcs} pcs`;
+                const qtyLabel = fullBoxes > 0 ? 'BOXES' : 'PCS';
                 return [`<tr style="border-bottom:1px solid #dcfce7;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${bin}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
                 <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
-                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${fullBoxes}</td>
+                <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${qtyDisplay}</td>
               </tr>`];
               });
             }).join('')}
