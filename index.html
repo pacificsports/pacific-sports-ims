@@ -7229,58 +7229,53 @@ function pcrGridKeyNav(e, bi, rowIdx, numBoxes, numRows) {
   const rowKeys = window._pcrGridRowKeys || Object.keys(totalQtyMap);
 
   if (e.shiftKey) {
-    // Shift+Tab: 이전 사이즈 같은 박스
-    let nextRowIdx = rowIdx - 1;
-    let nextBi = bi;
-    if (nextRowIdx < 0) {
-      nextRowIdx = numRows - 1;
-      nextBi = Math.max(0, bi - 1);
+    // Shift+Tab: 같은 사이즈 이전 박스, 박스 0이면 이전 사이즈 마지막 박스
+    let nextBi = bi - 1;
+    let nextRowIdx = rowIdx;
+    if (nextBi < 0) {
+      nextRowIdx = rowIdx - 1;
+      if (nextRowIdx < 0) nextRowIdx = numRows - 1;
+      nextBi = numBoxes - 1;
     }
     const nextEl = document.getElementById(`pcr-cell-${nextBi}-${nextRowIdx}`);
     if (nextEl) { nextEl.focus(); nextEl.select(); }
     return;
   }
 
-  // Tab: 같은 박스(bi)의 다음 사이즈(rowIdx+1)로 세로 이동
-  let nextRowIdx = rowIdx + 1;
-  let nextBi = bi;
+  // 현재 사이즈 배정 완료 여부 확인
+  const key = rowKeys[rowIdx];
+  const totalQty = totalQtyMap[key] || 0;
+  const assigned = boxes.reduce((s, box) => {
+    const item = box.items.find(i => `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === key);
+    return s + (item?.qty || 0);
+  }, 0);
+  const isComplete = totalQty > 0 && assigned >= totalQty;
 
-  if (nextRowIdx >= numRows) {
-    // 이 박스의 마지막 사이즈 → 다음 박스 첫 사이즈로
-    nextBi = bi + 1;
-    nextRowIdx = 0;
-    if (nextBi >= numBoxes) {
-      nextBi = 0;
-      nextRowIdx = 0;
-    }
-  } else {
-    // 현재 사이즈가 완전히 배정됐으면 (남은 수량 0) → 다음 미배정 사이즈 BOX1으로 점프
-    const key = rowKeys[rowIdx];
-    const totalQty = totalQtyMap[key] || 0;
-    const assigned = boxes.reduce((s, box) => {
-      const item = box.items.find(i => `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === key);
-      return s + (item?.qty || 0);
-    }, 0);
-    if (assigned >= totalQty && totalQty > 0) {
-      // 배정 완료 → 다음 미배정 사이즈 BOX1 찾기
-      for (let r = rowIdx + 1; r < numRows; r++) {
-        const rKey = rowKeys[r];
-        const rTotal = totalQtyMap[rKey] || 0;
-        const rAssigned = boxes.reduce((s, box) => {
-          const item = box.items.find(i => `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === rKey);
-          return s + (item?.qty || 0);
-        }, 0);
-        if (rAssigned < rTotal) {
-          nextRowIdx = r;
-          nextBi = 0;
-          break;
-        }
+  if (isComplete) {
+    // 배정 완료 → 다음 미완료 사이즈 BOX 1로 점프
+    for (let r = rowIdx + 1; r < numRows; r++) {
+      const rKey = rowKeys[r];
+      const rTotal = totalQtyMap[rKey] || 0;
+      const rAssigned = boxes.reduce((s, box) => {
+        const item = box.items.find(i => `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === rKey);
+        return s + (item?.qty || 0);
+      }, 0);
+      if (rAssigned < rTotal) {
+        const nextEl = document.getElementById(`pcr-cell-0-${r}`);
+        if (nextEl) { nextEl.focus(); nextEl.select(); }
+        return;
       }
     }
+    // 모든 사이즈 완료 → BOX 1 첫 사이즈로
+    const firstEl = document.getElementById(`pcr-cell-0-0`);
+    if (firstEl) { firstEl.focus(); firstEl.select(); }
+  } else {
+    // 미완료 → 같은 사이즈 다음 박스로 (가로 이동)
+    let nextBi = bi + 1;
+    if (nextBi >= numBoxes) nextBi = 0; // 마지막 박스면 BOX1으로
+    const nextEl = document.getElementById(`pcr-cell-${nextBi}-${rowIdx}`);
+    if (nextEl) { nextEl.focus(); nextEl.select(); }
   }
-
-  const nextEl = document.getElementById(`pcr-cell-${nextBi}-${nextRowIdx}`);
-  if (nextEl) { nextEl.focus(); nextEl.select(); }
 }
 
 function pcrDefectStyle(el) {
