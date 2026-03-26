@@ -8133,6 +8133,52 @@ function removeSingleBolFile(fileName, el) {
   el.remove();
 }
 
+// 브라우저에서 HTML → PDF base64 변환 (html2canvas + jsPDF)
+async function htmlToPdfBase64(htmlString) {
+  try {
+    const { jsPDF } = window.jspdf;
+    // 임시 컨테이너에 렌더링
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed;left:-9999px;top:0;width:850px;background:#fff;padding:16px;font-family:Arial,sans-serif;';
+    container.innerHTML = htmlString;
+    document.body.appendChild(container);
+    // 렌더링 대기
+    await new Promise(r => setTimeout(r, 300));
+    const canvas = await html2canvas(container, {
+      scale: 2, useCORS: true, allowTaint: true,
+      backgroundColor: '#ffffff', logging: false, windowWidth: 850
+    });
+    document.body.removeChild(container);
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'in', format: 'letter' });
+    const pdfW = pdf.internal.pageSize.getWidth();
+    const pdfH = pdf.internal.pageSize.getHeight();
+    const margin = 0.4;
+    const printW = pdfW - margin * 2;
+    const totalPrintH = (canvas.height / canvas.width) * printW;
+    const pageContentH = pdfH - margin * 2;
+    let srcY = 0;
+    let remainH = totalPrintH;
+    let firstPage = true;
+    while (remainH > 0.01) {
+      if (!firstPage) pdf.addPage();
+      firstPage = false;
+      const pageH = Math.min(remainH, pageContentH);
+      const srcH = Math.round((pageH / totalPrintH) * canvas.height);
+      const slice = document.createElement('canvas');
+      slice.width = canvas.width;
+      slice.height = srcH;
+      slice.getContext('2d').drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
+      pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', margin, margin, printW, pageH);
+      srcY += srcH;
+      remainH -= pageH;
+    }
+    return pdf.output('datauristring').split(',')[1];
+  } catch(e) {
+    console.error('htmlToPdfBase64 error:', e);
+    return null;
+  }
+}
+
 async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
   const custObj = (customers||[]).find(c => c.id === order.customer_id);
   const toEmail = custObj?.email || order.customer_email || order.email || '';
@@ -8226,6 +8272,12 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
       ? _bolFilesData.map(f => ({ base64: f.base64, mime: f.mimeType, filename: f.fileName }))
       : (bolData ? [{ base64: bolData.base64, mime: bolData.mimeType, filename: bolData.fileName }] : []);
 
+  // PL HTML → PDF (브라우저에서 직접 변환)
+  let plPdfBase64 = null;
+  if (plHtml) {
+    plPdfBase64 = await htmlToPdfBase64(plHtml);
+  }
+
   // 박스/팔레트 수 계산
   const totalBoxesShipped = (() => {
     const carrier = shippingInfo.carrier || '';
@@ -8251,7 +8303,8 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     wh: shippingInfo.wh || 'SC',
     note: shippingInfo.note || order.ship_note || '',
     lines: lineItems,
-    pl_html: plHtml || '',
+    pl_html: plPdfBase64 ? '' : (plHtml || ''),
+    pl_pdf: plPdfBase64 || null,
     bol_files: bolFilesArr,
     cc: ccEmail
   };
@@ -9512,10 +9565,20 @@ async function sendInvoiceEmail() {
     const toEmail = custObj?.accounting_email || order?.email;
     const ccEmail = custObj?.accounting_email_cc || '';
     if (toEmail) {
+      // Invoice HTML 빌드 → PDF 변환
+      let invPdfBase64 = null;
+      try {
+        const { data: settingsForPdf } = await db.from('company_settings').select('key,value');
+        const cs = {};
+        (settingsForPdf||[]).forEach(s => { cs[s.key] = s.value; });
+        const invHtml = buildInvoiceHtml(order, lines, false, order.invoice_number, null, cs, freightAmt);
+        if (invHtml) invPdfBase64 = await htmlToPdfBase64(invHtml);
+      } catch(e) { console.warn('Invoice PDF build error:', e); }
+
       await fetch('https://po-confirm-email.hjbae.workers.dev/send-invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order, lines, customer_email: toEmail, cc: ccEmail, companySettings, freightAmt })
+        body: JSON.stringify({ order, lines, customer_email: toEmail, cc: ccEmail, companySettings, freightAmt, inv_pdf: invPdfBase64 })
       });
     }
   } catch(e) { console.warn('Invoice email error:', e); }
