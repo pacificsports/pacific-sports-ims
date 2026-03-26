@@ -7081,7 +7081,8 @@ function renderPcrBoxes() {
           id="pcr-cell-${bi}-${rowIdx}"
           onclick="this.select()"
           oninput="updatePcrGrid(${bi},'${key.replace(/'/g,"\\'")}',this.value)"
-          onkeydown="pcrGridKeyNav(event,${bi},${rowIdx},${numBoxes},${rowKeys.length})"
+          onkeydown="if(event.key==='Tab'){event.preventDefault();}"
+          onkeyup="pcrGridKeyNav(event,${bi},${rowIdx},${numBoxes},${rowKeys.length})"
           style="width:58px;height:32px;border:1px solid ${qty>0?'#bfdbfe':'#e5e7eb'};border-radius:5px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${qty>0?'#1e3a8a':'#9ca3af'};background:${qty>0?'#eff6ff':'#fff'};-moz-appearance:textfield;" onfocus="this.style.borderColor='#3b82f6';this.style.outline='none'" onblur="this.style.borderColor=this.value&&parseInt(this.value)>0?'#bfdbfe':'#e5e7eb'">
       </td>`;
     }
@@ -7151,7 +7152,15 @@ function updatePcrGrid(bi, rowKey, val) {
     const newBoxNum = (window._pcrBoxes[window._pcrBoxes.length-1]?.boxNum || 0) + 1;
     const templateItems = (window._pcrBoxes[0]?.items || []).map(i => ({ ...i, qty: 0 }));
     window._pcrBoxes.push({ boxNum: newBoxNum, items: templateItems, boxQty: 60, isCustom: true });
+    // 재렌더 후 현재 셀에 포커스 복원
+    const rowKeys = window._pcrGridRowKeys || [];
+    const rowIdx = rowKeys.findIndex(k => k === rowKey);
     renderPcrBoxes();
+    // 재렌더 후 현재 위치로 포커스 복원
+    setTimeout(() => {
+      const el = document.getElementById(`pcr-cell-${bi}-${rowIdx}`);
+      if (el) { el.focus(); el.select(); }
+    }, 10);
     return;
   }
 
@@ -7222,7 +7231,6 @@ function _updateGridTotals() {
 
 function pcrGridKeyNav(e, bi, rowIdx, numBoxes, numRows) {
   if (e.key !== 'Tab') return;
-  e.preventDefault();
 
   const totalQtyMap = window._pcrBoxesTotalQty || {};
   const boxes = window._pcrBoxes || [];
@@ -15511,7 +15519,7 @@ function showCreditHoldFlash(overAmt) {
       <div style="padding:20px 24px 14px;border-bottom:1px solid #e5e7eb;flex-shrink:0;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
           <div style="font-size:16px;font-weight:700;color:#c2410c;">💻 Partial Preparing</div>
-          <button onclick="document.getElementById('pcr-complete-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+          <button tabindex="-1" onclick="document.getElementById('pcr-complete-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
         </div>
         <div style="font-size:12px;color:#6b7280;" id="pcr-complete-info"></div>
         <div style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:8px 12px;font-size:11px;color:#92400e;margin-top:10px;">
@@ -15548,7 +15556,7 @@ function showCreditHoldFlash(overAmt) {
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <div style="display:flex;align-items:center;gap:8px;">
             <label style="font-size:11px;font-weight:600;color:#374151;white-space:nowrap;">담당자 PIN <span style="color:#dc2626">*</span></label>
-            <input id="pcr-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:110px;text-align:center;" oninput="if(this.value.length===4) verifyPcrCompletePin()">
+            <input tabindex="-1" id="pcr-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:110px;text-align:center;" oninput="if(this.value.length===4) verifyPcrCompletePin()">
             <div id="pcr-complete-pin-error" style="color:#dc2626;font-size:11px;"></div>
           </div>
           <div id="pcr-complete-emp-info" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 10px;font-size:12px;color:#15803d;flex:1;"></div>
