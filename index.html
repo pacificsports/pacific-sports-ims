@@ -10611,35 +10611,47 @@ function playUrgentAlarmLoop() {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     _urgentAlarmCtx = ctx;
     const now = ctx.currentTime;
-    const dur = 3.0;
 
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(300, now);
-    osc.frequency.linearRampToValueAtTime(1200, now + 1.0);
-    osc.frequency.linearRampToValueAtTime(300, now + 2.0);
-    osc.frequency.linearRampToValueAtTime(1200, now + 3.0);
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.55, now + 0.1);
-    gain.gain.setValueAtTime(0.55, now + dur - 0.15);
-    gain.gain.linearRampToValueAtTime(0, now + dur);
-    osc.start(now); osc.stop(now + dur);
+    const sweepTimes = [
+      { start: 200, end: 900,  t: now + 0.0,  dur: 1.5 },
+      { start: 900, end: 200,  t: now + 1.5,  dur: 1.5 },
+      { start: 200, end: 900,  t: now + 3.0,  dur: 1.5 },
+      { start: 900, end: 200,  t: now + 4.5,  dur: 1.5 },
+    ];
 
-    const osc2 = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.connect(gain2); gain2.connect(ctx.destination);
-    osc2.type = 'square';
-    osc2.frequency.setValueAtTime(150, now);
-    osc2.frequency.linearRampToValueAtTime(600, now + 1.0);
-    osc2.frequency.linearRampToValueAtTime(150, now + 2.0);
-    osc2.frequency.linearRampToValueAtTime(600, now + 3.0);
-    gain2.gain.setValueAtTime(0, now);
-    gain2.gain.linearRampToValueAtTime(0.2, now + 0.1);
-    gain2.gain.setValueAtTime(0.2, now + dur - 0.15);
-    gain2.gain.linearRampToValueAtTime(0, now + dur);
-    osc2.start(now); osc2.stop(now + dur);
+    sweepTimes.forEach(({ start, end, t, dur }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(start, t);
+      osc.frequency.linearRampToValueAtTime(end, t + dur);
+      gain.gain.setValueAtTime(t === now ? 0 : 0.55, t);
+      if (t === now) gain.gain.linearRampToValueAtTime(0.55, t + 0.3);
+      if (t === now + 4.5) {
+        gain.gain.setValueAtTime(0.55, t + 1.2);
+        gain.gain.linearRampToValueAtTime(0, t + dur);
+      } else {
+        gain.gain.setValueAtTime(0.55, t + dur);
+      }
+      osc.start(t); osc.stop(t + dur + 0.05);
+
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2); gain2.connect(ctx.destination);
+      osc2.type = 'square';
+      osc2.frequency.setValueAtTime(start / 2, t);
+      osc2.frequency.linearRampToValueAtTime(end / 2, t + dur);
+      gain2.gain.setValueAtTime(t === now ? 0 : 0.18, t);
+      if (t === now) gain2.gain.linearRampToValueAtTime(0.18, t + 0.3);
+      if (t === now + 4.5) {
+        gain2.gain.setValueAtTime(0.18, t + 1.2);
+        gain2.gain.linearRampToValueAtTime(0, t + dur);
+      } else {
+        gain2.gain.setValueAtTime(0.18, t + dur);
+      }
+      osc2.start(t); osc2.stop(t + dur + 0.05);
+    });
   } catch(e) {}
 }
 
@@ -11676,38 +11688,51 @@ function playUrgentSiren() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const now = ctx.currentTime;
-    const dur = 3.0; // 3초 사이렌
 
-    // 메인 사이렌 — 낮→높→낮→높 반복 (민방위 스타일)
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.type = 'sawtooth';
-    // 주파수 sweep: 300Hz → 1200Hz → 300Hz → 1200Hz
-    osc.frequency.setValueAtTime(300, now);
-    osc.frequency.linearRampToValueAtTime(1200, now + 1.0);
-    osc.frequency.linearRampToValueAtTime(300, now + 2.0);
-    osc.frequency.linearRampToValueAtTime(1200, now + 3.0);
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.55, now + 0.1);
-    gain.gain.setValueAtTime(0.55, now + dur - 0.15);
-    gain.gain.linearRampToValueAtTime(0, now + dur);
-    osc.start(now); osc.stop(now + dur);
+    // 공습경보 사이렌 — 우~~~~~앙 (느리고 길게 스윕)
+    // 사이클: 낮→높→낮 x 2회 (총 6초)
+    const sweepTimes = [
+      { start: 200, end: 900,  t: now + 0.0,  dur: 1.5 },  // 우~~~~
+      { start: 900, end: 200,  t: now + 1.5,  dur: 1.5 },  // 앙~~~~
+      { start: 200, end: 900,  t: now + 3.0,  dur: 1.5 },  // 우~~~~
+      { start: 900, end: 200,  t: now + 4.5,  dur: 1.5 },  // 앙~~~~
+    ];
 
-    // 하모닉 레이어 (두께감)
-    const osc2 = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.connect(gain2); gain2.connect(ctx.destination);
-    osc2.type = 'square';
-    osc2.frequency.setValueAtTime(150, now);
-    osc2.frequency.linearRampToValueAtTime(600, now + 1.0);
-    osc2.frequency.linearRampToValueAtTime(150, now + 2.0);
-    osc2.frequency.linearRampToValueAtTime(600, now + 3.0);
-    gain2.gain.setValueAtTime(0, now);
-    gain2.gain.linearRampToValueAtTime(0.2, now + 0.1);
-    gain2.gain.setValueAtTime(0.2, now + dur - 0.15);
-    gain2.gain.linearRampToValueAtTime(0, now + dur);
-    osc2.start(now); osc2.stop(now + dur);
+    sweepTimes.forEach(({ start, end, t, dur }) => {
+      // 메인 사이렌 (두꺼운 sawtooth)
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(start, t);
+      osc.frequency.linearRampToValueAtTime(end, t + dur);
+      gain.gain.setValueAtTime(t === now ? 0 : 0.55, t);
+      if (t === now) gain.gain.linearRampToValueAtTime(0.55, t + 0.3);
+      if (t === now + 4.5) {
+        gain.gain.setValueAtTime(0.55, t + 1.2);
+        gain.gain.linearRampToValueAtTime(0, t + dur);
+      } else {
+        gain.gain.setValueAtTime(0.55, t + dur);
+      }
+      osc.start(t); osc.stop(t + dur + 0.05);
+
+      // 하모닉 (두께감 — 옥타브 아래)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2); gain2.connect(ctx.destination);
+      osc2.type = 'square';
+      osc2.frequency.setValueAtTime(start / 2, t);
+      osc2.frequency.linearRampToValueAtTime(end / 2, t + dur);
+      gain2.gain.setValueAtTime(t === now ? 0 : 0.18, t);
+      if (t === now) gain2.gain.linearRampToValueAtTime(0.18, t + 0.3);
+      if (t === now + 4.5) {
+        gain2.gain.setValueAtTime(0.18, t + 1.2);
+        gain2.gain.linearRampToValueAtTime(0, t + dur);
+      } else {
+        gain2.gain.setValueAtTime(0.18, t + dur);
+      }
+      osc2.start(t); osc2.stop(t + dur + 0.05);
+    });
 
   } catch(e) { console.warn('Audio not available:', e); }
 }
