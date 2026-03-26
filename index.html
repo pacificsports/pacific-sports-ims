@@ -7078,7 +7078,7 @@ function renderPcrBoxes() {
           placeholder="0"
           onclick="this.select()"
           oninput="updatePcrGrid(${bi},'${key.replace(/'/g,"\\'")}',this.value)"
-          style="width:58px;height:32px;border:1px solid ${qty>0?'#bfdbfe':'#e5e7eb'};border-radius:5px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${qty>0?'#1e3a8a':'#d1d5db'};background:${qty>0?'#eff6ff':'#fafafa'};-moz-appearance:textfield;" onfocus="this.select()">
+          style="width:58px;height:32px;border:1px solid ${qty>0?'#bfdbfe':'#e5e7eb'};border-radius:5px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${qty>0?'#1e3a8a':'#9ca3af'};background:${qty>0?'#eff6ff':'#fff'};-moz-appearance:textfield;" onfocus="this.style.borderColor='#3b82f6';this.style.outline='none'" onblur="this.style.borderColor=this.value&&parseInt(this.value)>0?'#bfdbfe':'#e5e7eb'">
       </td>`;
     }
     const remaining = row.totalQty - rowAssigned;
@@ -7140,7 +7140,17 @@ function updatePcrGrid(bi, rowKey, val) {
   } else if (qty > 0) {
     box.items.push({ styleNum, color, size, qty });
   }
-  // 재렌더 없이 헤더 합계만 업데이트
+
+  // 박스 합계 40 넘으면 다음 박스 자동 생성
+  const boxTotal = box.items.reduce((s,i) => s+(i.qty||0), 0);
+  if (boxTotal > 40 && !window._pcrBoxes[bi + 1]) {
+    const newBoxNum = (window._pcrBoxes[window._pcrBoxes.length-1]?.boxNum || 0) + 1;
+    const templateItems = (window._pcrBoxes[0]?.items || []).map(i => ({ ...i, qty: 0 }));
+    window._pcrBoxes.push({ boxNum: newBoxNum, items: templateItems, boxQty: 60, isCustom: true });
+    renderPcrBoxes();
+    return;
+  }
+
   _updateBoxHeaders();
   _updateRowTotals();
 }
@@ -7168,36 +7178,34 @@ function _updateBoxHeaders() {
 
 function _updateRowTotals() {
   const boxes = window._pcrBoxes || [];
-  const rowMap = {};
-  // 원본 totalQty
-  const origBoxes = window._pcrBoxesOriginal || boxes;
-  origBoxes.forEach(box => {
-    box.items.forEach(item => {
-      const key = `${item.styleNum||''}|||${item.color||''}|||${item.size||''}`;
-      if (!rowMap[key]) rowMap[key] = { totalQty: 0, assigned: 0 };
-      rowMap[key].totalQty += (item.qty||0);
-    });
-  });
+  const totalQtyMap = window._pcrBoxesTotalQty || {};
+  const assignedMap = {};
+
   // 현재 배정 합계
   boxes.forEach(box => {
     box.items.forEach(item => {
       const key = `${item.styleNum||''}|||${item.color||''}|||${item.size||''}`;
-      if (!rowMap[key]) rowMap[key] = { totalQty: 0, assigned: 0 };
-      rowMap[key].assigned += (item.qty||0);
+      assignedMap[key] = (assignedMap[key]||0) + (item.qty||0);
     });
   });
+
   // DOM 업데이트
-  Object.entries(rowMap).forEach(([key, data]) => {
+  Object.keys(totalQtyMap).forEach(key => {
     const el = document.getElementById(`pcr-row-remain-${key.replace(/[^a-zA-Z0-9]/g,'_')}`);
     if (!el) return;
-    const remaining = data.totalQty - data.assigned;
+    const totalQty = totalQtyMap[key] || 0;
+    const assigned = assignedMap[key] || 0;
+    const remaining = totalQty - assigned;
     if (remaining === 0) {
       el.innerHTML = '<div style="font-size:9px;color:#15803d;">✓</div>';
+    } else if (remaining > 0) {
+      el.innerHTML = `<div style="font-size:9px;font-weight:700;color:#dc2626;background:#fef2f2;border-radius:3px;padding:1px 4px;margin-top:2px;white-space:nowrap;">남은 ${remaining}</div>`;
     } else {
-      el.innerHTML = `<div style="font-size:9px;font-weight:700;color:${remaining>0?'#dc2626':'#dc2626'};background:${remaining>0?'#fef2f2':'#fef2f2'};border-radius:3px;padding:1px 4px;margin-top:2px;white-space:nowrap;">${remaining>0?'남은 '+remaining:'초과 '+Math.abs(remaining)}</div>`;
+      el.innerHTML = `<div style="font-size:9px;font-weight:700;color:#dc2626;background:#fef2f2;border-radius:3px;padding:1px 4px;margin-top:2px;white-space:nowrap;">초과 ${Math.abs(remaining)}</div>`;
     }
   });
-  // 전체 합계 행
+
+  // 전체 합계
   const grandTotal = boxes.reduce((s,box) => s+box.items.reduce((ss,i)=>ss+(i.qty||0),0), 0);
   const grandEl = document.getElementById('pcr-grand-total');
   if (grandEl) grandEl.textContent = grandTotal;
