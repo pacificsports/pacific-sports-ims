@@ -7898,26 +7898,32 @@ function toggleShipTrackingLabel() {
       '</div>';
   } else if (carrier === 'UPS' || carrier === 'FedEx') {
     trackingWrap.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-      '<label style="font-size:11px;font-weight:600;color:#374151;">Tracking # &amp; Weight per Box</label>' +
-      '<button type="button" onclick="addShipTrackingField()" style="font-size:10px;color:#1d4ed8;background:none;border:none;cursor:pointer;font-weight:600;padding:0;">+ Add Box</button>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
+      '<label style="font-size:11px;font-weight:600;color:#374151;white-space:nowrap;">Number of Boxes</label>' +
+      '<input type="number" id="ship-box-count" class="fi" min="1" max="50" value="1" style="width:70px;text-align:center;font-size:14px;font-weight:700;" oninput="generateShipTrackingRows(this.value)"/>' +
       '</div>' +
-      '<div id="ship-tracking-list">' +
-      '<div style="display:grid;grid-template-columns:1fr 100px;gap:6px;margin-bottom:4px;">' +
-      '<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" style="font-family:IBM Plex Mono,monospace;"/>' +
-      '<input type="number" class="fi ship-weight-input" placeholder="lbs" min="0" step="0.1" oninput="sumShipWeights()"/>' +
-      '</div></div>';
-    // Total Weight 필드를 읽기 전용 + 자동합산 표시로 변경
+      '<div style="display:grid;grid-template-columns:30px 1fr 90px 28px;gap:4px;margin-bottom:4px;padding:0 2px;">' +
+      '<span style="font-size:10px;color:#6b7280;text-align:center;">#</span>' +
+      '<span style="font-size:10px;color:#6b7280;">Tracking #</span>' +
+      '<span style="font-size:10px;color:#6b7280;">Weight(lbs)</span>' +
+      '<span></span>' +
+      '</div>' +
+      '<div id="ship-tracking-list"></div>';
+    // 기본 1행 생성
+    generateShipTrackingRows(1);
+    // Total Weight 자동합산
     const weightField = document.getElementById('ship-weight');
     if (weightField) {
       weightField.readOnly = true;
       weightField.style.background = '#f1f5f9';
-      weightField.style.color = '#374151';
       weightField.placeholder = '자동 합산';
       weightField.value = '';
     }
     const weightLabel = weightField?.previousElementSibling;
     if (weightLabel) weightLabel.textContent = 'Total Weight (lbs) — 자동 합산';
+    // Total Boxes 자동
+    const boxField = document.getElementById('ship-total-boxes');
+    if (boxField) { boxField.value = '1'; boxField.readOnly = true; boxField.style.background = '#f1f5f9'; }
   } else if (carrier === 'LTL') {
     trackingWrap.innerHTML =
       '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>' +
@@ -7947,16 +7953,59 @@ function toggleShipTrackingLabel() {
   }
 }
 
+function generateShipTrackingRows(count) {
+  const list = document.getElementById('ship-tracking-list');
+  if (!list) return;
+  const n = Math.max(1, Math.min(50, parseInt(count) || 1));
+  // 기존 값 보존
+  const existing = [...list.querySelectorAll('.ship-row')].map(row => ({
+    tracking: row.querySelector('.ship-tracking-input')?.value || '',
+    weight: row.querySelector('.ship-weight-input')?.value || ''
+  }));
+  list.innerHTML = '';
+  for (let i = 0; i < n; i++) {
+    const row = document.createElement('div');
+    row.className = 'ship-row';
+    row.style.cssText = 'display:grid;grid-template-columns:30px 1fr 90px 28px;gap:4px;margin-bottom:4px;align-items:center;';
+    row.innerHTML =
+      `<span style="font-size:11px;font-weight:700;color:#6b7280;text-align:center;">${i+1}</span>` +
+      `<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" value="${existing[i]?.tracking||''}" style="font-family:'IBM Plex Mono',monospace;font-size:11px;">` +
+      `<input type="number" class="fi ship-weight-input" placeholder="lbs" value="${existing[i]?.weight||''}" min="0" step="0.1" oninput="sumShipWeights()" style="font-size:11px;">` +
+      `<button type="button" onclick="deleteShipRow(this)" style="background:#fef2f2;border:1px solid #fca5a5;border-radius:4px;color:#dc2626;font-size:12px;cursor:pointer;padding:2px 6px;line-height:1;">✕</button>`;
+    list.appendChild(row);
+  }
+  // box count 싱크
+  const boxCountEl = document.getElementById('ship-box-count');
+  if (boxCountEl) boxCountEl.value = n;
+  const boxField = document.getElementById('ship-total-boxes');
+  if (boxField) boxField.value = n;
+  sumShipWeights();
+}
+
+function deleteShipRow(btn) {
+  const row = btn.closest('.ship-row');
+  if (!row) return;
+  const list = document.getElementById('ship-tracking-list');
+  if (list && list.querySelectorAll('.ship-row').length <= 1) return; // 최소 1개
+  row.remove();
+  // 번호 재정렬
+  list.querySelectorAll('.ship-row').forEach((r, i) => {
+    const numEl = r.querySelector('span');
+    if (numEl) numEl.textContent = i + 1;
+  });
+  const n = list.querySelectorAll('.ship-row').length;
+  const boxCountEl = document.getElementById('ship-box-count');
+  if (boxCountEl) boxCountEl.value = n;
+  const boxField = document.getElementById('ship-total-boxes');
+  if (boxField) boxField.value = n;
+  sumShipWeights();
+}
+
 function addShipTrackingField() {
   const list = document.getElementById('ship-tracking-list');
   if (!list) return;
-  const row = document.createElement('div');
-  row.style.cssText = 'display:grid;grid-template-columns:1fr 100px;gap:6px;margin-bottom:4px;';
-  row.innerHTML =
-    '<input type="text" class="fi ship-tracking-input" placeholder="Tracking #" style="font-family:\'IBM Plex Mono\',monospace;">' +
-    '<input type="number" class="fi ship-weight-input" placeholder="lbs" min="0" step="0.1" oninput="sumShipWeights()">';
-  list.appendChild(row);
-  row.querySelector('.ship-tracking-input').focus();
+  const n = list.querySelectorAll('.ship-row').length + 1;
+  generateShipTrackingRows(n);
 }
 
 function sumShipWeights() {
