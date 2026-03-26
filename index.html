@@ -7076,10 +7076,11 @@ function renderPcrBoxes() {
       const qty = itemIdx >= 0 ? (box.items[itemIdx].qty||0) : 0;
       rowAssigned += qty;
       cells += `<td style="padding:4px 6px;text-align:center;border-bottom:1px solid #f3f4f6;">
-        <input type="number" min="0" value="${qty}"
+        <input type="number" min="0" value="${qty > 0 ? qty : ''}"
+          placeholder="0"
           onclick="this.select()"
           oninput="updatePcrGrid(${bi},'${key.replace(/'/g,"\\'")}',this.value)"
-          style="width:58px;height:32px;border:1px solid ${qty>0?'#bfdbfe':'#e5e7eb'};border-radius:5px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${qty>0?'#1e3a8a':'#9ca3af'};background:${qty>0?'#eff6ff':'#fafafa'};-moz-appearance:textfield;" onfocus="this.select()">
+          style="width:58px;height:32px;border:1px solid ${qty>0?'#bfdbfe':'#e5e7eb'};border-radius:5px;text-align:center;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${qty>0?'#1e3a8a':'#d1d5db'};background:${qty>0?'#eff6ff':'#fafafa'};-moz-appearance:textfield;" onfocus="this.select()">
       </td>`;
     }
     const remaining = row.totalQty - rowAssigned;
@@ -7135,16 +7136,34 @@ function updatePcrGrid(bi, rowKey, val) {
   const idx = box.items.findIndex(i =>
     `${i.styleNum||''}|||${i.color||''}|||${i.size||''}` === rowKey
   );
-  if (qty === 0) {
-    if (idx >= 0) box.items.splice(idx, 1);
-  } else {
-    if (idx >= 0) {
-      box.items[idx].qty = qty;
-    } else {
-      box.items.push({ styleNum, color, size, qty });
-    }
+  if (idx >= 0) {
+    box.items[idx].qty = qty; // qty=0이어도 유지 (행 삭제 안 함)
+  } else if (qty > 0) {
+    box.items.push({ styleNum, color, size, qty });
   }
-  // 헤더와 합계만 업데이트 (전체 재렌더 없이)
+  // 헤더 합계만 업데이트
+  _updateGridTotals();
+}
+
+function _updateGridTotals() {
+  const boxes = window._pcrBoxes || [];
+  const PARTIAL_BOX_QTY = 60;
+  const PARTIAL_BOX_MAX = 72;
+  // 헤더 업데이트
+  boxes.forEach((box, bi) => {
+    const boxTotal = box.items.reduce((s,i) => s+(i.qty||0), 0);
+    const overMax = boxTotal > PARTIAL_BOX_MAX;
+    const over = boxTotal > PARTIAL_BOX_QTY && !overMax;
+    const full = boxTotal === PARTIAL_BOX_QTY;
+    const headerEl = document.querySelector(`th[data-box-idx="${bi}"]`);
+    if (headerEl) {
+      headerEl.querySelector('.box-total-display').textContent =
+        `${boxTotal}/${PARTIAL_BOX_QTY}${over?' ⚠':''}${overMax?' ❌':''}`;
+      headerEl.querySelector('.box-total-display').style.color =
+        overMax?'#fca5a5':over?'#fde68a':full?'#86efac':'#93c5fd';
+    }
+  });
+  // 간단히 전체 재렌더 (성능 충분)
   renderPcrBoxes();
 }
 
