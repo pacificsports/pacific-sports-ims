@@ -9934,68 +9934,82 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
 
   // Box allocation 계산 (pick ticket과 동일 로직)
   function calcPlBoxAllocation(sectionLines, sectionWh) {
+    const PARTIAL_BOX_QTY = 60; // Partial 박스는 항상 60장 고정
     const groups = {};
     sectionLines.forEach(l => {
-      const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
-      const key = `${l.styles?.style_number||''}|||${l.color||''}|||${ppb}`;
-      if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], boxQty: ppb };
+      const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+      const key = `${l.styles?.style_number||''}|||${l.color||''}`;
+      if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], ppb };
       const alloc = l.alloc_detail || {};
       const allocCA = l.alloc_ca_detail || {};
       const isCA = sectionWh === 'CA';
+      const activeAlloc = isCA ? allocCA : alloc;
       const scPcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
       const caPcrPcs = Object.entries(allocCA).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
       const pcrPcs = isCA ? caPcrPcs : scPcrPcs;
-      const activeAlloc2 = isCA ? allocCA : alloc;
-      const fullPcs2 = Object.entries(activeAlloc2).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?(v.boxes||0)*(ppb)+(v.partial||0):v||0),0);
-      if (fullPcs2 > 0) groups[key].sizes.push({ size: l.size||'', qty: fullPcs2, isFullBox: true });
+      const fullBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?(v.boxes||0):Math.floor((v||0)/ppb)),0);
+      if (fullBoxes > 0) groups[key].sizes.push({ size: l.size||'', qty: fullBoxes * ppb, isFullBox: true, ppb });
       if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs, isPartial: true });
     });
+
     const result = [];
     let globalBoxNum = 1;
-    Object.values(groups).sort((a,b) => b.boxQty - a.boxQty).forEach(g => {
-      const boxQty = g.boxQty;
+
+    Object.values(groups).forEach(g => {
       const fullSizes = g.sizes.filter(s => s.isFullBox && s.qty > 0).sort((a,b) => sizeOrd(a.size)-sizeOrd(b.size));
       const partialSizes = g.sizes.filter(s => s.isPartial && s.qty > 0).sort((a,b) => sizeOrd(a.size)-sizeOrd(b.size));
       const boxes = [];
-      let currentBox = { items: [], isPartial: false };
-      let currentTotal = 0;
-      // PCR Partial boxes FIRST (PC Room label과 번호 매칭)
-      partialSizes.forEach(s => {
-        let remaining = s.qty;
-        while (remaining > 0) {
-          const space = boxQty - currentTotal;
-          if (remaining > space && currentTotal > 0) {
-            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
-            currentBox = { items: [] }; currentTotal = 0;
+
+      // ── Partial 박스 (60장 고정, 여러 사이즈 합치기)
+      if (partialSizes.length > 0) {
+        const remaining = partialSizes.map(s => ({ ...s, left: s.qty }));
+        let i = 0;
+        while (i < remaining.length) {
+          const item = remaining[i];
+          if (item.left <= 0) { i++; continue; }
+          const boxItems = [];
+          let boxTotal = 0;
+          const take = Math.min(item.left, PARTIAL_BOX_QTY);
+          boxItems.push({ size: item.size, qty: take });
+          boxTotal += take;
+          item.left -= take;
+          if (boxTotal >= PARTIAL_BOX_QTY) {
+            boxes.push({ boxNum: globalBoxNum++, items: [...boxItems], isPartial: true });
+            if (item.left === 0) i++;
+            continue;
           }
-          const take = Math.min(remaining, boxQty - currentTotal);
-          if (take > 0) { currentBox.items.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
-          if (currentTotal >= boxQty) {
-            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true });
-            currentBox = { items: [] }; currentTotal = 0;
+          if (item.left === 0) {
+            i++;
+            let j = i;
+            while (j < remaining.length && boxTotal < PARTIAL_BOX_QTY) {
+              const next = remaining[j];
+              if (next.left <= 0) { j++; continue; }
+              const space = PARTIAL_BOX_QTY - boxTotal;
+              if (next.left <= space) {
+                boxItems.push({ size: next.size, qty: next.left });
+                boxTotal += next.left;
+                next.left = 0;
+                j++;
+              } else { break; }
+            }
+            i = j;
           }
+          boxes.push({ boxNum: globalBoxNum++, items: [...boxItems], isPartial: true });
         }
-      });
-      if (currentBox.items.length > 0) { boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: true }); currentBox = { items: [] }; currentTotal = 0; }
-      // Full boxes after
+      }
+
+      // ── Full 박스 (PPB 기준)
       fullSizes.forEach(s => {
+        const ppb = s.ppb || g.ppb || 72;
         let remaining = s.qty;
         while (remaining > 0) {
-          const space = boxQty - currentTotal;
-          if (remaining > space && currentTotal > 0) {
-            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: false });
-            currentBox = { items: [] }; currentTotal = 0;
-          }
-          const take = Math.min(remaining, boxQty - currentTotal);
-          if (take > 0) { currentBox.items.push({ size: s.size, qty: take }); currentTotal += take; remaining -= take; }
-          if (currentTotal >= boxQty) {
-            boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: false });
-            currentBox = { items: [] }; currentTotal = 0;
-          }
+          const take = Math.min(remaining, ppb);
+          boxes.push({ boxNum: globalBoxNum++, items: [{ size: s.size, qty: take }], isPartial: false });
+          remaining -= take;
         }
       });
-      if (currentBox.items.length > 0) { boxes.push({ boxNum: globalBoxNum++, items: [...currentBox.items], isPartial: false }); currentBox = { items: [] }; currentTotal = 0; }
-      if (boxes.length) result.push({ styleNum: g.styleNum, color: g.color, boxQty, boxes });
+
+      if (boxes.length) result.push({ styleNum: g.styleNum, color: g.color, boxQty: PARTIAL_BOX_QTY, boxes });
     });
     return result;
   }
