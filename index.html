@@ -7838,40 +7838,78 @@ function printSignedBol() {
   }, 200);
 }
 
-function saveAndAttachBol() {
+async function saveAndAttachBol() {
   // Preview 먼저 생성
   previewSignedBol();
 
   const content = document.getElementById('bol-preview-content').innerHTML;
   if (!content) { alert('먼저 Preview를 확인해주세요.'); return; }
 
-  // HTML → base64
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(content);
-  let binary = '';
-  bytes.forEach(b => binary += String.fromCharCode(b));
-  const base64 = btoa(binary);
-
   const po = _bolOrder?.customer_po || 'BOL';
   const wh = _shippedWh || 'SC';
-  const fileName = `BOL_PO${po}_${wh}.html`;
 
-  // _bolFilesDataSingle에 추가 (이메일 첨부용)
-  _bolFilesDataSingle.push({ base64, mimeType: 'text/html', fileName });
-  _bolFileData = { base64, mimeType: 'text/html', fileName };
+  // 버튼 로딩 표시
+  const saveBtn = document.querySelector('button[onclick="saveAndAttachBol()"]');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ PDF 변환 중...'; }
 
-  // BOL 파일 목록 UI 업데이트
-  const list = document.getElementById('bol-file-list');
-  if (list) {
-    const item = document.createElement('div');
-    item.style.cssText = 'display:flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:5px 10px;font-size:11px;';
-    item.innerHTML = '✅ <span style="font-weight:600;color:#15803d;">' + fileName + '</span>'
-      + ' <span style="font-size:10px;color:#6b7280;">(Created BOL)</span>';
-    list.appendChild(item);
+  try {
+    // worker.js를 통해 HTML → PDF 변환
+    const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <style>body{margin:0;padding:16px;font-family:Arial,sans-serif;}</style>
+      </head><body>${content}</body></html>`;
+
+    const res = await fetch('https://po-confirm-email.hjbae.workers.dev/html-to-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ html: fullHtml })
+    });
+
+    let base64, mimeType, fileName;
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.pdf) {
+        base64 = data.pdf;
+        mimeType = 'application/pdf';
+        fileName = `BOL_PO${po}_${wh}.pdf`;
+      }
+    }
+
+    // PDF 실패 시 HTML fallback
+    if (!base64) {
+      const encoder = new TextEncoder();
+      const bytes = encoder.encode(fullHtml);
+      let binary = '';
+      bytes.forEach(b => binary += String.fromCharCode(b));
+      base64 = btoa(binary);
+      mimeType = 'text/html';
+      fileName = `BOL_PO${po}_${wh}.html`;
+      console.warn('PDF 변환 실패 — HTML로 저장');
+    }
+
+    // _bolFilesDataSingle에 추가 (이메일 첨부용)
+    _bolFilesDataSingle.push({ base64, mimeType, fileName });
+    _bolFileData = { base64, mimeType, fileName };
+
+    // BOL 파일 목록 UI 업데이트
+    const list = document.getElementById('bol-file-list');
+    if (list) {
+      const item = document.createElement('div');
+      item.style.cssText = 'display:flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:5px 10px;font-size:11px;';
+      const isPdf = mimeType === 'application/pdf';
+      item.innerHTML = '✅ <span style="font-weight:600;color:#15803d;">' + fileName + '</span>'
+        + ' <span style="font-size:10px;color:#6b7280;">(Created BOL' + (isPdf ? ' — PDF' : ' — HTML') + ')</span>';
+      list.appendChild(item);
+    }
+
+    document.getElementById('modal-signed-bol').style.display = 'none';
+    showToast(mimeType === 'application/pdf' ? '✅ BOL PDF 첨부 완료!' : '⚠️ PDF 변환 실패 — HTML로 첨부됨');
+  } catch(e) {
+    console.error('saveAndAttachBol error:', e);
+    showToast('❌ BOL 저장 실패: ' + e.message);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '✅ Save & Attach'; }
   }
-
-  document.getElementById('modal-signed-bol').style.display = 'none';
-  showToast('✅ BOL 첨부 완료! Shipped 확정 시 이메일에 포함됩니다.');
 }
 
 // ── 3단계: Mark as Shipped → 재고 차감 + Back Order 처리
