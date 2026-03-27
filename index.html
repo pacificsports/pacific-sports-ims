@@ -7247,8 +7247,11 @@ async function openPcrComplete(orderId, wh) {
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
   if (!order || !lines) return;
 
+  window._pcrCompleteOrderName = order.customer_name || '';
+  window._pcrCompleteOrderPo = order.customer_po || '';
   document.getElementById('pcr-complete-info').innerHTML =
-    '<b>'+order.customer_name+'</b> &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
+    '<div style="font-weight:700;font-size:13px;color:#111827;">'+order.customer_name+'</div>'
+    + '<div style="font-size:11px;color:#6b7280;margin-top:2px;">PO# '+(order.customer_po||'—')+'</div>';
 
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const filteredLines = isSplit
@@ -9302,16 +9305,18 @@ function openBoxAssignModal() {
     const wh = window._boxAssignCurrentWh;
     if (!isSplit || (!scBoxes.length || !caBoxes.length)) {
       document.getElementById('pcr-complete-info').innerHTML =
-        `<div style="font-size:12px;color:#374151;">📦 <b>${wh}</b> 박스 배정을 확인하고 수정하세요.</div>`;
+        `<div style="font-weight:700;font-size:13px;color:#111827;">${(window._pcrCompleteOrderName||'')}</div>`
+        + `<div style="font-size:11px;color:#6b7280;margin-top:2px;">PO# ${(window._pcrCompleteOrderPo||'—')} &nbsp;·&nbsp; 📦 ${wh} WH</div>`;
     } else {
-      document.getElementById('pcr-complete-info').innerHTML = `
-        <div style="display:flex;gap:0;border-radius:6px;overflow:hidden;border:1px solid #e5e7eb;">
+      document.getElementById('pcr-complete-info').innerHTML =
+        `<div style="font-weight:700;font-size:13px;color:#111827;margin-bottom:8px;">${(window._pcrCompleteOrderName||'')} <span style="font-size:11px;font-weight:400;color:#6b7280;">PO# ${(window._pcrCompleteOrderPo||'—')}</span></div>`
+        + `<div style="display:flex;gap:0;border-radius:6px;overflow:hidden;border:1px solid #e5e7eb;">
           <button onclick="switchBoxTab('SC')"
-            style="flex:1;padding:9px;font-size:12px;font-weight:700;border:none;cursor:pointer;background:${wh==='SC'?'#1e3a8a':'#f1f5f9'};color:${wh==='SC'?'#fff':'#374151'};">
+            style="flex:1;padding:8px;font-size:12px;font-weight:700;border:none;cursor:pointer;background:${wh==='SC'?'#1e3a8a':'#f1f5f9'};color:${wh==='SC'?'#fff':'#374151'};">
             🟢 SC 배정 (${window._pcrBoxesSC.length}박스)
           </button>
           <button onclick="switchBoxTab('CA')"
-            style="flex:1;padding:9px;font-size:12px;font-weight:700;border:none;cursor:pointer;background:${wh==='CA'?'#c2410c':'#f1f5f9'};color:${wh==='CA'?'#fff':'#374151'};">
+            style="flex:1;padding:8px;font-size:12px;font-weight:700;border:none;cursor:pointer;background:${wh==='CA'?'#c2410c':'#f1f5f9'};color:${wh==='CA'?'#fff':'#374151'};">
             🟠 CA 배정 (${window._pcrBoxesCA.length}박스)
           </button>
         </div>`;
@@ -9328,6 +9333,9 @@ function openBoxAssignModal() {
 
   window._pcrBoxMode = 'grid'; // Save PO 모드 → 스프레드시트 그리드 UI
   window._pcrIsSaveMode = true;
+  // 오더 정보 저장 (renderTabs에서 표시용)
+  window._pcrCompleteOrderName = currentInvoiceData?.order?.customer_name || '';
+  window._pcrCompleteOrderPo = currentInvoiceData?.order?.customer_po || '';
   const _noticeEl = document.getElementById('pcr-prepare-notice');
   if (_noticeEl) _noticeEl.style.display = 'none';
   renderTabs();
@@ -17847,23 +17855,24 @@ function showCreditHoldFlash(overAmt) {
     <div class="modal-box" style="background:#fff;border-radius:12px;width:720px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
 
       <!-- 고정 헤더 (드래그 핸들) -->
-      <div class="modal-head" style="padding:16px 20px;border-bottom:1px solid #e5e7eb;flex-shrink:0;cursor:grab;user-select:none;border-radius:12px 12px 0 0;position:relative;">
+      <div class="modal-head" style="padding:14px 20px 12px;border-bottom:1px solid #e5e7eb;flex-shrink:0;cursor:grab;user-select:none;border-radius:12px 12px 0 0;position:relative;">
         <!-- X 버튼 — 오른쪽 상단 고정 -->
         <button tabindex="-1" onclick="closeModal('pcr-complete-modal')"
           style="position:absolute;top:10px;right:14px;background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;z-index:2;padding:4px;">✕</button>
-        <!-- 타이틀 -->
-        <div style="font-size:15px;font-weight:700;color:#c2410c;padding-right:32px;margin-bottom:8px;">💻 Partial Preparing</div>
-        <!-- SC/CA 탭 또는 오더 정보 -->
-        <div id="pcr-complete-info"></div>
-        <!-- 안내문구 (Order Status 모드만) -->
-        <div id="pcr-prepare-notice" style="background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:7px 12px;font-size:11px;color:#92400e;margin-top:10px;">
-          💻 Partial pcs 준비 수량을 확인하세요. 불량이 있으면 아래에 입력해주세요.
+        <!-- 타이틀 + 오더정보 두 줄 -->
+        <div style="display:flex;align-items:flex-start;gap:20px;padding-right:36px;">
+          <div style="font-size:15px;font-weight:700;color:#c2410c;white-space:nowrap;">💻 Partial<br>Preparing</div>
+          <div id="pcr-complete-info" style="font-size:12px;color:#374151;"></div>
         </div>
       </div>
 
       <!-- 스크롤 영역 -->
       <div style="flex:1;overflow-y:auto;padding:16px 24px;">
         <div id="pcr-complete-lines"></div>
+        <!-- 안내문구 — + 박스 버튼 아래, Order Status 모드만 표시 -->
+        <div id="pcr-prepare-notice" style="display:none;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:8px 12px;font-size:11px;color:#92400e;margin-top:12px;">
+          💻 Partial pcs 준비 수량을 확인하세요. 불량이 있으면 아래에 입력해주세요.
+        </div>
       </div>
 
       <!-- 고정 푸터 -->
