@@ -11185,19 +11185,23 @@ async function sendInvoiceEmail() {
     const custObj = customers.find(c => c.id === order?.customer_id);
     const toEmail = custObj?.accounting_email || order?.email;
     const ccEmail = custObj?.accounting_email_cc || '';
-    if (toEmail) {
-      // Invoice # with WH prefix: SC2026001 or CA2026001
-      const invWhPrefix = (_invoiceWh || order.wh_code || 'SC') === 'CA' ? 'CA' : 'SC';
-      const rawInvNum = order.invoice_number || '';
-      const displayInvNum = rawInvNum ? (invWhPrefix + rawInvNum) : '—';
-      const emailSubject = `Invoice #${displayInvNum} : ${order.customer_name || ''} (PO#${order.customer_po || '—'})`;
-      const invShipInfo2 = { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'' };
 
-      // Invoice PDF 생성 — displayInvNum 사용
+    // cs는 outer scope에서 정의 (buildInvoiceEmailBodyHtml 포함 모든 곳에서 사용)
+    const cs = {};
+    (settingsRows||[]).forEach(s => { cs[s.key] = s.value; });
+
+    // Invoice # with WH prefix
+    const invWhPrefix = (_invoiceWh || order.wh_code || 'SC') === 'CA' ? 'CA' : 'SC';
+    const rawInvNum = order.invoice_number || '';
+    const displayInvNum = rawInvNum ? (invWhPrefix + rawInvNum) : '—';
+    const invShipInfo2 = { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'' };
+
+    if (toEmail) {
+      const emailSubject = `Invoice #${displayInvNum} : ${order.customer_name || ''} (PO#${order.customer_po || '—'})`;
+
+      // Invoice PDF 생성
       let invPdfBase64 = null;
       try {
-        const cs = {};
-        (settingsRows||[]).forEach(s => { cs[s.key] = s.value; });
         const invHtml = buildInvoiceHtml(order, lines, false, displayInvNum, invShipInfo2, cs, freightAmt);
         if (invHtml) invPdfBase64 = await htmlToPdfBase64(invHtml);
       } catch(e) { console.warn('Invoice PDF error:', e); }
@@ -11207,43 +11211,52 @@ async function sendInvoiceEmail() {
       try {
         const wh = _invoiceWh || order.wh_code || 'SC';
         const { data: plLines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', _invoiceOrderId);
-        const invShipInfo = { carrier: order.carrier||'', tracking: order.tracking_number||'' };
-        const plHtml = buildPackingListHtml(order, plLines||[], order.wh_code === 'SC&CA', wh, invShipInfo, '');
+        const plShipInfo = { carrier: order.carrier||'', tracking: order.tracking_number||'' };
+        const plHtml = buildPackingListHtml(order, plLines||[], order.wh_code === 'SC&CA', wh, plShipInfo, '');
         if (plHtml) plPdfBase64 = await htmlToPdfBase64(plHtml);
       } catch(e) { console.warn('PL PDF error:', e); }
 
-      // PO 파일 (DB에서)
+      // PO 파일
       const poPdfBase64 = order.po_file || null;
 
-      // 이메일 body HTML 직접 빌드 — qty_filled 기준 shipped 수량만 표시
-      const invEmailBodyHtml = buildInvoiceEmailBodyHtml(order, lines, displayInvNum, invShipInfo2, cs, freightAmt);
+      // 이메일 body HTML 빌드 (cs가 outer scope에 있으므로 안전)
+      let invEmailBodyHtml = '';
+      try {
+        invEmailBodyHtml = buildInvoiceEmailBodyHtml(order, lines, displayInvNum, invShipInfo2, cs, freightAmt);
+      } catch(e) { console.warn('Invoice email body error:', e); }
 
-      await fetch('https://po-confirm-email.hjbae.workers.dev/send-invoice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          order, lines, customer_email: toEmail, cc: ccEmail,
-          companySettings, freightAmt,
-          inv_pdf: invPdfBase64,
-          pl_pdf: plPdfBase64,
-          po_pdf: poPdfBase64,
-          subject: emailSubject,
-          invoice_number_display: displayInvNum,
-          email_html: invEmailBodyHtml
-        })
-      });
+      try {
+        await fetch('https://po-confirm-email.hjbae.workers.dev/send-invoice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            order, lines, customer_email: toEmail, cc: ccEmail,
+            companySettings, freightAmt,
+            inv_pdf: invPdfBase64,
+            pl_pdf: plPdfBase64,
+            po_pdf: poPdfBase64,
+            subject: emailSubject,
+            invoice_number_display: displayInvNum,
+            email_html: invEmailBodyHtml || undefined
+          })
+        });
+      } catch(e) { console.warn('Invoice send-invoice fetch error:', e); }
     }
-  } catch(e) { console.warn('Invoice email error:', e); }
-
-  closeModal('modal-invoice-review');
-  playCashRegister();
-  showToast('✅ Invoice 발송 완료!');
-  _invoiceOrderId = null;
-  _invoiceWh = null;
-  // Completed 탭으로 이동
-  const completedTab = document.querySelector('.ntab[onclick*="completed"]');
-  if (completedTab) showPanel('completed', completedTab);
-  else loadOrderStatus();
+  } catch(e) {
+    console.warn('Invoice email error:', e);
+    showToast('⚠️ Invoice 처리 중 오류: ' + e.message);
+  } finally {
+    // 성공/실패 관계없이 항상 모달 닫고 완료 처리
+    closeModal('modal-invoice-review');
+    playCashRegister();
+    showToast('✅ Invoice 발송 완료!');
+    _invoiceOrderId = null;
+    _invoiceWh = null;
+    // Completed 탭으로 이동
+    const completedTab = document.querySelector('.ntab[onclick*="completed"]');
+    if (completedTab) showPanel('completed', completedTab);
+    else loadOrderStatus();
+  }
 }
 
 // ── Back Order 취소
