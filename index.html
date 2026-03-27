@@ -7800,25 +7800,25 @@ function renderPcrBoxesGrid() {
         <!-- 2줄: 입력 필드 -->
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
           <span style="font-size:10px;color:#6b7280;">Shade</span>
-          <input type="number" min="0" value="0" id="gdef-shade-${rowId}"
+          <input type="number" min="0" value="" placeholder="0" id="gdef-shade-${rowId}"
             oninput="calcGridDefect('${rowId}')"
             style="width:46px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;">
           <span style="font-size:10px;color:#6b7280;">Hole</span>
-          <input type="number" min="0" value="0" id="gdef-hole-${rowId}"
+          <input type="number" min="0" value="" placeholder="0" id="gdef-hole-${rowId}"
             oninput="calcGridDefect('${rowId}')"
             style="width:46px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;">
           <span style="font-size:10px;color:#6b7280;">Stain</span>
-          <input type="number" min="0" value="0" id="gdef-stain-${rowId}"
+          <input type="number" min="0" value="" placeholder="0" id="gdef-stain-${rowId}"
             oninput="calcGridDefect('${rowId}')"
             style="width:46px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;">
           <span style="font-size:10px;color:#6b7280;">Other</span>
-          <input type="number" min="0" value="0" id="gdef-other-${rowId}"
+          <input type="number" min="0" value="" placeholder="0" id="gdef-other-${rowId}"
             oninput="calcGridDefect('${rowId}')"
             style="width:46px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;">
           <input type="text" id="gdef-note-${rowId}" placeholder="이유..."
             style="width:90px;height:26px;border:1px solid #fca5a5;border-radius:4px;padding:0 6px;font-size:11px;">
           <span style="font-size:10px;color:#6b7280;font-weight:600;margin-left:4px;">Total</span>
-          <input type="number" min="0" value="0" id="gdef-total-${rowId}" readonly
+          <input type="number" min="0" value="" placeholder="0" id="gdef-total-${rowId}" readonly
             style="width:50px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:800;color:#dc2626;background:#fff5f5;cursor:default;">
         </div>
       </td>
@@ -9015,10 +9015,10 @@ async function openDefectConfirmModal(defectId) {
           <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">🔐 Manager PIN</label>
           <input id="defect-confirm-pin" type="password" inputmode="numeric" maxlength="4"
             style="width:100%;height:44px;border:1px solid #d1d5db;border-radius:6px;text-align:center;font-size:22px;letter-spacing:10px;font-family:'IBM Plex Mono',monospace;margin-bottom:6px;"
-            oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+            oninput="this.value=this.value.replace(/[^0-9]/g,'');_onDefectPinInput(this.value)">
           <div id="defect-confirm-error" style="font-size:11px;color:#dc2626;min-height:16px;margin-bottom:14px;"></div>
-          <button onclick="confirmDefect()"
-            style="width:100%;padding:12px;background:#111827;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:0.5px;">
+          <button id="defect-confirm-btn" onclick="confirmDefect()" disabled
+            style="width:100%;padding:12px;background:#111827;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:0.5px;opacity:0.5;">
             ✅ Confirm & Deduct Inventory
           </button>
         </div>
@@ -9064,19 +9064,54 @@ async function openDefectConfirmModal(defectId) {
      ${d.wh} WH · ${d.style_number} ${d.color} ${d.size}<br>
      Shade:${d.shade_qty} Hole:${d.hole_qty} Stain:${d.stain_qty} Other:${d.other_qty} = <b style="color:#dc2626;">${d.total_qty} pcs</b><br>
      보고자: ${d.reported_by} · ${new Date(d.reported_at).toLocaleString('en-US',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'})}`;
-  document.getElementById('defect-confirm-pin').value = '';
-  document.getElementById('defect-confirm-error').textContent = '';
+  window._defectConfirmEmp = null;
+  const pinEl = document.getElementById('defect-confirm-pin');
+  const btnEl = document.getElementById('defect-confirm-btn');
+  const errEl2 = document.getElementById('defect-confirm-error');
+  if (pinEl) pinEl.value = '';
+  if (errEl2) { errEl2.textContent = ''; errEl2.style.color = '#dc2626'; }
+  if (btnEl) { btnEl.disabled = true; btnEl.style.opacity = '0.5'; }
   modal.style.display = 'flex';
+}
+
+// PIN 실시간 검증 (4자리 입력 시)
+async function _onDefectPinInput(val) {
+  const errEl = document.getElementById('defect-confirm-error');
+  const btn = document.getElementById('defect-confirm-btn');
+  if (val.length < 4) {
+    if (errEl) errEl.textContent = '';
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+    window._defectConfirmEmp = null;
+    return;
+  }
+  if (_pinEmployees.length === 0) await loadPinEmployees();
+  const emp = _pinEmployees.find(e => e.pin === val && ['manager','supervisor','admin'].includes(e.role));
+  if (!emp) {
+    if (errEl) errEl.textContent = '❌ PIN이 올바르지 않거나 권한이 없습니다.';
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+    window._defectConfirmEmp = null;
+  } else {
+    if (errEl) errEl.textContent = '✅ ' + emp.name;
+    if (errEl) errEl.style.color = '#15803d';
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+    window._defectConfirmEmp = emp;
+  }
 }
 
 async function confirmDefect() {
   const pin = document.getElementById('defect-confirm-pin')?.value || '';
   const errEl = document.getElementById('defect-confirm-error');
-  if (pin.length < 4) { errEl.textContent = 'PIN 4자리를 입력하세요.'; return; }
 
+  // PIN이 현재 입력칸에 있고 검증된 emp가 있어야만 진행
+  if (pin.length < 4 || !window._defectConfirmEmp) {
+    if (errEl) { errEl.textContent = 'PIN 4자리를 입력하세요.'; errEl.style.color = '#dc2626'; }
+    document.getElementById('defect-confirm-pin')?.focus();
+    return;
+  }
+  // 한 번 더 검증 (PIN이 변경됐을 경우 대비)
   if (_pinEmployees.length === 0) await loadPinEmployees();
   const emp = _pinEmployees.find(e => e.pin === pin && ['manager','supervisor','admin'].includes(e.role));
-  if (!emp) { errEl.textContent = '❌ PIN이 올바르지 않거나 권한이 없습니다.'; document.getElementById('defect-confirm-pin').value=''; return; }
+  if (!emp) { if (errEl) { errEl.textContent = '❌ PIN이 올바르지 않습니다.'; errEl.style.color = '#dc2626'; } window._defectConfirmEmp = null; return; }
 
   // defect 정보 조회
   const { data: d } = await db.from('defects').select('*').eq('id', _defectConfirmId).single();
