@@ -835,9 +835,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 <button id="emergency-badge-btn-kpi" onclick="event.stopPropagation();openEmergencyPendingList()" style="display:none;background:#dc2626;border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;font-weight:800;color:#fff;animation:emergencyPulse 1.5s infinite;white-space:nowrap;">
                   🚨 Emergency<br><span id="emergency-badge-count-kpi" style="font-size:14px;font-weight:900;">0</span> pending
                 </button>
-                <button id="defect-badge-btn-kpi" onclick="event.stopPropagation();openDefectPendingModal()" style="display:none;background:#c2410c;border:none;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:11px;font-weight:800;color:#fff;animation:emergencyPulse 1.5s infinite;white-space:nowrap;">
-                  ⚠️ 불량 확인<br><span id="defect-badge-count-kpi" style="font-size:14px;font-weight:900;">0</span> pending
-                </button>
+
               </div>
             </div>
           </div>
@@ -5444,8 +5442,8 @@ async function loadOrderStatus() {
         </div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
           ${isUrgent?'<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 URGENT</span>':''}
-          ${(window._cardEmergencyMap||{})[o.id] ? `<span onclick="event.stopPropagation();openEmergencyPendingList()" style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:8px;background:#dc2626;color:#fff;cursor:pointer;animation:emergencyPulse 1.5s infinite;">🚨 ${(window._cardEmergencyMap||{})[o.id]}</span>` : ''}
-          ${(window._cardDefectMap||{})[o.id] ? `<span onclick="event.stopPropagation();openDefectPendingModal()" style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:8px;background:#c2410c;color:#fff;cursor:pointer;animation:emergencyPulse 1.5s infinite;">⚠️ 불량 ${(window._cardDefectMap||{})[o.id]}</span>` : ''}
+          ${(window._cardEmergencyMap||{})[o.id] ? `<span onclick="event.stopPropagation();openEmergencyPendingList()" style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:8px;background:#111827;color:#fff;cursor:pointer;animation:emergencyPulse 1.5s infinite;">🚨 Emergency</span>` : ''}
+          ${(window._cardDefectMap||{})[o.id] ? `<span onclick="event.stopPropagation();openDefectPendingModal()" style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:8px;background:#111827;color:#fff;cursor:pointer;animation:emergencyPulse 1.5s infinite;">⚠️ 불량 ${(window._cardDefectMap||{})[o.id]}pcs</span>` : ''}
           ${whBadge}
         </div>
       </div>
@@ -8451,17 +8449,19 @@ async function submitPcrComplete() {
     }, 0);
 
     let defectTotal = 0, shade = 0, hole = 0, stain = 0, other = 0, defectNote = '';
-    if (isGridMode) {
-      // Grid 모드: rowId = styleNum___color___size (특수문자→_)
-      const rowId = `${l.styleNum||''}|||${l.color||''}|||${l.size||''}`.replace(/[^a-zA-Z0-9]/g,'_');
-      const gd = gridDefects.find(d => d.rowId === rowId);
-      if (gd) { defectTotal = gd.total; shade = gd.shade; hole = gd.hole; stain = gd.stain; other = gd.other; defectNote = gd.note; }
-    } else {
-      // 카드 모드: 박스별 ID에서 합산
-      defectTotal = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-defect-box-'+bi+'-0')?.value||0)), 0);
-      shade = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-shade-box-'+bi+'-0')?.value||0)), 0);
-      hole  = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-hole-box-'+bi+'-0')?.value||0)), 0);
-      stain = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-stain-box-'+bi+'-0')?.value||0)), 0);
+    // grid/prepare 모드 모두 gdef-* DOM 요소로 라인별 매칭 (카드 모드 버그 수정)
+    const rowId = `${l.styleNum||''}|||${l.color||''}|||${l.size||''}`.replace(/[^a-zA-Z0-9]/g,'_');
+    const gd = gridDefects.find(d => d.rowId === rowId);
+    if (gd) { defectTotal = gd.total; shade = gd.shade; hole = gd.hole; stain = gd.stain; other = gd.other; defectNote = gd.note; }
+    else if (!isGridMode) {
+      // 카드 모드 fallback: 아이템 인덱스 기반
+      const ii = _pcrCompleteLines.indexOf(l);
+      boxes.forEach((box, bi) => {
+        defectTotal += parseInt(document.getElementById('pcr-defect-box-'+bi+'-'+ii)?.value||0);
+        shade += parseInt(document.getElementById('pcr-shade-box-'+bi+'-'+ii)?.value||0);
+        hole  += parseInt(document.getElementById('pcr-hole-box-'+bi+'-'+ii)?.value||0);
+        stain += parseInt(document.getElementById('pcr-stain-box-'+bi+'-'+ii)?.value||0);
+      });
     }
     return { ...l, preparedQty: preparedQty || l.partialQty, defectTotal, shade, hole, stain, other, defectNote, pcrBinId: l.pcrBinId };
   });
@@ -8864,12 +8864,6 @@ async function _checkDefectsPending() {
   const { data: pending } = await db.from('defects')
     .select('*').eq('status', 'pending').order('reported_at', { ascending: false });
   const count = pending?.length || 0;
-
-  // Preparing KPI 카드 배지 업데이트
-  const btn = document.getElementById('defect-badge-btn-kpi');
-  const countEl = document.getElementById('defect-badge-count-kpi');
-  if (btn) btn.style.display = count > 0 ? 'block' : 'none';
-  if (countEl) countEl.textContent = count;
 
   // 오더별 카드 배지용 맵 생성 (order_id → 불량 총 pcs)
   window._cardDefectMap = {};
