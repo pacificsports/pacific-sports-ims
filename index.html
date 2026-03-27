@@ -9539,6 +9539,210 @@ async function htmlToPdfBase64(htmlString) {
   }
 }
 
+
+// ══════════════════════════════════════════════════════
+// Shipped 이메일 HTML 빌더 (이 파일에서 직접 생성 → Worker에 전달)
+// SC: 파란색 체크, CA: 주황색 체크, 이전 배송 완료: 녹색 체크
+// ══════════════════════════════════════════════════════
+function buildShippedEmailHtml(order, shippingInfo, lineItems) {
+  const currentWh = shippingInfo.wh || 'SC';
+  const isSplit = lineItems.some(l => l.is_split);
+  const carrier = shippingInfo.carrier || '';
+  const tracking = shippingInfo.tracking || '';
+  const freightCarrier = shippingInfo.freightCarrier || '';
+  const note = shippingInfo.note || order.ship_note || '';
+  const totalBoxes = shippingInfo.total_boxes || shippingInfo.totalBoxes || '';
+
+  const isLtl = carrier === 'LTL';
+  const isWillCall = carrier === 'Will Call';
+  const displayCarrier = isLtl && freightCarrier ? freightCarrier : carrier;
+  const trackingLabel = isLtl ? 'PRO #' : 'Tracking #';
+
+  // ── 이번 배송 수량 합계 (shipped qty 기준)
+  const totalScShipped = lineItems.reduce((s,l) => s + (l.sc_qty||0), 0);
+  const totalCaShipped = lineItems.reduce((s,l) => s + (l.ca_qty||0), 0);
+  const totalThisShipment = currentWh === 'CA' ? totalCaShipped
+                          : isSplit ? totalScShipped + totalCaShipped
+                          : totalScShipped;
+  const totalPoPcs = lineItems.reduce((s,l) => s + (l.qty||0), 0);
+  const totalBackPcs = lineItems.reduce((s,l) => s + (l.back_qty||0), 0);
+  const hasBackOrder = totalBackPcs > 0;
+
+  // Ship From label
+  const shipFromLabel = currentWh === 'CA' ? 'Eastvale, CA' : isSplit ? 'Sumter, SC + Eastvale, CA' : 'Sumter, SC';
+
+  // ── 배송 정보 블록
+  const shipInfoHtml = (carrier || tracking) ? `
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:16px 20px;margin-bottom:20px;">
+      <div style="font-size:13px;font-weight:700;color:#0369a1;margin-bottom:10px;">🚚 Shipping Information</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        ${carrier ? `<tr><td style="padding:4px 0;color:#6b7280;width:140px;">Carrier</td><td style="font-weight:700;">${displayCarrier}</td></tr>` : ''}
+        ${tracking && !isWillCall ? `<tr><td style="padding:4px 0;color:#6b7280;">${trackingLabel}</td><td style="font-weight:600;font-family:monospace;">${tracking}</td></tr>` : ''}
+        ${isWillCall && shippingInfo.pickupBy ? `<tr><td style="padding:4px 0;color:#6b7280;">Picked Up By</td><td style="font-weight:600;">${shippingInfo.pickupBy}</td></tr>` : ''}
+        ${totalBoxes ? `<tr><td style="padding:4px 0;color:#6b7280;">Total Boxes</td><td style="font-weight:700;">${totalBoxes} boxes</td></tr>` : ''}
+      </table>
+    </div>` : '';
+
+  // ── 라인 테이블 컬럼 헤더
+  const colHeader = isSplit
+    ? `<th style="padding:8px 10px;text-align:center;color:#1e40af;font-weight:700;">SC Shipped</th>
+       <th style="padding:8px 10px;text-align:center;color:#ea580c;font-weight:700;">CA Shipped</th>`
+    : `<th style="padding:8px 10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};font-weight:700;">Shipped</th>`;
+
+  // ── 라인 rows (shipped qty 있는 라인만)
+  const shippedLines = lineItems.filter(l =>
+    isSplit ? (l.sc_qty > 0 || l.ca_qty > 0)
+    : currentWh === 'CA' ? l.ca_qty > 0 : l.sc_qty > 0
+  );
+  const backLines = lineItems.filter(l => (l.back_qty||0) > 0);
+
+  const renderShipRow = l => {
+    // SC 체크 셀
+    const scCheck = l.sc_shipped
+      ? `<span style="color:#1e40af;font-weight:800;font-size:14px;">✓</span>`
+      : l.sc_prev_shipped
+        ? `<span style="color:#16a34a;font-weight:800;font-size:14px;">✓</span>`
+        : `<span style="color:#d1d5db;">—</span>`;
+    const scDate = l.sc_shipped_date ? `<div style="font-size:10px;color:#6b7280;">${l.sc_shipped_date}</div>` : '';
+    const scQtyStr = l.sc_qty > 0 ? `<div style="font-size:11px;font-weight:700;color:#1e40af;">${l.sc_qty} pcs</div>` : '';
+    const scCell = `<td style="padding:8px 10px;text-align:center;">${scCheck}${scDate}${scQtyStr}</td>`;
+
+    // CA 체크 셀
+    const caCheck = l.ca_shipped
+      ? `<span style="color:#ea580c;font-weight:800;font-size:14px;">✓</span>`
+      : l.ca_prev_shipped
+        ? `<span style="color:#16a34a;font-weight:800;font-size:14px;">✓</span>`
+        : `<span style="color:#d1d5db;">—</span>`;
+    const caDate = l.ca_shipped_date ? `<div style="font-size:10px;color:#6b7280;">${l.ca_shipped_date}</div>` : '';
+    const caQtyStr = l.ca_qty > 0 ? `<div style="font-size:11px;font-weight:700;color:#ea580c;">${l.ca_qty} pcs</div>` : '';
+    const caCell = `<td style="padding:8px 10px;text-align:center;">${caCheck}${caDate}${caQtyStr}</td>`;
+
+    if (isSplit) {
+      return `<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:8px 10px;font-family:monospace;font-size:12px;font-weight:600;">${l.style}</td>
+        <td style="padding:8px 10px;">${l.color}</td>
+        <td style="padding:8px 10px;text-align:center;">${l.size}</td>
+        <td style="padding:8px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
+        ${scCell}${caCell}
+      </tr>`;
+    } else {
+      const whCheck = currentWh === 'CA' ? caCheck : scCheck;
+      const whDate  = currentWh === 'CA' ? caDate  : scDate;
+      const whQty   = currentWh === 'CA' ? l.ca_qty : l.sc_qty;
+      const whColor = currentWh === 'CA' ? '#ea580c' : '#1e40af';
+      return `<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:8px 10px;font-family:monospace;font-size:12px;font-weight:600;">${l.style}</td>
+        <td style="padding:8px 10px;">${l.color}</td>
+        <td style="padding:8px 10px;text-align:center;">${l.size}</td>
+        <td style="padding:8px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
+        <td style="padding:8px 10px;text-align:center;">${whCheck}${whDate}${whQty > 0 ? `<div style="font-size:11px;font-weight:700;color:${whColor};">${whQty} pcs</div>` : ''}</td>
+      </tr>`;
+    }
+  };
+
+  const shippedRows = shippedLines.map(renderShipRow).join('');
+
+  // ── tfoot totals
+  const tfootHtml = `
+    <tfoot>
+      <tr style="background:#f0f4ff;border-top:2px solid #e5e7eb;font-weight:700;">
+        <td colspan="3" style="padding:10px;text-align:right;color:#6b7280;font-size:12px;">Total Shipped:</td>
+        <td style="padding:10px;text-align:center;color:#6b7280;font-size:12px;">${totalPoPcs} PO</td>
+        ${isSplit
+          ? `<td style="padding:10px;text-align:center;color:#1e40af;">${totalScShipped} pcs</td>
+             <td style="padding:10px;text-align:center;color:#ea580c;">${totalCaShipped} pcs</td>`
+          : `<td style="padding:10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};">${totalThisShipment} pcs</td>`}
+      </tr>
+    </tfoot>`;
+
+  // ── Back Order 섹션
+  const backOrderHtml = hasBackOrder ? `
+    <div style="margin-top:24px;border:2px solid #fecaca;border-radius:8px;overflow:hidden;">
+      <div style="background:#fee2e2;padding:10px 16px;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:16px;">⚠️</span>
+        <span style="font-size:13px;font-weight:700;color:#991b1b;">Back Order — ${totalBackPcs} pcs pending</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr style="background:#fef2f2;border-bottom:1px solid #fecaca;">
+            <th style="padding:7px 10px;text-align:left;color:#991b1b;font-weight:600;">Style</th>
+            <th style="padding:7px 10px;text-align:left;color:#991b1b;font-weight:600;">Color</th>
+            <th style="padding:7px 10px;text-align:center;color:#991b1b;font-weight:600;">Size</th>
+            <th style="padding:7px 10px;text-align:center;color:#991b1b;font-weight:600;">Back Qty</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${backLines.map(l => `
+            <tr style="border-bottom:1px solid #fef2f2;">
+              <td style="padding:7px 10px;font-family:monospace;font-size:12px;font-weight:600;">${l.style}</td>
+              <td style="padding:7px 10px;">${l.color}</td>
+              <td style="padding:7px 10px;text-align:center;">${l.size}</td>
+              <td style="padding:7px 10px;text-align:center;font-weight:700;color:#dc2626;">${l.back_qty}</td>
+            </tr>`).join('')}
+        </tbody>
+        <tfoot>
+          <tr style="background:#fef2f2;border-top:1px solid #fecaca;">
+            <td colspan="3" style="padding:8px 10px;text-align:right;font-size:12px;color:#991b1b;">Total Back Order:</td>
+            <td style="padding:8px 10px;text-align:center;font-weight:800;color:#dc2626;">${totalBackPcs} pcs</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="padding:10px 16px;background:#fff5f5;font-size:11px;color:#991b1b;border-top:1px solid #fecaca;">
+        We will ship your remaining items as soon as inventory is available. You will receive a separate shipment notification.
+      </div>
+    </div>` : '';
+
+  // ── 범례
+  const legendHtml = isSplit ? `
+    <div style="display:flex;gap:16px;font-size:11px;color:#6b7280;margin-top:14px;padding-top:10px;border-top:1px solid #e5e7eb;flex-wrap:wrap;">
+      <span><span style="color:#1e40af;font-weight:700;">✓</span> SC — This shipment</span>
+      <span><span style="color:#ea580c;font-weight:700;">✓</span> CA — This shipment</span>
+      <span><span style="color:#16a34a;font-weight:700;">✓</span> Previously shipped</span>
+    </div>` : `
+    <div style="display:flex;gap:16px;font-size:11px;color:#6b7280;margin-top:14px;padding-top:10px;border-top:1px solid #e5e7eb;flex-wrap:wrap;">
+      <span><span style="color:${currentWh==='CA'?'#ea580c':'#1e40af'};font-weight:700;">✓</span> Shipped this order</span>
+      <span><span style="color:#16a34a;font-weight:700;">✓</span> Previously shipped</span>
+    </div>`;
+
+  const noteHtml = note ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;font-size:12px;margin-bottom:16px;"><span style="font-weight:700;color:#d97706;">📝 Note:</span> ${note}</div>` : '';
+
+  return `
+  <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;">
+    <div style="background:#0f2744;padding:16px 24px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center;">
+      <div style="color:#fff;font-size:18px;font-weight:800;letter-spacing:1px;">PACIFIC SPORTS INC</div>
+      <div style="color:#93c5fd;font-size:13px;font-weight:600;">Your order has shipped 🚚</div>
+    </div>
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:12px 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Customer PO<br><span style="font-size:14px;font-weight:700;color:#111;text-transform:none;">${order.customer_po||'—'}</span></div>
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Ship Date<br><span style="font-size:14px;font-weight:700;color:#111;text-transform:none;">${order.ship_date||new Date().toLocaleDateString('en-US')}</span></div>
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Ship From<br><span style="font-size:13px;font-weight:700;color:#111;text-transform:none;">${shipFromLabel}</span></div>
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Total Shipped<br><span style="font-size:14px;font-weight:700;color:${currentWh==='CA'?'#ea580c':'#1e40af'};text-transform:none;">${totalThisShipment} pcs</span></div>
+    </div>
+    <div style="padding:20px 24px;background:#fff;border:1px solid #e5e7eb;border-top:none;">
+      ${noteHtml}
+      ${shipInfoHtml}
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr style="background:#f3f4f6;border-bottom:2px solid #e5e7eb;">
+            <th style="padding:8px 10px;text-align:left;font-weight:600;">Style</th>
+            <th style="padding:8px 10px;text-align:left;font-weight:600;">Color</th>
+            <th style="padding:8px 10px;text-align:center;font-weight:600;">Size</th>
+            <th style="padding:8px 10px;text-align:center;color:#6b7280;font-weight:600;">PO Qty</th>
+            ${colHeader}
+          </tr>
+        </thead>
+        <tbody>${shippedRows}</tbody>
+        ${tfootHtml}
+      </table>
+      ${legendHtml}
+      ${backOrderHtml}
+    </div>
+    <div style="padding:12px 24px;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;font-size:11px;color:#9ca3af;text-align:center;">
+      Pacific Sports Inc · 1605 South Guignard Pkwy, Sumter SC 29150 · (803) 773-2177
+    </div>
+  </div>`;
+}
+
 async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
   const custObj = (customers||[]).find(c => c.id === order.customer_id);
   const toEmail = custObj?.email || order.customer_email || order.email || '';
@@ -9593,18 +9797,20 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
 
     const backQty = l.qty_backordered || 0;
 
-    // 해당 WH 이번 배송에 포함됐는지 (alloc 수량 > 0)
-    const scShipped = scQty > 0;
-    const caShipped = caQty > 0;
-
-    // 이전 배송 기록 (sc_shipped_at / ca_shipped_at)
-    const scPrevShipped = !!order.sc_shipped_at;
-    const caPrevShipped = !!order.ca_shipped_at;
-
     // 날짜 포맷 M/D
     const fmtDate = d => d ? new Date(d).toLocaleDateString('en-US',{month:'numeric',day:'numeric'}) : '';
-    const scShippedDate = order.sc_shipped_at ? fmtDate(order.sc_shipped_at) : (currentWh === 'SC' ? fmtDate(new Date()) : '');
-    const caShippedDate = order.ca_shipped_at ? fmtDate(order.ca_shipped_at) : (currentWh === 'CA' ? fmtDate(new Date()) : '');
+
+    // 이번 배송 WH에서 수량 있는 라인만 체크
+    const scShippedNow = currentWh === 'SC' && scQty > 0;
+    const caShippedNow = currentWh === 'CA' && caQty > 0;
+
+    // 이전 배송 기록 — 현재 WH가 아닌 반대쪽 WH가 이미 나갔는지
+    const scPrevShipped = !!order.sc_shipped_at && currentWh !== 'SC';
+    const caPrevShipped = !!order.ca_shipped_at && currentWh !== 'CA';
+
+    // 날짜: 이번 ship이면 오늘, 이전 ship이면 DB 날짜
+    const scShippedDate = scShippedNow ? fmtDate(new Date()) : (scPrevShipped ? fmtDate(order.sc_shipped_at) : '');
+    const caShippedDate = caShippedNow ? fmtDate(new Date()) : (caPrevShipped ? fmtDate(order.ca_shipped_at) : '');
 
     return {
       style: l.styles?.style_number || '',
@@ -9614,8 +9820,8 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
       sc_qty: scQty,
       ca_qty: caQty,
       back_qty: backQty,
-      sc_shipped: scShipped,
-      ca_shipped: caShipped,
+      sc_shipped: scShippedNow,
+      ca_shipped: caShippedNow,
       sc_prev_shipped: scPrevShipped,
       ca_prev_shipped: caPrevShipped,
       sc_shipped_date: scShippedDate,
@@ -9649,6 +9855,9 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
   })();
   const totalPalletsShipped = shippingInfo.pallets || 0;
 
+  // ── 이메일 HTML 직접 빌드 (Worker에 완성된 HTML로 전달)
+  const emailHtml = buildShippedEmailHtml(order, shippingInfo, lineItems);
+
   const payload = {
     customer_name: order.customer_name,
     customer_po: order.customer_po || '',
@@ -9663,6 +9872,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     wh: shippingInfo.wh || 'SC',
     note: shippingInfo.note || order.ship_note || '',
     lines: lineItems,
+    email_html: emailHtml,
     pl_html: plPdfBase64 ? '' : (plHtml || ''),
     pl_pdf: plPdfBase64 || null,
     bol_files: bolFilesArr,
