@@ -2302,7 +2302,21 @@ async function openInvoicePreview(orderId) {
   const invoiceNum = order.invoice_number || (String(new Date().getFullYear()) + '001');
   const invWhPfxPreview = wh === 'CA' ? 'CA' : 'SC';
   const displayInvNumPreview = invoiceNum ? (invWhPfxPreview + invoiceNum) : invoiceNum;
-  const invShipInfoPreview = { carrier: order.carrier || '', tracking: order.tracking_number || '', freightCarrier: order.pickup_company || '' };
+  // DB 값 우선, 없으면 ship 모달 DOM에서 fallback
+  const _previewDomCarrier = document.getElementById('ship-carrier')?.value || '';
+  let _previewDomTracking = '';
+  if (_previewDomCarrier === 'UPS' || _previewDomCarrier === 'FedEx') {
+    const _pts = document.querySelectorAll('.ship-tracking-input');
+    _previewDomTracking = [..._pts].map(i => i.value.trim()).filter(Boolean).join(', ');
+  } else {
+    _previewDomTracking = document.getElementById('ship-tracking')?.value || '';
+  }
+  const _previewDomFreight = document.getElementById('ship-freight-carrier')?.value || '';
+  const invShipInfoPreview = {
+    carrier: order.carrier || _previewDomCarrier || '',
+    tracking: order.tracking_number || _previewDomTracking || '',
+    freightCarrier: order.pickup_company || _previewDomFreight || ''
+  };
   document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, displayInvNumPreview, invShipInfoPreview, null, 0);
 
 
@@ -9305,6 +9319,7 @@ async function saveAndAttachBol() {
 let _shippedOrderId = null;
 let _shippedWh = null;
 let _shippedEmp = null;
+let _lastShippingInfo = null; // ship 완료 시 저장, reviewAndSendInvoice fallback용
 
 function toggleShipTrackingLabel() {
   const carrier = document.getElementById('ship-carrier')?.value || '';
@@ -10826,6 +10841,9 @@ async function _doShippedCore(emp) {
   const orderId = _shippedOrderId;
   const wh = _shippedWh;
 
+  // ship 완료 시 shipping info 전역 저장 (Invoice Review fallback용)
+  _lastShippingInfo = { carrier, tracking, freightCarrier, wh: wh || 'SC' };
+
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
   if (!order || !lines) return;
@@ -11067,10 +11085,23 @@ async function reviewAndSendInvoice(orderId, wh) {
   // WH prefix 적용: SC2026001 / CA2026001
   const invWhPfx = (wh || order.wh_code || 'SC') === 'CA' ? 'CA' : 'SC';
   const displayInvoiceNum = invoiceNum ? (invWhPfx + invoiceNum) : invoiceNum;
+
+  // DB 값 우선, 없으면 _lastShippingInfo(ship 직후 전역 저장) → DOM fallback 순서
+  const _fb = _lastShippingInfo || {};
+  const _domCarrier = document.getElementById('ship-carrier')?.value || '';
+  let _domTracking = '';
+  if (_domCarrier === 'UPS' || _domCarrier === 'FedEx') {
+    const inputs = document.querySelectorAll('.ship-tracking-input');
+    _domTracking = [...inputs].map(i => i.value.trim()).filter(Boolean).join(', ');
+  } else {
+    _domTracking = document.getElementById('ship-tracking')?.value || '';
+  }
+  const _domFreightCarrier = document.getElementById('ship-freight-carrier')?.value || '';
+
   const invShipInfo = {
-    carrier: order.carrier || '',
-    tracking: order.tracking_number || '',
-    freightCarrier: order.pickup_company || ''
+    carrier: order.carrier || _fb.carrier || _domCarrier || '',
+    tracking: order.tracking_number || _fb.tracking || _domTracking || '',
+    freightCarrier: order.pickup_company || _fb.freightCarrier || _domFreightCarrier || ''
   };
   document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, displayInvoiceNum, invShipInfo, companySettings, 0);
   const invCustObj = customers.find(c => c.id === order.customer_id);
