@@ -1173,6 +1173,20 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div style="font-size:18px;font-weight:800;color:#111827;">⚙️ Settings</div>
       </div>
 
+      <!-- 에러 로그 섹션 -->
+      <div style="background:#fff;border:1px solid #fecaca;border-radius:10px;padding:20px;margin-bottom:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div>
+            <div style="font-size:14px;font-weight:700;color:#991b1b;">📋 Error Log</div>
+            <div style="font-size:11px;color:#6b7280;margin-top:2px;">이메일 발송 실패, 저장 오류 등 경고/에러 내역</div>
+          </div>
+          <button class="btn" style="font-size:11px;" onclick="_errorLog.length=0;_renderErrorLog();">🗑 Clear</button>
+        </div>
+        <div id="error-log-list" style="max-height:200px;overflow-y:auto;">
+          <div style="font-size:12px;color:#9ca3af;text-align:center;padding:12px;">에러 없음 ✓</div>
+        </div>
+      </div>
+
       <!-- Inventory Committed 재계산 섹션 -->
       <div style="background:#fff;border:1px solid #fecaca;border-radius:10px;padding:20px;margin-bottom:20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
@@ -2173,7 +2187,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'receiving') loadReceivingHistory();
   if (name === 'intransit') loadInTransit();
   if (name === 'completed') loadCompleted();
-  if (name === 'settings') { loadSettings(); loadManagerApprovals(); updateBuildingUI(); }
+  if (name === 'settings') { loadSettings(); loadManagerApprovals(); updateBuildingUI(); setTimeout(_renderErrorLog, 100); }
 }
 
 // ══════════════════════════════════
@@ -13754,18 +13768,52 @@ function fillCosts(group) {
   });
 }
 
+// ── 에러 로그 (Settings 탭에서 확인 가능)
+const _errorLog = [];
+function _logError(msg) {
+  const entry = { time: new Date().toLocaleTimeString(), msg };
+  _errorLog.unshift(entry); // 최신이 위
+  if (_errorLog.length > 50) _errorLog.pop(); // 최대 50개 유지
+  // Settings 패널이 열려있으면 즉시 갱신
+  const el = document.getElementById('error-log-list');
+  if (el) _renderErrorLog();
+}
+function _renderErrorLog() {
+  const el = document.getElementById('error-log-list');
+  if (!el) return;
+  if (_errorLog.length === 0) {
+    el.innerHTML = '<div style="font-size:12px;color:#9ca3af;text-align:center;padding:12px;">에러 없음 ✓</div>';
+    return;
+  }
+  el.innerHTML = _errorLog.map(e =>
+    `<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid #fecaca;align-items:flex-start;">
+      <span style="font-size:10px;color:#9ca3af;white-space:nowrap;min-width:60px;">${e.time}</span>
+      <span style="font-size:12px;color:#dc2626;word-break:break-all;">${e.msg}</span>
+    </div>`
+  ).join('');
+}
+
 function showToast(msg) {
+  // 에러/경고면 로그에 기록
+  if (msg.startsWith('❌') || msg.startsWith('⚠️')) _logError(msg);
+
   let t = document.getElementById('toast');
   if (!t) {
     t = document.createElement('div');
     t.id = 'toast';
-    t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1b5e20;color:#fff;padding:10px 18px;border-radius:8px;font-weight:700;font-size:13px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:opacity 0.3s;';
     document.body.appendChild(t);
   }
+  const isError = msg.startsWith('❌');
+  const isWarn  = msg.startsWith('⚠️');
+  const bg = isError ? '#991b1b' : isWarn ? '#92400e' : '#1b5e20';
+  const duration = isError ? 6000 : isWarn ? 4000 : 2500;
+
+  t.style.cssText = `position:fixed;bottom:24px;right:24px;background:${bg};color:#fff;padding:10px 18px;border-radius:8px;font-weight:700;font-size:13px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:opacity 0.3s;max-width:420px;cursor:pointer;`;
   t.textContent = msg;
   t.style.opacity = '1';
+  t.onclick = () => { t.style.opacity = '0'; }; // 클릭해서 바로 닫기
   clearTimeout(t._to);
-  t._to = setTimeout(() => { t.style.opacity = '0'; }, 2500);
+  t._to = setTimeout(() => { t.style.opacity = '0'; }, duration);
 }
 
 // ── 새 오더 알람 사운드 (띠딩띠딩 — 더 길게)
