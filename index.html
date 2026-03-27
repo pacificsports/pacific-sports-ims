@@ -10185,16 +10185,30 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     cc: ccEmail
   };
 
+  // payload 크기 확인
+  const payloadStr = JSON.stringify(payload);
+  const payloadKB = Math.round(payloadStr.length / 1024);
+  console.log(`[sendShippedEmail] payload size: ${payloadKB} KB, to: ${toEmail}`);
+
   try {
     const res = await fetch('https://po-confirm-email.hjbae.workers.dev/send-shipped', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: payloadStr
     });
-    const data = await res.json();
-    return res.ok ? { ok: true, id: data.id } : { ok: false, error: data.error || 'Unknown error' };
+    let data;
+    try { data = await res.json(); } catch(e) { data = { error: 'Worker response parse failed: ' + e.message }; }
+    if (res.ok) {
+      console.log('[sendShippedEmail] success, id:', data.id);
+      return { ok: true, id: data.id };
+    } else {
+      const errMsg = data.error || data.message || `HTTP ${res.status} ${res.statusText}`;
+      console.error('[sendShippedEmail] failed:', res.status, errMsg, data);
+      return { ok: false, error: `[${res.status}] ${errMsg}` };
+    }
   } catch (e) {
-    return { ok: false, error: e.message };
+    console.error('[sendShippedEmail] fetch error:', e);
+    return { ok: false, error: 'Network error: ' + e.message };
   }
 }
 
@@ -11314,7 +11328,11 @@ async function _doShippedCore(emp) {
       // DB에 발송 기록
       await db.from('orders').update({ shipped_email_sent_at: new Date().toISOString() }).eq('id', orderId);
     } else {
-      showToast('❌ 이메일 발송 실패: ' + result.error);
+      const errDetail = result.error || 'Unknown error';
+      console.error('[Shipped email failed]', errDetail);
+      showToast('❌ 이메일 발송 실패: ' + errDetail);
+      // Settings Error Log에도 추가 상세 정보 기록
+      _logError('Shipped email to ' + (order?.customer_name||'?') + ' PO#' + (order?.customer_po||'?') + ' — ' + errDetail);
     }
   }
 
