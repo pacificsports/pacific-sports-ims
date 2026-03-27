@@ -8903,22 +8903,64 @@ async function _checkDefectsPending() {
 async function openDefectPendingModal() {
   let modal = document.getElementById('defect-pending-modal');
   if (!modal) {
+    // 오버레이 방식 — 중앙에서 시작, 드래그로 이동 가능
+    const overlay = document.createElement('div');
+    overlay.id = 'defect-pending-overlay';
+    overlay.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:99998;align-items:center;justify-content:center;';
+    overlay.onclick = e => { if (e.target === overlay) overlay.style.display = 'none'; };
+
     modal = document.createElement('div');
     modal.id = 'defect-pending-modal';
-    modal.style.cssText = 'display:none;position:fixed;bottom:20px;left:20px;z-index:99999;width:360px;max-height:70vh;overflow-y:auto;background:#fff;border:2px solid #dc2626;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.25);';
+    modal.style.cssText = 'width:380px;max-height:75vh;overflow-y:auto;background:#fff;border:2px solid #111827;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.4);cursor:default;';
     modal.innerHTML = `
-      <div style="background:#dc2626;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-radius:10px 10px 0 0;">
+      <div id="defect-pending-head" style="background:#111827;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-radius:10px 10px 0 0;cursor:grab;user-select:none;">
         <span style="color:#fff;font-weight:700;font-size:13px;">⚠️ 불량 승인 대기</span>
-        <button onclick="document.getElementById('defect-pending-modal').style.display='none'"
-          style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;line-height:1;">✕</button>
+        <button onclick="document.getElementById('defect-pending-overlay').style.display='none'"
+          style="background:none;border:none;color:#9ca3af;font-size:18px;cursor:pointer;line-height:1;">✕</button>
       </div>
       <div id="defect-pending-list" style="padding:12px;"></div>`;
-    document.body.appendChild(modal);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // 드래그 기능
+    const head = modal.querySelector('#defect-pending-head');
+    let drag = null;
+    head.addEventListener('mousedown', e => {
+      if (e.target.closest('button')) return;
+      e.preventDefault();
+      const rect = modal.getBoundingClientRect();
+      modal.style.position = 'fixed';
+      modal.style.left = rect.left + 'px';
+      modal.style.top = rect.top + 'px';
+      modal.style.margin = '0';
+      overlay.style.alignItems = 'flex-start';
+      overlay.style.justifyContent = 'flex-start';
+      drag = { startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top };
+      head.style.cursor = 'grabbing';
+    });
+    document.addEventListener('mousemove', e => {
+      if (!drag) return;
+      modal.style.left = Math.max(0, drag.origLeft + e.clientX - drag.startX) + 'px';
+      modal.style.top = Math.max(0, drag.origTop + e.clientY - drag.startY) + 'px';
+    });
+    document.addEventListener('mouseup', () => { if (drag) { drag = null; head.style.cursor = 'grab'; } });
   }
+
+  const overlay2 = document.getElementById('defect-pending-overlay');
+  // 열 때마다 위치 초기화 (중앙)
+  modal.style.position = '';
+  modal.style.left = '';
+  modal.style.top = '';
+  modal.style.margin = '';
+  if (overlay2) { overlay2.style.alignItems = 'center'; overlay2.style.justifyContent = 'center'; }
 
   const { data: pending } = await db.from('defects')
     .select('*').eq('status', 'pending').order('reported_at', { ascending: false });
-  if (!pending || !pending.length) { modal.style.display = 'none'; return; }
+  const overlay3 = document.getElementById('defect-pending-overlay');
+  if (!pending || !pending.length) {
+    if (overlay3) overlay3.style.display = 'none';
+    return;
+  }
 
   document.getElementById('defect-pending-list').innerHTML = pending.map(d => `
     <div style="border:1px solid #fecaca;border-radius:8px;padding:10px;margin-bottom:8px;background:#fff5f5;">
@@ -8937,8 +8979,8 @@ async function openDefectPendingModal() {
       </button>
     </div>`).join('');
 
-  modal.style.display = 'flex';
-  modal.style.flexDirection = 'column';
+  if (overlay3) { overlay3.style.display = 'flex'; }
+  else { modal.style.display = 'flex'; }
 }
 
 let _defectConfirmId = null;
