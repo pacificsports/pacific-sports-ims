@@ -323,7 +323,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 .credit-hold-flash-close{position:absolute;top:12px;right:14px;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:18px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;}
 .credit-hold-flash-close:hover{background:rgba(255,255,255,0.3);}
 @keyframes chBox{0%{transform:scale(0.8);opacity:0;}15%{transform:scale(1);opacity:1;}80%{transform:scale(1);opacity:1;}100%{transform:scale(0.8);opacity:0;}}
-@keyframes emergencyPulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.85;transform:scale(1.06);}}
+@keyframes emergencyPulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.6;transform:scale(1.12);}}
 </style>
 </head>
 <body>
@@ -5212,7 +5212,10 @@ async function loadOrderStatus() {
   });
   window._cardDefectMap = {};
   (defectResult.data||[]).forEach(d => {
-    if (d.order_id) window._cardDefectMap[d.order_id] = (window._cardDefectMap[d.order_id]||0) + d.total_qty;
+    if (d.order_id) {
+      const key = d.order_id + '|' + (d.wh === 'CA' ? 'CA' : 'SC');
+      window._cardDefectMap[key] = (window._cardDefectMap[key]||0) + d.total_qty;
+    }
   });
 
   let orders = data || [];
@@ -5442,8 +5445,8 @@ async function loadOrderStatus() {
         </div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
           ${isUrgent?'<span style="font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 URGENT</span>':''}
-          ${(window._cardEmergencyMap||{})[o.id] ? `<span onclick="event.stopPropagation();openEmergencyPendingList()" style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:8px;background:#111827;color:#fff;cursor:pointer;animation:emergencyPulse 1.5s infinite;">🚨 Emergency</span>` : ''}
-          ${(window._cardDefectMap||{})[o.id] ? `<span onclick="event.stopPropagation();openDefectPendingModal()" style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:8px;background:#111827;color:#fff;cursor:pointer;animation:emergencyPulse 1.5s infinite;">⚠️ 불량 ${(window._cardDefectMap||{})[o.id]}pcs</span>` : ''}
+          ${(window._cardEmergencyMap||{})[o.id] ? `<span onclick="event.stopPropagation();openEmergencyPendingList()" style="font-size:11px;font-weight:800;padding:4px 10px;border-radius:8px;background:#111827;color:#fff;cursor:pointer;animation:emergencyPulse 1s infinite;letter-spacing:0.3px;box-shadow:0 2px 8px rgba(0,0,0,0.4);">🚨 Emergency</span>` : ''}
+          ${(window._cardDefectMap||{})[o.id+'|'+wh] ? `<span onclick="event.stopPropagation();openDefectPendingModal()" style="font-size:11px;font-weight:800;padding:4px 10px;border-radius:8px;background:#111827;color:#fff;cursor:pointer;animation:emergencyPulse 1s infinite;letter-spacing:0.3px;box-shadow:0 2px 8px rgba(0,0,0,0.4);">⚠️ 불량 ${(window._cardDefectMap||{})[o.id+'|'+wh]}pcs</span>` : ''}
           ${whBadge}
         </div>
       </div>
@@ -7430,6 +7433,7 @@ async function openPcrComplete(orderId, wh) {
       window._pcrBoxes = JSON.parse(JSON.stringify(savedAlloc));
       window._pcrBoxesOriginal = JSON.parse(JSON.stringify(savedAlloc));
       window._pcrGridRowKeys = null; // renderPcrBoxes에서 재계산
+      window._pcrBoxMode = 'grid'; // Order Status 모드도 grid UI 사용
       window._pcrIsSaveMode = false;
       const _n1 = document.getElementById('pcr-prepare-notice');
       if (_n1) _n1.style.display = 'block';
@@ -8076,16 +8080,21 @@ function calcGridDefect(rowId) {
 // Grid 모드에서 불량 데이터 수집 (confirmBoxAndSave 호출 시)
 function collectGridDefects() {
   const defects = [];
-  document.querySelectorAll('[id^="grid-defect-row-"]').forEach(row => {
+  // pcr-complete-modal 내부에서만 검색 (다른 창의 잔여 DOM 무시)
+  const container = document.getElementById('pcr-complete-lines') || document;
+  container.querySelectorAll('[id^="grid-defect-row-"]').forEach(row => {
     const rowId = row.id.replace('grid-defect-row-', '');
-    const total = parseInt(document.getElementById('gdef-total-' + rowId)?.value) || 0;
+    const totalEl = document.getElementById('gdef-total-' + rowId);
+    if (!totalEl) return;
+    // 해당 element가 현재 보이는 모달 내부에 있는지 확인
+    if (!container.contains(totalEl) && container !== document) return;
+    const total = parseInt(totalEl.value) || 0;
     if (total > 0) {
       const shade = parseInt(document.getElementById('gdef-shade-' + rowId)?.value) || 0;
       const hole  = parseInt(document.getElementById('gdef-hole-'  + rowId)?.value) || 0;
       const stain = parseInt(document.getElementById('gdef-stain-' + rowId)?.value) || 0;
       const other = parseInt(document.getElementById('gdef-other-' + rowId)?.value) || 0;
       const note  = document.getElementById('gdef-note-' + rowId)?.value || '';
-      // rowId = styleNum_color_size (특수문자 → _)
       defects.push({ rowId, shade, hole, stain, other, note, total });
     }
   });
@@ -8544,6 +8553,11 @@ async function submitPcrComplete() {
     [whPre+'pcr_prepared_lines']: JSON.stringify(preparedLines)
   }).eq('id', _pcrCompleteOrderId);
 
+  // 불량 입력 초기화
+  document.getElementById('pcr-complete-lines')?.querySelectorAll('[id^="gdef-"]').forEach(el => {
+    if (el.tagName === 'INPUT') el.value = '0';
+  });
+  document.querySelectorAll('[id^="grid-defect-row-"]').forEach(r => r.style.display = 'none');
   closeModal('pcr-complete-modal');
   showToast('✅ Partial Ready to Ship — ' + empName);
 
@@ -8869,7 +8883,14 @@ async function _checkDefectsPending() {
   window._cardDefectMap = {};
   (pending || []).forEach(d => {
     if (d.order_id) {
-      window._cardDefectMap[d.order_id] = (window._cardDefectMap[d.order_id] || 0) + d.total_qty;
+      // wh별로 분리 (SC/CA 각각 표시)
+      const scKey = d.order_id + '|SC';
+      const caKey = d.order_id + '|CA';
+      if (d.wh === 'CA') {
+        window._cardDefectMap[caKey] = (window._cardDefectMap[caKey] || 0) + d.total_qty;
+      } else {
+        window._cardDefectMap[scKey] = (window._cardDefectMap[scKey] || 0) + d.total_qty;
+      }
     }
   });
 }
