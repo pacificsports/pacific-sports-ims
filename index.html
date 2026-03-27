@@ -431,7 +431,10 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <div class="panel" id="panel-inventory">
       <div class="card">
         <div class="card-head"><span class="card-title">📦 Inventory — CA + SC Combined</span>
-          <button class="btn btn-primary btn-sm" onclick="openAddInventory()">+ Add Stock</button>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-sm" style="background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="openInventoryLog()">📋 Change Log</button>
+            <button class="btn btn-primary btn-sm" onclick="openAddInventory()">+ Add Stock</button>
+          </div>
         </div>
 <div class="inv-filter" style="grid-template-columns:repeat(8,1fr);">
 <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STYLE #</label>
@@ -3800,6 +3803,57 @@ async function useReservedQty(orderLineId, useQty, invId, invQty, invCommitted) 
   renderEntryTable();
 }
 
+// ══════════════════════════════════════════════
+// INVENTORY LOGGING SYSTEM
+// ══════════════════════════════════════════════
+
+/**
+ * 재고 변경 로그 기록
+ * @param {string} invId - inventory row id
+ * @param {number} qtyBefore - 변경 전 수량
+ * @param {number} qtyAfter - 변경 후 수량
+ * @param {string} changeType - 'commit'|'release'|'transfer_out'|'transfer_in'|'adjustment'|'emergency_out'|'emergency_in'|'po_save'|'po_delete'
+ * @param {string} changedBy - 직원 이름
+ * @param {string} referenceId - order_id or emergency_transfer_id (optional)
+ * @param {string} referenceType - 'order'|'emergency_transfer' (optional)
+ * @param {string} notes - 설명 (optional)
+ */
+async function logInventoryChange(invId, qtyBefore, qtyAfter, changeType, changedBy, referenceId=null, referenceType=null, notes=null) {
+  if (qtyBefore === qtyAfter) return; // 변경 없으면 skip
+  try {
+    await db.from('inventory_logs').insert({
+      inventory_id: invId,
+      qty_before: qtyBefore,
+      qty_after: qtyAfter,
+      change_type: changeType,
+      changed_by: changedBy || 'system',
+      reference_id: referenceId,
+      reference_type: referenceType,
+      notes
+    });
+  } catch(e) {
+    console.warn('inventory_log insert failed:', e.message);
+    // 로그 실패해도 메인 로직은 계속 진행
+  }
+}
+
+/**
+ * inventory update + 자동 로그 기록 헬퍼
+ */
+async function updateInventoryQty(invId, field, newQty, changeType, changedBy, referenceId=null, referenceType=null, notes=null) {
+  // 현재 값 조회
+  const { data: current } = await db.from('inventory').select('qty_on_hand,qty_committed').eq('id', invId).single();
+  const qtyBefore = current?.[field] ?? 0;
+  
+  // 업데이트
+  const { error } = await db.from('inventory').update({ [field]: newQty }).eq('id', invId);
+  if (error) throw error;
+  
+  // 로그
+  await logInventoryChange(invId, qtyBefore, newQty, changeType, changedBy, referenceId, referenceType, notes);
+  return { qtyBefore, qtyAfter: newQty };
+}
+
 let _savingInProgress = false;
 async function saveInvoice() {
   if (_savingInProgress) return;
@@ -3905,7 +3959,9 @@ async function _doSaveInvoice() {
       .eq('size', (t.size||'').toUpperCase())
       .maybeSingle();
     if (!scRow) continue;
-    await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand - t.qty }).eq('id', scRow.id);
+    const newScQty = scRow.qty_on_hand - t.qty;
+    await db.from('inventory').update({ qty_on_hand: newScQty }).eq('id', scRow.id);
+    await logInventoryChange(scRow.id, scRow.qty_on_hand, newScQty, 'transfer_out', _currentEmployee?.name||'system', null, null, `PCR Transfer out - ${t.qty}pcs`);
     const { data: pcrRows } = await db.from('inventory')
       .select('id, qty_on_hand')
       .eq('warehouse_id', pcrWhObj.id)
@@ -3914,7 +3970,9 @@ async function _doSaveInvoice() {
       .eq('size', (t.size||'').toUpperCase())
       .eq('location', 'PCR');
     if (pcrRows && pcrRows.length > 0) {
-      await db.from('inventory').update({ qty_on_hand: pcrRows[0].qty_on_hand + t.qty }).eq('id', pcrRows[0].id);
+      const newPcrQty = pcrRows[0].qty_on_hand + t.qty;
+      await db.from('inventory').update({ qty_on_hand: newPcrQty }).eq('id', pcrRows[0].id);
+      await logInventoryChange(pcrRows[0].id, pcrRows[0].qty_on_hand, newPcrQty, 'transfer_in', _currentEmployee?.name||'system', null, null, `PCR Transfer in - ${t.qty}pcs`);
     } else {
       await db.from('inventory').insert({
         warehouse_id: pcrWhObj.id, style_id: scRow.style_id || null,
@@ -4104,7 +4162,9 @@ async function _doSaveInvoice() {
           if (toRelease <= 0) break;
           const rel = Math.min(toRelease, inv.qty_committed||0);
           if (rel > 0) {
-            await db.from('inventory').update({ qty_committed: Math.max(0, (inv.qty_committed||0) - rel) }).eq('id', inv.id);
+            const newCommitDel = Math.max(0, (inv.qty_committed||0) - rel);
+            await db.from('inventory').update({ qty_committed: newCommitDel }).eq('id', inv.id);
+            await logInventoryChange(inv.id, inv.qty_committed||0, newCommitDel, 'po_delete', _currentEmployee?.name||'system', orderId, 'order', `PO Delete - committed release`);
             toRelease -= rel;
           }
         }
@@ -4244,7 +4304,9 @@ async function _doSaveInvoice() {
         const avail = Math.max(0, (inv.qty_on_hand||0) - (inv.qty_committed||0));
         const commit = Math.min(toCommit, avail);
         if (commit > 0) {
-          await db.from('inventory').update({ qty_committed: (inv.qty_committed||0) + commit }).eq('id', inv.id);
+          const newCommit = (inv.qty_committed||0) + commit;
+          await db.from('inventory').update({ qty_committed: newCommit }).eq('id', inv.id);
+          await logInventoryChange(inv.id, inv.qty_committed||0, newCommit, 'commit', _currentEmployee?.name||'system', order?.id, 'order', `PO Save - ${l.styleNum||''} ${l.color||''} ${l.size||''}`);
           toCommit -= commit;
         }
       }
@@ -5702,14 +5764,110 @@ async function restoreOrderInventory(orderId) {
   }
 
   // DB 업데이트
+  const empName = _currentEmployee?.name || 'system';
   for (const [invId, amounts] of Object.entries(restoreMap)) {
     const inv = (allInv||[]).find(i => i.id === invId);
     if (!inv) continue;
-    await db.from('inventory').update({
-      qty_committed: Math.max(0, (inv.qty_committed||0) - amounts.committed),
-      qty_on_hand: amounts.onHand > 0 ? (inv.qty_on_hand||0) + amounts.onHand : inv.qty_on_hand
-    }).eq('id', invId);
+    const newCommitted = Math.max(0, (inv.qty_committed||0) - amounts.committed);
+    const newOnHand = amounts.onHand > 0 ? (inv.qty_on_hand||0) + amounts.onHand : inv.qty_on_hand;
+    await db.from('inventory').update({ qty_committed: newCommitted, qty_on_hand: newOnHand }).eq('id', invId);
+    if (amounts.committed > 0) await logInventoryChange({
+      invId, changedBy: empName, changeType: 'po_delete',
+      qtyBefore: inv.qty_committed||0, qtyAfter: newCommitted,
+      referenceId: orderId, referenceType: 'order', notes: 'PO Delete - committed release'
+    });
+    if (amounts.onHand > 0) await logInventoryChange({
+      invId, changedBy: empName, changeType: 'po_delete',
+      qtyBefore: inv.qty_on_hand||0, qtyAfter: newOnHand,
+      referenceId: orderId, referenceType: 'order', notes: 'PO Delete - on_hand restore'
+    });
   }
+}
+
+// ══════════════════════════════════
+// INVENTORY LOG VIEWER
+// ══════════════════════════════════
+async function openInventoryLog() {
+  document.getElementById('inv-log-filter-style').value = '';
+  document.getElementById('inv-log-filter-color').value = '';
+  document.getElementById('inv-log-filter-type').value = '';
+  document.getElementById('inv-log-filter-who').value = '';
+  document.getElementById('inv-log-modal').style.display = 'flex';
+  await loadInventoryLog();
+}
+
+async function loadInventoryLog() {
+  const styleFilter = document.getElementById('inv-log-filter-style').value.trim();
+  const colorFilter = document.getElementById('inv-log-filter-color').value.trim();
+  const typeFilter = document.getElementById('inv-log-filter-type').value;
+  const whoFilter = document.getElementById('inv-log-filter-who').value.trim();
+  const tbody = document.getElementById('inv-log-tbody');
+  tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:20px;color:#9ca3af;">로딩중...</td></tr>';
+
+  let query = db.from('inventory_logs')
+    .select('*, inventory(location,color,size,warehouses(code),styles(style_number))')
+    .order('changed_at', { ascending: false })
+    .limit(200);
+
+  if (typeFilter) query = query.eq('change_type', typeFilter);
+  if (whoFilter) query = query.ilike('changed_by', `%${whoFilter}%`);
+
+  const { data: logs, error } = await query;
+  if (error) { tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:20px;color:#dc2626;">로드 실패</td></tr>'; return; }
+
+  const typeLabels = {
+    commit: { label: 'Commit', color: '#1d4ed8', bg: '#eff6ff' },
+    po_delete: { label: 'PO Delete', color: '#dc2626', bg: '#fef2f2' },
+    release: { label: 'Release', color: '#15803d', bg: '#f0fdf4' },
+    transfer_out: { label: 'Transfer Out', color: '#92400e', bg: '#fefce8' },
+    transfer_in: { label: 'Transfer In', color: '#065f46', bg: '#ecfdf5' },
+    emergency_out: { label: '🚨 Emg Out', color: '#dc2626', bg: '#fef2f2' },
+    emergency_in: { label: '🚨 Emg In', color: '#15803d', bg: '#f0fdf4' },
+    adjustment: { label: 'Adjustment', color: '#6b7280', bg: '#f9fafb' },
+  };
+
+  // 필터 (style/color는 클라이언트 사이드)
+  let filtered = (logs||[]).filter(log => {
+    const styleNum = log.inventory?.styles?.style_number || '';
+    const color = log.inventory?.color || '';
+    if (styleFilter && !styleNum.includes(styleFilter)) return false;
+    if (colorFilter && !color.toLowerCase().includes(colorFilter.toLowerCase())) return false;
+    return true;
+  });
+
+  document.getElementById('inv-log-count').textContent = `${filtered.length}건`;
+
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:20px;color:#9ca3af;">변경 기록 없음</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(log => {
+    const inv = log.inventory || {};
+    const styleNum = inv.styles?.style_number || '—';
+    const color = inv.color || '—';
+    const size = inv.size || '—';
+    const location = inv.location || '—';
+    const wh = inv.warehouses?.code || '';
+    const diff = (log.qty_after||0) - (log.qty_before||0);
+    const diffStr = diff > 0 ? `+${diff}` : `${diff}`;
+    const diffColor = diff > 0 ? '#15803d' : '#dc2626';
+    const t = typeLabels[log.change_type] || { label: log.change_type, color: '#6b7280', bg: '#f9fafb' };
+    const dt = new Date(log.changed_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit', hour12:true });
+    return `<tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:7px 12px;font-size:11px;color:#6b7280;white-space:nowrap;">${dt}</td>
+      <td style="padding:7px 12px;"><span style="font-size:10px;font-weight:700;color:${t.color};background:${t.bg};padding:2px 7px;border-radius:4px;white-space:nowrap;">${t.label}</span></td>
+      <td style="padding:7px 12px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#374151;">${location}<span style="font-size:9px;color:#9ca3af;margin-left:4px;">${wh}</span></td>
+      <td style="padding:7px 12px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1e3a8a;">${styleNum}</td>
+      <td style="padding:7px 12px;font-size:11px;">${color}</td>
+      <td style="padding:7px 12px;text-align:center;font-weight:800;font-family:'IBM Plex Mono',monospace;">${size}</td>
+      <td style="padding:7px 12px;text-align:center;font-size:11px;color:#6b7280;">${log.qty_before??'—'}</td>
+      <td style="padding:7px 12px;text-align:center;font-size:11px;font-weight:700;">${log.qty_after??'—'}</td>
+      <td style="padding:7px 12px;text-align:center;font-weight:800;color:${diffColor};">${diffStr}</td>
+      <td style="padding:7px 12px;font-size:11px;color:#374151;">${log.changed_by||'—'}</td>
+      <td style="padding:7px 12px;font-size:10px;color:#6b7280;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${log.notes||''}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ══════════════════════════════════
@@ -8093,9 +8251,13 @@ async function openEmergencyTransferRequest(orderId, wh) {
 
   // PCR 현재 재고 로드
   const pcrWhCode = wh === 'CA' ? 'CA-PCR' : 'SC-PCR';
-  const { data: pcrInvData } = await db.from('inventory')
-    .select('id,qty_on_hand,color,size,styles(style_number),warehouses(code)')
-    .eq('warehouses.code', pcrWhCode);
+  const pcrWhObj = warehouses.find(w => w.code === pcrWhCode);
+  const pcrWhId = pcrWhObj?.id;
+  const { data: pcrInvData } = pcrWhId
+    ? await db.from('inventory')
+        .select('id,qty_on_hand,color,size,styles(style_number),warehouses(code)')
+        .eq('warehouse_id', pcrWhId)
+    : { data: [] };
 
   const linesHtml = filteredLines.map((l, i) => {
     const styleNum = l.styles?.style_number || '';
@@ -8234,9 +8396,14 @@ async function openEmergencyManagerReview(transfer) {
     `<b>${transfer.order_customer}</b> &nbsp;|&nbsp; PO# ${transfer.order_po||'—'} &nbsp;|&nbsp; ${transfer.wh} &nbsp;|&nbsp; 요청자: ${transfer.requested_by}`;
 
   // WH 재고 로드
-  const { data: inv } = await db.from('inventory')
-    .select('id,location,qty_on_hand,qty_committed,styles(style_number),warehouses(code)')
-    .gt('qty_on_hand', 0);
+  const whObj = warehouses.find(w => w.code === transfer.wh);
+  const whId = whObj?.id;
+  const { data: inv } = whId
+    ? await db.from('inventory')
+        .select('id,location,qty_on_hand,qty_committed,styles(style_number),warehouses(code)')
+        .eq('warehouse_id', whId)
+        .gt('qty_on_hand', 0)
+    : { data: [] };
 
   const items = transfer.items || [];
   const linesHtml = items.map((item, i) => {
@@ -8287,12 +8454,56 @@ async function openEmergencyManagerReview(transfer) {
 }
 
 async function applyPcrActualQty(itemIdx, pcrInvId) {
-  if (!pcrInvId) { showToast('⚠️ PCR 재고 항목을 찾을 수 없어요'); return; }
   const newQty = parseInt(document.getElementById(`emg-mgr-pcr-qty-${itemIdx}`)?.value) || 0;
-  const { error } = await db.from('inventory').update({ qty_on_hand: newQty }).eq('id', pcrInvId);
-  if (error) { showToast('❌ 적용 실패: ' + error.message); return; }
+
+  if (pcrInvId) {
+    // 기존 PCR 재고 항목 업데이트
+    const result = await updateInventoryQty({
+      invId: pcrInvId, newQty, changedBy: _emergencyManagerEmp?.name || 'manager',
+      changeType: 'pcr_adjustment', referenceId: _emergencyTransferId,
+      referenceType: 'emergency_transfer', notes: `Manager PCR 실제수량 조정 → ${newQty}pcs`
+    });
+    if (result.error) { showToast('❌ 적용 실패: ' + result.error.message); return; }
+  } else {
+    // PCR 재고 항목 없음 → transfer 데이터에서 style/color/size 가져와서 찾기
+    const items = JSON.parse(document.getElementById('emergency-manager-lines').dataset.items || '[]');
+    const item = items[itemIdx];
+    const transfer = await db.from('emergency_transfers').select('wh').eq('id', _emergencyTransferId).single();
+    const pcrWhCode = transfer.data?.wh === 'CA' ? 'CA-PCR' : 'SC-PCR';
+
+    // warehouses 테이블에서 PCR wh id 가져오기
+    const { data: pcrWh } = await db.from('warehouses').select('id').eq('code', pcrWhCode).single();
+    if (!pcrWh) { showToast('⚠️ PCR 창고 정보를 찾을 수 없어요'); return; }
+
+    // styles 테이블에서 style id 가져오기
+    const { data: styleData } = await db.from('styles').select('id').eq('style_number', item.styleNum).single();
+
+    // 같은 style/color/size PCR bin 다시 검색
+    const { data: existingInv } = await db.from('inventory')
+      .select('id,qty_on_hand')
+      .eq('warehouse_id', pcrWh.id)
+      .eq('color', item.color)
+      .eq('size', item.size)
+      .maybeSingle();
+
+    if (existingInv) {
+      const { error } = await db.from('inventory').update({ qty_on_hand: newQty }).eq('id', existingInv.id);
+      if (error) { showToast('❌ 적용 실패: ' + error.message); return; }
+      // pcrInvId 업데이트 (완료 시 사용)
+      const items2 = JSON.parse(document.getElementById('emergency-manager-lines').dataset.items || '[]');
+      items2[itemIdx].pcrInvId = existingInv.id;
+      document.getElementById('emergency-manager-lines').dataset.items = JSON.stringify(items2);
+    } else {
+      showToast('⚠️ PCR 재고 항목을 찾을 수 없어요. Bin 배분에서 먼저 PCR Transfer를 진행해주세요.');
+      return;
+    }
+  }
+
   const appliedEl = document.getElementById(`emg-mgr-pcr-applied-${itemIdx}`);
   if (appliedEl) appliedEl.style.display = 'inline';
+  // 입력 필드 비활성화
+  const qtyEl = document.getElementById(`emg-mgr-pcr-qty-${itemIdx}`);
+  if (qtyEl) { qtyEl.disabled = true; qtyEl.style.background = '#f0fdf4'; qtyEl.style.color = '#15803d'; }
   showToast(`✅ PCR 재고 ${newQty}pcs로 업데이트됨`);
 }
 
@@ -8438,35 +8649,42 @@ async function completeEmergencyTransfer() {
   const pcrWh = transfer.wh === 'CA' ? 'CA-PCR' : 'SC-PCR';
   const { data: pcrInv } = await db.from('inventory').select('id,qty_on_hand,warehouses(code),styles(style_number)');
 
+  const empName = _currentEmployee?.name || 'WH';
   for (const item of items) {
     const pcs = item.boxes * (item.ppb || 72);
+    const noteBase = `Emergency ${item.styleNum} ${item.color} ${item.size} ${item.boxes}박스`;
+
     // WH bin 차감
     const whBin = (inv||[]).find(iv => iv.id === item.binId);
     if (whBin) {
-      await db.from('inventory').update({
-        qty_on_hand: Math.max(0, (whBin.qty_on_hand||0) - pcs)
-      }).eq('id', whBin.id);
+      const newWhQty = Math.max(0, (whBin.qty_on_hand||0) - pcs);
+      await updateInventoryQty({
+        invId: whBin.id, newQty: newWhQty, changedBy: empName,
+        changeType: 'emergency_out', referenceId: _emergencyTransferId,
+        referenceType: 'emergency_transfer', notes: noteBase + ' → PCR'
+      });
     }
-    // PCR 재고: pcrActualQty + 이번 transfer 수량 (pcrInvId 우선 사용)
-    const pcrPcs = item.boxes * (item.ppb || 72);
+
+    // PCR 재고 증가
     const pcrInvId = item.pcrInvId;
     if (pcrInvId) {
-      // pcrActualQty가 있으면 그 값 + transfer pcs (Manager가 이미 apply했을 수도 있으니 현재 값 기준)
       const { data: currentPcr } = await db.from('inventory').select('qty_on_hand').eq('id', pcrInvId).single();
       const currentQty = currentPcr?.qty_on_hand || 0;
-      await db.from('inventory').update({
-        qty_on_hand: currentQty + pcrPcs
-      }).eq('id', pcrInvId);
+      await updateInventoryQty({
+        invId: pcrInvId, newQty: currentQty + pcs, changedBy: empName,
+        changeType: 'emergency_in', referenceId: _emergencyTransferId,
+        referenceType: 'emergency_transfer', notes: noteBase + ' ← WH'
+      });
     } else {
-      // fallback: style 기준으로 찾기
       const pcrBin = (pcrInv||[]).find(iv =>
-        iv.warehouses?.code === pcrWh &&
-        iv.styles?.style_number === item.styleNum
+        iv.warehouses?.code === pcrWh && iv.styles?.style_number === item.styleNum
       );
       if (pcrBin) {
-        await db.from('inventory').update({
-          qty_on_hand: (pcrBin.qty_on_hand||0) + pcrPcs
-        }).eq('id', pcrBin.id);
+        await updateInventoryQty({
+          invId: pcrBin.id, newQty: (pcrBin.qty_on_hand||0) + pcs, changedBy: empName,
+          changeType: 'emergency_in', referenceId: _emergencyTransferId,
+          referenceType: 'emergency_transfer', notes: noteBase + ' ← WH (fallback)'
+        });
       }
     }
   }
@@ -13872,6 +14090,38 @@ async function deleteCustomer() {
 
 // HELPERS
 // ══════════════════════════════════
+
+// ── 재고 변경 로그 헬퍼 ──
+async function logInventoryChange({ invId, changedBy, changeType, qtyBefore, qtyAfter, referenceId, referenceType, notes }) {
+  try {
+    await db.from('inventory_logs').insert({
+      inventory_id: invId,
+      changed_by: changedBy || _currentEmployee?.name || 'system',
+      change_type: changeType,
+      qty_before: qtyBefore,
+      qty_after: qtyAfter,
+      reference_id: referenceId || null,
+      reference_type: referenceType || null,
+      notes: notes || null
+    });
+  } catch(e) {
+    console.warn('inventory log failed:', e);
+  }
+}
+
+// 재고 업데이트 + 로그 한번에
+async function updateInventoryQty({ invId, field = 'qty_on_hand', newQty, changedBy, changeType, referenceId, referenceType, notes }) {
+  // 현재 값 먼저 읽기
+  const { data: current } = await db.from('inventory').select('qty_on_hand,qty_committed').eq('id', invId).single();
+  const qtyBefore = current?.[field] ?? 0;
+  
+  const { error } = await db.from('inventory').update({ [field]: newQty }).eq('id', invId);
+  if (error) { console.error('inventory update failed:', error); return { error }; }
+  
+  await logInventoryChange({ invId, changedBy, changeType, qtyBefore, qtyAfter: newQty, referenceId, referenceType, notes });
+  return { error: null };
+}
+
 function statusChip(s) {
   const map = {
     open:'c-b', processing:'c-b',
@@ -15734,6 +15984,53 @@ function showCreditHoldFlash(overAmt) {
 }
 
 </script>
+
+<!-- ── Inventory Change Log Modal ── -->
+<div id="inv-log-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(900px,95vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:18px 24px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:16px;font-weight:800;color:#1e3a8a;">📋 Inventory Change Log</div>
+      <button tabindex="-1" onclick="document.getElementById('inv-log-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+    </div>
+    <div style="padding:12px 24px;border-bottom:1px solid #e5e7eb;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <input id="inv-log-filter-style" placeholder="Style #" style="height:30px;border:1px solid #d1d5db;border-radius:5px;padding:0 8px;font-size:12px;width:90px;">
+      <input id="inv-log-filter-color" placeholder="Color" style="height:30px;border:1px solid #d1d5db;border-radius:5px;padding:0 8px;font-size:12px;width:90px;">
+      <select id="inv-log-filter-type" style="height:30px;border:1px solid #d1d5db;border-radius:5px;padding:0 6px;font-size:12px;">
+        <option value="">All Types</option>
+        <option value="commit">Commit (PO Save)</option>
+        <option value="po_delete">PO Delete</option>
+        <option value="transfer_out">Transfer Out</option>
+        <option value="transfer_in">Transfer In</option>
+        <option value="emergency_out">Emergency Out</option>
+        <option value="emergency_in">Emergency In</option>
+        <option value="adjustment">Adjustment</option>
+      </select>
+      <input id="inv-log-filter-who" placeholder="담당자" style="height:30px;border:1px solid #d1d5db;border-radius:5px;padding:0 8px;font-size:12px;width:90px;">
+      <button class="btn btn-sm btn-primary" onclick="loadInventoryLog()">🔍 Search</button>
+      <span id="inv-log-count" style="font-size:11px;color:#6b7280;margin-left:auto;"></span>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:0;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead style="position:sticky;top:0;background:#f8fafc;z-index:1;">
+          <tr>
+            <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Date/Time</th>
+            <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e5e7eb;">Type</th>
+            <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e5e7eb;">Location</th>
+            <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e5e7eb;">Style</th>
+            <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e5e7eb;">Color</th>
+            <th style="padding:8px 12px;text-align:center;border-bottom:2px solid #e5e7eb;">Size</th>
+            <th style="padding:8px 12px;text-align:center;border-bottom:2px solid #e5e7eb;">Before</th>
+            <th style="padding:8px 12px;text-align:center;border-bottom:2px solid #e5e7eb;">After</th>
+            <th style="padding:8px 12px;text-align:center;border-bottom:2px solid #e5e7eb;">Change</th>
+            <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e5e7eb;">By</th>
+            <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #e5e7eb;">Notes</th>
+          </tr>
+        </thead>
+        <tbody id="inv-log-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 
 <!-- ── Emergency Transfer Request Modal (PC Room) ── -->
 <div id="emergency-request-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
