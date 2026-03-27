@@ -5206,6 +5206,9 @@ async function loadOrderStatus() {
     db.from('emergency_transfers').select('order_id').eq('status', 'pending'),
     db.from('defects').select('order_id, total_qty').eq('status', 'pending')
   ]);
+  const prevEmergencyCount = Object.keys(window._cardEmergencyMap||{}).length;
+  const prevDefectCount = Object.keys(window._cardDefectMap||{}).length;
+
   window._cardEmergencyMap = {};
   (emergResult.data||[]).forEach(t => {
     if (t.order_id) window._cardEmergencyMap[t.order_id] = (window._cardEmergencyMap[t.order_id]||0) + 1;
@@ -5217,6 +5220,12 @@ async function loadOrderStatus() {
       window._cardDefectMap[key] = (window._cardDefectMap[key]||0) + d.total_qty;
     }
   });
+
+  // 새 Emergency/불량 생기면 알림음
+  const newEmergencyCount = Object.keys(window._cardEmergencyMap).length;
+  const newDefectCount = Object.keys(window._cardDefectMap).length;
+  if (newEmergencyCount > prevEmergencyCount) playEmergencyAlert();
+  else if (newDefectCount > prevDefectCount) playDefectAlert();
 
   let orders = data || [];
   if (whFilter) orders = orders.filter(o => o.warehouses?.code === whFilter || (o.is_split_warehouse && whFilter === 'SC'));
@@ -9094,10 +9103,13 @@ async function _checkEmergencyPending() {
   }
 
   // 카드별 Emergency 맵 업데이트
+  const prevCount = Object.keys(window._cardEmergencyMap||{}).length;
   window._cardEmergencyMap = {};
   (pending||[]).forEach(t => {
     if (t.order_id) window._cardEmergencyMap[t.order_id] = (window._cardEmergencyMap[t.order_id]||0) + 1;
   });
+  // 새 Emergency 생기면 알림음
+  if (Object.keys(window._cardEmergencyMap).length > prevCount) playEmergencyAlert();
 
   // 배지 업데이트
   const pendingCount = (pending||[]).length;
@@ -14410,6 +14422,47 @@ function showToast(msg) {
 }
 
 // ── 새 오더 알람 사운드 (띠딩띠딩 — 더 길게)
+// ── Emergency Transfer 알림음 (빠른 3연타 — 긴박함)
+function playEmergencyAlert() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+    // 낮고 빠른 3연타 비프
+    [[0.00, 440], [0.18, 440], [0.36, 440],
+     [0.60, 440], [0.78, 440], [0.96, 440]].forEach(([t, freq]) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, now + t);
+      gain.gain.setValueAtTime(0, now + t);
+      gain.gain.linearRampToValueAtTime(0.3, now + t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + t + 0.14);
+      osc.start(now + t); osc.stop(now + t + 0.15);
+    });
+  } catch(e) {}
+}
+
+// ── 불량 알림음 (낮은 경고음 2번 — 주의)
+function playDefectAlert() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+    // 낮고 무거운 2번 경고
+    [[0.0, 220], [0.5, 180]].forEach(([t, freq]) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(freq, now + t);
+      gain.gain.setValueAtTime(0, now + t);
+      gain.gain.linearRampToValueAtTime(0.35, now + t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + t + 0.35);
+      osc.start(now + t); osc.stop(now + t + 0.4);
+    });
+  } catch(e) {}
+}
+
 function playNewOrderChime() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
