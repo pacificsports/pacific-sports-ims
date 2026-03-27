@@ -10227,8 +10227,9 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
     const savedBoxAlloc = whOverride === 'CA'
       ? order?.ca_pcr_box_allocation
       : order?.sc_pcr_box_allocation;
+    // savedBoxAlloc은 [{boxNum, items, ...}] 형태 → calcBoxAllocation 형태로 변환
     const boxAlloc = savedBoxAlloc && savedBoxAlloc.length > 0
-      ? savedBoxAlloc
+      ? [{ styleNum: '', color: '', boxQty: 60, boxes: savedBoxAlloc }]
       : calcBoxAllocation(partialLines);
 
     // ── SECTION 0: PCR → WH BACK TRANSFER
@@ -10529,11 +10530,15 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
     }, 0);
     // totalPcrBoxes = PC Room 박스 수
     const savedBoxAllocPl = sectionWh === 'CA' ? order?.ca_pcr_box_allocation : order?.sc_pcr_box_allocation;
-    const boxAllocForCount = (savedBoxAllocPl && savedBoxAllocPl.length > 0) ? savedBoxAllocPl : calcPlBoxAllocation(sectionLines, sectionWh);
+    // savedBoxAllocPl은 [{boxNum, items}] 형태 → calcPlBoxAllocation 형태로 변환
+    const _wrapSaved = (saved) => saved && saved.length > 0
+      ? [{ styleNum: '', color: '', boxQty: 60, boxes: saved.map(b => ({ ...b, isPartial: true })) }]
+      : null;
+    const boxAllocForCount = _wrapSaved(savedBoxAllocPl) || calcPlBoxAllocation(sectionLines, sectionWh);
     const totalPcrBoxes = boxAllocForCount.reduce((s,g) => s + g.boxes.filter(b=>b.isPartial!==false).length, 0);
 
     // Box detail table
-    const boxAlloc = (savedBoxAllocPl && savedBoxAllocPl.length > 0) ? savedBoxAllocPl : calcPlBoxAllocation(sectionLines, sectionWh);
+    const boxAlloc = _wrapSaved(savedBoxAllocPl) || calcPlBoxAllocation(sectionLines, sectionWh);
 
     // 모든 group에서 PCR 박스 먼저, Full 박스 나중에 재정렬
     const allBoxRows = [];
