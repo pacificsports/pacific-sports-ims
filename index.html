@@ -374,7 +374,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <div class="ntab" onclick="showPanel('customerpos',this)">📋 Customer POs <span class="badge" id="open-orders-badge">0</span></div>
     <div class="ntab" onclick="showPanel('orderstatus',this)">🚦 Order Status</div>
     <div class="ntab" onclick="showPanel('backorders',this)"><span style="color:#dc2626;font-weight:700;">Back Orders</span> <span class="badge" id="backorders-badge" style="background:#dc2626;">0</span></div>
-    <div class="ntab" onclick="showPanel('completed',this)">✅ Completed</div>
+    <!-- Completed tab moved into Customer POs -->
     <!-- Order Processing 드롭다운 -->
     <div class="ntab ntab-dropdown" id="ntab-orderproc" onmouseenter="showDropdown('dd-orderproc')" onmouseleave="hideDropdown('dd-orderproc')" onclick="toggleDropdown('dd-orderproc')">
       📄 Order Documents ▾
@@ -481,6 +481,21 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <div id="po-toolbar" style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-primary" onclick="openNewInvoice()">➕ New Customer PO</button>
         <button class="btn" onclick="loadCustomerPOs()">🔄 Refresh</button>
+        <!-- Active / Completed / All 뷰 토글 -->
+        <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:4px;overflow:hidden;">
+          <button id="po-view-active" onclick="setPoView('active')"
+            style="height:30px;padding:0 14px;font-size:11px;font-weight:600;cursor:pointer;border:none;background:#1a56a0;color:#fff;font-family:inherit;">
+            Active
+          </button>
+          <button id="po-view-completed" onclick="setPoView('completed')"
+            style="height:30px;padding:0 14px;font-size:11px;font-weight:600;cursor:pointer;border:none;background:#f5f7fa;color:#344054;font-family:inherit;border-left:1px solid var(--border);">
+            ✅ Completed
+          </button>
+          <button id="po-view-all" onclick="setPoView('all')"
+            style="height:30px;padding:0 14px;font-size:11px;font-weight:600;cursor:pointer;border:none;background:#f5f7fa;color:#344054;font-family:inherit;border-left:1px solid var(--border);">
+            All
+          </button>
+        </div>
         <input class="fi" id="po-search-input" placeholder="🔍 PO# or Customer 검색..." style="width:220px;height:30px;font-size:12px;" oninput="filterCustomerPOs()">
         <select class="fsel" id="po-filter-customer" onchange="filterCustomerPOs()" style="height:30px;font-size:11px;min-width:160px;">
           <option value="">All Customers</option>
@@ -493,6 +508,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <option value="ready_to_ship">Ready to Ship</option>
           <option value="shipped">Shipped</option>
           <option value="invoiced">Invoiced</option>
+          <option value="completed">Completed</option>
           <option value="backordered">Back Order</option>
           <option value="cancelled">Cancelled</option>
         </select>
@@ -4752,6 +4768,24 @@ let allOrders = [];
 // CUSTOMER POs
 // ══════════════════════════════════
 let allCustomerPOs = [];
+let _poCurrentView = 'active'; // 'active' | 'completed' | 'all'
+
+function setPoView(view) {
+  _poCurrentView = view;
+  _updatePoViewButtons();
+  renderCustomerPOTable();
+}
+
+function _updatePoViewButtons() {
+  const views = ['active', 'completed', 'all'];
+  views.forEach(v => {
+    const btn = document.getElementById('po-view-' + v);
+    if (!btn) return;
+    const isActive = _poCurrentView === v;
+    btn.style.background = isActive ? '#1a56a0' : '#f5f7fa';
+    btn.style.color = isActive ? '#fff' : '#344054';
+  });
+}
 
 async function loadCustomerPOs(subview = null) {
   // hash subview 복원 (refresh 시) — openInvoice는 pushState 안 함
@@ -4771,6 +4805,8 @@ async function loadCustomerPOs(subview = null) {
     .select('*, warehouses(code,name)')
     .order('created_at', { ascending: false });
   allCustomerPOs = data || [];
+  // 현재 뷰 버튼 상태 갱신
+  _updatePoViewButtons();
 
   // 고객 필터 드롭다운 채우기
   const custSel = document.getElementById('po-filter-customer');
@@ -4946,8 +4982,17 @@ function renderCustomerPOTable() {
   const search = (document.getElementById('po-search-input')?.value || '').toLowerCase();
   const custFilter = document.getElementById('po-filter-customer')?.value || '';
   const statusFilter = document.getElementById('po-filter-status')?.value || '';
+  const view = _poCurrentView || 'active';
+
+  const ACTIVE_STATUSES = ['po_entered','credit_hold','preparing','ready_to_ship','shipped','invoiced','backordered','partial','open','rejected'];
+  const COMPLETED_STATUSES = ['completed','cancelled'];
 
   let filtered = allCustomerPOs.filter(o => {
+    // 뷰 필터 (status 드롭다운 선택 없을 때)
+    if (!statusFilter) {
+      if (view === 'active' && !ACTIVE_STATUSES.includes(o.status)) return false;
+      if (view === 'completed' && !COMPLETED_STATUSES.includes(o.status)) return false;
+    }
     if (custFilter && o.customer_name !== custFilter) return false;
     if (statusFilter && o.status !== statusFilter) return false;
     if (search) {
@@ -4965,6 +5010,7 @@ function renderCustomerPOTable() {
     ready_to_ship: { label: 'Ready to Ship', color: '#0891b2', bg: '#ecfeff' },
     shipped:    { label: 'Shipped',    color: '#16a34a', bg: '#f0fdf4' },
     invoiced:   { label: 'Invoiced',   color: '#7c3aed', bg: '#f5f3ff' },
+    completed:  { label: 'Completed',  color: '#15803d', bg: '#f0fdf4' },
     backordered:{ label: 'Back Order', color: '#dc2626', bg: '#fff1f2' },
     partial:    { label: 'Partial',    color: '#ea580c', bg: '#fff7ed' },
     open:       { label: 'Open',       color: '#1a56a0', bg: '#eff6ff' },
@@ -5005,12 +5051,17 @@ function renderCustomerPOTable() {
           <td><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:${st.bg};color:${st.color};">${st.label}</span></td>
           <td style="font-size:11px;color:var(--text3)">${(o.created_at||'').slice(0,10)}</td>
           <td style="white-space:nowrap;">
-            <button class="btn btn-sm" onclick="event.stopPropagation();openPODetail('${o.id}')">열기 →</button>
             ${(function(){
-              if(['shipped','invoiced','completed','cancelled'].includes(o.status)) return '';
               const oid = o.id, onum = o.order_number, ocust = (o.customer_name||'').replace(/'/g,'');
-              return '<button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;margin-left:4px;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕ Cancel</button> ' +
-                     '<button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;margin-left:4px;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑 Delete</button>';
+              const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
+              if(o.status === 'completed') {
+                return '<button class="btn btn-sm" style="background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;margin-left:4px;" onclick="event.stopPropagation();reviewAndSendInvoice(\\\'' + oid + '\\\',\\\'' + wh + '\\\')">🧾 Re-send Invoice</button>' +
+                       '<button class="btn btn-sm" style="background:#f0f9ff;color:#0891b2;border-color:#bae6fd;margin-left:4px;" onclick="event.stopPropagation();printPackingListFromCard(\\\'' + oid + '\\\',\\\'' + wh + '\\\')">📋 Print PL</button>';
+              }
+              if(['shipped','invoiced','cancelled'].includes(o.status)) return '';
+              return '<button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;margin-left:4px;" onclick="event.stopPropagation();cancelOrderConfirm(\\\'' + oid + '\\\',\\\'' + onum + '\\\',\\\'' + ocust + '\\\')">✕ Cancel</button> ' +
+                     '<button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;margin-left:4px;" onclick="event.stopPropagation();deleteOrderConfirm(\\\'' + oid + '\\\',\\\'' + onum + '\\\',\\\'' + ocust + '\\\')">🗑 Delete</button>';
+            })()}
             })()}
           </td>
         </tr>`;
@@ -5026,9 +5077,10 @@ function openNewPO() {
 }
 
 function openPODetail(orderId) {
-  // Invoice 탭에서 해당 오더 열기
-  showPanel('invoice', document.querySelector('.ntab[onclick*="invoice"]'));
-  setTimeout(() => openInvoiceDetail(orderId), 100);
+  // Customer POs 탭에서 직접 열기
+  const tab = document.querySelector('.ntab[onclick*="customerpos"]');
+  if (tab) showPanel('customerpos', tab);
+  setTimeout(() => openInvoice(orderId), 100);
 }
 
 // ══════════════════════════════════
@@ -11252,10 +11304,14 @@ async function sendInvoiceEmail() {
     showToast('✅ Invoice 발송 완료!');
     _invoiceOrderId = null;
     _invoiceWh = null;
-    // Completed 탭으로 이동
-    const completedTab = document.querySelector('.ntab[onclick*="completed"]');
-    if (completedTab) showPanel('completed', completedTab);
-    else loadOrderStatus();
+    // Customer POs Completed 뷰로 이동
+    _poCurrentView = 'completed';
+    const customerPosTab = document.querySelector('.ntab[onclick*="customerpos"]');
+    if (customerPosTab) {
+      showPanel('customerpos', customerPosTab);
+    } else {
+      loadCustomerPOs();
+    }
   }
 }
 
