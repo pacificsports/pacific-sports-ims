@@ -8977,14 +8977,28 @@ function openBoxAssignModal() {
     const allItems = [];
     const seen = new Set();
     const totalQtyMap = {};
+    const sizeOrdInner = s => (['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'].indexOf(s)+1)||99;
+
+    // PCR bin 키 패턴 (SC-PCR|PCR, CA-PCR|PCR)
+    const pcrKeyForWh = whFilter === 'CA' ? 'CA-PCR|PCR' : 'SC-PCR|PCR';
+
     poLines.forEach(l => {
       const lineWh = l.wh || 'SC';
       const isScLine = lineWh==='SC' || lineWh==='SC&CA' || !l.wh;
       const isCaLine = lineWh==='CA' || lineWh==='SC&CA';
       if (whFilter==='SC' && !isScLine) return;
       if (whFilter==='CA' && !isCaLine) return;
-      const loose = l.loose ?? (l.qty % (l.ppb||72));
+
+      // alloc에서 직접 PCR pcs 읽기 (loose 계산보다 정확)
+      const allocObj = whFilter === 'CA' ? (l.allocCA || {}) : (l.allocSC || {});
+      const pcrPcs = Object.entries(allocObj)
+        .filter(([k]) => k.includes('PCR'))
+        .reduce((s, [, v]) => s + (v || 0), 0);
+
+      // fallback: alloc에 PCR 키 없으면 loose 계산
+      const loose = pcrPcs > 0 ? pcrPcs : (l.loose ?? (l.qty % (l.ppb||72)));
       if (!loose) return;
+
       const key = `${l.styleNum||''}|||${l.color||''}|||${l.size||''}`;
       totalQtyMap[key] = (totalQtyMap[key]||0) + loose;
       if (!seen.has(key)) {
@@ -8994,11 +9008,13 @@ function openBoxAssignModal() {
     });
     if (!allItems.length) return { boxes: [], totalQtyMap: {} };
 
-    const emptyItems = allItems.map(i => ({ ...i, qty: 0 }));
-    return {
-      boxes: [{ boxNum:1, items: emptyItems, boxQty:60, isCustom:false }],
-      totalQtyMap
-    };
+    // 자동 배치 없음 — 빈 박스 1개로 시작, 사용자가 직접 입력
+    const PARTIAL_BOX_QTY = 60;
+    const sortedItems = [...allItems].sort((a,b) => sizeOrdInner(a.size)-sizeOrdInner(b.size));
+    const emptyItems = sortedItems.map(i => ({ ...i, qty: 0 }));
+    const boxes = [{ boxNum: 1, items: emptyItems, boxQty: PARTIAL_BOX_QTY, isCustom: false }];
+
+    return { boxes, totalQtyMap };
   };
 
   const scResult = buildBoxes('SC');
