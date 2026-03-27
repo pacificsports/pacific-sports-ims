@@ -5153,13 +5153,13 @@ async function loadOrderStatus() {
       const hasWh  = totalBoxes > 0 || totalTransfers > 0;
       const hasPcr = totalPcr > 0 || totalLoose > 0;
 
-      const whBtn = hasWh ? `<button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${whPrinted?'#f0fdf4':'#fff'};color:${whPrinted?'#15803d':'#374151'};border-color:${whPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${whPrinted?'✅ WH 프린트됨':'🏭 WH Ticket'}</button>` : '';
-      const pcrBtn = hasPcr ? `<button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${pcPrinted?'#f0fdf4':'#fff'};color:${pcPrinted?'#15803d':'#374151'};border-color:${pcPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">${pcPrinted?'✅ Partial 프린트됨':'💻 Partial Ticket'}</button>` : '';
+      const whBtn = hasWh ? `<button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${whPrinted?'#f0fdf4':'#fff'};color:${whPrinted?'#15803d':'#374151'};border-color:${whPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${whPrinted?'✅ WH Ticket Printed':'🏭 Print Warehouse Ticket'}</button>` : '';
+      const pcrBtn = hasPcr ? `<button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${pcPrinted?'#f0fdf4':'#fff'};color:${pcPrinted?'#15803d':'#374151'};border-color:${pcPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','pcroom')">${pcPrinted?'✅ Partial Ticket Printed':'💻 Print Partial Ticket'}</button>` : '';
 
-      // 둘 다 없는 경우(수량 0 오더 등) — 기본 WH Ticket 표시
+      // 둘 다 없는 경우 — 기본 WH Ticket 표시
       const btnRow = (whBtn || pcrBtn)
         ? `<div style="display:flex;gap:4px;margin-top:8px;">${whBtn}${pcrBtn}</div>`
-        : `<div style="display:flex;gap:4px;margin-top:8px;"><button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${whPrinted?'#f0fdf4':'#fff'};color:${whPrinted?'#15803d':'#374151'};border-color:${whPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${whPrinted?'✅ WH 프린트됨':'🏭 WH Ticket'}</button></div>`;
+        : `<div style="display:flex;gap:4px;margin-top:8px;"><button class="btn btn-sm" style="flex:1;font-size:9px;padding:5px 4px;background:${whPrinted?'#f0fdf4':'#fff'};color:${whPrinted?'#15803d':'#374151'};border-color:${whPrinted?'#86efac':'#d1d5db'};" onclick="event.stopPropagation();printPickTicketType('${o.id}','${wh}','warehouse')">${whPrinted?'✅ WH Ticket Printed':'🏭 Print Warehouse Ticket'}</button></div>`;
 
       const timeRow = (whPrinted||pcPrinted)
         ? `<div style="font-size:9px;color:#6b7280;margin-top:3px;text-align:center;">${[hasWh&&whPrinted?'🏭 '+new Date(whPrinted).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):hasWh?'🏭 미프린트':'', hasPcr&&pcPrinted?'💻 '+new Date(pcPrinted).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):hasPcr?'💻 미프린트':''].filter(Boolean).join(' · ')}</div>`
@@ -5211,7 +5211,16 @@ async function loadOrderStatus() {
         const prepWhLines = isSplit
           ? prepLines.filter(l => wh === 'CA' ? (l.wh==='CA'||l.wh==='SC&CA') : (l.wh==='SC'||l.wh==='SC&CA'||!l.wh))
           : prepLines;
-        const prepNeedsWh  = prepWhLines.some(l => (l.qty_boxes||0) > 0);
+        const prepNeedsWh = prepWhLines.some(l => {
+          const allocObj = wh === 'CA'
+            ? (l.alloc_ca_detail || (l.wh==='CA' ? l.alloc_detail : null) || {})
+            : (l.wh!=='CA' ? l.alloc_detail : null) || {};
+          // WH bin에 full box 있으면
+          return (l.qty_boxes||0) > 0 || Object.entries(allocObj).some(([k,v]) =>
+            !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|') &&
+            (typeof v==='object' ? (v.boxes||0) > 0 : Math.floor((v||0)/(l.pcs_per_box||72)) > 0)
+          );
+        });
         const prepNeedsPcr = prepWhLines.some(l => {
           const allocObj = wh === 'CA'
             ? (l.alloc_ca_detail || (l.wh==='CA' ? l.alloc_detail : null) || {})
@@ -5221,14 +5230,14 @@ async function loadOrderStatus() {
         });
 
         const whBtnStyle = whDone ? 'background:#f0fdf4;color:#15803d;border-color:#86efac;' : 'background:#eff6ff;color:#1d4ed8;border-color:#93c5fd;';
-        const whBtnLabel = whDone ? '✅ WH Ready to Ship — Prepared by: ' + whBy : '🏭 Warehouse Preparing';
+        const whBtnLabel = whDone ? '✅ WH Ticket Printed — ' + whBy : '🏭 Print Warehouse Ticket';
         const whBtnClick = "event.stopPropagation();openWhComplete('" + o.id + "','" + wh + "')";
         const whBtn = prepNeedsWh
           ? '<button class="btn btn-sm" style="width:100%;font-size:10px;' + whBtnStyle + '" onclick="' + whBtnClick + '">' + whBtnLabel + '</button>'
           : '';
 
         const pcrBtnStyle = pcrDone ? 'background:#f0fdf4;color:#15803d;border-color:#86efac;' : 'background:#fff7ed;color:#c2410c;border-color:#fdba74;';
-        const pcrBtnLabel = pcrDone ? '✅ Partial Ready to Ship — Prepared by: ' + pcrBy : '💻 Partial Preparing';
+        const pcrBtnLabel = pcrDone ? '✅ Partial Ticket Printed — ' + pcrBy : '💻 Print Partial Ticket';
         const pcrBtnClick = "event.stopPropagation();openPcrComplete('" + o.id + "','" + wh + "')";
         const pcrBtn = prepNeedsPcr
           ? '<button class="btn btn-sm" style="width:100%;font-size:10px;' + pcrBtnStyle + '" onclick="' + pcrBtnClick + '">' + pcrBtnLabel + '</button>'
