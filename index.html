@@ -10331,12 +10331,13 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
           </tr></thead>
           <tbody>
             ${boxAlloc.flatMap(g => g.boxes.flatMap((box, bi) => {
-              const boxTotal = box.items.reduce((s,i) => s+i.qty, 0);
-              return box.items.map((item, ii) => {
-                // 이전 아이템과 style/color 같으면 반복 표시 생략
-                const prevItem = ii > 0 ? box.items[ii-1] : null;
+              const activeItems = box.items.filter(i => (i.qty||0) > 0);
+              if (!activeItems.length) return [];
+              const boxTotal = activeItems.reduce((s,i) => s+i.qty, 0);
+              return activeItems.map((item, ii) => {
+                const prevItem = ii > 0 ? activeItems[ii-1] : null;
                 const showStyle = !prevItem || prevItem.styleNum !== item.styleNum || prevItem.color !== item.color;
-                return `<tr style="border-bottom:1px solid ${ii===box.items.length-1?'#93c5fd':'#dbeafe'};">
+                return `<tr style="border-bottom:1px solid ${ii===activeItems.length-1?'#93c5fd':'#dbeafe'};">
                 <td style="padding:6px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:#1e3a8a;">${ii===0 ? 'BOX '+box.boxNum : ''}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${showStyle ? (item.styleNum||'') : ''}</td>
                 <td style="padding:6px 8px;font-size:11px;">${showStyle ? (item.color||'') : ''}</td>
@@ -10575,16 +10576,18 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
             <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #c4b5fd;">Box Total</th>
           </tr></thead>
           <tbody>
-            ${allBoxRows.filter(b=>b.isPartial).flatMap(box =>
-              box.items.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===box.items.length-1?'#e5e7eb':'#f3f4f6'};background:#faf8ff;">
+            ${allBoxRows.filter(b=>b.isPartial).flatMap(box => {
+              const activeItems = box.items.filter(i => (i.qty||0) > 0);
+              if (!activeItems.length) return [];
+              return activeItems.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===activeItems.length-1?'#e5e7eb':'#f3f4f6'};background:#faf8ff;">
                 <td style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:#7c3aed;">${ii===0?'BOX '+box.boxNum:''}</td>
                 <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${ii===0?box.styleNum:''}</td>
                 <td style="padding:6px 10px;font-size:11px;">${ii===0?box.color:''}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
-                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:#7c3aed;">${ii===0?'1 box':''}</td>
-              </tr>`)
-            ).join('')}
+                <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;color:#7c3aed;">${ii===0?activeItems.reduce((s,i)=>s+i.qty,0)+' pcs':''}</td>
+              </tr>`);
+            }).join('')}
           </tbody>
         </table>` : ''}
 
@@ -10602,16 +10605,18 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
             <th style="padding:5px 10px;text-align:center;font-size:10px;text-transform:uppercase;border-bottom:1px solid #e5e7eb;">Box Total</th>
           </tr></thead>
           <tbody>
-            ${allBoxRows.filter(b=>!b.isPartial).flatMap(box =>
-              box.items.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===box.items.length-1?'#e5e7eb':'#f3f4f6'};">
+            ${allBoxRows.filter(b=>!b.isPartial).flatMap(box => {
+              const activeItems = box.items.filter(i => (i.qty||0) > 0);
+              if (!activeItems.length) return [];
+              return activeItems.map((item,ii) => `<tr style="border-bottom:1px solid ${ii===activeItems.length-1?'#e5e7eb':'#f3f4f6'};">
                 <td style="padding:6px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:#111827;">${ii===0?'BOX '+box.boxNum:''}</td>
                 <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${ii===0?box.styleNum:''}</td>
                 <td style="padding:6px 10px;font-size:11px;">${ii===0?box.color:''}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;">${item.size}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:700;">${item.qty}</td>
                 <td style="padding:6px 10px;font-size:11px;text-align:center;font-weight:800;">${ii===0?'1 box':''}</td>
-              </tr>`)
-            ).join('')}
+              </tr>`);
+            }).join('')}
           </tbody>
         </table>` : ''}
 
