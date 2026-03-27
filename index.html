@@ -6902,6 +6902,27 @@ async function openPcrComplete(orderId, wh) {
       if (totalPcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: totalPcrPcs, styleNum: l.styles?.style_number||'', color: l.color||'' });
     });
 
+    // totalQtyMap 먼저 계산 (DB 저장값 있어도 필요)
+    const totalQtyMap = {};
+    Object.values(groups).forEach(g => {
+      g.sizes.forEach(s => {
+        const key = `${s.styleNum||''}|||${s.color||''}|||${s.size||''}`;
+        totalQtyMap[key] = (totalQtyMap[key]||0) + s.qty;
+      });
+    });
+    window._pcrBoxesTotalQty = totalQtyMap;
+
+    // DB에 저장된 박스 배정이 있으면 그걸 사용
+    const savedAlloc = wh === 'CA' ? order?.ca_pcr_box_allocation : order?.sc_pcr_box_allocation;
+    if (savedAlloc && savedAlloc.length > 0) {
+      window._pcrBoxes = JSON.parse(JSON.stringify(savedAlloc));
+      window._pcrBoxesOriginal = JSON.parse(JSON.stringify(savedAlloc));
+      window._pcrGridRowKeys = null; // renderPcrBoxes에서 재계산
+      renderPcrBoxes();
+      document.getElementById('pcr-complete-modal').style.display = 'flex';
+      return;
+    }
+
     // 박스 배치 계산 — 같은 색상 우선, 박스 최소화
     let globalBoxNum = 1;
     window._pcrBoxes = [];
@@ -6998,7 +7019,15 @@ async function openPcrComplete(orderId, wh) {
       pushBox(boxItems);
     }
 
-    // 원본 스냅샷 저장 (renderPcrBoxes 전에 저장해야 isNewItem 체크가 정확함)
+    // _pcrBoxesTotalQty 설정 (renderPcrBoxes에서 TOTAL QTY 표시용)
+    allItems.forEach(item => {
+      const key = `${item.styleNum||''}|||${item.color||''}|||${item.size||''}`;
+      totalQtyMap[key] = (totalQtyMap[key]||0) + item.qty;
+    });
+    window._pcrBoxesTotalQty = totalQtyMap;
+    window._pcrBoxMode = 'prepare';
+
+    // 원본 스냅샷 저장
     window._pcrBoxesOriginal = JSON.parse(JSON.stringify(window._pcrBoxes));
     renderPcrBoxes();
   }
@@ -7007,6 +7036,119 @@ async function openPcrComplete(orderId, wh) {
 }
 
 function renderPcrBoxes() {
+  if (window._pcrBoxMode === 'grid') { renderPcrBoxesGrid(); return; }
+  // ── Preparing 모드: 기존 박스별 카드 UI ──
+  const container = document.getElementById('pcr-complete-lines');
+  const boxes = window._pcrBoxes || [];
+  const styleOptsList = (window.styles||[]).map(function(s){ return '<option value="'+s.style_number+'">'; }).join('');
+
+  let html = '';
+  for (let bi = 0; bi < boxes.length; bi++) {
+    const box = boxes[bi];
+    const total = box.items.reduce(function(s,i){ return s+(i.qty||0); }, 0);
+    const isCustom = box.isCustom;
+
+    let rowsHtml = '<div style="display:flex;align-items:center;padding:5px 14px;background:#f8fafc;border-bottom:1px solid #e5e7eb;">'
+      + '<div style="min-width:44px;"></div>'
+      + '<div style="min-width:100px;margin-right:12px;"></div>'
+      + '<div style="min-width:36px;"></div>'
+      + '<div style="width:60px;text-align:center;font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;">준비</div>'
+      + '<div style="margin:0 10px;font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px;">오더</div>'
+      + '</div>';
+
+    for (let ii = 0; ii < box.items.length; ii++) {
+      const item = box.items[ii];
+      const origItem = window._pcrBoxesOriginal && window._pcrBoxesOriginal[bi] && window._pcrBoxesOriginal[bi].items ? window._pcrBoxesOriginal[bi].items[ii] : undefined;
+      const origQty = origItem !== undefined ? origItem.qty : null;
+      const isNewItem = origItem === undefined;
+      const changed = !isNewItem && item.qty !== origQty;
+
+      const itemStyleNum = item.styleNum || box.styleNum || '';
+      const itemColor = item.color || box.color || '';
+      const qtyColor = changed ? '#dc2626' : '#111827';
+      const refQty = origQty !== null ? origQty : item.qty;
+      const defectId = 'pcr-defect-box-'+bi+'-'+ii;
+
+      const delBtn = isNewItem
+        ? '<button onclick="window._pcrBoxes['+bi+'].items.splice('+ii+',1);renderPcrBoxes()" style="background:none;border:none;color:#d1d5db;cursor:pointer;font-size:13px;padding:0 0 0 8px;line-height:1;">&#x2715;</button>'
+        : '';
+
+      rowsHtml += '<div style="border-bottom:1px solid #f1f5f9;">'
+        + '<div style="display:flex;align-items:center;padding:9px 14px;gap:0;">'
+        + '<span style="font-size:12px;font-weight:800;color:#1e3a8a;font-family:IBM Plex Mono,monospace;min-width:44px;">'+itemStyleNum+'</span>'
+        + '<span style="font-size:12px;color:#374151;min-width:100px;margin-right:12px;">'+itemColor+'</span>'
+        + '<span style="font-size:13px;font-weight:800;color:#1e3a8a;font-family:IBM Plex Mono,monospace;min-width:36px;">'+item.size+'</span>'
+        + '<input type="number" min="0" value="'+item.qty+'" onchange="updatePcrBoxItem('+bi+','+ii+',this.value);checkPcrChanges()" style="width:60px;height:32px;border:1px solid '+(changed?'#fca5a5':'#e5e7eb')+';border-radius:6px;text-align:center;font-size:15px;font-weight:800;font-family:IBM Plex Mono,monospace;color:'+qtyColor+';background:'+(changed?'#fff5f5':'#f9fafb')+';">'
+        + '<span style="font-size:12px;margin:0 10px;white-space:nowrap;color:#9ca3af;">/ <b style="color:'+(changed?'#dc2626':'#6b7280')+'">'+refQty+'</b> pcs</span>'
+        + '<div style="flex:1;"></div>'
+        + '<button onclick="togglePcrDefectRow('+bi+','+ii+')" id="defect-btn-'+bi+'-'+ii+'" style="font-size:11px;color:#9ca3af;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:3px 8px;cursor:pointer;white-space:nowrap;">불량 입력</button>'
+        + delBtn
+        + '</div>'
+        + '<div id="pcr-defect-row-'+bi+'-'+ii+'" style="display:none;padding:8px 14px 10px;background:#fef2f2;gap:8px;align-items:center;flex-wrap:wrap;">'
+        + '<span style="font-size:11px;font-weight:700;color:#dc2626;">⚠️ 불량</span>'
+        + '<div style="display:flex;align-items:center;gap:6px;">'
+        + '<span style="font-size:10px;color:#6b7280;font-weight:600;">Total</span>'
+        + '<input type="number" min="0" value="0" id="'+defectId+'" style="width:48px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;" oninput="pcrDefectStyle(this)">'
+        + '</div>'
+        + '<div style="display:flex;align-items:center;gap:6px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Shade</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Hole</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Stain</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Other</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
+        + '<input type="text" id="pcr-other-note-box-'+bi+'-'+ii+'" placeholder="이유..." style="width:90px;height:28px;border:1px solid #fecaca;border-radius:4px;padding:0 6px;font-size:11px;">'
+        + '</div>'
+        + '</div>'
+        + '</div>';
+    }
+
+    const addFormHtml = box.addingItem ? (
+      '<div style="padding:8px 14px;background:#f8fafc;border-top:1px solid #e5e7eb;">'
+      + '<div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;">'
+      + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">STYLE</div>'
+      + '<input list="pcr-style-opts-'+bi+'" id="pcr-add-style-'+bi+'" placeholder="1368" style="width:68px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 5px;font-size:12px;font-weight:700;">'
+      + '<datalist id="pcr-style-opts-'+bi+'">'+styleOptsList+'</datalist></div>'
+      + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">COLOR</div>'
+      + '<input id="pcr-add-color-'+bi+'" placeholder="Navy Htr" style="width:100px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 5px;font-size:12px;"></div>'
+      + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">SIZE</div>'
+      + '<select id="pcr-add-size-'+bi+'" style="width:62px;height:28px;border:1px solid #d1d5db;border-radius:4px;padding:0 3px;font-size:12px;">'
+      + '<option value="">-</option><option>XS</option><option>S</option><option>M</option><option>L</option><option>XL</option>'
+      + '<option>2XL</option><option>3XL</option><option>4XL</option><option>5XL</option>'
+      + '<option>2T</option><option>3T</option><option>4T</option><option>5T</option>'
+      + '<option>YS</option><option>YM</option><option>YL</option><option>YXL</option></select></div>'
+      + '<div><div style="font-size:9px;color:#9ca3af;margin-bottom:2px;">QTY</div>'
+      + '<input type="number" id="pcr-add-qty-'+bi+'" min="1" placeholder="0" style="width:52px;height:28px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-size:12px;font-weight:700;"></div>'
+      + '<button onclick="confirmPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 12px;background:#1e3a8a;color:#fff;border:none;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;">✓ 추가</button>'
+      + '<button onclick="cancelPcrBoxItemAdd('+bi+')" style="height:28px;padding:0 8px;background:#fff;color:#6b7280;border:1px solid #d1d5db;border-radius:4px;font-size:12px;cursor:pointer;">취소</button>'
+      + '</div></div>'
+    ) : '';
+
+    const addBtnHtml = !box.addingItem
+      ? '<div style="padding:6px 14px;"><button onclick="addPcrBoxItemInline('+bi+')" style="font-size:11px;color:#1d4ed8;background:none;border:1px dashed #bfdbfe;border-radius:4px;padding:3px 10px;cursor:pointer;">+ 아이템 추가</button></div>'
+      : '';
+
+    const deleteBoxBtn = isCustom
+      ? '<button onclick="removePcrBox('+bi+')" style="background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:13px;padding:0;line-height:1;">🗑</button>'
+      : '';
+
+    html += '<div style="border:1px solid #e2e8f0;border-radius:10px;margin-bottom:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04);">'
+      + '<div style="background:#1e3a8a;padding:9px 14px;display:flex;justify-content:space-between;align-items:center;">'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + '<span style="font-size:11px;font-weight:800;color:#fff;font-family:IBM Plex Mono,monospace;letter-spacing:1px;">BOX '+box.boxNum+'</span>'
+      + (isCustom ? '<span style="font-size:9px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:3px;font-weight:700;">추가</span>' : '')
+      + '</div>'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + '<span style="font-size:12px;font-weight:800;color:#93c5fd;font-family:IBM Plex Mono,monospace;">'+total+' pcs</span>'
+      + deleteBoxBtn + '</div></div>'
+      + rowsHtml + addFormHtml + addBtnHtml
+      + '</div>';
+  }
+
+  html += '<button onclick="addPcrBox()" style="width:100%;padding:10px;border:2px dashed #bfdbfe;border-radius:8px;background:#f0f9ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;margin-top:4px;">📦 + 박스 추가</button>';
+  container.innerHTML = html;
+  checkPcrChanges();
+}
+
+function renderPcrBoxesGrid() {
   const container = document.getElementById('pcr-complete-lines');
   const boxes = window._pcrBoxes || [];
   if (!boxes.length) { container.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;">배정할 Partial 수량 없음</div>'; return; }
@@ -7164,7 +7306,7 @@ function updatePcrGrid(bi, rowKey, val) {
     // 재렌더 후 현재 셀에 포커스 복원
     const rowKeys = window._pcrGridRowKeys || [];
     const rowIdx = rowKeys.findIndex(k => k === rowKey);
-    renderPcrBoxes();
+    renderPcrBoxesGrid();
     // 재렌더 후 현재 위치로 포커스 복원
     setTimeout(() => {
       const el = document.getElementById(`pcr-cell-${bi}-${rowIdx}`);
@@ -8077,6 +8219,7 @@ function openBoxAssignModal() {
   document.getElementById('pcr-complete-btn').textContent = '✅ 확인 후 PO 저장';
   document.getElementById('pcr-complete-btn').onclick = confirmBoxAndSave;
 
+  window._pcrBoxMode = 'grid'; // Save PO 모드 → 스프레드시트 그리드 UI
   renderTabs();
   renderPcrBoxes();
   document.getElementById('pcr-complete-modal').style.display = 'flex';
