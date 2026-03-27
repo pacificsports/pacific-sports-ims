@@ -11181,6 +11181,8 @@ async function confirmBatchShip() {
 async function confirmShipped() {
   const shipDate = document.getElementById('ship-date-inp').value;
   if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
+  const carrier = document.getElementById('ship-carrier').value;
+  if (!carrier) { alert('Carrier를 선택해주세요.'); document.getElementById('ship-carrier')?.focus(); return; }
 
   // 인라인 PIN 체크
   if (!_shipEmpPin) {
@@ -11244,43 +11246,90 @@ async function _doShippedCore(emp) {
 
   for (const l of lines) {
     const lineWh = l.wh || 'SC';
+
+    // ── alloc_detail 기준으로 filled 계산 (PCR 포함)
+    // alloc_detail = SC bins, alloc_ca_detail = CA bins
+    const allocSC = l.alloc_detail || {};
+    const allocCA = l.alloc_ca_detail || {};
+
+    const allocPcs = (allocObj) =>
+      Object.entries(allocObj)
+        .filter(([k]) => !k.includes('TRANSFER|'))
+        .reduce((s, [, v]) => s + (typeof v === 'object' ? (v.pcs || 0) : (v || 0)), 0);
+
+    let filled = 0;
+    if (lineWh === 'SC&CA') {
+      filled = allocPcs(allocSC) + allocPcs(allocCA);
+    } else if (lineWh === 'CA') {
+      filled = allocPcs(allocCA) || allocPcs(allocSC);
+    } else {
+      filled = allocPcs(allocSC);
+    }
+
+    // alloc이 없으면 기존 inventory 차감 방식으로 fallback
+    if (filled === 0) {
+      const whIds = lineWh === 'SC&CA'
+        ? [scWh?.id, caWh?.id].filter(Boolean)
+        : lineWh === 'CA' ? [caWh?.id] : [scWh?.id];
+
+      let toFill = l.qty_pieces;
+      for (const wId of whIds) {
+        if (toFill <= 0) break;
+        const { data: invRows } = await db.from('inventory')
+          .select('id, qty_on_hand, qty_committed, location')
+          .eq('color', (l.color||'').toUpperCase())
+          .eq('size', (l.size||'').toUpperCase())
+          .eq('warehouse_id', wId)
+          .order('qty_on_hand', { ascending: false });
+        for (const inv of (invRows || [])) {
+          if (toFill <= 0) break;
+          const deduct = Math.min(toFill, inv.qty_on_hand || 0);
+          if (deduct > 0) {
+            filled += deduct;
+            toFill -= deduct;
+          }
+        }
+      }
+    }
+
+    // inventory 실제 차감 (일반 bin + PCR bin 모두)
     const whIds = lineWh === 'SC&CA'
       ? [scWh?.id, caWh?.id].filter(Boolean)
       : lineWh === 'CA' ? [caWh?.id] : [scWh?.id];
 
-    let toFill = l.qty_pieces;
-    let filled = 0;
+    // WH warehouse + PCR warehouse 모두 차감
+    const pcrWhIds = lineWh === 'SC&CA'
+      ? [warehouses.find(w=>w.code==='SC-PCR')?.id, warehouses.find(w=>w.code==='CA-PCR')?.id].filter(Boolean)
+      : lineWh === 'CA'
+        ? [warehouses.find(w=>w.code==='CA-PCR')?.id].filter(Boolean)
+        : [warehouses.find(w=>w.code==='SC-PCR')?.id].filter(Boolean);
 
-    for (const wId of whIds) {
-      if (toFill <= 0) break;
-      // SC/CA bin에서만 차감 — PCR(location='PCR') 제외
-      let invQuery = db.from('inventory')
-        .select('id, qty_on_hand, qty_committed, location')
+    const allDeductWhIds = [...whIds, ...pcrWhIds];
+    let toDeduct = filled;
+
+    for (const wId of allDeductWhIds) {
+      if (toDeduct <= 0) break;
+      const { data: invRows } = await db.from('inventory')
+        .select('id, qty_on_hand, qty_committed')
         .eq('color', (l.color||'').toUpperCase())
         .eq('size', (l.size||'').toUpperCase())
         .eq('warehouse_id', wId)
-        .neq('location', 'PCR')
         .order('qty_on_hand', { ascending: false });
-      // order_line에 location(bin) 정보 있으면 해당 bin 우선
-      if (l.location) invQuery = invQuery.eq('location', l.location);
-      const { data: invRows } = await invQuery;
-
       for (const inv of (invRows || [])) {
-        if (toFill <= 0) break;
-        const deduct = Math.min(toFill, inv.qty_on_hand || 0);
+        if (toDeduct <= 0) break;
+        const deduct = Math.min(toDeduct, inv.qty_on_hand || 0);
         const commitRelease = Math.min(inv.qty_committed || 0, deduct);
         if (deduct > 0) {
           await db.from('inventory').update({
             qty_on_hand: (inv.qty_on_hand || 0) - deduct,
             qty_committed: Math.max(0, (inv.qty_committed || 0) - commitRelease)
           }).eq('id', inv.id);
-          filled += deduct;
-          toFill -= deduct;
+          toDeduct -= deduct;
         }
       }
     }
 
-    const backQty = l.qty_pieces - filled;
+    const backQty = Math.max(0, l.qty_pieces - filled);
     if (backQty > 0) {
       totalBackQty += backQty;
       backLines.push({ ...l, qty_filled: filled, qty_backordered: backQty });
@@ -11495,6 +11544,18 @@ async function reviewAndSendInvoice(orderId, wh) {
     freightCarrier: order.pickup_company || _fb.freightCarrier || _domFreightCarrier || ''
   };
   document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, displayInvoiceNum, invShipInfo, companySettings, 0);
+
+  // Ship Via / Tracking 편집 필드에 현재 값 채우기
+  const _carrierEl = document.getElementById('inv-carrier-edit');
+  const _trackingEl = document.getElementById('inv-tracking-edit');
+  const _freightCoEl = document.getElementById('inv-freight-co-edit');
+  if (_carrierEl) _carrierEl.value = invShipInfo.carrier || '';
+  if (_trackingEl) _trackingEl.value = invShipInfo.tracking || '';
+  if (_freightCoEl) {
+    _freightCoEl.value = invShipInfo.freightCarrier || '';
+    _freightCoEl.style.display = invShipInfo.carrier === 'LTL' ? 'block' : 'none';
+  }
+  window._invoiceShipInfo = invShipInfo;
   const invCustObj = customers.find(c => c.id === order.customer_id);
   const invToEmail = invCustObj?.accounting_email || order.email || '(이메일 없음)';
   const invCcEmail = invCustObj?.accounting_email_cc || '';
@@ -11585,7 +11646,10 @@ async function sendInvoiceEmail() {
     const invWhPrefix = (_invoiceWh || order.wh_code || 'SC') === 'CA' ? 'CA' : 'SC';
     const rawInvNum = order.invoice_number || '';
     const displayInvNum = rawInvNum ? (invWhPrefix + rawInvNum) : '—';
-    const invShipInfo2 = { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'' };
+    // _invoiceShipInfo (모달에서 직접 수정한 값) 우선, 없으면 DB 값
+    const invShipInfo2 = window._invoiceShipInfo && (window._invoiceShipInfo.carrier || window._invoiceShipInfo.tracking)
+      ? window._invoiceShipInfo
+      : { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'' };
 
     if (toEmail) {
       const emailSubject = `Invoice #${displayInvNum} : ${order.customer_name || ''} (PO#${order.customer_po || '—'})`;
@@ -12689,6 +12753,63 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     return renderSection(scLines, '-SC') + (caLines.length ? '<div style="page-break-before:always;margin-top:32px;">' + renderSection(caLines, '-CA') + '</div>' : '');
   }
   return renderSection(lines, '');
+}
+
+// ── Invoice Review: Carrier/Tracking 편집 ──────────────
+function toggleInvCarrierFields() {
+  const carrier = document.getElementById('inv-carrier-edit')?.value || '';
+  const freightWrap = document.getElementById('inv-freight-co-edit');
+  if (freightWrap) freightWrap.style.display = carrier === 'LTL' ? 'inline-block' : 'none';
+  applyInvoiceShipping();
+}
+
+function applyInvoiceShipping() {
+  const carrier = document.getElementById('inv-carrier-edit')?.value || '';
+  const tracking = document.getElementById('inv-tracking-edit')?.value || '';
+  const freightCo = document.getElementById('inv-freight-co-edit')?.value || '';
+
+  // _invoiceShipInfo 업데이트
+  if (!window._invoiceShipInfo) window._invoiceShipInfo = {};
+  window._invoiceShipInfo.carrier = carrier;
+  window._invoiceShipInfo.tracking = tracking;
+  window._invoiceShipInfo.freightCarrier = freightCo;
+
+  // Invoice preview 즉시 갱신
+  if (!_invoiceOrderId) return;
+  const contentEl = document.getElementById('invoice-review-content');
+  if (!contentEl) return;
+
+  // 현재 렌더링된 invoice에서 Ship Via / Tracking 셀만 교체
+  const isLtl = carrier === 'LTL';
+  const shipViaStr = (isLtl && freightCo) ? freightCo : (carrier || '—');
+  const trackingStr = tracking || '—';
+
+  // innerHTML 전체 재빌드 대신 해당 셀만 업데이트
+  const cells = contentEl.querySelectorAll('[data-field]');
+  cells.forEach(cell => {
+    if (cell.dataset.field === 'ship_via') cell.textContent = shipViaStr;
+    if (cell.dataset.field === 'tracking') cell.textContent = trackingStr;
+  });
+
+  // data-field 속성이 없으면 전체 재빌드
+  if (!contentEl.querySelector('[data-field="ship_via"]')) {
+    // DB에서 order 재조회 없이 현재 _invoiceShipInfo로 재빌드
+    db.from('orders').select('*, warehouses(code,name)').eq('id', _invoiceOrderId).single().then(({data: order}) => {
+      if (!order) return;
+      db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', _invoiceOrderId).then(({data: lines}) => {
+        if (!lines) return;
+        const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+        const filteredLines = isSplit && _invoiceWh
+          ? lines.filter(l => _invoiceWh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
+          : lines;
+        const invWhPfx = (_invoiceWh || order.wh_code || 'SC') === 'CA' ? 'CA' : 'SC';
+        const displayNum = (order.invoice_number ? invWhPfx + order.invoice_number : '—');
+        const freightAmt = parseFloat(document.getElementById('invoice-freight-amt')?.value) || 0;
+        const cs = {};
+        contentEl.innerHTML = buildInvoiceHtml(order, filteredLines, false, displayNum, window._invoiceShipInfo, cs, freightAmt);
+      });
+    });
+  }
 }
 
 async function verifyInvoicePinInline() {
@@ -17539,27 +17660,44 @@ function showCreditHoldFlash(overAmt) {
       <button class="modal-close" style="color:#fff;" onclick="closeModal('modal-invoice-review')">×</button>
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="invoice-review-content"></div>
-    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:space-between;align-items:center;background:#fff;flex-shrink:0;">
-      <div style="display:flex;align-items:center;gap:12px;flex:1;flex-wrap:wrap;">
-        <div id="invoice-review-email-row" style="font-size:12px;color:#6b7280;">이메일 수신: <span id="invoice-review-email" style="font-weight:600;color:#111;"></span></div>
-        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
-          <label style="color:#6b7280;white-space:nowrap;">Freight $</label>
-          <input id="invoice-freight-amt" type="number" min="0" step="0.01" value="0" class="fi" style="width:80px;font-size:12px;padding:4px 8px;">
-          <button class="btn btn-sm" onclick="updateInvoiceFreight()" style="font-size:11px;white-space:nowrap;">Apply</button>
-          <button class="btn btn-sm" onclick="document.getElementById('invoice-freight-amt').value=0;updateInvoiceFreight();" style="font-size:11px;white-space:nowrap;color:#dc2626;border-color:#fca5a5;">✕ Clear</button>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
-          <label style="color:#6b7280;white-space:nowrap;">🔐 Manager PIN</label>
-          <input id="invoice-pin-inline" type="password" inputmode="numeric" maxlength="4" class="fi"
-            style="width:80px;font-size:13px;letter-spacing:6px;font-family:'IBM Plex Mono',monospace;padding:4px 8px;text-align:center;"
-            placeholder="" oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyInvoicePinInline();">
-          <span id="invoice-pin-inline-status" style="font-size:11px;color:#6b7280;"></span>
-        </div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border);background:#fff;flex-shrink:0;">
+      <!-- Ship Via / Tracking 수정 행 -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid #f3f4f6;">
+        <span style="font-size:11px;color:#6b7280;font-weight:600;white-space:nowrap;">🚚 Ship Via:</span>
+        <select id="inv-carrier-edit" class="fi" style="width:105px;font-size:12px;padding:4px 6px;height:28px;" onchange="toggleInvCarrierFields()">
+          <option value="">— 선택 —</option>
+          <option value="UPS">UPS</option>
+          <option value="FedEx">FedEx</option>
+          <option value="LTL">LTL</option>
+          <option value="Will Call">Will Call</option>
+          <option value="Other">Other</option>
+        </select>
+        <input id="inv-freight-co-edit" type="text" class="fi" placeholder="Freight Co. (LTL)" style="width:130px;font-size:12px;padding:4px 6px;height:28px;display:none;" oninput="applyInvoiceShipping()">
+        <input id="inv-tracking-edit" type="text" class="fi" placeholder="Tracking / PRO #" style="width:200px;font-size:12px;padding:4px 6px;height:28px;font-family:'IBM Plex Mono',monospace;" oninput="applyInvoiceShipping()">
       </div>
-      <div style="display:flex;gap:8px;flex-shrink:0;">
-        <button id="invoice-review-cancel-btn" class="btn" onclick="closeModal('modal-invoice-review')">취소</button>
-        <button class="btn" onclick="printInNewWindow(document.getElementById('invoice-review-content').innerHTML)">🖨️ Print</button>
-        <button id="invoice-review-send-btn" class="btn btn-primary" onclick="sendInvoiceWithPin()">📧 Send Invoice</button>
+      <!-- 기존 하단 행 -->
+      <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;">
+        <div style="display:flex;align-items:center;gap:12px;flex:1;flex-wrap:wrap;">
+          <div id="invoice-review-email-row" style="font-size:12px;color:#6b7280;">이메일 수신: <span id="invoice-review-email" style="font-weight:600;color:#111;"></span></div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+            <label style="color:#6b7280;white-space:nowrap;">Freight $</label>
+            <input id="invoice-freight-amt" type="number" min="0" step="0.01" value="0" class="fi" style="width:80px;font-size:12px;padding:4px 8px;">
+            <button class="btn btn-sm" onclick="updateInvoiceFreight()" style="font-size:11px;white-space:nowrap;">Apply</button>
+            <button class="btn btn-sm" onclick="document.getElementById('invoice-freight-amt').value=0;updateInvoiceFreight();" style="font-size:11px;white-space:nowrap;color:#dc2626;border-color:#fca5a5;">✕ Clear</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+            <label style="color:#6b7280;white-space:nowrap;">🔐 Manager PIN</label>
+            <input id="invoice-pin-inline" type="password" inputmode="numeric" maxlength="4" class="fi"
+              style="width:80px;font-size:13px;letter-spacing:6px;font-family:'IBM Plex Mono',monospace;padding:4px 8px;text-align:center;"
+              placeholder="" oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyInvoicePinInline();">
+            <span id="invoice-pin-inline-status" style="font-size:11px;color:#6b7280;"></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0;">
+          <button id="invoice-review-cancel-btn" class="btn" onclick="closeModal('modal-invoice-review')">취소</button>
+          <button class="btn" onclick="printInNewWindow(document.getElementById('invoice-review-content').innerHTML)">🖨️ Print</button>
+          <button id="invoice-review-send-btn" class="btn btn-primary" onclick="sendInvoiceWithPin()">📧 Send Invoice</button>
+        </div>
       </div>
     </div>
   </div>
