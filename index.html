@@ -302,9 +302,16 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 .modal-overlay.open{display:flex;}
 .modal-box{background:#fff;border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,0.35);overflow:hidden;}
 .modal{background:#fff;border-radius:8px;width:560px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
-.modal-head{background:var(--grid-head);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-radius:8px 8px 0 0;}
+.modal-head{background:var(--grid-head);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-radius:8px 8px 0 0;cursor:grab;user-select:none;}
+.modal-head:active{cursor:grabbing;}
 .modal-title{font-size:13px;font-weight:700;color:var(--primary-dark);}
 .modal-close{background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3);line-height:1;}
+/* draggable modal box */
+.modal-overlay.dragging{background:rgba(0,0,0,0.2);}
+.modal-overlay .modal-box,
+.modal-overlay .modal{transition:box-shadow 0.15s;}
+.modal-overlay.dragging .modal-box,
+.modal-overlay.dragging .modal{box-shadow:0 32px 80px rgba(0,0,0,0.45);}
 .modal-body{padding:16px;}
 .modal-foot{padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;}
 
@@ -15701,10 +15708,223 @@ function closeModal(id) {
   el.classList.remove('open');
   el.style.display = 'none';
 }
-document.querySelectorAll('.modal-overlay').forEach(m => {
-  m.addEventListener('mousedown', e => { m._bgClick = (e.target === m); });
-  m.addEventListener('click', e => { if (e.target === m && m._bgClick) m.classList.remove('open'); });
-});
+// ── Modal drag-to-move ──────────────────────────────────────
+(function initDraggableModals() {
+  // background click to close
+  document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.addEventListener('mousedown', e => { m._bgClick = (e.target === m); });
+    m.addEventListener('click', e => { if (e.target === m && m._bgClick) m.classList.remove('open'); });
+  });
+
+  // drag logic — attached once on document, works for all modals
+  let _drag = null; // { overlay, box, startX, startY, origLeft, origTop }
+
+  function getModalBox(overlay) {
+    return overlay.querySelector('.modal-box') || overlay.querySelector('.modal');
+  }
+
+  function onHeaderMousedown(e) {
+    // only drag on header itself, not buttons inside
+    if (e.target.closest('button') || e.target.closest('input')) return;
+    const header = e.currentTarget;
+    const overlay = header.closest('.modal-overlay');
+    if (!overlay) return;
+    const box = getModalBox(overlay);
+    if (!box) return;
+
+    e.preventDefault();
+
+    // First drag: transition from flexbox-center to fixed position
+    if (!box.style.left) {
+      const rect = box.getBoundingClientRect();
+      box.style.position = 'fixed';
+      box.style.left = rect.left + 'px';
+      box.style.top  = rect.top  + 'px';
+      box.style.margin = '0';
+      // Remove flex centering from overlay
+      overlay.style.alignItems = 'flex-start';
+      overlay.style.justifyContent = 'flex-start';
+    }
+
+    _drag = {
+      overlay,
+      box,
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: parseFloat(box.style.left) || 0,
+      origTop:  parseFloat(box.style.top)  || 0,
+    };
+    overlay.classList.add('dragging');
+  }
+
+  document.addEventListener('mousemove', e => {
+    if (!_drag) return;
+    const dx = e.clientX - _drag.startX;
+    const dy = e.clientY - _drag.startY;
+    let newLeft = _drag.origLeft + dx;
+    let newTop  = _drag.origTop  + dy;
+
+    // Keep modal on screen
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const bw = _drag.box.offsetWidth, bh = _drag.box.offsetHeight;
+    newLeft = Math.max(0, Math.min(newLeft, vw - bw));
+    newTop  = Math.max(0, Math.min(newTop,  vh - 40)); // allow some off-bottom
+
+    _drag.box.style.left = newLeft + 'px';
+    _drag.box.style.top  = newTop  + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!_drag) return;
+    _drag.overlay.classList.remove('dragging');
+    _drag = null;
+  });
+
+  // Touch support
+  document.addEventListener('touchmove', e => {
+    if (!_drag) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const dx = t.clientX - _drag.startX;
+    const dy = t.clientY - _drag.startY;
+    const newLeft = Math.max(0, _drag.origLeft + dx);
+    const newTop  = Math.max(0, _drag.origTop  + dy);
+    _drag.box.style.left = newLeft + 'px';
+    _drag.box.style.top  = newTop  + 'px';
+  }, { passive: false });
+
+  document.addEventListener('touchend', () => {
+    if (!_drag) return;
+    _drag.overlay.classList.remove('dragging');
+    _drag = null;
+  });
+
+  // Reset position when modal is closed/reopened
+  const _origClose = window.closeModal;
+  window.closeModal = function(id) {
+    const el = document.getElementById(id);
+    if (el) {
+      const box = getModalBox(el);
+      if (box) {
+        box.style.left = '';
+        box.style.top  = '';
+        box.style.position = '';
+        box.style.margin = '';
+      }
+      el.style.alignItems = '';
+      el.style.justifyContent = '';
+    }
+    if (_origClose) _origClose(id);
+    else {
+      if (el) { el.classList.remove('open'); el.style.display = 'none'; }
+    }
+  };
+
+  // Attach mousedown to all .modal-head elements (current + future)
+  // Also finds first-child divs of inline fixed modals as drag handles
+  function getInlineModalOverlays(root) {
+    // Select all fixed+inset:0 overlays that are NOT .modal-overlay
+    const all = root.querySelectorAll ? root.querySelectorAll('div[style*="inset:0"]') : [];
+    return [...all].filter(el => {
+      const s = el.style;
+      return s.position === 'fixed' && !el.classList.contains('modal-overlay')
+          && !el.classList.contains('lp-overlay') && !el.classList.contains('credit-hold-flash');
+    });
+  }
+
+  function attachDragToHeads(root) {
+    // 1. .modal-head (class-based modals)
+    root.querySelectorAll('.modal-head').forEach(h => {
+      if (!h._dragAttached) {
+        h.addEventListener('mousedown', onHeaderMousedown);
+        h.addEventListener('touchstart', e => {
+          if (e.target.closest('button') || e.target.closest('input')) return;
+          const t = e.touches[0];
+          const header = h;
+          const overlay = header.closest('.modal-overlay');
+          if (!overlay) return;
+          const box = getModalBox(overlay);
+          if (!box) return;
+          if (!box.style.left) {
+            const rect = box.getBoundingClientRect();
+            box.style.position = 'fixed';
+            box.style.left = rect.left + 'px';
+            box.style.top  = rect.top  + 'px';
+            box.style.margin = '0';
+            overlay.style.alignItems = 'flex-start';
+            overlay.style.justifyContent = 'flex-start';
+          }
+          _drag = {
+            overlay, box,
+            startX: t.clientX, startY: t.clientY,
+            origLeft: parseFloat(box.style.left) || 0,
+            origTop:  parseFloat(box.style.top)  || 0,
+          };
+          overlay.classList.add('dragging');
+        }, { passive: false });
+        h._dragAttached = true;
+      }
+    });
+
+    // 2. Inline fixed modals — use first child div as drag handle
+    getInlineModalOverlays(root === document ? document.body : root).forEach(overlay => {
+      if (overlay._inlineDragAttached) return;
+      // Find the inner box (first div child that has border-radius or background:#fff)
+      const box = overlay.querySelector(':scope > div');
+      if (!box) return;
+      // Use first child of box as handle (usually has the title)
+      const handle = box.querySelector(':scope > div:first-child');
+      if (!handle || handle._dragAttached) return;
+      handle.style.cursor = 'grab';
+      handle.addEventListener('mousedown', e => {
+        if (e.target.closest('button') || e.target.closest('input') || e.target.closest('select')) return;
+        e.preventDefault();
+        if (!box.style.left) {
+          const rect = box.getBoundingClientRect();
+          box.style.position = 'fixed';
+          box.style.left = rect.left + 'px';
+          box.style.top  = rect.top  + 'px';
+          box.style.margin = '0';
+          overlay.style.alignItems = 'flex-start';
+          overlay.style.justifyContent = 'flex-start';
+        }
+        _drag = {
+          overlay, box,
+          startX: e.clientX, startY: e.clientY,
+          origLeft: parseFloat(box.style.left) || 0,
+          origTop:  parseFloat(box.style.top)  || 0,
+        };
+        overlay.classList.add('dragging');
+      });
+      handle._dragAttached = true;
+      overlay._inlineDragAttached = true;
+    });
+  }
+
+  // Run on DOM load + watch for dynamically created modals
+  attachDragToHeads(document);
+  new MutationObserver(muts => {
+    muts.forEach(m => m.addedNodes.forEach(n => {
+      if (n.nodeType === 1) attachDragToHeads(n);
+    }));
+  }).observe(document.body, { childList: true, subtree: true });
+})();
+
+// Reset modal drag position when reopening
+function resetModalPosition(overlayId) {
+  const overlay = document.getElementById(overlayId);
+  if (!overlay) return;
+  const box = overlay.querySelector('.modal-box') || overlay.querySelector('.modal') || overlay.querySelector(':scope > div');
+  if (box) {
+    box.style.left = '';
+    box.style.top  = '';
+    box.style.position = '';
+    box.style.margin = '';
+  }
+  overlay.style.alignItems = '';
+  overlay.style.justifyContent = '';
+  overlay._inlineDragAttached = false;
+}
 
 // ═══════════════════════════════════════════
 // IN TRANSIT
