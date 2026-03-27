@@ -316,6 +316,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 .credit-hold-flash-close{position:absolute;top:12px;right:14px;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:18px;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;}
 .credit-hold-flash-close:hover{background:rgba(255,255,255,0.3);}
 @keyframes chBox{0%{transform:scale(0.8);opacity:0;}15%{transform:scale(1);opacity:1;}80%{transform:scale(1);opacity:1;}100%{transform:scale(0.8);opacity:0;}}
+@keyframes emergencyPulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.85;transform:scale(1.06);}}
 </style>
 </head>
 <body>
@@ -359,6 +360,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <span class="chrome-wh-sc">● SC: Sumter</span>
       <span class="chrome-divider"></span>
       <span id="chrome-user" style="font-size:12px;color:rgba(255,255,255,0.8);"></span>
+      <button id="emergency-badge-btn" onclick="openEmergencyPendingList()" style="display:none;margin-left:8px;position:relative;background:#dc2626;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;color:#fff;">
+        🚨 Emergency <span id="emergency-badge-count" style="background:#fff;color:#dc2626;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:10px;font-weight:900;">0</span>
+      </button>
       <button class="logout-btn" onclick="doLogout()">Sign Out</button>
         <button class="btn btn-sm" style="margin-left:8px;font-size:10px;padding:4px 8px;background:var(--bg2);color:var(--text2);border:1px solid var(--border);" onclick="exportAllData()">💾 Backup</button>
     </div>
@@ -8373,15 +8377,61 @@ function startEmergencyPolling() {
 }
 
 async function _checkEmergencyPending() {
-  const { data } = await db.from('emergency_transfers')
+  const { data: pending } = await db.from('emergency_transfers')
     .select('*').eq('status', 'pending').order('requested_at', { ascending: false });
-  if (!data || !data.length) return;
+  const { data: approved } = await db.from('emergency_transfers')
+    .select('*').eq('status', 'approved').order('approved_at', { ascending: false });
 
-  // 이미 열려있으면 skip
-  if (document.getElementById('emergency-manager-modal').style.display === 'flex') return;
+  // WH approved 팝업 (자동)
+  if (approved && approved.length > 0) {
+    if (document.getElementById('emergency-wh-modal').style.display !== 'flex') {
+      openEmergencyWhModal(approved[0]);
+    }
+  }
 
-  // 가장 최근 pending 표시
-  openEmergencyManagerReview(data[0]);
+  // 배지 업데이트
+  const pendingCount = (pending||[]).length;
+  const badgeBtn = document.getElementById('emergency-badge-btn');
+  const badgeCount = document.getElementById('emergency-badge-count');
+  if (badgeBtn) {
+    badgeBtn.style.display = pendingCount > 0 ? 'inline-flex' : 'none';
+    if (badgeCount) badgeCount.textContent = pendingCount;
+    // 깜빡임 효과
+    if (pendingCount > 0) {
+      badgeBtn.style.animation = 'emergencyPulse 1.5s infinite';
+    } else {
+      badgeBtn.style.animation = '';
+    }
+  }
+}
+
+function openEmergencyPendingList() {
+  const listEl = document.getElementById('emergency-pending-list');
+  listEl.innerHTML = '<div style="text-align:center;padding:16px;color:#9ca3af;">로딩중...</div>';
+  document.getElementById('emergency-pending-modal').style.display = 'flex';
+
+  db.from('emergency_transfers').select('*').eq('status', 'pending')
+    .order('requested_at', { ascending: false })
+    .then(({ data }) => {
+      if (!data || !data.length) {
+        listEl.innerHTML = '<div style="text-align:center;padding:16px;color:#9ca3af;">대기중인 요청 없음</div>';
+        return;
+      }
+      listEl.innerHTML = data.map(t => `
+        <div style="border:1px solid #fecaca;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff5f5;">
+          <div style="font-weight:700;font-size:12px;color:#1e3a8a;">${t.order_customer}</div>
+          <div style="font-size:11px;color:#6b7280;margin:2px 0;">PO# ${t.order_po||'—'} | ${t.wh} | ${new Date(t.requested_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div>
+          <div style="font-size:11px;color:#374151;margin:2px 0;">요청자: <b>${t.requested_by}</b></div>
+          <div style="font-size:11px;color:#374151;margin:4px 0;">
+            ${(t.items||[]).map(i => `${i.styleNum} ${i.color} ${i.size} ${i.boxes}박스`).join(', ')}
+          </div>
+          <button onclick="document.getElementById('emergency-pending-modal').style.display='none';openEmergencyManagerReview(${JSON.stringify(t).replace(/"/g,'&quot;')})"
+            style="margin-top:6px;width:100%;padding:6px;background:#d97706;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
+            📋 Review & Approve
+          </button>
+        </div>
+      `).join('');
+    });
 }
 
 async function openEmergencyManagerReview(transfer) {
@@ -16029,6 +16079,17 @@ function showCreditHoldFlash(overAmt) {
         <tbody id="inv-log-tbody"></tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<!-- ── Emergency Pending List Modal ── -->
+<div id="emergency-pending-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99998;align-items:flex-start;justify-content:flex-end;padding:60px 20px 0 0;">
+  <div style="background:#fff;border-radius:12px;width:360px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.25);border:2px solid #dc2626;">
+    <div style="padding:14px 16px;background:#dc2626;border-radius:10px 10px 0 0;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:14px;font-weight:800;color:#fff;">🚨 Emergency Requests</div>
+      <button tabindex="-1" onclick="document.getElementById('emergency-pending-modal').style.display='none'" style="background:none;border:none;color:#fff;font-size:18px;cursor:pointer;">✕</button>
+    </div>
+    <div id="emergency-pending-list" style="overflow-y:auto;flex:1;padding:12px;"></div>
   </div>
 </div>
 
