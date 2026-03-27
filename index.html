@@ -5058,52 +5058,93 @@ function renderCustomerPOTable() {
     return;
   }
 
-  document.getElementById('customerpo-table-wrap').innerHTML = `
-    <table class="tbl">
-      <thead><tr>
-        <th>Customer</th><th>PO #</th><th>WH</th>
-        <th>Total Pcs</th><th>Total Amount</th><th>Ship Date</th>
-        <th>Priority</th><th>Status</th><th>Created</th><th></th>
-      </tr></thead>
-      <tbody>${filtered.map(o => {
-        const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
-        const whCode = o.wh_code || o.warehouses?.code || '—';
-        const whBadge = (whCode === 'SC&CA' || o.is_split_warehouse)
-                      ? '<span class="loc-sc">SC</span> <span class="loc-ca">CA</span>'
-                      : whCode === 'CA' ? '<span class="loc-ca">CA</span>'
-                      : '<span class="loc-sc">SC</span>';
-        const priBadge = o.priority === 'urgent'   ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 Urgent</span>'
-                       : '<span style="font-size:10px;color:#9ca3af;">—</span>';
-        const rowBg = o.priority === 'urgent' ? 'background:#fff5f5;' : '';
-        return `<tr style="cursor:pointer;${rowBg}" onclick="openPODetail('${o.id}')">
-          <td style="font-weight:700;color:#111827;">${o.customer_name}</td>
-          <td class="mono" style="font-weight:700;">${o.customer_po || '—'}</td>
-          <td>${whBadge}</td>
-          <td style="text-align:center">${(o.total_pcs||0).toLocaleString()}</td>
-          <td style="font-weight:700;color:var(--primary)">$${(o.total_amount||0).toLocaleString()}</td>
-          <td>${o.ship_date || '—'}</td>
-          <td>${priBadge}</td>
-          <td><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:${st.bg};color:${st.color};">${st.label}</span></td>
-          <td style="font-size:11px;color:var(--text3)">${(o.created_at||'').slice(0,10)}</td>
-          <td style="white-space:nowrap;">
-            ${(function(){
-              const oid = o.id, onum = o.order_number, ocust = (o.customer_name||'').replace(/'/g,'');
-              const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
-              if(o.status === 'completed') {
-                return '<button class="btn btn-sm" style="background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;margin-left:4px;" onclick="event.stopPropagation();reviewAndSendInvoice(\\\'' + oid + '\\\',\\\'' + wh + '\\\')">🧾 Re-send Invoice</button>' +
-                       '<button class="btn btn-sm" style="background:#f0f9ff;color:#0891b2;border-color:#bae6fd;margin-left:4px;" onclick="event.stopPropagation();printPackingListFromCard(\\\'' + oid + '\\\',\\\'' + wh + '\\\')">📋 Print PL</button>';
-              }
-              if(['shipped','invoiced','cancelled'].includes(o.status)) return '';
-              return '<button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;margin-left:4px;" onclick="event.stopPropagation();cancelOrderConfirm(\\\'' + oid + '\\\',\\\'' + onum + '\\\',\\\'' + ocust + '\\\')">✕ Cancel</button> ' +
-                     '<button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;margin-left:4px;" onclick="event.stopPropagation();deleteOrderConfirm(\\\'' + oid + '\\\',\\\'' + onum + '\\\',\\\'' + ocust + '\\\')">🗑 Delete</button>';
-            })()}
-            })()}
-          </td>
-        </tr>`;
-      }).join('')}
-      </tbody>
-    </table>`;
+  const isCompletedView = (view === 'completed') && !statusFilter;
+
+  if (isCompletedView) {
+    // ── Completed 전용 테이블 ──────────────────────────────
+    const rows = filtered.map(o => {
+      const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
+      const whCode = o.wh_code || o.warehouses?.code || '—';
+      const whBadge = (whCode === 'SC&CA' || o.is_split_warehouse)
+        ? '<span class="loc-sc">SC</span> <span class="loc-ca">CA</span>'
+        : whCode === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+      const oid = o.id;
+      const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
+      const receivedDate = (o.created_at||'').slice(0,10);
+      const shippedDate = o.ship_date || (o.sc_shipped_at||'').slice(0,10) || (o.ca_shipped_at||'').slice(0,10) || '—';
+      const preparedBy = o.sc_pcr_complete_by || o.ca_pcr_complete_by || o.created_by || '—';
+      const btnStyle = (bg,color,border) => `background:${bg};color:${color};border-color:${border};font-size:10px;margin:2px 0;white-space:nowrap;`;
+      return '<tr style="cursor:pointer;" onclick="openPODetail(\'' + oid + '\')">'
+        + '<td style="font-weight:700;color:#111827;">' + o.customer_name + '</td>'
+        + '<td class="mono" style="font-weight:700;">' + (o.customer_po||'—') + '</td>'
+        + '<td>' + whBadge + '</td>'
+        + '<td style="text-align:center">' + (o.total_pcs||0).toLocaleString() + '</td>'
+        + '<td style="font-weight:700;color:var(--primary)">$' + (o.total_amount||0).toLocaleString() + '</td>'
+        + '<td style="font-size:11px;color:#6b7280;">' + receivedDate + '</td>'
+        + '<td style="font-size:11px;color:#6b7280;">' + shippedDate + '</td>'
+        + '<td style="font-size:11px;color:#6b7280;">' + preparedBy + '</td>'
+        + '<td><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:' + st.bg + ';color:' + st.color + ';">' + st.label + '</span></td>'
+        + '<td style="white-space:nowrap;" onclick="event.stopPropagation()">'
+        + '<div style="display:flex;flex-direction:column;gap:3px;min-width:150px;">'
+        + '<button class="btn btn-sm" style="' + btnStyle('#f0f9ff','#0369a1','#bae6fd') + '" onclick="resendShippedEmail(\'' + oid + '\',\'' + wh + '\')">📧 Re-send Shipped</button>'
+        + '<button class="btn btn-sm" style="' + btnStyle('#f5f3ff','#7c3aed','#c4b5fd') + '" onclick="reviewAndSendInvoice(\'' + oid + '\',\'' + wh + '\')">🧾 Re-send Invoice</button>'
+        + '<button class="btn btn-sm" style="' + btnStyle('#f0fdf4','#15803d','#86efac') + '" onclick="printPackingListFromCard(\'' + oid + '\',\'' + wh + '\')">📋 Print PL</button>'
+        + '<button class="btn btn-sm" style="' + btnStyle('#fef2f2','#dc2626','#fca5a5') + '" onclick="openReturnModal(\'' + oid + '\')">↩ Return</button>'
+        + '</div>'
+        + '</td>'
+        + '</tr>';
+    }).join('');
+    document.getElementById('customerpo-table-wrap').innerHTML =
+      '<table class="tbl"><thead><tr>'
+      + '<th>Customer</th><th>PO #</th><th>WH</th>'
+      + '<th>Total Pcs</th><th>Total Amt</th>'
+      + '<th>Received</th><th>Shipped</th>'
+      + '<th>Prepared By</th><th>Status</th>'
+      + '<th>Documents</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+
+  } else {
+    // ── Active / All 테이블 ──────────────────────────────
+    const rows = filtered.map(o => {
+      const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
+      const whCode = o.wh_code || o.warehouses?.code || '—';
+      const whBadge = (whCode === 'SC&CA' || o.is_split_warehouse)
+                    ? '<span class="loc-sc">SC</span> <span class="loc-ca">CA</span>'
+                    : whCode === 'CA' ? '<span class="loc-ca">CA</span>'
+                    : '<span class="loc-sc">SC</span>';
+      const priBadge = o.priority === 'urgent'
+        ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 Urgent</span>'
+        : '<span style="font-size:10px;color:#9ca3af;">—</span>';
+      const rowBg = o.priority === 'urgent' ? 'background:#fff5f5;' : '';
+      const oid = o.id, onum = o.order_number, ocust = (o.customer_name||'').replace(/'/g,'');
+      const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
+      let actionBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
+      if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
+        actionBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕ Cancel</button>'
+          + ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑 Delete</button>';
+      }
+      return '<tr style="cursor:pointer;' + rowBg + '" onclick="openPODetail(\'' + oid + '\')">'
+        + '<td style="font-weight:700;color:#111827;">' + o.customer_name + '</td>'
+        + '<td class="mono" style="font-weight:700;">' + (o.customer_po||'—') + '</td>'
+        + '<td>' + whBadge + '</td>'
+        + '<td style="text-align:center">' + (o.total_pcs||0).toLocaleString() + '</td>'
+        + '<td style="font-weight:700;color:var(--primary)">$' + (o.total_amount||0).toLocaleString() + '</td>'
+        + '<td>' + (o.ship_date||'—') + '</td>'
+        + '<td>' + priBadge + '</td>'
+        + '<td><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:' + st.bg + ';color:' + st.color + ';">' + st.label + '</span></td>'
+        + '<td style="font-size:11px;color:var(--text3)">' + (o.created_at||'').slice(0,10) + '</td>'
+        + '<td style="white-space:nowrap;">' + actionBtns + '</td>'
+        + '</tr>';
+    }).join('');
+    document.getElementById('customerpo-table-wrap').innerHTML =
+      '<table class="tbl"><thead><tr>'
+      + '<th>Customer</th><th>PO #</th><th>WH</th>'
+      + '<th>Total Pcs</th><th>Total Amount</th><th>Ship Date</th>'
+      + '<th>Priority</th><th>Status</th><th>Created</th><th></th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
 }
+
 
 function openNewPO() {
   // 기존 Invoice 탭의 New Invoice 기능으로 연결
@@ -5471,7 +5512,11 @@ async function loadOrderStatus() {
         <button class="btn btn-sm btn-green" style="width:100%;margin-top:4px;font-size:10px;" onclick="event.stopPropagation();doShipped('${o.id}','${wh}')">🚚 Mark as Shipped</button>
         <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','ready_to_ship','preparing')">↩ Back to Preparing</button>`:''}
       ${col==='shipped'? (o._status === 'invoiced'
-        ? `<div style="width:100%;margin-top:8px;font-size:10px;background:#f0fdf4;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:5px 8px;text-align:center;font-weight:600;">✅ Invoice Sent</div>`
+        ? `<div style="width:100%;margin-top:8px;display:flex;flex-direction:column;gap:4px;">
+            <div style="font-size:10px;background:#f0fdf4;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:4px 8px;text-align:center;font-weight:600;">✅ Invoice Sent</div>
+            <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f0f9ff;color:#0369a1;border-color:#bae6fd;" onclick="event.stopPropagation();resendShippedEmail('${o.id}','${wh}')">📧 Re-send Shipped</button>
+            <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">🧾 Re-send Invoice</button>
+           </div>`
         : `<button class="btn btn-sm" style="width:100%;margin-top:8px;font-size:10px;background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;" onclick="event.stopPropagation();reviewAndSendInvoice('${o.id}','${wh}')">📧 Review & Send Invoice</button>`)
       :''}
       ${col==='backorder'?`
@@ -10249,6 +10294,45 @@ function updatePlShipping() {
 
   shippingEl.style.display = 'block';
   shippingEl.innerHTML = html;
+}
+
+// ── Re-send Shipped Email (PL + BOL) ──────────────────────────
+async function resendShippedEmail(orderId, wh) {
+  showToast('⏳ Shipped 이메일 재발송 중...');
+  try {
+    const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
+    const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+    if (!order || !lines) { showToast('❌ 오더 정보를 찾을 수 없습니다'); return; }
+
+    const shippingInfo = {
+      wh: wh || order.wh_code || 'SC',
+      carrier: order.carrier || '',
+      tracking: order.tracking_number || '',
+      freightCarrier: order.pickup_company || '',
+      note: order.ship_note || '',
+    };
+
+    const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+    const plHtml = buildPackingListHtml(order, lines, isSplit, wh || 'SC', shippingInfo, shippingInfo.note || '');
+
+    // BOL 파일은 DB에서 가져오기 (orders.bol_file 또는 orders.bol_files)
+    const bolData = order.bol_file ? { base64: order.bol_file, mimeType: 'application/pdf', fileName: 'BOL_PO' + (order.customer_po||'') + '.pdf' } : null;
+
+    const result = await sendShippedEmail(order, shippingInfo, plHtml, bolData);
+    if (result.ok) {
+      showToast('✅ Shipped 이메일 재발송 완료!');
+    } else {
+      showToast('❌ 재발송 실패: ' + result.error);
+    }
+  } catch(e) {
+    console.error('[resendShippedEmail]', e);
+    showToast('❌ 오류: ' + e.message);
+  }
+}
+
+// ── Return Modal (placeholder) ──────────────────────────
+function openReturnModal(orderId) {
+  showToast('🔧 Return 기능은 준비 중입니다');
 }
 
 async function printPackingListFromCard(orderId, whFilter) {
