@@ -11669,12 +11669,16 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       const allocCA = l.alloc_ca_detail || {};
       const isCA = sectionWh === 'CA';
       const activeAlloc = isCA ? allocCA : alloc;
-      const scPcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-      const caPcrPcs = Object.entries(allocCA).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-      const pcrPcs = isCA ? caPcrPcs : scPcrPcs;
-      const fullBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
-      // 이 창고 배분 총 pcs = full box pcs + partial pcs
-      const whTotalPcs = fullBoxes * ppb + pcrPcs;
+      // WH bin pcs: v.pcs 직접 사용 (v.boxes*ppb는 partial 누락 버그 있음)
+      const pcrPcs = Object.entries(activeAlloc)
+        .filter(([k])=>k.includes('PCR|PCR'))
+        .reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0), 0);
+      const fullBinEntries = Object.entries(activeAlloc)
+        .filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|'));
+      const fullBoxes = fullBinEntries.reduce((s,[,v])=>s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
+      // v.pcs가 있으면 직접 사용, 없으면 boxes*ppb fallback
+      const fullPcs = fullBinEntries.reduce((s,[,v])=>s+(typeof v==='object'?(v.pcs||v.boxes*ppb||0):(v||0)),0);
+      const whTotalPcs = fullPcs + pcrPcs;
       if (whTotalPcs === 0) return '';
       const pcrDisplay = pcrPcs > 0 ? pcrPcs + ' pcs' : '—';
       return `<tr style="border-bottom:1px solid #f3f4f6;">
@@ -11691,9 +11695,9 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       const ppb = l.pcs_per_box || 60;
       const isCA = sectionWh === 'CA';
       const activeAlloc = isCA ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
-      const fBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
       const pPcs = Object.entries(activeAlloc).filter(([k])=>k.includes('PCR|PCR')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.pcs||0:v||0),0);
-      return s + fBoxes * ppb + pPcs;
+      const fPcs = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'?(v.pcs||v.boxes*ppb||0):(v||0)),0);
+      return s + fPcs + pPcs;
     }, 0);
     const totalBoxes = sorted.reduce((s,l) => {
       const ppb = l.pcs_per_box || 60;
@@ -12222,13 +12226,28 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     if (!sectionLines.length) return '';
     const freight = freightAmt || 0;
     const invNo = invoiceNum ? invoiceNum + (suffix||'') : '—';
+    // suffix로 현재 섹션 WH 판단: '-SC' → SC, '-CA' → CA, '' → 싱글WH
+    const sectionWh = suffix === '-CA' ? 'CA' : 'SC';
+
+    // SC&CA 라인의 shipped qty: alloc pcs 기준 (WH별로 정확히 분리)
+    const getWhShippedQty = (l) => {
+      if (l.wh === 'SC&CA') {
+        const activeAlloc = sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+        const ppb = l.pcs_per_box || 60;
+        return Object.entries(activeAlloc)
+          .filter(([k]) => !k.includes('TRANSFER|'))
+          .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs || v.boxes*ppb || 0) : (v||0)), 0);
+      }
+      return l.qty_filled || 0;
+    };
+
     const sorted = [...sectionLines]
-      .filter(l => (l.qty_filled || 0) > 0)  // shipped 수량 있는 라인만 포함
+      .filter(l => getWhShippedQty(l) > 0)  // 이 WH에서 shipped 수량 있는 라인만
       .sort((a,b) => { const ca = (a.color||'').localeCompare(b.color||''); return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size); });
     let totalOrdered = 0, totalShipped = 0, totalAmt = 0;
     const rows = sorted.map(l => {
       const ordered = l.qty_pieces || 0;
-      const shipped = l.qty_filled || 0;  // qty_filled 없으면 0 (fallback X)
+      const shipped = getWhShippedQty(l);  // WH별 정확한 수량
       const price = l.unit_price || 0;
       const amt = shipped * price;
       totalOrdered += ordered; totalShipped += shipped; totalAmt += amt;
@@ -12244,7 +12263,8 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     const freightCo = (shipInfo && shipInfo.freightCarrier) || order.pickup_company || '';
     let shipViaStr = carrier || '—';
     if (carrier === 'LTL' && freightCo) shipViaStr = freightCo;
-    const whCodeInv = order.wh_code || order.warehouses?.code || 'SC';
+    // split 오더는 섹션별 WH 레이블 사용
+    const whCodeInv = isSplit ? sectionWh : (order.wh_code || order.warehouses?.code || 'SC');
     const whLabelInv = whCodeInv === 'CA' ? 'Eastvale, CA' : 'Sumter, SC';
     const trackingStr = tracking || '—';
     const billAddr = (order.bill_addr || '').replace(/\n/g, '<br>') || order.customer_name || '—';
@@ -12255,8 +12275,9 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     return `<div style="font-family:Arial,sans-serif;font-size:12px;color:#111;width:100%;"><div style="background:#111827;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;"><img src="${LOGO_B64}" style="height:44px;width:auto;"><div style="text-align:right;"><div style="color:#fff;font-size:24px;font-weight:900;letter-spacing:3px;">INVOICE</div><div style="color:#9ca3af;font-size:10px;margin-top:2px;">Page: 1</div></div></div><div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:10px 24px;display:flex;justify-content:space-between;margin-bottom:14px;"><div style="font-size:11px;color:#374151;line-height:1.6;"><div style="font-weight:700;font-size:12px;">PEACE TEXTILE AMERICA, INC.</div><div>d.b.a Pacific Sports</div><div>1605 South Guignard Parkway<br>Sumter SC 29150</div><div>Ph: (803) 760-6251</div></div><div style="font-size:11px;text-align:right;color:#374151;line-height:1.8;"><div style="font-weight:700;font-size:12px;">INV #: ${invNo}</div><div style="font-weight:700;">INVOICE DATE: ${invoiceDate}</div><div style="font-weight:700;">DUE DATE: ${dueDate}</div><div style="margin-top:6px;border-top:1px solid #d1d5db;padding-top:6px;">ORDER DATE: ${orderDate}</div><div>SHIP DATE: ${shipDate}</div></div></div><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;"><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SOLD TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'\u2014'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${billAddr}</div></div><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SHIP TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'\u2014'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${shipAddr}</div></div><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SEND PAYMENT TO:</div><div style="font-size:11px;color:#374151;line-height:1.5;">${paymentLines}</div></div></div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px;background:#f1f5f9;border-radius:6px;padding:10px;"><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Customer P.O.</div><div style="font-weight:700;font-size:13px;">${order.customer_po||'\u2014'}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'Net 30'}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Ship From</div><div style="font-weight:700;">${whLabelInv}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Ship Via</div><div style="font-weight:700;">${shipViaStr}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Tracking / PRO #</div><div style="font-weight:600;font-family:monospace;font-size:11px;">${trackingStr}</div></div></div><table style="width:100%;border-collapse:collapse;margin-bottom:0;"><thead><tr style="background:#111827;color:#fff;"><th style="padding:7px 8px;text-align:left;font-size:11px;">STYLE</th><th style="padding:7px 8px;text-align:left;font-size:11px;width:30%;">DESCRIPTION</th><th style="padding:7px 8px;text-align:center;font-size:11px;">COLOR</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SIZE</th><th style="padding:7px 8px;text-align:center;font-size:11px;">ORDERED</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SHIPPED</th><th style="padding:7px 8px;text-align:center;font-size:11px;">UNIT</th><th style="padding:7px 8px;text-align:right;font-size:11px;">PRICE</th><th style="padding:7px 8px;text-align:right;font-size:11px;">AMOUNT</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="7" style="padding:6px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td><td colspan="2" style="padding:6px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td></tr>${freight > 0 ? '<tr><td colspan="7" style="padding:4px 6px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td><td colspan="2" style="padding:4px 6px;text-align:right;">$'+ freight.toFixed(2) +'</td></tr>' : ''}<tr style="background:#111827;color:#fff;"><td colspan="7" style="padding:10px 6px;text-align:right;font-weight:700;font-size:13px;">INVOICE TOTAL:</td><td colspan="2" style="padding:10px 6px;text-align:right;font-weight:900;font-size:16px;">$${(totalAmt+freight).toFixed(2)}</td></tr><tr style="background:#f1f5f9;"><td colspan="7" style="padding:8px 6px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE:</td><td colspan="2" style="padding:8px 6px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td></tr></tfoot></table><div style="margin-top:12px;border:1px solid #e5e7eb;border-radius:6px;padding:12px;font-size:10px;color:#374151;display:flex;gap:16px;"><div style="flex:2;"><div style="font-weight:700;margin-bottom:4px;">RETURN POLICY:</div><div style="line-height:1.5;">${returnPolicy}</div></div></div></div>`;
   };
   if (isSplit) {
-    const scLines = lines.filter(l => !l.wh || l.wh === 'SC');
-    const caLines = lines.filter(l => l.wh === 'CA');
+    // SC&CA 라인은 양쪽 섹션 모두에 포함 (qty_filled는 WH별로 따로 계산 필요)
+    const scLines = lines.filter(l => !l.wh || l.wh === 'SC' || l.wh === 'SC&CA');
+    const caLines = lines.filter(l => l.wh === 'CA' || l.wh === 'SC&CA');
     return renderSection(scLines, '-SC') + (caLines.length ? '<div style="page-break-before:always;margin-top:32px;">' + renderSection(caLines, '-CA') + '</div>' : '');
   }
   return renderSection(lines, '');
