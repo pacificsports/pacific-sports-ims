@@ -8995,31 +8995,66 @@ async function openDefectConfirmModal(defectId) {
   _defectConfirmId = defectId;
   let modal = document.getElementById('defect-confirm-modal');
   if (!modal) {
+    // 오버레이 — 중앙 시작, 드래그 가능
     modal = document.createElement('div');
     modal.id = 'defect-confirm-modal';
-    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;align-items:center;justify-content:center;';
+    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;align-items:center;justify-content:center;';
+    modal.onclick = e => { if (e.target === modal) { modal.style.display='none'; } };
+
     modal.innerHTML = `
-      <div style="background:#fff;border-radius:12px;padding:24px;width:380px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-        <div style="font-size:15px;font-weight:700;color:#dc2626;margin-bottom:6px;">⚠️ 불량 확인 — Manager Confirm</div>
-        <div id="defect-confirm-info" style="font-size:12px;color:#6b7280;margin-bottom:16px;"></div>
-        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
-          <label style="font-size:11px;font-weight:600;color:#374151;">🔐 Manager PIN</label>
-          <input id="defect-confirm-pin" type="password" inputmode="numeric" maxlength="4"
-            style="width:100%;height:40px;border:1px solid #fca5a5;border-radius:6px;text-align:center;font-size:20px;letter-spacing:8px;font-family:'IBM Plex Mono',monospace;"
-            oninput="this.value=this.value.replace(/[^0-9]/g,'')">
-          <div id="defect-confirm-error" style="font-size:11px;color:#dc2626;"></div>
-        </div>
-        <div style="display:flex;gap:8px;">
+      <div id="defect-confirm-box" style="background:#fff;border-radius:12px;width:400px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
+        <!-- 헤더 — 드래그 핸들 + X 버튼 -->
+        <div id="defect-confirm-head" style="background:#111827;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;cursor:grab;user-select:none;">
+          <span style="color:#fff;font-size:14px;font-weight:700;">⚠️ 불량 확인 — Manager Confirm</span>
           <button onclick="document.getElementById('defect-confirm-modal').style.display='none'"
-            class="btn" style="flex:1;">취소</button>
+            style="background:none;border:none;color:#9ca3af;font-size:20px;cursor:pointer;line-height:1;padding:0;">✕</button>
+        </div>
+        <!-- 내용 -->
+        <div style="padding:20px;">
+          <div id="defect-confirm-info" style="font-size:12px;color:#374151;margin-bottom:16px;line-height:1.6;background:#f8fafc;border-radius:6px;padding:10px 12px;border:1px solid #e5e7eb;"></div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:6px;">🔐 Manager PIN</label>
+          <input id="defect-confirm-pin" type="password" inputmode="numeric" maxlength="4"
+            style="width:100%;height:44px;border:1px solid #d1d5db;border-radius:6px;text-align:center;font-size:22px;letter-spacing:10px;font-family:'IBM Plex Mono',monospace;margin-bottom:6px;"
+            oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+          <div id="defect-confirm-error" style="font-size:11px;color:#dc2626;min-height:16px;margin-bottom:14px;"></div>
           <button onclick="confirmDefect()"
-            style="flex:2;padding:10px;background:#dc2626;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">
+            style="width:100%;padding:12px;background:#111827;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:0.5px;">
             ✅ Confirm & Deduct Inventory
           </button>
         </div>
       </div>`;
     document.body.appendChild(modal);
+
+    // 드래그
+    const box = modal.querySelector('#defect-confirm-box');
+    const head = modal.querySelector('#defect-confirm-head');
+    let drag = null;
+    head.addEventListener('mousedown', e => {
+      if (e.target.closest('button')) return;
+      e.preventDefault();
+      const rect = box.getBoundingClientRect();
+      box.style.position = 'fixed';
+      box.style.left = rect.left + 'px';
+      box.style.top = rect.top + 'px';
+      box.style.margin = '0';
+      modal.style.alignItems = 'flex-start';
+      modal.style.justifyContent = 'flex-start';
+      drag = { startX: e.clientX, startY: e.clientY, origLeft: rect.left, origTop: rect.top };
+      head.style.cursor = 'grabbing';
+    });
+    document.addEventListener('mousemove', e => {
+      if (!drag) return;
+      box.style.left = Math.max(0, drag.origLeft + e.clientX - drag.startX) + 'px';
+      box.style.top = Math.max(0, drag.origTop + e.clientY - drag.startY) + 'px';
+    });
+    document.addEventListener('mouseup', () => { if (drag) { drag = null; head.style.cursor = 'grab'; } });
   }
+
+  // 열 때마다 위치 초기화 (중앙)
+  const box2 = modal.querySelector('#defect-confirm-box');
+  if (box2) { box2.style.position=''; box2.style.left=''; box2.style.top=''; box2.style.margin=''; }
+  modal.style.alignItems = 'center';
+  modal.style.justifyContent = 'center';
 
   // 불량 정보 표시
   const { data: d } = await db.from('defects').select('*').eq('id', defectId).single();
@@ -9071,7 +9106,8 @@ async function confirmDefect() {
     confirmed_at: new Date().toISOString()
   }).eq('id', _defectConfirmId);
 
-  document.getElementById('defect-confirm-modal').style.display = 'none';
+  const _dcm = document.getElementById('defect-confirm-modal');
+  if (_dcm) { _dcm.style.display='none'; }
   showToast('✅ 불량 확인 완료 — ' + d.total_qty + 'pcs 재고 차감 (' + emp.name + ')');
 
   // 카드 새로고침 (배지 즉시 제거)
@@ -14420,10 +14456,25 @@ function showToast(msg) {
 }
 
 // ── 새 오더 알람 사운드 (띠딩띠딩 — 더 길게)
+// ── 공유 AudioContext — 첫 클릭 시 unlock
+let _sharedAudioCtx = null;
+function _getAudioCtx() {
+  if (!_sharedAudioCtx) {
+    _sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (_sharedAudioCtx.state === 'suspended') {
+    _sharedAudioCtx.resume();
+  }
+  return _sharedAudioCtx;
+}
+// 첫 번째 사용자 클릭/터치 시 AudioContext 미리 unlock
+document.addEventListener('click', () => _getAudioCtx(), { once: false });
+document.addEventListener('keydown', () => _getAudioCtx(), { once: false });
+
 // ── Emergency Transfer 알림음 (빠른 3연타 — 긴박함)
 function playEmergencyAlert() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _getAudioCtx();
     const now = ctx.currentTime;
     // 낮고 빠른 3연타 비프
     [[0.00, 440], [0.18, 440], [0.36, 440],
@@ -14444,7 +14495,7 @@ function playEmergencyAlert() {
 // ── 불량 알림음 (낮은 경고음 2번 — 주의)
 function playDefectAlert() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _getAudioCtx();
     const now = ctx.currentTime;
     // 낮고 무거운 2번 경고
     [[0.0, 220], [0.5, 180]].forEach(([t, freq]) => {
