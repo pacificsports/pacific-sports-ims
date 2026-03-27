@@ -1951,6 +1951,8 @@ async function startAppWithEmployee(emp) {
   // 빌딩 알람 워치 시작
   updateBuildingUI();
   startUrgentAlarmWatch();
+  // Emergency Transfer 폴링 시작
+  startEmergencyPolling();
 
   setTimeout(() => {
     const allowedPanels = ROLE_TABS[emp.role] || ROLE_TABS.staff;
@@ -5274,6 +5276,7 @@ async function loadOrderStatus() {
           ${pcrBtn}
           ${plReadyBtn}
           ${reprintBtn}
+          <button class="btn btn-sm" style="width:100%;font-size:10px;background:#fef2f2;color:#dc2626;border-color:#fca5a5;font-weight:700;" onclick="event.stopPropagation();openEmergencyTransferRequest('${o.id}','${wh}')">🚨 Emergency Box Request</button>
           <button class="btn btn-sm" style="width:100%;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();rollbackStatus('${o.id}','${wh}','preparing','po_entered')">↩ Back to PO Entered</button>
         </div>`;
       })():''}
@@ -7088,15 +7091,15 @@ function renderPcrBoxes() {
         + '<div id="pcr-defect-row-'+bi+'-'+ii+'" style="display:none;padding:8px 14px 10px;background:#fef2f2;gap:8px;align-items:center;flex-wrap:wrap;">'
         + '<span style="font-size:11px;font-weight:700;color:#dc2626;">⚠️ 불량</span>'
         + '<div style="display:flex;align-items:center;gap:6px;">'
-        + '<span style="font-size:10px;color:#6b7280;font-weight:600;">Total</span>'
-        + '<input type="number" min="0" value="0" id="'+defectId+'" style="width:48px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;" oninput="pcrDefectStyle(this)">'
+        + '<span style="font-size:10px;color:#6b7280;">Shade</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'-'+ii+'" oninput="pcrSumDefect(\''+defectId+'\',\'pcr-shade-box-'+bi+'-'+ii+'\',\'pcr-hole-box-'+bi+'-'+ii+'\',\'pcr-stain-box-'+bi+'-'+ii+'\',\'pcr-other-box-'+bi+'-'+ii+'\')" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Hole</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'-'+ii+'" oninput="pcrSumDefect(\''+defectId+'\',\'pcr-shade-box-'+bi+'-'+ii+'\',\'pcr-hole-box-'+bi+'-'+ii+'\',\'pcr-stain-box-'+bi+'-'+ii+'\',\'pcr-other-box-'+bi+'-'+ii+'\')" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Stain</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'-'+ii+'" oninput="pcrSumDefect(\''+defectId+'\',\'pcr-shade-box-'+bi+'-'+ii+'\',\'pcr-hole-box-'+bi+'-'+ii+'\',\'pcr-stain-box-'+bi+'-'+ii+'\',\'pcr-other-box-'+bi+'-'+ii+'\')" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
+        + '<span style="font-size:10px;color:#6b7280;">Other</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'-'+ii+'" oninput="pcrSumDefect(\''+defectId+'\',\'pcr-shade-box-'+bi+'-'+ii+'\',\'pcr-hole-box-'+bi+'-'+ii+'\',\'pcr-stain-box-'+bi+'-'+ii+'\',\'pcr-other-box-'+bi+'-'+ii+'\')" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
+        + '<input type="text" id="pcr-other-note-box-'+bi+'-'+ii+'" placeholder="이유..." style="width:90px;height:28px;border:1px solid #fecaca;border-radius:4px;padding:0 6px;font-size:11px;">'
         + '</div>'
         + '<div style="display:flex;align-items:center;gap:6px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Shade</span><input type="number" min="0" value="0" id="pcr-shade-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Hole</span><input type="number" min="0" value="0" id="pcr-hole-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Stain</span><input type="number" min="0" value="0" id="pcr-stain-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
-        + '<span style="font-size:10px;color:#6b7280;">Other</span><input type="number" min="0" value="0" id="pcr-other-box-'+bi+'-'+ii+'" style="width:44px;height:28px;border:1px solid #fecaca;border-radius:4px;text-align:center;font-size:12px;">'
-        + '<input type="text" id="pcr-other-note-box-'+bi+'-'+ii+'" placeholder="이유..." style="width:90px;height:28px;border:1px solid #fecaca;border-radius:4px;padding:0 6px;font-size:11px;">'
+        + '<span style="font-size:10px;color:#6b7280;font-weight:600;">Total</span>'
+        + '<input type="number" min="0" value="0" id="'+defectId+'" readonly style="width:48px;height:28px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;background:#fff5f5;cursor:default;">'
         + '</div>'
         + '</div>'
         + '</div>';
@@ -7190,12 +7193,11 @@ function renderPcrBoxesGrid() {
   // 박스 수 (+ 추가 버튼용 빈 박스 슬롯)
   const numBoxes = boxes.length;
 
-  // 헤더 행
+  // 헤더 행 - Total Qty를 박스들 뒤로
   let headerCells = `
     <th style="padding:8px 10px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Style</th>
     <th style="padding:8px 10px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;">Color</th>
-    <th style="padding:8px 10px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;">Size</th>
-    <th style="padding:8px 10px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;white-space:nowrap;">Total Qty</th>`;
+    <th style="padding:8px 10px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e5e7eb;">Size</th>`;
   for (let bi = 0; bi < numBoxes; bi++) {
     const boxTotal = boxes[bi].items.reduce((s,i) => s+(i.qty||0), 0);
     const overMax = boxTotal > PARTIAL_BOX_MAX;
@@ -7437,6 +7439,46 @@ function pcrGridKeyNav(e, bi, rowIdx, numBoxes, numRows) {
     if (nextEl) { nextEl.focus(); nextEl.select(); }
   }
 }
+
+function pcrSumDefect(totalId, shadeId, holeId, stainId, otherId) {
+  const total = (parseInt(document.getElementById(shadeId)?.value)||0)
+              + (parseInt(document.getElementById(holeId)?.value)||0)
+              + (parseInt(document.getElementById(stainId)?.value)||0)
+              + (parseInt(document.getElementById(otherId)?.value)||0);
+  const el = document.getElementById(totalId);
+  if (!el) return;
+  el.value = total;
+  el.style.color = total > 0 ? '#dc2626' : '#9ca3af';
+  el.style.borderColor = total > 0 ? '#fca5a5' : '#e5e7eb';
+  el.style.background = total > 0 ? '#fff5f5' : '#f9fafb';
+}
+
+function pcrSumDefect(totalId, shadeId, holeId, stainId, otherId) {
+  const shade = parseInt(document.getElementById(shadeId)?.value)||0;
+  const hole  = parseInt(document.getElementById(holeId)?.value)||0;
+  const stain = parseInt(document.getElementById(stainId)?.value)||0;
+  const other = parseInt(document.getElementById(otherId)?.value)||0;
+  const total = shade + hole + stain + other;
+  const totalEl = document.getElementById(totalId);
+  if (totalEl) {
+    totalEl.value = total;
+    totalEl.style.color = total > 0 ? '#dc2626' : '#9ca3af';
+  }
+}
+
+function calcDefectTotal(bi, ii) {
+  const shade = parseInt(document.getElementById('pcr-shade-box-'+bi+'-'+ii)?.value)||0;
+  const hole  = parseInt(document.getElementById('pcr-hole-box-'+bi+'-'+ii)?.value)||0;
+  const stain = parseInt(document.getElementById('pcr-stain-box-'+bi+'-'+ii)?.value)||0;
+  const other = parseInt(document.getElementById('pcr-other-box-'+bi+'-'+ii)?.value)||0;
+  const total = shade + hole + stain + other;
+  const totalEl = document.getElementById('pcr-defect-box-'+bi+'-'+ii);
+  if (totalEl) {
+    totalEl.value = total;
+    totalEl.style.color = total > 0 ? '#dc2626' : '#9ca3af';
+  }
+}
+
 
 function pcrDefectStyle(el) {
   const v = parseInt(el.value) || 0;
@@ -8022,6 +8064,373 @@ let _bolDrawing = false;
 let _bolHasSig = false;
 let _bolOrder = null;
 let _bolLines = null;
+
+// ══════════════════════════════════════════════
+// EMERGENCY TRANSFER SYSTEM
+// ══════════════════════════════════════════════
+let _emergencyTransferId = null;
+let _emergencyRequestEmp = null;
+let _emergencyManagerEmp = null;
+
+async function openEmergencyTransferRequest(orderId, wh) {
+  _emergencyRequestEmp = null;
+  document.getElementById('emergency-request-pin').value = '';
+  document.getElementById('emergency-request-pin-error').textContent = '';
+  document.getElementById('emergency-request-emp-info').style.display = 'none';
+  document.getElementById('emergency-request-btn').disabled = true;
+
+  const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
+  const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+  if (!order || !lines) return;
+
+  document.getElementById('emergency-request-info').innerHTML =
+    `<b>${order.customer_name}</b> &nbsp;|&nbsp; PO# ${order.customer_po||'—'} &nbsp;|&nbsp; ${wh}`;
+
+  const isSplit = order.is_split_warehouse || order.wh_code === 'SC&CA';
+  const filteredLines = isSplit
+    ? lines.filter(l => wh === 'CA' ? (l.wh==='CA'||l.wh==='SC&CA') : (l.wh==='SC'||l.wh==='SC&CA'||!l.wh))
+    : lines;
+
+  const linesHtml = filteredLines.map((l, i) => {
+    const styleNum = l.styles?.style_number || '';
+    const ppb = l.pcs_per_box || 72;
+    const boxes = Math.floor((l.qty_pieces||0) / ppb);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;">
+      <input type="checkbox" id="emg-chk-${i}" data-line-id="${l.id}" data-style="${styleNum}" data-color="${l.color||''}" data-size="${l.size||''}" data-ppb="${ppb}"
+        style="width:16px;height:16px;accent-color:#dc2626;cursor:pointer;">
+      <label for="emg-chk-${i}" style="cursor:pointer;flex:1;">
+        <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:#1e3a8a;">${styleNum}</span>
+        <span style="font-size:12px;color:#374151;margin:0 8px;">${l.color||''}</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:13px;color:#1e3a8a;">${l.size||''}</span>
+      </label>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <input type="number" min="1" value="1" id="emg-qty-${i}" style="width:50px;height:28px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-size:13px;font-weight:700;">
+        <span style="font-size:11px;color:#6b7280;">박스</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('emergency-request-lines').innerHTML = linesHtml || '<div style="color:#9ca3af;text-align:center;padding:20px;">라인 없음</div>';
+  document.getElementById('emergency-request-lines').dataset.orderId = orderId;
+  document.getElementById('emergency-request-lines').dataset.wh = wh;
+  document.getElementById('emergency-request-modal').style.display = 'flex';
+}
+
+async function verifyEmergencyRequestPin() {
+  const pin = document.getElementById('emergency-request-pin').value;
+  if (pin.length < 4) return;
+  if (_pinEmployees.length === 0) await loadPinEmployees();
+  const emp = _pinEmployees.find(e => e.pin === pin);
+  if (!emp) {
+    document.getElementById('emergency-request-pin-error').textContent = '❌ PIN 오류';
+    document.getElementById('emergency-request-btn').disabled = true;
+    _emergencyRequestEmp = null;
+    return;
+  }
+  _emergencyRequestEmp = emp;
+  document.getElementById('emergency-request-pin-error').textContent = '';
+  document.getElementById('emergency-request-emp-info').style.display = 'block';
+  document.getElementById('emergency-request-emp-info').textContent = '✅ ' + emp.name;
+  document.getElementById('emergency-request-btn').disabled = false;
+}
+
+async function submitEmergencyRequest() {
+  if (!_emergencyRequestEmp) return;
+  const container = document.getElementById('emergency-request-lines');
+  const orderId = container.dataset.orderId;
+  const wh = container.dataset.wh;
+
+  const checkboxes = container.querySelectorAll('input[type=checkbox]:checked');
+  if (!checkboxes.length) { alert('아이템을 선택하세요.'); return; }
+
+  const items = Array.from(checkboxes).map((cb, i) => {
+    const idx = cb.id.replace('emg-chk-', '');
+    const qty = parseInt(document.getElementById('emg-qty-'+idx)?.value) || 1;
+    return {
+      lineId: cb.dataset.lineId,
+      styleNum: cb.dataset.style,
+      color: cb.dataset.color,
+      size: cb.dataset.size,
+      ppb: parseInt(cb.dataset.ppb) || 72,
+      boxes: qty,
+      binId: null // Manager가 지정
+    };
+  });
+
+  const { data: order } = await db.from('orders').select('customer_name,customer_po').eq('id', orderId).single();
+
+  const { data: transfer, error } = await db.from('emergency_transfers').insert({
+    order_id: orderId,
+    order_customer: order?.customer_name || '',
+    order_po: order?.customer_po || '',
+    wh,
+    requested_by: _emergencyRequestEmp.name,
+    status: 'pending',
+    items
+  }).select().single();
+
+  if (error) { alert('요청 실패: ' + error.message); return; }
+
+  document.getElementById('emergency-request-modal').style.display = 'none';
+  showToast('🚨 Emergency 요청 전송 완료 — Manager 승인 대기중');
+
+  // Manager 화면에 실시간 알림 (같은 페이지면 바로 팝업)
+  _checkEmergencyPending();
+}
+
+// ── Manager: pending 요청 폴링 ──
+let _emergencyPollInterval = null;
+function startEmergencyPolling() {
+  if (_emergencyPollInterval) return;
+  _emergencyPollInterval = setInterval(_checkEmergencyPending, 8000);
+  _checkEmergencyPending();
+}
+
+async function _checkEmergencyPending() {
+  const { data } = await db.from('emergency_transfers')
+    .select('*').eq('status', 'pending').order('requested_at', { ascending: false });
+  if (!data || !data.length) return;
+
+  // 이미 열려있으면 skip
+  if (document.getElementById('emergency-manager-modal').style.display === 'flex') return;
+
+  // 가장 최근 pending 표시
+  openEmergencyManagerReview(data[0]);
+}
+
+async function openEmergencyManagerReview(transfer) {
+  _emergencyTransferId = transfer.id;
+  _emergencyManagerEmp = null;
+  document.getElementById('emergency-manager-pin').value = '';
+  document.getElementById('emergency-manager-pin-error').textContent = '';
+  document.getElementById('emergency-manager-emp-info').style.display = 'none';
+  document.getElementById('emergency-manager-btn').disabled = true;
+
+  document.getElementById('emergency-manager-info').innerHTML =
+    `<b>${transfer.order_customer}</b> &nbsp;|&nbsp; PO# ${transfer.order_po||'—'} &nbsp;|&nbsp; ${transfer.wh} &nbsp;|&nbsp; 요청자: ${transfer.requested_by}`;
+
+  // WH 재고 로드
+  const { data: inv } = await db.from('inventory')
+    .select('id,location,qty_on_hand,qty_committed,styles(style_number),warehouses(code)')
+    .gt('qty_on_hand', 0);
+
+  const items = transfer.items || [];
+  const linesHtml = items.map((item, i) => {
+    const whInv = (inv||[]).filter(iv =>
+      iv.warehouses?.code === transfer.wh &&
+      iv.styles?.style_number === item.styleNum &&
+      iv.qty_on_hand > 0
+    );
+    const binOptions = whInv.map(iv =>
+      `<option value="${iv.id}" data-qty="${iv.qty_on_hand}" data-loc="${iv.location}">${iv.location} (${iv.qty_on_hand}pcs)</option>`
+    ).join('');
+
+    return `<div style="padding:10px 0;border-bottom:1px solid #f3f4f6;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:#1e3a8a;">${item.styleNum}</span>
+        <span style="font-size:12px;color:#374151;">${item.color}</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:13px;color:#1e3a8a;">${item.size}</span>
+        <span style="font-size:11px;color:#6b7280;margin-left:auto;">요청: ${item.boxes}박스</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <select id="emg-mgr-bin-${i}" style="flex:1;height:32px;border:1px solid #d1d5db;border-radius:6px;padding:0 8px;font-size:12px;">
+          <option value="">← Bin 선택</option>
+          ${binOptions}
+        </select>
+        <input type="number" min="1" value="${item.boxes}" id="emg-mgr-qty-${i}"
+          style="width:56px;height:32px;border:1px solid #d1d5db;border-radius:6px;text-align:center;font-size:13px;font-weight:700;">
+        <span style="font-size:11px;color:#6b7280;">박스</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('emergency-manager-lines').innerHTML = linesHtml;
+  document.getElementById('emergency-manager-lines').dataset.items = JSON.stringify(items);
+  document.getElementById('emergency-manager-modal').style.display = 'flex';
+}
+
+async function verifyEmergencyManagerPin() {
+  const pin = document.getElementById('emergency-manager-pin').value;
+  if (pin.length < 4) return;
+  if (_pinEmployees.length === 0) await loadPinEmployees();
+  const emp = _pinEmployees.find(e => e.pin === pin && (e.role === 'manager' || e.role === 'admin'));
+  if (!emp) {
+    document.getElementById('emergency-manager-pin-error').textContent = '❌ Manager PIN 오류';
+    document.getElementById('emergency-manager-btn').disabled = true;
+    _emergencyManagerEmp = null;
+    return;
+  }
+  _emergencyManagerEmp = emp;
+  document.getElementById('emergency-manager-pin-error').textContent = '';
+  document.getElementById('emergency-manager-emp-info').style.display = 'block';
+  document.getElementById('emergency-manager-emp-info').textContent = '✅ ' + emp.name;
+  document.getElementById('emergency-manager-btn').disabled = false;
+}
+
+async function approveEmergencyTransfer() {
+  if (!_emergencyManagerEmp || !_emergencyTransferId) return;
+
+  const items = JSON.parse(document.getElementById('emergency-manager-lines').dataset.items || '[]');
+  const approvedItems = items.map((item, i) => {
+    const binSel = document.getElementById(`emg-mgr-bin-${i}`);
+    const qty = parseInt(document.getElementById(`emg-mgr-qty-${i}`)?.value) || item.boxes;
+    const opt = binSel?.selectedOptions[0];
+    return {
+      ...item,
+      boxes: qty,
+      binId: binSel?.value || null,
+      binLocation: opt?.dataset.loc || '',
+      binQty: parseInt(opt?.dataset.qty) || 0
+    };
+  });
+
+  if (approvedItems.some(i => !i.binId)) {
+    alert('모든 아이템의 Bin을 선택해주세요.');
+    return;
+  }
+
+  await db.from('emergency_transfers').update({
+    status: 'approved',
+    items: approvedItems,
+    approved_by: _emergencyManagerEmp.name,
+    approved_at: new Date().toISOString()
+  }).eq('id', _emergencyTransferId);
+
+  document.getElementById('emergency-manager-modal').style.display = 'none';
+  showToast('✅ Approved — WH에 전달됨');
+
+  // WH 화면에 바로 팝업
+  _checkEmergencyApproved();
+}
+
+// ── WH: approved 요청 폴링 ──
+async function _checkEmergencyApproved() {
+  const { data } = await db.from('emergency_transfers')
+    .select('*').eq('status', 'approved').order('approved_at', { ascending: false });
+  if (!data || !data.length) return;
+  if (document.getElementById('emergency-wh-modal').style.display === 'flex') return;
+  openEmergencyWhModal(data[0]);
+}
+
+function openEmergencyWhModal(transfer) {
+  _emergencyTransferId = transfer.id;
+  document.getElementById('emergency-wh-info').innerHTML =
+    `<b>${transfer.order_customer}</b> &nbsp;|&nbsp; PO# ${transfer.order_po||'—'} &nbsp;|&nbsp; Approved by: ${transfer.approved_by}`;
+
+  const items = transfer.items || [];
+  const linesHtml = items.map(item => `
+    <div style="display:flex;align-items:center;gap:12px;padding:12px;background:#fff5f5;border-radius:8px;margin-bottom:8px;border:1px solid #fca5a5;">
+      <div style="font-size:28px;">📦</div>
+      <div style="flex:1;">
+        <div style="font-weight:800;font-size:14px;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;">${item.styleNum} &nbsp; ${item.color} &nbsp; ${item.size}</div>
+        <div style="font-size:13px;color:#374151;margin-top:2px;"><b>${item.boxes}</b> 박스 (${(item.boxes * item.ppb)}pcs)</div>
+        <div style="font-size:13px;font-weight:700;color:#dc2626;margin-top:2px;">📍 ${item.binLocation} → PCR</div>
+      </div>
+    </div>
+  `).join('');
+
+  document.getElementById('emergency-wh-lines').innerHTML = linesHtml;
+  document.getElementById('emergency-wh-lines').dataset.transfer = JSON.stringify(transfer);
+  document.getElementById('emergency-wh-modal').style.display = 'flex';
+}
+
+function printEmergencyPickTicket() {
+  const transfer = JSON.parse(document.getElementById('emergency-wh-lines').dataset.transfer || '{}');
+  const items = transfer.items || [];
+  const now = new Date().toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+
+  const html = `<!DOCTYPE html><html><head><title>Emergency Pick Ticket</title>
+  <style>
+    body { font-family: 'IBM Plex Mono', monospace; margin: 20px; }
+    .header { background: #dc2626; color: #fff; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+    .title { font-size: 20px; font-weight: 900; }
+    .sub { font-size: 12px; margin-top: 4px; opacity: 0.9; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th { background: #1e3a8a; color: #fff; padding: 8px 12px; font-size: 11px; text-align: left; }
+    td { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; font-size: 13px; }
+    .bin { color: #dc2626; font-weight: 900; font-size: 16px; }
+    .urgent { color: #dc2626; font-weight: 700; text-align: center; margin: 16px 0; font-size: 14px; border: 2px solid #dc2626; padding: 8px; border-radius: 6px; }
+  </style></head><body>
+  <div class="header">
+    <div class="title">🚨 URGENT — Emergency Pick Ticket</div>
+    <div class="sub">${transfer.order_customer} | PO# ${transfer.order_po||'—'} | ${transfer.wh} | ${now}</div>
+  </div>
+  <div class="urgent">⚠️ PRIORITY — PCR ROOM WAITING</div>
+  <table>
+    <thead><tr>
+      <th>BIN LOCATION</th><th>STYLE</th><th>COLOR</th><th>SIZE</th><th>BOXES</th><th>PCS</th>
+    </tr></thead>
+    <tbody>
+      ${items.map(item => `<tr>
+        <td class="bin">${item.binLocation}</td>
+        <td>${item.styleNum}</td>
+        <td>${item.color}</td>
+        <td style="font-weight:800;">${item.size}</td>
+        <td style="font-weight:700;">${item.boxes}</td>
+        <td>${item.boxes * item.ppb}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+  <div style="margin-top:20px;font-size:11px;color:#6b7280;">Approved by: ${transfer.approved_by} | Requested by: ${transfer.requested_by}</div>
+  <script>window.onload=()=>window.print();</script>
+  </body></html>`;
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
+async function completeEmergencyTransfer() {
+  if (!_emergencyTransferId) return;
+  const transfer = JSON.parse(document.getElementById('emergency-wh-lines').dataset.transfer || '{}');
+  const items = transfer.items || [];
+
+  // 재고 처리: WH bin 차감, PCR 증가
+  const { data: inv } = await db.from('inventory').select('id,location,qty_on_hand,qty_committed,warehouses(code)');
+  const pcrWh = transfer.wh === 'CA' ? 'CA-PCR' : 'SC-PCR';
+  const { data: pcrInv } = await db.from('inventory').select('id,qty_on_hand,warehouses(code),styles(style_number)');
+
+  for (const item of items) {
+    const pcs = item.boxes * (item.ppb || 72);
+    // WH bin 차감
+    const whBin = (inv||[]).find(iv => iv.id === item.binId);
+    if (whBin) {
+      await db.from('inventory').update({
+        qty_on_hand: Math.max(0, (whBin.qty_on_hand||0) - pcs)
+      }).eq('id', whBin.id);
+    }
+    // PCR 재고 증가 (해당 스타일/사이즈 PCR bin)
+    const pcrBin = (pcrInv||[]).find(iv =>
+      iv.warehouses?.code === pcrWh &&
+      iv.styles?.style_number === item.styleNum
+    );
+    if (pcrBin) {
+      await db.from('inventory').update({
+        qty_on_hand: (pcrBin.qty_on_hand||0) + pcs
+      }).eq('id', pcrBin.id);
+    }
+  }
+
+  // 상태 업데이트
+  await db.from('emergency_transfers').update({
+    status: 'completed',
+    completed_at: new Date().toISOString()
+  }).eq('id', _emergencyTransferId);
+
+  document.getElementById('emergency-wh-modal').style.display = 'none';
+  showToast('✅ Emergency Transfer 완료 — 재고 업데이트됨');
+  loadOrderStatus();
+}
+
+async function openEmergencyManagerReviewById(transferId) {
+  const { data } = await db.from('emergency_transfers').select('*').eq('id', transferId).single();
+  if (data) openEmergencyManagerReview(data);
+}
+
+async function openEmergencyWhModalById(transferId) {
+  const { data } = await db.from('emergency_transfers').select('*').eq('id', transferId).single();
+  if (data) openEmergencyWhModal(data);
+}
 
 async function openPcrTransferConfirm(orderId, wh) {
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
@@ -15265,6 +15674,81 @@ function showCreditHoldFlash(overAmt) {
 }
 
 </script>
+
+<!-- ── Emergency Transfer Request Modal (PC Room) ── -->
+<div id="emergency-request-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(560px,95vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:18px 24px 14px;border-bottom:1px solid #e5e7eb;background:#fef2f2;border-radius:14px 14px 0 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:16px;font-weight:800;color:#dc2626;">🚨 Emergency Box Request</div>
+        <button tabindex="-1" onclick="document.getElementById('emergency-request-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+      </div>
+      <div id="emergency-request-info" style="font-size:12px;color:#374151;margin-top:4px;"></div>
+    </div>
+    <div style="padding:16px 24px;overflow-y:auto;flex:1;">
+      <div style="font-size:12px;color:#6b7280;margin-bottom:10px;">필요한 아이템을 선택하세요:</div>
+      <div id="emergency-request-lines"></div>
+    </div>
+    <div style="padding:14px 24px;border-top:1px solid #e5e7eb;background:#fff;border-radius:0 0 14px 14px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <label style="font-size:11px;font-weight:600;color:#374151;white-space:nowrap;">요청자 PIN <span style="color:#dc2626">*</span></label>
+        <input id="emergency-request-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:110px;text-align:center;" oninput="if(this.value.length===4) verifyEmergencyRequestPin()">
+        <div id="emergency-request-pin-error" style="color:#dc2626;font-size:11px;"></div>
+        <div id="emergency-request-emp-info" style="display:none;font-size:11px;color:#15803d;font-weight:600;"></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn" onclick="document.getElementById('emergency-request-modal').style.display='none'">취소</button>
+        <button class="btn" id="emergency-request-btn" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700;" onclick="submitEmergencyRequest()" disabled>🚨 Manager에게 요청</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Emergency Transfer Manager Modal ── -->
+<div id="emergency-manager-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(620px,95vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:18px 24px 14px;border-bottom:1px solid #e5e7eb;background:#fefce8;border-radius:14px 14px 0 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:16px;font-weight:800;color:#92400e;">📋 Emergency Transfer — Manager Review</div>
+        <button tabindex="-1" onclick="document.getElementById('emergency-manager-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+      </div>
+      <div id="emergency-manager-info" style="font-size:12px;color:#374151;margin-top:4px;"></div>
+    </div>
+    <div style="padding:16px 24px;overflow-y:auto;flex:1;">
+      <div style="font-size:12px;color:#6b7280;margin-bottom:10px;">각 아이템의 WH Bin과 박스 수를 지정하세요:</div>
+      <div id="emergency-manager-lines"></div>
+    </div>
+    <div style="padding:14px 24px;border-top:1px solid #e5e7eb;background:#fff;border-radius:0 0 14px 14px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <label style="font-size:11px;font-weight:600;color:#374151;white-space:nowrap;">Manager PIN <span style="color:#dc2626">*</span></label>
+        <input id="emergency-manager-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:110px;text-align:center;" oninput="if(this.value.length===4) verifyEmergencyManagerPin()">
+        <div id="emergency-manager-pin-error" style="color:#dc2626;font-size:11px;"></div>
+        <div id="emergency-manager-emp-info" style="display:none;font-size:11px;color:#15803d;font-weight:600;"></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn" onclick="document.getElementById('emergency-manager-modal').style.display='none'">닫기</button>
+        <button class="btn" id="emergency-manager-btn" style="background:#d97706;color:#fff;border-color:#d97706;font-weight:700;" onclick="approveEmergencyTransfer()" disabled>✅ Approve & Send to WH</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Emergency Transfer WH Modal ── -->
+<div id="emergency-wh-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(580px,95vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);border:3px solid #dc2626;">
+    <div style="padding:18px 24px 14px;background:#dc2626;border-radius:11px 11px 0 0;">
+      <div style="font-size:18px;font-weight:900;color:#fff;">🚨 URGENT — WH Pick Request</div>
+      <div id="emergency-wh-info" style="font-size:12px;color:#fecaca;margin-top:4px;"></div>
+    </div>
+    <div style="padding:16px 24px;overflow-y:auto;flex:1;">
+      <div id="emergency-wh-lines"></div>
+    </div>
+    <div style="padding:14px 24px;border-top:1px solid #e5e7eb;background:#fff;border-radius:0 0 14px 14px;display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn" style="background:#1e3a8a;color:#fff;border-color:#1e3a8a;font-weight:700;" onclick="printEmergencyPickTicket()">🖨️ Print Pick Ticket</button>
+      <button class="btn" id="emergency-wh-btn" style="background:#15803d;color:#fff;border-color:#15803d;font-weight:700;" onclick="completeEmergencyTransfer()">✅ 완료 확인</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── Use Reserved Modal ── -->
 <div class="modal-overlay" id="modal-use-reserved" style="display:none;z-index:10000;">
