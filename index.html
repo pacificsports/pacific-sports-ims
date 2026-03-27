@@ -8091,21 +8091,41 @@ async function openEmergencyTransferRequest(orderId, wh) {
     ? lines.filter(l => wh === 'CA' ? (l.wh==='CA'||l.wh==='SC&CA') : (l.wh==='SC'||l.wh==='SC&CA'||!l.wh))
     : lines;
 
+  // PCR 현재 재고 로드
+  const pcrWhCode = wh === 'CA' ? 'CA-PCR' : 'SC-PCR';
+  const { data: pcrInvData } = await db.from('inventory')
+    .select('id,qty_on_hand,color,size,styles(style_number),warehouses(code)')
+    .eq('warehouses.code', pcrWhCode);
+
   const linesHtml = filteredLines.map((l, i) => {
     const styleNum = l.styles?.style_number || '';
     const ppb = l.pcs_per_box || 72;
-    const boxes = Math.floor((l.qty_pieces||0) / ppb);
-    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f3f4f6;">
-      <input type="checkbox" id="emg-chk-${i}" data-line-id="${l.id}" data-style="${styleNum}" data-color="${l.color||''}" data-size="${l.size||''}" data-ppb="${ppb}"
-        style="width:16px;height:16px;accent-color:#dc2626;cursor:pointer;">
-      <label for="emg-chk-${i}" style="cursor:pointer;flex:1;">
-        <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:#1e3a8a;">${styleNum}</span>
-        <span style="font-size:12px;color:#374151;margin:0 8px;">${l.color||''}</span>
-        <span style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:13px;color:#1e3a8a;">${l.size||''}</span>
-      </label>
-      <div style="display:flex;align-items:center;gap:4px;">
-        <input type="number" min="1" value="1" id="emg-qty-${i}" style="width:50px;height:28px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-size:13px;font-weight:700;">
-        <span style="font-size:11px;color:#6b7280;">박스</span>
+    const pcrBin = (pcrInvData||[]).find(iv =>
+      iv.styles?.style_number === styleNum && iv.color === l.color && iv.size === l.size
+    );
+    const pcrSystemQty = pcrBin?.qty_on_hand || 0;
+    const pcrInvId = pcrBin?.id || '';
+
+    return `<div style="border:1px solid #fecaca;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <input type="checkbox" id="emg-chk-${i}" data-line-id="${l.id}" data-style="${styleNum}" data-color="${l.color||''}" data-size="${l.size||''}" data-ppb="${ppb}" data-pcr-inv-id="${pcrInvId}" data-pcr-system-qty="${pcrSystemQty}"
+          style="width:16px;height:16px;accent-color:#dc2626;cursor:pointer;">
+        <label for="emg-chk-${i}" style="cursor:pointer;flex:1;display:flex;align-items:center;gap:8px;">
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:#1e3a8a;">${styleNum}</span>
+          <span style="font-size:12px;color:#374151;">${l.color||''}</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:13px;color:#1e3a8a;">${l.size||''}</span>
+        </label>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <input type="number" min="1" value="1" id="emg-qty-${i}" style="width:50px;height:28px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-size:13px;font-weight:700;">
+          <span style="font-size:11px;color:#6b7280;">박스 요청</span>
+        </div>
+      </div>
+      <div style="background:#fef2f2;border-radius:6px;padding:7px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span style="font-size:11px;color:#dc2626;font-weight:600;">PCR 실제 보유:</span>
+        <input type="number" min="0" value="${pcrSystemQty}" id="emg-pcr-qty-${i}"
+          style="width:64px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;">
+        <span style="font-size:11px;color:#6b7280;">pcs</span>
+        <span style="font-size:10px;color:#9ca3af;">(시스템: ${pcrSystemQty}pcs)</span>
       </div>
     </div>`;
   }).join('');
@@ -8143,9 +8163,10 @@ async function submitEmergencyRequest() {
   const checkboxes = container.querySelectorAll('input[type=checkbox]:checked');
   if (!checkboxes.length) { alert('아이템을 선택하세요.'); return; }
 
-  const items = Array.from(checkboxes).map((cb, i) => {
+  const items = Array.from(checkboxes).map((cb) => {
     const idx = cb.id.replace('emg-chk-', '');
     const qty = parseInt(document.getElementById('emg-qty-'+idx)?.value) || 1;
+    const pcrActualQty = parseInt(document.getElementById('emg-pcr-qty-'+idx)?.value) ?? parseInt(cb.dataset.pcrSystemQty) ?? 0;
     return {
       lineId: cb.dataset.lineId,
       styleNum: cb.dataset.style,
@@ -8153,6 +8174,9 @@ async function submitEmergencyRequest() {
       size: cb.dataset.size,
       ppb: parseInt(cb.dataset.ppb) || 72,
       boxes: qty,
+      pcrInvId: cb.dataset.pcrInvId || null,
+      pcrSystemQty: parseInt(cb.dataset.pcrSystemQty) || 0,
+      pcrActualQty, // PC Room이 입력한 실제 보유량
       binId: null // Manager가 지정
     };
   });
@@ -8225,13 +8249,26 @@ async function openEmergencyManagerReview(transfer) {
       `<option value="${iv.id}" data-qty="${iv.qty_on_hand}" data-loc="${iv.location}">${iv.location} (${iv.qty_on_hand}pcs)</option>`
     ).join('');
 
-    return `<div style="padding:10px 0;border-bottom:1px solid #f3f4f6;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+    return `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
         <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:#1e3a8a;">${item.styleNum}</span>
         <span style="font-size:12px;color:#374151;">${item.color}</span>
         <span style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:13px;color:#1e3a8a;">${item.size}</span>
         <span style="font-size:11px;color:#6b7280;margin-left:auto;">요청: ${item.boxes}박스</span>
       </div>
+      ${item.pcrActualQty !== undefined ? `
+      <div style="background:#fef2f2;border-radius:6px;padding:7px 10px;margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span style="font-size:11px;font-weight:700;color:#dc2626;">⚠️ PCR 실제 보유:</span>
+        <input type="number" min="0" value="${item.pcrActualQty}" id="emg-mgr-pcr-qty-${i}"
+          style="width:64px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:700;color:#dc2626;">
+        <span style="font-size:11px;color:#6b7280;">pcs</span>
+        <span style="font-size:10px;color:#9ca3af;">(시스템: ${item.pcrSystemQty||0}pcs)</span>
+        <button onclick="applyPcrActualQty(${i},'${item.pcrInvId||''}')"
+          style="height:26px;padding:0 10px;background:#dc2626;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;margin-left:4px;">
+          ✅ Apply
+        </button>
+        <span id="emg-mgr-pcr-applied-${i}" style="font-size:11px;color:#15803d;display:none;">✓ 적용됨</span>
+      </div>` : ''}
       <div style="display:flex;gap:8px;align-items:center;">
         <select id="emg-mgr-bin-${i}" style="flex:1;height:32px;border:1px solid #d1d5db;border-radius:6px;padding:0 8px;font-size:12px;">
           <option value="">← Bin 선택</option>
@@ -8247,6 +8284,16 @@ async function openEmergencyManagerReview(transfer) {
   document.getElementById('emergency-manager-lines').innerHTML = linesHtml;
   document.getElementById('emergency-manager-lines').dataset.items = JSON.stringify(items);
   document.getElementById('emergency-manager-modal').style.display = 'flex';
+}
+
+async function applyPcrActualQty(itemIdx, pcrInvId) {
+  if (!pcrInvId) { showToast('⚠️ PCR 재고 항목을 찾을 수 없어요'); return; }
+  const newQty = parseInt(document.getElementById(`emg-mgr-pcr-qty-${itemIdx}`)?.value) || 0;
+  const { error } = await db.from('inventory').update({ qty_on_hand: newQty }).eq('id', pcrInvId);
+  if (error) { showToast('❌ 적용 실패: ' + error.message); return; }
+  const appliedEl = document.getElementById(`emg-mgr-pcr-applied-${itemIdx}`);
+  if (appliedEl) appliedEl.style.display = 'inline';
+  showToast(`✅ PCR 재고 ${newQty}pcs로 업데이트됨`);
 }
 
 async function verifyEmergencyManagerPin() {
@@ -8322,9 +8369,9 @@ function openEmergencyWhModal(transfer) {
     <div style="display:flex;align-items:center;gap:12px;padding:12px;background:#fff5f5;border-radius:8px;margin-bottom:8px;border:1px solid #fca5a5;">
       <div style="font-size:28px;">📦</div>
       <div style="flex:1;">
-        <div style="font-weight:800;font-size:14px;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;">${item.styleNum} &nbsp; ${item.color} &nbsp; ${item.size}</div>
+        <div style="font-size:15px;font-weight:900;color:#dc2626;margin-bottom:4px;">📍 ${item.binLocation} → PCR</div>
+        <div style="font-weight:800;font-size:13px;color:#1e3a8a;font-family:'IBM Plex Mono',monospace;">${item.styleNum} &nbsp; ${item.color} &nbsp; ${item.size}</div>
         <div style="font-size:13px;color:#374151;margin-top:2px;"><b>${item.boxes}</b> 박스 (${(item.boxes * item.ppb)}pcs)</div>
-        <div style="font-size:13px;font-weight:700;color:#dc2626;margin-top:2px;">📍 ${item.binLocation} → PCR</div>
       </div>
     </div>
   `).join('');
@@ -8352,7 +8399,7 @@ function printEmergencyPickTicket() {
     .urgent { color: #dc2626; font-weight: 700; text-align: center; margin: 16px 0; font-size: 14px; border: 2px solid #dc2626; padding: 8px; border-radius: 6px; }
   </style></head><body>
   <div class="header">
-    <div class="title">🚨 URGENT — Emergency Pick Ticket</div>
+    <div class="title">🚨 URGENT — TRANSFER TO PC ROOM</div>
     <div class="sub">${transfer.order_customer} | PO# ${transfer.order_po||'—'} | ${transfer.wh} | ${now}</div>
   </div>
   <div class="urgent">⚠️ PRIORITY — PCR ROOM WAITING</div>
@@ -8400,15 +8447,27 @@ async function completeEmergencyTransfer() {
         qty_on_hand: Math.max(0, (whBin.qty_on_hand||0) - pcs)
       }).eq('id', whBin.id);
     }
-    // PCR 재고 증가 (해당 스타일/사이즈 PCR bin)
-    const pcrBin = (pcrInv||[]).find(iv =>
-      iv.warehouses?.code === pcrWh &&
-      iv.styles?.style_number === item.styleNum
-    );
-    if (pcrBin) {
+    // PCR 재고: pcrActualQty + 이번 transfer 수량 (pcrInvId 우선 사용)
+    const pcrPcs = item.boxes * (item.ppb || 72);
+    const pcrInvId = item.pcrInvId;
+    if (pcrInvId) {
+      // pcrActualQty가 있으면 그 값 + transfer pcs (Manager가 이미 apply했을 수도 있으니 현재 값 기준)
+      const { data: currentPcr } = await db.from('inventory').select('qty_on_hand').eq('id', pcrInvId).single();
+      const currentQty = currentPcr?.qty_on_hand || 0;
       await db.from('inventory').update({
-        qty_on_hand: (pcrBin.qty_on_hand||0) + pcs
-      }).eq('id', pcrBin.id);
+        qty_on_hand: currentQty + pcrPcs
+      }).eq('id', pcrInvId);
+    } else {
+      // fallback: style 기준으로 찾기
+      const pcrBin = (pcrInv||[]).find(iv =>
+        iv.warehouses?.code === pcrWh &&
+        iv.styles?.style_number === item.styleNum
+      );
+      if (pcrBin) {
+        await db.from('inventory').update({
+          qty_on_hand: (pcrBin.qty_on_hand||0) + pcrPcs
+        }).eq('id', pcrBin.id);
+      }
     }
   }
 
@@ -15738,7 +15797,7 @@ function showCreditHoldFlash(overAmt) {
 <div id="emergency-wh-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:99999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:14px;width:min(580px,95vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);border:3px solid #dc2626;">
     <div style="padding:18px 24px 14px;background:#dc2626;border-radius:11px 11px 0 0;">
-      <div style="font-size:18px;font-weight:900;color:#fff;">🚨 URGENT — WH Pick Request</div>
+      <div style="font-size:18px;font-weight:900;color:#fff;">🚨 URGENT — TRANSFER TO PC ROOM</div>
       <div id="emergency-wh-info" style="font-size:12px;color:#fecaca;margin-top:4px;"></div>
     </div>
     <div style="padding:16px 24px;overflow-y:auto;flex:1;">
