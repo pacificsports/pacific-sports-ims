@@ -1171,6 +1171,18 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div style="font-size:18px;font-weight:800;color:#111827;">⚙️ Settings</div>
       </div>
 
+      <!-- Inventory Committed 재계산 섹션 -->
+      <div style="background:#fff;border:1px solid #fecaca;border-radius:10px;padding:20px;margin-bottom:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div>
+            <div style="font-size:14px;font-weight:700;color:#991b1b;">🔧 Inventory Committed 재계산</div>
+            <div style="font-size:11px;color:#6b7280;margin-top:2px;">취소/삭제된 오더의 잔여 Reserved 수량을 정리합니다. Active 오더 기준으로 qty_committed를 재계산합니다.</div>
+          </div>
+          <button class="btn" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5;font-weight:700;" onclick="recalcAllCommitted()">🔄 Recalculate Committed</button>
+        </div>
+        <div id="recalc-committed-status" style="font-size:11px;color:#6b7280;"></div>
+      </div>
+
       <!-- Manager 승인 섹션 -->
       <div style="background:#fff;border:1px solid #fbbf24;border-radius:10px;padding:20px;margin-bottom:20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
@@ -5618,6 +5630,82 @@ async function loadSettings() {
   }
 }
 
+// ── Inventory Committed 재계산 ──────────────────────────
+async function recalcAllCommitted() {
+  const btn = document.querySelector('[onclick="recalcAllCommitted()"]');
+  const statusEl = document.getElementById('recalc-committed-status');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 재계산 중...'; }
+  if (statusEl) statusEl.textContent = '재고 데이터 로딩 중...';
+
+  try {
+    // 1. 모든 inventory qty_committed 0으로 리셋
+    if (statusEl) statusEl.textContent = 'Step 1/3: qty_committed 초기화 중...';
+    const { data: allInv } = await db.from('inventory').select('id').gt('qty_committed', 0);
+    const invIds = (allInv || []).map(i => i.id);
+    for (let i = 0; i < invIds.length; i += 50) {
+      const batch = invIds.slice(i, i + 50);
+      await db.from('inventory').update({ qty_committed: 0 }).in('id', batch);
+    }
+
+    // 2. Active 오더의 order_lines 가져오기
+    if (statusEl) statusEl.textContent = 'Step 2/3: Active 오더 로딩 중...';
+    const { data: activeLines } = await db.from('order_lines')
+      .select('id, order_id, color, size, qty_pieces, warehouse_id, wh, orders!inner(status)')
+      .not('orders.status', 'in', '(cancelled,completed,shipped,invoiced)');
+
+    // 3. 라인별로 committed 재예약
+    if (statusEl) statusEl.textContent = 'Step 3/3: Committed 재계산 중...';
+    let totalRecommitted = 0;
+    const lines = activeLines || [];
+
+    for (const ol of lines) {
+      if (!ol.qty_pieces || ol.qty_pieces <= 0) continue;
+
+      // SC&CA split: SC WH + CA WH 둘 다
+      const lineWh = ol.wh || 'SC';
+      const { data: warehouses } = await db.from('warehouses').select('id,code');
+      const scWh = warehouses?.find(w => w.code === 'SC');
+      const caWh = warehouses?.find(w => w.code === 'CA');
+
+      const commitWhIds = lineWh === 'SC&CA'
+        ? [scWh?.id, caWh?.id].filter(Boolean)
+        : [ol.warehouse_id].filter(Boolean);
+
+      let toCommit = ol.qty_pieces;
+      for (const cwId of commitWhIds) {
+        if (toCommit <= 0) break;
+        const { data: invRows } = await db.from('inventory')
+          .select('id, qty_on_hand, qty_committed')
+          .eq('color', (ol.color||'').toUpperCase())
+          .eq('size', (ol.size||'').toUpperCase())
+          .eq('warehouse_id', cwId)
+          .order('qty_on_hand', { ascending: false });
+        for (const inv of (invRows || [])) {
+          if (toCommit <= 0) break;
+          const avail = Math.max(0, (inv.qty_on_hand||0) - (inv.qty_committed||0));
+          const commit = Math.min(toCommit, avail);
+          if (commit > 0) {
+            await db.from('inventory').update({ qty_committed: (inv.qty_committed||0) + commit }).eq('id', inv.id);
+            toCommit -= commit;
+            totalRecommitted += commit;
+          }
+        }
+      }
+    }
+
+    if (statusEl) statusEl.innerHTML = `✅ 완료 — ${lines.length}개 라인, ${totalRecommitted.toLocaleString()} pcs re-committed. (${new Date().toLocaleTimeString()})`;
+    statusEl.style.color = '#15803d';
+    showToast(`✅ Committed 재계산 완료! ${totalRecommitted.toLocaleString()} pcs`);
+
+  } catch(e) {
+    console.error('recalcAllCommitted error:', e);
+    if (statusEl) { statusEl.textContent = '❌ 오류: ' + e.message; statusEl.style.color = '#dc2626'; }
+    showToast('❌ 오류 발생: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Recalculate Committed'; }
+  }
+}
+
 async function saveInvoiceSettings() {
   const paymentInfo = document.getElementById('settings-payment-info')?.value || '';
   const returnPolicy = document.getElementById('settings-return-policy')?.value || '';
@@ -7492,7 +7580,8 @@ function renderPcrBoxesGrid() {
     const remainColor = remaining > 0 ? '#dc2626' : remaining < 0 ? '#dc2626' : '#15803d';
     const remainBg = remaining !== 0 ? '#fef2f2' : '#f0fdf4';
     const rowId = key.replace(/[^a-zA-Z0-9]/g,'_');
-    dataRows += `<tr>
+    const defRowId = 'gd_' + rowId;
+    dataRows += `<tr id="grid-row-${rowId}">
       <td style="padding:8px 10px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;border-bottom:1px solid #f3f4f6;white-space:nowrap;">${row.styleNum}</td>
       <td style="padding:8px 10px;font-size:11px;border-bottom:1px solid #f3f4f6;white-space:nowrap;">${row.color}</td>
       <td style="padding:8px 10px;font-size:12px;font-weight:800;text-align:center;border-bottom:1px solid #f3f4f6;font-family:'IBM Plex Mono',monospace;">${row.size}</td>
@@ -7501,7 +7590,45 @@ function renderPcrBoxesGrid() {
         <div id="pcr-row-remain-${rowId}">${remaining !== 0 ? `<div style="font-size:9px;font-weight:700;color:${remainColor};background:${remainBg};border-radius:3px;padding:1px 4px;margin-top:2px;white-space:nowrap;">${remaining>0?'남은 '+remaining:'초과 '+Math.abs(remaining)}</div>` : `<div style="font-size:9px;color:#15803d;">✓ 완료</div>`}</div>
       </td>
       ${cells}
-      <td style="border-bottom:1px solid #f3f4f6;"></td>
+      <td style="padding:4px 6px;border-bottom:1px solid #f3f4f6;text-align:center;white-space:nowrap;">
+        <button onclick="toggleGridDefectRow('${rowId}')" id="grid-defect-btn-${rowId}"
+          style="font-size:10px;color:#9ca3af;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;padding:2px 7px;cursor:pointer;white-space:nowrap;">
+          ⚠️ 불량
+        </button>
+        <div id="grid-defect-badge-${rowId}" style="display:none;font-size:9px;font-weight:700;color:#dc2626;margin-top:2px;"></div>
+      </td>
+    </tr>
+    <tr id="grid-defect-row-${rowId}" style="display:none;background:#fef2f2;">
+      <td colspan="${4 + numBoxes + 1}" style="padding:8px 14px;border-bottom:1px solid #fecaca;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-size:11px;font-weight:700;color:#dc2626;">⚠️ 불량 — ${row.styleNum} ${row.color} ${row.size}</span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:10px;color:#6b7280;">Shade</span>
+            <input type="number" min="0" value="0" id="gdef-shade-${rowId}"
+              oninput="calcGridDefect('${rowId}')"
+              style="width:46px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;">
+            <span style="font-size:10px;color:#6b7280;">Hole</span>
+            <input type="number" min="0" value="0" id="gdef-hole-${rowId}"
+              oninput="calcGridDefect('${rowId}')"
+              style="width:46px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;">
+            <span style="font-size:10px;color:#6b7280;">Stain</span>
+            <input type="number" min="0" value="0" id="gdef-stain-${rowId}"
+              oninput="calcGridDefect('${rowId}')"
+              style="width:46px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;">
+            <span style="font-size:10px;color:#6b7280;">Other</span>
+            <input type="number" min="0" value="0" id="gdef-other-${rowId}"
+              oninput="calcGridDefect('${rowId}')"
+              style="width:46px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:12px;font-weight:700;">
+            <input type="text" id="gdef-note-${rowId}" placeholder="이유..."
+              style="width:90px;height:26px;border:1px solid #fca5a5;border-radius:4px;padding:0 6px;font-size:11px;">
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:10px;color:#6b7280;font-weight:600;">Total 불량</span>
+            <input type="number" min="0" value="0" id="gdef-total-${rowId}" readonly
+              style="width:50px;height:26px;border:1px solid #fca5a5;border-radius:4px;text-align:center;font-size:13px;font-weight:800;color:#dc2626;background:#fff5f5;cursor:default;">
+          </div>
+        </div>
+      </td>
     </tr>`;
   });
 
@@ -7733,6 +7860,59 @@ function pcrDefectStyle(el) {
   el.style.color = v > 0 ? '#dc2626' : '#9ca3af';
   el.style.borderColor = v > 0 ? '#fca5a5' : '#e5e7eb';
   el.style.background = v > 0 ? '#fff' : '#f9fafb';
+}
+
+// ── Grid 모드 불량 토글 / 계산 ──────────────────────────
+function toggleGridDefectRow(rowId) {
+  const row = document.getElementById('grid-defect-row-' + rowId);
+  const btn = document.getElementById('grid-defect-btn-' + rowId);
+  if (!row || !btn) return;
+  const isOpen = row.style.display !== 'none';
+  row.style.display = isOpen ? 'none' : 'table-row';
+  btn.style.background = isOpen ? '#f9fafb' : '#fef2f2';
+  btn.style.color = isOpen ? '#9ca3af' : '#dc2626';
+  btn.style.borderColor = isOpen ? '#e5e7eb' : '#fca5a5';
+}
+
+function calcGridDefect(rowId) {
+  const shade = parseInt(document.getElementById('gdef-shade-' + rowId)?.value) || 0;
+  const hole  = parseInt(document.getElementById('gdef-hole-'  + rowId)?.value) || 0;
+  const stain = parseInt(document.getElementById('gdef-stain-' + rowId)?.value) || 0;
+  const other = parseInt(document.getElementById('gdef-other-' + rowId)?.value) || 0;
+  const total = shade + hole + stain + other;
+  const totalEl = document.getElementById('gdef-total-' + rowId);
+  if (totalEl) { totalEl.value = total; totalEl.style.color = total > 0 ? '#dc2626' : '#9ca3af'; }
+  const badge = document.getElementById('grid-defect-badge-' + rowId);
+  if (badge) {
+    if (total > 0) { badge.style.display = 'block'; badge.textContent = total + ' 불량'; }
+    else { badge.style.display = 'none'; }
+  }
+  const btn = document.getElementById('grid-defect-btn-' + rowId);
+  if (btn) {
+    btn.style.color = total > 0 ? '#dc2626' : '#9ca3af';
+    btn.style.background = total > 0 ? '#fef2f2' : '#f9fafb';
+    btn.style.borderColor = total > 0 ? '#fca5a5' : '#e5e7eb';
+    btn.innerHTML = total > 0 ? `⚠️ 불량 <b>${total}</b>` : '⚠️ 불량';
+  }
+}
+
+// Grid 모드에서 불량 데이터 수집 (confirmBoxAndSave 호출 시)
+function collectGridDefects() {
+  const defects = [];
+  document.querySelectorAll('[id^="grid-defect-row-"]').forEach(row => {
+    const rowId = row.id.replace('grid-defect-row-', '');
+    const total = parseInt(document.getElementById('gdef-total-' + rowId)?.value) || 0;
+    if (total > 0) {
+      const shade = parseInt(document.getElementById('gdef-shade-' + rowId)?.value) || 0;
+      const hole  = parseInt(document.getElementById('gdef-hole-'  + rowId)?.value) || 0;
+      const stain = parseInt(document.getElementById('gdef-stain-' + rowId)?.value) || 0;
+      const other = parseInt(document.getElementById('gdef-other-' + rowId)?.value) || 0;
+      const note  = document.getElementById('gdef-note-' + rowId)?.value || '';
+      // rowId = styleNum_color_size (특수문자 → _)
+      defects.push({ rowId, shade, hole, stain, other, note, total });
+    }
+  });
+  return defects;
 }
 
 function togglePcrDefectRow(bi, ii) {
@@ -8078,17 +8258,33 @@ async function submitPcrComplete() {
 
   // 새 박스 구조에서 데이터 수집
   const boxes = window._pcrBoxes || [];
+  const isGridMode = window._pcrBoxMode === 'grid';
+
+  // Grid 모드: gdef-* 라인별 불량 / 카드 모드: pcr-defect-box-* 박스별 불량
+  const gridDefects = isGridMode ? collectGridDefects() : [];
+
   const preparedLines = _pcrCompleteLines.map(l => {
     // 박스들에서 이 size/style/color의 총 수량 합산
     const preparedQty = boxes.reduce((s, box) => {
-      return s + box.items.filter(item => item.size === l.size).reduce((ss,item) => ss+item.qty, 0);
+      return s + box.items.filter(item =>
+        item.size === l.size && (item.styleNum||'') === (l.styleNum||'') && (item.color||'') === (l.color||'')
+      ).reduce((ss,item) => ss+item.qty, 0);
     }, 0);
-    // 불량은 박스별로 수집 (같은 사이즈가 여러 박스에 걸쳐있을 수 있으니 박스 인덱스로)
-    const defectTotal = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-defect-box-'+bi)?.value||0)), 0);
-    const shade = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-shade-box-'+bi)?.value||0)), 0);
-    const hole  = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-hole-box-'+bi)?.value||0)), 0);
-    const stain = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-stain-box-'+bi)?.value||0)), 0);
-    return { ...l, preparedQty: preparedQty || l.partialQty, defectTotal, shade, hole, stain, pcrBinId: l.pcrBinId };
+
+    let defectTotal = 0, shade = 0, hole = 0, stain = 0, other = 0, defectNote = '';
+    if (isGridMode) {
+      // Grid 모드: rowId = styleNum___color___size (특수문자→_)
+      const rowId = `${l.styleNum||''}|||${l.color||''}|||${l.size||''}`.replace(/[^a-zA-Z0-9]/g,'_');
+      const gd = gridDefects.find(d => d.rowId === rowId);
+      if (gd) { defectTotal = gd.total; shade = gd.shade; hole = gd.hole; stain = gd.stain; other = gd.other; defectNote = gd.note; }
+    } else {
+      // 카드 모드: 박스별 ID에서 합산
+      defectTotal = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-defect-box-'+bi+'-0')?.value||0)), 0);
+      shade = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-shade-box-'+bi+'-0')?.value||0)), 0);
+      hole  = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-hole-box-'+bi+'-0')?.value||0)), 0);
+      stain = boxes.reduce((s, box, bi) => s + (parseInt(document.getElementById('pcr-stain-box-'+bi+'-0')?.value||0)), 0);
+    }
+    return { ...l, preparedQty: preparedQty || l.partialQty, defectTotal, shade, hole, stain, other, defectNote, pcrBinId: l.pcrBinId };
   });
 
   // PCR qty_on_hand 차감 (준비수량 + 불량수량)
