@@ -7687,6 +7687,20 @@ function renderPcrBoxesGrid() {
   const boxes = window._pcrBoxes || [];
   if (!boxes.length) { container.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;">배정할 Partial 수량 없음</div>'; return; }
 
+  // 재렌더 전 불량 입력값 저장
+  const _savedDefects = {};
+  container.querySelectorAll('[id^="gdef-shade-"]').forEach(el => {
+    const rowId = el.id.replace('gdef-shade-', '');
+    _savedDefects[rowId] = {
+      shade: document.getElementById('gdef-shade-' + rowId)?.value || '',
+      hole:  document.getElementById('gdef-hole-'  + rowId)?.value || '',
+      stain: document.getElementById('gdef-stain-' + rowId)?.value || '',
+      other: document.getElementById('gdef-other-' + rowId)?.value || '',
+      note:  document.getElementById('gdef-note-'  + rowId)?.value || '',
+      open:  document.getElementById('grid-defect-row-' + rowId)?.style.display !== 'none',
+    };
+  });
+
   const PARTIAL_BOX_QTY = 60;
   const PARTIAL_BOX_MAX = 72;  // 최대 허용 수량 (초과 시 에러)
 
@@ -7851,6 +7865,24 @@ function renderPcrBoxesGrid() {
         <tfoot><tr>${totalCells}</tr></tfoot>
       </table>
     </div>`;
+
+  // 불량 입력값 복원
+  Object.entries(_savedDefects).forEach(([rowId, v]) => {
+    const shade = document.getElementById('gdef-shade-' + rowId);
+    const hole  = document.getElementById('gdef-hole-'  + rowId);
+    const stain = document.getElementById('gdef-stain-' + rowId);
+    const other = document.getElementById('gdef-other-' + rowId);
+    const note  = document.getElementById('gdef-note-'  + rowId);
+    const row   = document.getElementById('grid-defect-row-' + rowId);
+    if (shade) shade.value = v.shade;
+    if (hole)  hole.value  = v.hole;
+    if (stain) stain.value = v.stain;
+    if (other) other.value = v.other;
+    if (note)  note.value  = v.note;
+    if (row && v.open) row.style.display = 'table-row';
+    if (v.shade || v.hole || v.stain || v.other) calcGridDefect(rowId);
+  });
+
   checkPcrChanges();
 }
 
@@ -8450,7 +8482,13 @@ async function verifyPcrCompletePin() {
 }
 
 async function submitPcrComplete() {
-  if (!_pcrCompleteEmp) return;
+  // PIN이 현재 입력칸에 있어야 진행 (지웠으면 차단)
+  const _currentPin = document.getElementById('pcr-complete-pin')?.value || '';
+  if (!_pcrCompleteEmp || _currentPin.length < 4) {
+    document.getElementById('pcr-complete-pin-error').textContent = 'PIN을 입력하세요.';
+    document.getElementById('pcr-complete-pin')?.focus();
+    return;
+  }
   const whPre = _pcrCompleteWh === 'CA' ? 'ca_' : 'sc_';
   const empName = _pcrCompleteEmp.name;
 
@@ -8999,7 +9037,8 @@ async function openDefectConfirmModal(defectId) {
     modal = document.createElement('div');
     modal.id = 'defect-confirm-modal';
     modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;align-items:center;justify-content:center;';
-    modal.onclick = e => { if (e.target === modal) { modal.style.display='none'; } };
+    modal.addEventListener('mousedown', e => { modal._bgClick = (e.target === modal); });
+    modal.onclick = e => { if (e.target === modal && modal._bgClick) { modal.style.display='none'; } };
 
     modal.innerHTML = `
       <div id="defect-confirm-box" style="background:#fff;border-radius:12px;width:400px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
@@ -9059,11 +9098,29 @@ async function openDefectConfirmModal(defectId) {
   // 불량 정보 표시
   const { data: d } = await db.from('defects').select('*').eq('id', defectId).single();
   if (!d) return;
+  // 현재 PCR 재고 조회
+  const pcrWhObj2 = warehouses.find(w => w.code === d.wh + '-PCR');
+  let currentInvQty = '?';
+  if (pcrWhObj2) {
+    const { data: invCheck } = await db.from('inventory')
+      .select('qty_on_hand')
+      .eq('warehouse_id', pcrWhObj2.id)
+      .eq('color', (d.color||'').toUpperCase())
+      .eq('size', (d.size||'').toUpperCase())
+      .eq('location', 'PCR')
+      .single();
+    if (invCheck) currentInvQty = invCheck.qty_on_hand;
+  }
+  const newInvQty = typeof currentInvQty === 'number' ? Math.max(0, currentInvQty - d.total_qty) : '?';
+
   document.getElementById('defect-confirm-info').innerHTML =
     `<b>${d.order_customer}</b> — PO# ${d.order_po||'—'}<br>
      ${d.wh} WH · ${d.style_number} ${d.color} ${d.size}<br>
      Shade:${d.shade_qty} Hole:${d.hole_qty} Stain:${d.stain_qty} Other:${d.other_qty} = <b style="color:#dc2626;">${d.total_qty} pcs</b><br>
-     보고자: ${d.reported_by} · ${new Date(d.reported_at).toLocaleString('en-US',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'})}`;
+     보고자: ${d.reported_by} · ${new Date(d.reported_at).toLocaleString('en-US',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'})}<br>
+     <span style="margin-top:6px;display:inline-block;background:#f1f5f9;border-radius:4px;padding:3px 8px;font-size:11px;color:#374151;">
+       📦 현재 재고 <b>${currentInvQty}</b> pcs &nbsp;→&nbsp; 차감 후 <b style="color:#dc2626;">${newInvQty}</b> pcs
+     </span>`;
   window._defectConfirmEmp = null;
   const pinEl = document.getElementById('defect-confirm-pin');
   const btnEl = document.getElementById('defect-confirm-btn');
@@ -18391,7 +18448,7 @@ function showCreditHoldFlash(overAmt) {
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <div style="display:flex;align-items:center;gap:8px;">
             <label style="font-size:11px;font-weight:600;color:#374151;white-space:nowrap;">담당자 PIN <span style="color:#dc2626">*</span></label>
-            <input tabindex="-1" id="pcr-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:110px;text-align:center;" oninput="if(this.value.length===4) verifyPcrCompletePin()">
+            <input tabindex="-1" id="pcr-complete-pin" class="fi" type="password" maxlength="4" inputmode="numeric" placeholder="" style="font-size:18px;letter-spacing:8px;width:110px;text-align:center;" oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4){verifyPcrCompletePin();}else{_pcrCompleteEmp=null;document.getElementById('pcr-complete-emp-info').style.display='none';document.getElementById('pcr-complete-btn').disabled=true;}">
             <div id="pcr-complete-pin-error" style="color:#dc2626;font-size:11px;"></div>
           </div>
           <div id="pcr-complete-emp-info" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 10px;font-size:12px;color:#15803d;flex:1;"></div>
