@@ -9098,19 +9098,22 @@ async function openDefectConfirmModal(defectId) {
   // 불량 정보 표시
   const { data: d } = await db.from('defects').select('*').eq('id', defectId).single();
   if (!d) return;
-  // 현재 PCR 재고 조회
-  const pcrWhObj2 = warehouses.find(w => w.code === d.wh + '-PCR');
+  // 현재 PCR 재고 조회 — warehouse 테이블에서 직접 code로 조회
   let currentInvQty = '?';
-  if (pcrWhObj2) {
-    const { data: invCheck } = await db.from('inventory')
-      .select('qty_on_hand')
-      .eq('warehouse_id', pcrWhObj2.id)
-      .eq('color', (d.color||'').toUpperCase())
-      .eq('size', (d.size||'').toUpperCase())
-      .eq('location', 'PCR')
-      .single();
-    if (invCheck) currentInvQty = invCheck.qty_on_hand;
-  }
+  try {
+    const pcrWhCode = (d.wh || 'SC') + '-PCR';
+    const { data: whRow } = await db.from('warehouses').select('id').eq('code', pcrWhCode).single();
+    if (whRow) {
+      const { data: invCheck } = await db.from('inventory')
+        .select('qty_on_hand')
+        .eq('warehouse_id', whRow.id)
+        .eq('color', (d.color||'').toUpperCase())
+        .eq('size', (d.size||'').toUpperCase())
+        .eq('location', 'PCR')
+        .single();
+      if (invCheck) currentInvQty = invCheck.qty_on_hand ?? '?';
+    }
+  } catch(e) { currentInvQty = '?'; }
   const newInvQty = typeof currentInvQty === 'number' ? Math.max(0, currentInvQty - d.total_qty) : '?';
 
   document.getElementById('defect-confirm-info').innerHTML =
