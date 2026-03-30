@@ -11934,8 +11934,14 @@ async function _doShippedCore(emp) {
   _lastShippingInfo = { carrier, tracking, freightCarrier, wh: wh || 'SC' };
 
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
-  const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
-  if (!order || !lines) return;
+  const { data: allLines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+  if (!order || !allLines) return;
+
+  // 현재 WH에 해당하는 라인만 처리
+  const isSplitOrder = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const lines = isSplitOrder
+    ? allLines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+    : allLines;
 
   const warehouses = await db.from('warehouses').select('*').then(r => r.data || []);
   const scWh = warehouses.find(w => w.code === 'SC');
@@ -12073,9 +12079,12 @@ async function _doShippedCore(emp) {
 
   // Back Order가 있으면 별도 Back Order 레코드 생성
   if (totalBackQty > 0) {
-    const boNum = order.order_number + '-BO';
+    // Split 오더면 WH별로 BO 번호 구분
+    const boNum = isSplitOrder ? order.order_number + '-BO-' + (wh||'SC') : order.order_number + '-BO';
+    const { data: existingBo } = await db.from('orders').select('id').eq('order_number', boNum).single();
+    const finalBoNum = existingBo ? boNum + '-2' : boNum;
     const { data: boOrder } = await db.from('orders').insert({
-      order_number: boNum,
+      order_number: finalBoNum,
       customer_name: order.customer_name,
       customer_po: order.customer_po,
       customer_id: order.customer_id,
@@ -12405,6 +12414,7 @@ async function sendInvoiceEmail() {
     closeModal('modal-invoice-review');
     playShippedSound();
     showToast('✅ Invoice 발송 완료!');
+    playCashRegister();
     _invoiceOrderId = null;
     _invoiceWh = null;
     // Customer POs Completed 뷰로 이동
