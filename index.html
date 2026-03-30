@@ -10603,179 +10603,197 @@ async function htmlToPdfBase64(htmlString) {
 // ══════════════════════════════════════════════════════
 function buildShippedEmailHtml(order, shippingInfo, lineItems) {
   const currentWh = shippingInfo.wh || 'SC';
-  const isSplit = lineItems.some(l => l.is_split);
+  const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const carrier = shippingInfo.carrier || '';
   const tracking = shippingInfo.tracking || '';
   const freightCarrier = shippingInfo.freightCarrier || '';
   const note = shippingInfo.note || order.ship_note || '';
   const totalBoxes = shippingInfo.total_boxes || shippingInfo.totalBoxes || '';
-
   const isLtl = carrier === 'LTL';
   const isWillCall = carrier === 'Will Call';
   const displayCarrier = isLtl && freightCarrier ? freightCarrier : carrier;
   const trackingLabel = isLtl ? 'PRO #' : 'Tracking #';
 
-  // ── 이번 배송 수량 합계 (shipped qty 기준)
+  const fmtDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : null;
+
+  // 수량 계산
   const totalScShipped = lineItems.reduce((s,l) => s + (l.sc_qty||0), 0);
   const totalCaShipped = lineItems.reduce((s,l) => s + (l.ca_qty||0), 0);
-  const totalThisShipment = currentWh === 'CA' ? totalCaShipped
-                          : isSplit ? totalScShipped + totalCaShipped
-                          : totalScShipped;
+  const totalThisShipment = currentWh === 'CA' ? totalCaShipped : totalScShipped;
   const totalPoPcs = lineItems.reduce((s,l) => s + (l.qty||0), 0);
+
+  // SC/CA status
+  const scShippedAt = order.sc_shipped_at ? fmtDate(order.sc_shipped_at.slice(0,10)) : null;
+  const caShippedAt = order.ca_shipped_at ? fmtDate(order.ca_shipped_at.slice(0,10)) : null;
+  const scStatus = scShippedAt ? `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped ${scShippedAt}</span>`
+    : order.sc_status === 'ready_to_ship' ? `<span style="color:#1e40af;">Ready to Ship</span>`
+    : order.sc_status === 'preparing' ? `<span style="color:#d97706;">Preparing</span>`
+    : `<span style="color:#6b7280;">Pending</span>`;
+  const caStatus = caShippedAt ? `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped ${caShippedAt}</span>`
+    : order.ca_status === 'ready_to_ship' ? `<span style="color:#1e40af;">Ready to Ship</span>`
+    : order.ca_status === 'preparing' ? `<span style="color:#d97706;">Preparing</span>`
+    : `<span style="color:#6b7280;">Pending</span>`;
+
+  // SC/CA backorder
+  const scBackLines = lineItems.filter(l => (l.sc_back_qty||l.back_qty||0) > 0 && (l.wh==='SC'||l.wh==='SC&CA'||!l.wh));
+  const caBackLines = lineItems.filter(l => (l.ca_back_qty||l.back_qty||0) > 0 && (l.wh==='CA'||l.wh==='SC&CA'));
+  const backLines = isSplit ? [] : lineItems.filter(l => (l.back_qty||0) > 0);
   const totalBackPcs = lineItems.reduce((s,l) => s + (l.back_qty||0), 0);
   const hasBackOrder = totalBackPcs > 0;
 
-  // Ship From label
-  const shipFromLabel = currentWh === 'CA' ? 'Eastvale, CA' : isSplit ? 'Sumter, SC + Eastvale, CA' : 'Sumter, SC';
+  // Ship date formatting
+  const shipDateStr = order.ship_date ? fmtDate(order.ship_date) : new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
 
-  // ── 배송 정보 블록
+  // Shipping info block
   const shipInfoHtml = (carrier || tracking) ? `
-    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:16px 20px;margin-bottom:20px;">
-      <div style="font-size:13px;font-weight:700;color:#0369a1;margin-bottom:10px;">🚚 Shipping Information</div>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        ${carrier ? `<tr><td style="padding:4px 0;color:#6b7280;width:140px;">Carrier</td><td style="font-weight:700;">${displayCarrier}</td></tr>` : ''}
-        ${tracking && !isWillCall ? `<tr><td style="padding:4px 0;color:#6b7280;">${trackingLabel}</td><td style="font-weight:600;font-family:monospace;">${tracking}</td></tr>` : ''}
-        ${isWillCall && shippingInfo.pickupBy ? `<tr><td style="padding:4px 0;color:#6b7280;">Picked Up By</td><td style="font-weight:600;">${shippingInfo.pickupBy}</td></tr>` : ''}
-        ${totalBoxes ? `<tr><td style="padding:4px 0;color:#6b7280;">Total Boxes</td><td style="font-weight:700;">${totalBoxes} boxes</td></tr>` : ''}
-      </table>
-    </div>` : '';
+    <table style="width:100%;border-collapse:collapse;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;margin-bottom:16px;">
+      <tr><td style="padding:12px 16px;">
+        <div style="font-size:12px;font-weight:700;color:#0369a1;margin-bottom:8px;">&#128666; Shipping Information</div>
+        <table style="border-collapse:collapse;font-size:13px;">
+          ${carrier ? `<tr><td style="padding:3px 0;color:#6b7280;width:120px;">Carrier</td><td style="font-weight:700;">${displayCarrier}</td></tr>` : ''}
+          ${tracking && !isWillCall ? `<tr><td style="padding:3px 0;color:#6b7280;">${trackingLabel}</td><td style="font-weight:600;font-family:monospace;">${tracking}</td></tr>` : ''}
+          ${totalBoxes ? `<tr><td style="padding:3px 0;color:#6b7280;">Total Boxes</td><td style="font-weight:700;">${totalBoxes} boxes</td></tr>` : ''}
+        </table>
+      </td></tr>
+    </table>` : '';
 
-  // ── 라인 테이블 컬럼 헤더
+  // Shipped from block
+  const shippedFromHtml = isSplit ? `
+    <table style="width:100%;border-collapse:collapse;background:#f0f7ff;border:1px solid #bfdbfe;border-radius:8px;margin-bottom:16px;">
+      <tr><td style="padding:12px 16px;">
+        <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:8px;">&#128230; Shipped From</div>
+        <table style="border-collapse:collapse;font-size:13px;width:100%;">
+          <tr>
+            <td style="padding:4px 0;color:#1e40af;width:14px;">&#9679;</td>
+            <td style="padding:4px 0;color:#1e40af;">SC Warehouse (Sumter, SC): <strong>${totalScShipped} pcs</strong></td>
+            <td style="padding:4px 8px;font-size:12px;">${scStatus}</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 0;color:#ea580c;">&#9679;</td>
+            <td style="padding:4px 0;color:#ea580c;">CA Warehouse (Eastvale, CA): <strong>${totalCaShipped} pcs</strong></td>
+            <td style="padding:4px 8px;font-size:12px;">${caStatus}</td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>` : `
+    <table style="width:100%;border-collapse:collapse;background:#f0f7ff;border:1px solid #bfdbfe;border-radius:8px;margin-bottom:16px;">
+      <tr><td style="padding:12px 16px;">
+        <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:4px;">&#128230; Shipped From</div>
+        <div style="font-size:13px;color:${currentWh==='CA'?'#ea580c':'#1e40af'};">
+          ${currentWh==='CA'?'CA Warehouse (Eastvale, CA)':'SC Warehouse (Sumter, SC)'}: <strong>${totalThisShipment} pcs</strong>
+        </div>
+      </td></tr>
+    </table>`;
+
+  // Backorder section - SC/CA 구분
+  const renderBackSection = (lines, label, color) => lines.length ? `
+    <table style="width:100%;border-collapse:collapse;margin-top:16px;border:2px solid #fecaca;border-radius:8px;">
+      <tr><td style="background:#fee2e2;padding:8px 16px;border-radius:6px 6px 0 0;">
+        <span style="font-size:13px;font-weight:700;color:#991b1b;">&#9888;&#65039; ${label} Back Order — ${lines.reduce((s,l)=>s+(l.back_qty||0),0)} pcs pending</span>
+      </td></tr>
+      <tr><td style="padding:0;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead><tr style="background:#fef2f2;">
+            <th style="padding:6px 10px;text-align:left;color:#991b1b;">Style</th>
+            <th style="padding:6px 10px;text-align:left;color:#991b1b;">Color</th>
+            <th style="padding:6px 10px;text-align:center;color:#991b1b;">Size</th>
+            <th style="padding:6px 10px;text-align:center;color:#991b1b;">Back Qty</th>
+          </tr></thead>
+          <tbody>${lines.map(l=>`
+            <tr style="border-top:1px solid #fef2f2;">
+              <td style="padding:5px 10px;font-weight:600;">${l.style}</td>
+              <td style="padding:5px 10px;">${l.color}</td>
+              <td style="padding:5px 10px;text-align:center;">${l.size}</td>
+              <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${l.back_qty} pcs</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </td></tr>
+      <tr><td style="padding:8px 16px;background:#fff5f5;font-size:11px;color:#991b1b;border-top:1px solid #fecaca;">
+        We will ship your remaining items as soon as inventory is available.
+      </td></tr>
+    </table>` : '';
+
+  const backOrderHtml = isSplit
+    ? renderBackSection(scBackLines, 'SC', '#1e40af') + renderBackSection(caBackLines, 'CA', '#ea580c')
+    : renderBackSection(backLines, '', '#991b1b');
+
+  // Line table
   const colHeader = isSplit
     ? `<th style="padding:8px 10px;text-align:center;color:#1e40af;font-weight:700;">SC Shipped</th>
-       <th style="padding:8px 10px;text-align:center;color:#ea580c;font-weight:700;">CA Shipped</th>`
-    : `<th style="padding:8px 10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};font-weight:700;">Shipped</th>`;
+       <th style="padding:8px 10px;text-align:center;color:#ea580c;font-weight:700;">CA Status</th>
+       <th style="padding:8px 10px;text-align:center;color:#dc2626;font-weight:600;">Back</th>`
+    : `<th style="padding:8px 10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};font-weight:700;">Shipped</th>
+       <th style="padding:8px 10px;text-align:center;color:#dc2626;font-weight:600;">Back</th>`;
 
-  // ── 라인 rows (shipped qty 있는 라인만)
-  const shippedLines = lineItems.filter(l =>
-    isSplit ? (l.sc_qty > 0 || l.ca_qty > 0)
-    : currentWh === 'CA' ? l.ca_qty > 0 : l.sc_qty > 0
-  );
-  const backLines = lineItems.filter(l => (l.back_qty||0) > 0);
+  const renderRow = l => {
+    const scQty = l.sc_qty||0;
+    const caQty = l.ca_qty||0;
+    const backQty = l.back_qty||0;
 
-  const renderShipRow = l => {
-    // SC 체크 셀
-    const scCheck = l.sc_shipped
-      ? `<span style="color:#1e40af;font-weight:800;font-size:14px;">✓</span>`
-      : l.sc_prev_shipped
-        ? `<span style="color:#16a34a;font-weight:800;font-size:14px;">✓</span>`
-        : `<span style="color:#d1d5db;">—</span>`;
-    const scDate = l.sc_shipped_date ? `<div style="font-size:10px;color:#6b7280;">${l.sc_shipped_date}</div>` : '';
-    const scQtyStr = l.sc_qty > 0 ? `<div style="font-size:11px;font-weight:700;color:#1e40af;">${l.sc_qty} pcs</div>` : '';
-    const scCell = `<td style="padding:8px 10px;text-align:center;">${scCheck}${scDate}${scQtyStr}</td>`;
+    const scCell = scQty > 0
+      ? `<td style="padding:7px 10px;text-align:center;"><span style="color:#1e40af;font-weight:800;">&#10003;</span><div style="font-size:11px;color:#6b7280;">${l.sc_shipped_date||''}</div><div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
+      : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
 
-    // CA 체크 셀
-    const caCheck = l.ca_shipped
-      ? `<span style="color:#ea580c;font-weight:800;font-size:14px;">✓</span>`
-      : l.ca_prev_shipped
-        ? `<span style="color:#16a34a;font-weight:800;font-size:14px;">✓</span>`
-        : `<span style="color:#d1d5db;">—</span>`;
-    const caDate = l.ca_shipped_date ? `<div style="font-size:10px;color:#6b7280;">${l.ca_shipped_date}</div>` : '';
-    const caQtyStr = l.ca_qty > 0 ? `<div style="font-size:11px;font-weight:700;color:#ea580c;">${l.ca_qty} pcs</div>` : '';
-    const caCell = `<td style="padding:8px 10px;text-align:center;">${caCheck}${caDate}${caQtyStr}</td>`;
+    const caStatusCell = caShippedAt && caQty > 0
+      ? `<td style="padding:7px 10px;text-align:center;"><span style="color:#16a34a;font-weight:800;">&#10003;</span><div style="font-size:10px;color:#6b7280;">${caShippedAt}</div><div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div></td>`
+      : caQty > 0
+        ? `<td style="padding:7px 10px;text-align:center;font-size:12px;color:#ea580c;font-weight:600;">${caStatus.replace(/<[^>]*>/g,'')}<div style="font-weight:700;">${caQty} pcs</div></td>`
+        : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
+
+    const backCell = backQty > 0
+      ? `<td style="padding:7px 10px;text-align:center;color:#dc2626;font-weight:700;">${backQty}</td>`
+      : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
 
     if (isSplit) {
       return `<tr style="border-bottom:1px solid #f3f4f6;">
-        <td style="padding:8px 10px;font-family:monospace;font-size:12px;font-weight:600;">${l.style}</td>
-        <td style="padding:8px 10px;">${l.color}</td>
-        <td style="padding:8px 10px;text-align:center;">${l.size}</td>
-        <td style="padding:8px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
-        ${scCell}${caCell}
+        <td style="padding:7px 10px;font-weight:600;">${l.style}</td>
+        <td style="padding:7px 10px;">${l.color}</td>
+        <td style="padding:7px 10px;text-align:center;">${l.size}</td>
+        <td style="padding:7px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
+        ${scCell}${caStatusCell}${backCell}
       </tr>`;
     } else {
-      const whCheck = currentWh === 'CA' ? caCheck : scCheck;
-      const whDate  = currentWh === 'CA' ? caDate  : scDate;
-      const whQty   = currentWh === 'CA' ? l.ca_qty : l.sc_qty;
-      const whColor = currentWh === 'CA' ? '#ea580c' : '#1e40af';
+      const whQty = currentWh==='CA' ? caQty : scQty;
+      const whColor = currentWh==='CA' ? '#ea580c' : '#1e40af';
+      const whShipped = currentWh==='CA' ? caShippedAt : scShippedAt;
+      const shipCell = whQty > 0
+        ? `<td style="padding:7px 10px;text-align:center;"><span style="color:${whColor};font-weight:800;">&#10003;</span>${whShipped?`<div style="font-size:10px;color:#6b7280;">${whShipped}</div>`:''}<div style="font-size:12px;font-weight:700;color:${whColor};">${whQty} pcs</div></td>`
+        : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
       return `<tr style="border-bottom:1px solid #f3f4f6;">
-        <td style="padding:8px 10px;font-family:monospace;font-size:12px;font-weight:600;">${l.style}</td>
-        <td style="padding:8px 10px;">${l.color}</td>
-        <td style="padding:8px 10px;text-align:center;">${l.size}</td>
-        <td style="padding:8px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
-        <td style="padding:8px 10px;text-align:center;">${whCheck}${whDate}${whQty > 0 ? `<div style="font-size:11px;font-weight:700;color:${whColor};">${whQty} pcs</div>` : ''}</td>
+        <td style="padding:7px 10px;font-weight:600;">${l.style}</td>
+        <td style="padding:7px 10px;">${l.color}</td>
+        <td style="padding:7px 10px;text-align:center;">${l.size}</td>
+        <td style="padding:7px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
+        ${shipCell}${backCell}
       </tr>`;
     }
   };
 
-  const shippedRows = shippedLines.map(renderShipRow).join('');
-
-  // ── tfoot totals
-  const tfootHtml = `
-    <tfoot>
-      <tr style="background:#f0f4ff;border-top:2px solid #e5e7eb;font-weight:700;">
-        <td colspan="3" style="padding:10px;text-align:right;color:#6b7280;font-size:12px;">Total Shipped:</td>
-        <td style="padding:10px;text-align:center;color:#6b7280;font-size:12px;">${totalPoPcs} PO</td>
-        ${isSplit
-          ? `<td style="padding:10px;text-align:center;color:#1e40af;">${totalScShipped} pcs</td>
-             <td style="padding:10px;text-align:center;color:#ea580c;">${totalCaShipped} pcs</td>`
-          : `<td style="padding:10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};">${totalThisShipment} pcs</td>`}
-      </tr>
-    </tfoot>`;
-
-  // ── Back Order 섹션
-  const backOrderHtml = hasBackOrder ? `
-    <div style="margin-top:24px;border:2px solid #fecaca;border-radius:8px;overflow:hidden;">
-      <div style="background:#fee2e2;padding:10px 16px;display:flex;align-items:center;gap:8px;">
-        <span style="font-size:16px;">⚠️</span>
-        <span style="font-size:13px;font-weight:700;color:#991b1b;">Back Order — ${totalBackPcs} pcs pending</span>
-      </div>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr style="background:#fef2f2;border-bottom:1px solid #fecaca;">
-            <th style="padding:7px 10px;text-align:left;color:#991b1b;font-weight:600;">Style</th>
-            <th style="padding:7px 10px;text-align:left;color:#991b1b;font-weight:600;">Color</th>
-            <th style="padding:7px 10px;text-align:center;color:#991b1b;font-weight:600;">Size</th>
-            <th style="padding:7px 10px;text-align:center;color:#991b1b;font-weight:600;">Back Qty</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${backLines.map(l => `
-            <tr style="border-bottom:1px solid #fef2f2;">
-              <td style="padding:7px 10px;font-family:monospace;font-size:12px;font-weight:600;">${l.style}</td>
-              <td style="padding:7px 10px;">${l.color}</td>
-              <td style="padding:7px 10px;text-align:center;">${l.size}</td>
-              <td style="padding:7px 10px;text-align:center;font-weight:700;color:#dc2626;">${l.back_qty}</td>
-            </tr>`).join('')}
-        </tbody>
-        <tfoot>
-          <tr style="background:#fef2f2;border-top:1px solid #fecaca;">
-            <td colspan="3" style="padding:8px 10px;text-align:right;font-size:12px;color:#991b1b;">Total Back Order:</td>
-            <td style="padding:8px 10px;text-align:center;font-weight:800;color:#dc2626;">${totalBackPcs} pcs</td>
-          </tr>
-        </tfoot>
-      </table>
-      <div style="padding:10px 16px;background:#fff5f5;font-size:11px;color:#991b1b;border-top:1px solid #fecaca;">
-        We will ship your remaining items as soon as inventory is available. You will receive a separate shipment notification.
-      </div>
-    </div>` : '';
-
-  // ── 범례
-  const legendHtml = isSplit ? `
-    <div style="display:flex;gap:16px;font-size:11px;color:#6b7280;margin-top:14px;padding-top:10px;border-top:1px solid #e5e7eb;flex-wrap:wrap;">
-      <span><span style="color:#1e40af;font-weight:700;">✓</span> SC — This shipment</span>
-      <span><span style="color:#ea580c;font-weight:700;">✓</span> CA — This shipment</span>
-      <span><span style="color:#16a34a;font-weight:700;">✓</span> Previously shipped</span>
-    </div>` : `
-    <div style="display:flex;gap:16px;font-size:11px;color:#6b7280;margin-top:14px;padding-top:10px;border-top:1px solid #e5e7eb;flex-wrap:wrap;">
-      <span><span style="color:${currentWh==='CA'?'#ea580c':'#1e40af'};font-weight:700;">✓</span> Shipped this order</span>
-      <span><span style="color:#16a34a;font-weight:700;">✓</span> Previously shipped</span>
-    </div>`;
-
-  const noteHtml = note ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;font-size:12px;margin-bottom:16px;"><span style="font-weight:700;color:#d97706;">📝 Note:</span> ${note}</div>` : '';
+  const allLines = lineItems.filter(l => (l.sc_qty||0)+(l.ca_qty||0)+(l.back_qty||0) > 0);
+  const noteHtml = note ? `<table style="width:100%;border-collapse:collapse;margin-bottom:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;"><tr><td style="padding:10px 14px;font-size:12px;"><strong style="color:#d97706;">&#128203; Note:</strong> ${note}</td></tr></table>` : '';
 
   return `
   <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;">
-    <div style="background:#0f2744;padding:16px 24px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center;">
-      <div style="color:#fff;font-size:18px;font-weight:800;letter-spacing:1px;">PACIFIC SPORTS INC</div>
-      <div style="color:#93c5fd;font-size:13px;font-weight:600;">Your order has shipped 🚚</div>
-    </div>
-    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:12px 24px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Customer PO<br><span style="font-size:14px;font-weight:700;color:#111;text-transform:none;">${order.customer_po||'—'}</span></div>
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Ship Date<br><span style="font-size:14px;font-weight:700;color:#111;text-transform:none;">${order.ship_date||new Date().toLocaleDateString('en-US')}</span></div>
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Ship From<br><span style="font-size:13px;font-weight:700;color:#111;text-transform:none;">${shipFromLabel}</span></div>
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Total Shipped<br><span style="font-size:14px;font-weight:700;color:${currentWh==='CA'?'#ea580c':'#1e40af'};text-transform:none;">${totalThisShipment} pcs</span></div>
-    </div>
+    <table style="width:100%;border-collapse:collapse;border-radius:8px 8px 0 0;overflow:hidden;">
+      <tr style="background:#0f2744;">
+        <td style="padding:16px 24px;">
+          <div style="color:#fff;font-size:18px;font-weight:800;">Pacific Sports</div>
+          <div style="color:#93c5fd;font-size:12px;margin-top:2px;">Your order has shipped &#128666;</div>
+        </td>
+      </tr>
+    </table>
     <div style="padding:20px 24px;background:#fff;border:1px solid #e5e7eb;border-top:none;">
+      <p style="font-size:14px;margin:0 0 4px;">Dear <strong>${order.customer_name||''}</strong>,</p>
+      <p style="font-size:13px;color:#374151;margin:0 0 16px;">Great news! Your order has been shipped. Please find the details below.</p>
+      <table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:16px;">
+        <tr>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Your PO #<br><strong style="font-size:16px;color:#111;">${order.customer_po||'—'}</strong></td>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Ship Date<br><strong style="font-size:14px;color:#111;">${shipDateStr}</strong></td>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Total Shipped<br><strong style="font-size:14px;color:${currentWh==='CA'?'#ea580c':'#1e40af'};">${totalThisShipment} pcs</strong></td>
+        </tr>
+      </table>
+      ${shippedFromHtml}
       ${noteHtml}
       ${shipInfoHtml}
       <table style="width:100%;border-collapse:collapse;font-size:13px;">
@@ -10788,14 +10806,24 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
             ${colHeader}
           </tr>
         </thead>
-        <tbody>${shippedRows}</tbody>
-        ${tfootHtml}
+        <tbody>${allLines.map(renderRow).join('')}</tbody>
+        <tfoot>
+          <tr style="background:#f0f4ff;border-top:2px solid #e5e7eb;font-weight:700;">
+            <td colspan="3" style="padding:8px 10px;text-align:right;color:#6b7280;font-size:12px;">Total:</td>
+            <td style="padding:8px 10px;text-align:center;color:#6b7280;">${totalPoPcs} pcs</td>
+            ${isSplit
+              ? `<td style="padding:8px 10px;text-align:center;color:#1e40af;">${totalScShipped} pcs</td>
+                 <td style="padding:8px 10px;text-align:center;color:#ea580c;">${totalCaShipped} pcs</td>
+                 <td style="padding:8px 10px;text-align:center;color:#dc2626;">${totalBackPcs > 0 ? totalBackPcs+' pcs' : '—'}</td>`
+              : `<td style="padding:8px 10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};">${totalThisShipment} pcs</td>
+                 <td style="padding:8px 10px;text-align:center;color:#dc2626;">${totalBackPcs > 0 ? totalBackPcs+' pcs' : '—'}</td>`}
+          </tr>
+        </tfoot>
       </table>
-      ${legendHtml}
       ${backOrderHtml}
     </div>
     <div style="padding:12px 24px;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;font-size:11px;color:#9ca3af;text-align:center;">
-      Pacific Sports Inc · 1605 South Guignard Pkwy, Sumter SC 29150 · (803) 773-2177
+      Pacific Sports Inc &middot; 1605 South Guignard Pkwy, Sumter SC 29150 &middot; (803) 773-2177
     </div>
   </div>`;
 }
