@@ -9104,14 +9104,17 @@ async function openDefectConfirmModal(defectId) {
     const pcrWhCode = (d.wh || 'SC') + '-PCR';
     const { data: whRow } = await db.from('warehouses').select('id').eq('code', pcrWhCode).single();
     if (whRow) {
-      const { data: invCheck } = await db.from('inventory')
+      const { data: invCheckRows } = await db.from('inventory')
         .select('qty_on_hand')
         .eq('warehouse_id', whRow.id)
         .eq('color', (d.color||'').toUpperCase())
         .eq('size', (d.size||'').toUpperCase())
-        .eq('location', 'PCR')
-        .single();
-      if (invCheck) currentInvQty = invCheck.qty_on_hand ?? '?';
+        .eq('location', 'PCR');
+      if (invCheckRows && invCheckRows.length > 0) {
+        currentInvQty = invCheckRows.reduce((s, r) => s + (r.qty_on_hand || 0), 0);
+      } else {
+        currentInvQty = 0;
+      }
     }
   } catch(e) { currentInvQty = '?'; }
   const newInvQty = typeof currentInvQty === 'number' ? Math.max(0, currentInvQty - d.total_qty) : '?';
@@ -9726,6 +9729,48 @@ async function savePcrTransferConfirm() {
     await db.from('order_lines').update({
       pcr_transfer_status: statusMap
     }).eq('id', lineId);
+  }
+
+  // 체크된 항목 → PCR 재고 qty_on_hand 증가
+  const pcrWhCode = (wh === 'CA' ? 'CA' : 'SC') + '-PCR';
+  const { data: pcrWhRow } = await db.from('warehouses').select('id').eq('code', pcrWhCode).single();
+  if (pcrWhRow) {
+    for (const [lineId, statusMap] of Object.entries(lineMap)) {
+      const item = items.find(i => i.lineId === lineId && statusMap[i.allocKey]);
+      if (!item) continue;
+      const checkedItems = items.filter(i => i.lineId === lineId && statusMap[i.allocKey]);
+      for (const ci of checkedItems) {
+        const pcs = ci.boxes > 0 ? ci.boxes * 60 : ci.pcs;
+        if (pcs <= 0) continue;
+        // 기존 PCR 재고 row 찾기
+        const { data: invRows } = await db.from('inventory')
+          .select('id, qty_on_hand')
+          .eq('warehouse_id', pcrWhRow.id)
+          .eq('color', (ci.color||'').toUpperCase())
+          .eq('size', (ci.size||'').toUpperCase())
+          .eq('location', 'PCR')
+          .order('qty_on_hand', { ascending: false })
+          .limit(1);
+        if (invRows && invRows.length > 0) {
+          await db.from('inventory').update({
+            qty_on_hand: (invRows[0].qty_on_hand || 0) + pcs
+          }).eq('id', invRows[0].id);
+        } else {
+          // PCR row 없으면 새로 생성
+          const { data: styleRow } = await db.from('order_lines')
+            .select('style_id').eq('id', ci.lineId).single();
+          await db.from('inventory').insert({
+            warehouse_id: pcrWhRow.id,
+            style_id: styleRow?.style_id || null,
+            color: (ci.color||'').toUpperCase(),
+            size: (ci.size||'').toUpperCase(),
+            location: 'PCR',
+            qty_on_hand: pcs,
+            qty_committed: 0
+          });
+        }
+      }
+    }
   }
 
   // orders에 확인 완료 timestamp 저장
