@@ -396,6 +396,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       🏭 Inventory ▾
       <div class="ntab-dd" id="dd-inventory">
         <div onclick="showPanel('inventory',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🔍 Search by Item</div>
+        <div onclick="showPanel('pcroom',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">💻 PC Room</div>
         <div onclick="showPanel('receiving',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">📥 Receiving</div>
         <div onclick="showPanel('intransit',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🚛 In Transit</div>
         <div onclick="showPanel('styles',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">👕 Styles</div>
@@ -1059,6 +1060,24 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
       </div>
     </div><!-- end panel-invoice -->
+
+    <!-- ── PC ROOM ── -->
+    <div class="panel" id="panel-pcroom">
+      <div class="card">
+        <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;">
+          <span class="card-title">💻 PC Room Inventory</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="pcroom-wh-filter" class="fsel" style="height:28px;font-size:11px;" onchange="loadPcRoom()">
+              <option value="SC-PCR">🟢 SC PC Room</option>
+              <option value="CA-PCR">🟠 CA PC Room</option>
+            </select>
+            <input id="pcroom-search" type="text" class="fi" placeholder="Color / Size 검색..." style="width:160px;height:28px;font-size:11px;" oninput="renderPcRoomTable()">
+            <button class="btn" style="font-size:11px;" onclick="loadPcRoom()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div id="pcroom-table-wrap" style="overflow-x:auto;margin-top:8px;"></div>
+      </div>
+    </div>
 
     <!-- ── RECEIVING ── -->
     <div class="panel" id="panel-receiving">
@@ -2172,6 +2191,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
 
   if (name === 'dashboard') loadDashboard();
   if (name === 'inventory') loadInventory();
+  if (name === 'pcroom') loadPcRoom();
   if (name === 'customerpos') loadCustomerPOs(subview);
   if (name === 'orderstatus') {
     // 혹시 열려있는 모달 닫기
@@ -5891,6 +5911,91 @@ async function loadDefectReport() {
     <div style="margin-top:8px;font-size:11px;color:#9ca3af;text-align:right;">
       총 ${data.length}건 · 불량 합계: ${data.reduce((s,d)=>s+d.total_qty,0)} pcs
     </div>`;
+}
+
+// ── PC Room Inventory ──────────────────────────
+let _pcroomData = [];
+
+async function loadPcRoom() {
+  const wrap = document.getElementById('pcroom-table-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="text-align:center;padding:20px;color:#9ca3af;">로딩 중...</div>';
+
+  const whCode = document.getElementById('pcroom-wh-filter')?.value || 'SC-PCR';
+  const { data: whRow } = await db.from('warehouses').select('id,name').eq('code', whCode).single();
+  if (!whRow) { wrap.innerHTML = '<div style="color:#dc2626;padding:16px;">Warehouse를 찾을 수 없습니다.</div>'; return; }
+
+  const { data: inv } = await db.from('inventory')
+    .select('id, color, size, location, qty_on_hand, qty_committed, styles(style_number,description)')
+    .eq('warehouse_id', whRow.id)
+    .eq('location', 'PCR')
+    .order('color').order('size');
+
+  _pcroomData = inv || [];
+  renderPcRoomTable();
+}
+
+function renderPcRoomTable() {
+  const wrap = document.getElementById('pcroom-table-wrap');
+  if (!wrap) return;
+  const search = (document.getElementById('pcroom-search')?.value || '').toLowerCase();
+  const filtered = _pcroomData.filter(i =>
+    !search ||
+    (i.color||'').toLowerCase().includes(search) ||
+    (i.size||'').toLowerCase().includes(search) ||
+    (i.styles?.style_number||'').toLowerCase().includes(search)
+  ).filter(i => i.qty_on_hand > 0 || i.qty_committed > 0); // 수량 있는 것만
+
+  if (!filtered.length) {
+    wrap.innerHTML = '<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px;">수량이 있는 항목이 없습니다.</div>';
+    return;
+  }
+
+  const totalQty = filtered.reduce((s,i) => s + (i.qty_on_hand||0), 0);
+  const rows = filtered.map(i => {
+    const avail = (i.qty_on_hand||0) - (i.qty_committed||0);
+    return `<tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:7px 10px;font-size:12px;font-family:monospace;font-weight:600;">${i.styles?.style_number||'—'}</td>
+      <td style="padding:7px 10px;font-size:12px;">${i.color||''}</td>
+      <td style="padding:7px 10px;font-size:12px;text-align:center;font-weight:700;">${i.size||''}</td>
+      <td style="padding:7px 10px;font-size:12px;text-align:center;font-weight:800;color:#1e40af;">${(i.qty_on_hand||0).toLocaleString()}</td>
+      <td style="padding:7px 10px;font-size:12px;text-align:center;color:#dc2626;">${(i.qty_committed||0).toLocaleString()}</td>
+      <td style="padding:7px 10px;font-size:12px;text-align:center;font-weight:700;color:${avail>0?'#15803d':'#9ca3af'};">${avail.toLocaleString()}</td>
+      <td style="padding:7px 10px;text-align:center;">
+        <button onclick="openPcRoomEdit('${i.id}', ${i.qty_on_hand||0})"
+          style="font-size:10px;padding:2px 8px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;cursor:pointer;">✏️ 수정</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <div style="font-size:11px;color:#6b7280;margin-bottom:8px;">
+      총 <b>${filtered.length}</b>개 항목 · <b>${totalQty.toLocaleString()}</b> pcs
+    </div>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">
+        <th style="padding:8px 10px;text-align:left;font-size:10px;color:#6b7280;">Style</th>
+        <th style="padding:8px 10px;text-align:left;font-size:10px;color:#6b7280;">Color</th>
+        <th style="padding:8px 10px;text-align:center;font-size:10px;color:#6b7280;">Size</th>
+        <th style="padding:8px 10px;text-align:center;font-size:10px;color:#1e40af;">On Hand</th>
+        <th style="padding:8px 10px;text-align:center;font-size:10px;color:#dc2626;">Committed</th>
+        <th style="padding:8px 10px;text-align:center;font-size:10px;color:#15803d;">Available</th>
+        <th style="padding:8px 10px;"></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function openPcRoomEdit(invId, currentQty) {
+  const newQty = prompt(`현재 수량: ${currentQty} pcs
+새 수량 입력:`, currentQty);
+  if (newQty === null || newQty === '') return;
+  const qty = parseInt(newQty);
+  if (isNaN(qty) || qty < 0) { alert('올바른 수량을 입력하세요.'); return; }
+  const { error } = await db.from('inventory').update({ qty_on_hand: qty }).eq('id', invId);
+  if (error) { alert('수정 실패: ' + error.message); return; }
+  showToast('✅ PC Room 재고 수정 완료');
+  loadPcRoom();
 }
 
 async function saveInvoiceSettings() {
@@ -9768,7 +9873,7 @@ async function savePcrTransferConfirm() {
           .order('qty_on_hand', { ascending: false })
           .limit(1);
         if (invRows && invRows.length > 0) {
-          // 첫 번째 row에만 추가 (중복 row 방지 — 절대 insert 안 함)
+          // 첫 번째 row에만 추가 (중복 row 방지)
           const totalExisting = invRows.reduce((s, r) => s + (r.qty_on_hand || 0), 0);
           await db.from('inventory').update({
             qty_on_hand: totalExisting + pcs
@@ -9777,8 +9882,20 @@ async function savePcrTransferConfirm() {
           for (let ri = 1; ri < invRows.length; ri++) {
             await db.from('inventory').update({ qty_on_hand: 0, qty_committed: 0 }).eq('id', invRows[ri].id);
           }
+        } else {
+          // PCR row 없으면 새로 생성 (단 1개만)
+          const { data: styleRow } = await db.from('order_lines')
+            .select('style_id').eq('id', ci.lineId).single();
+          await db.from('inventory').insert({
+            warehouse_id: pcrWhRow.id,
+            style_id: styleRow?.style_id || null,
+            color: (ci.color||'').toUpperCase(),
+            size: (ci.size||'').toUpperCase(),
+            location: 'PCR',
+            qty_on_hand: pcs,
+            qty_committed: 0
+          });
         }
-        // PCR row 없으면 생성 안 함 — 재고 이동은 WH에서 해야 함
       }
     }
   }
@@ -12278,7 +12395,7 @@ async function sendInvoiceEmail() {
   } finally {
     // 성공/실패 관계없이 항상 모달 닫고 완료 처리
     closeModal('modal-invoice-review');
-    playCashRegister();
+    playShippedSound();
     showToast('✅ Invoice 발송 완료!');
     _invoiceOrderId = null;
     _invoiceWh = null;
@@ -14635,19 +14752,12 @@ function playEmergencyAlert() {
   try {
     const ctx = _getAudioCtx();
     const now = ctx.currentTime;
-    // 낮고 빠른 3연타 비프
-    [[0.00, 440], [0.18, 440], [0.36, 440],
-     [0.60, 440], [0.78, 440], [0.96, 440]].forEach(([t, freq]) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(freq, now + t);
-      gain.gain.setValueAtTime(0, now + t);
-      gain.gain.linearRampToValueAtTime(0.3, now + t + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + t + 0.14);
-      osc.start(now + t); osc.stop(now + t + 0.15);
-    });
+    // 핵경보 — 낮게 우~~~
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.connect(g);g.connect(ctx.destination);o.type='sawtooth';
+    o.frequency.setValueAtTime(150,now);o.frequency.exponentialRampToValueAtTime(400,now+1.5);
+    g.gain.setValueAtTime(0.4,now);g.gain.exponentialRampToValueAtTime(0.001,now+1.5);
+    o.start(now);o.stop(now+1.55);
   } catch(e) {}
 }
 
@@ -14656,45 +14766,65 @@ function playDefectAlert() {
   try {
     const ctx = _getAudioCtx();
     const now = ctx.currentTime;
-    // 피아노 단음 내림 (도→시→라) — 뭔가 잘못됐다는 느낌
-    const notes = [[0.00, 523], [0.18, 494], [0.36, 440]];
-    notes.forEach(([t, freq]) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(freq, now + t);
-      gain.gain.setValueAtTime(0, now + t);
-      gain.gain.linearRampToValueAtTime(0.4, now + t + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + t + 0.5);
-      osc.start(now + t); osc.stop(now + t + 0.55);
+    // 심장박동 경고 — 두근두근
+    [0, 0.15, 0.6, 0.75].forEach(t => {
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.type='sine';
+      o.frequency.setValueAtTime(120,now+t);o.frequency.exponentialRampToValueAtTime(60,now+t+0.1);
+      g.gain.setValueAtTime(0.5,now+t);g.gain.exponentialRampToValueAtTime(0.001,now+t+0.1);
+      o.start(now+t);o.stop(now+t+0.12);
+    });
+  } catch(e) {}
+}
+
+function playShippedSound() {
+  try {
+    const ctx = _getAudioCtx();
+    const now = ctx.currentTime;
+    // 성공 팡파레 — 도미솔도↑
+    [[0,523],[0.1,659],[0.2,784],[0.3,1047]].forEach(([t,f]) => {
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.type='sine';o.frequency.setValueAtTime(f,now+t);
+      g.gain.setValueAtTime(0,now+t);g.gain.linearRampToValueAtTime(0.4,now+t+0.01);
+      g.gain.exponentialRampToValueAtTime(0.001,now+t+0.3);o.start(now+t);o.stop(now+t+0.35);
     });
   } catch(e) {}
 }
 
 function playNewOrderChime() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _getAudioCtx();
     const now = ctx.currentTime;
-    // 더 길고 풍성한 차임 - 3세트 x 3음
-    const notes = [
-      [0.00, 880], [0.20, 1100], [0.40, 1320],
-      [0.70, 880], [0.90, 1100], [1.10, 1320],
-      [1.40, 1100],[1.60, 1320], [1.80, 1540],
-      [2.10, 1320],[2.30, 1540], [2.50, 1760],
-    ];
-    notes.forEach(([time, freq]) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, now + time);
-      gain.gain.setValueAtTime(0, now + time);
-      gain.gain.linearRampToValueAtTime(0.45, now + time + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + time + 0.55);
-      osc.start(now + time); osc.stop(now + time + 0.6);
-    });
-  } catch(e) { console.warn('Audio not available:', e); }
+    // 튜둠 + 잔향 + 고음 띠잉
+    const o1=ctx.createOscillator(),g1=ctx.createGain();
+    o1.connect(g1);g1.connect(ctx.destination);o1.type='sine';
+    o1.frequency.setValueAtTime(180,now);o1.frequency.exponentialRampToValueAtTime(40,now+0.3);
+    g1.gain.setValueAtTime(0.8,now);g1.gain.exponentialRampToValueAtTime(0.001,now+0.3);
+    o1.start(now);o1.stop(now+0.35);
+    const buf=ctx.createBuffer(1,Math.floor(ctx.sampleRate*0.05),ctx.sampleRate);
+    const bd=buf.getChannelData(0);for(let i=0;i<bd.length;i++)bd[i]=Math.random()*2-1;
+    const src=ctx.createBufferSource();src.buffer=buf;
+    const lpf=ctx.createBiquadFilter();lpf.type='lowpass';lpf.frequency.value=200;
+    const gn=ctx.createGain();src.connect(lpf);lpf.connect(gn);gn.connect(ctx.destination);
+    gn.gain.setValueAtTime(0.5,now);gn.gain.exponentialRampToValueAtTime(0.001,now+0.05);
+    src.start(now);src.stop(now+0.06);
+    const o2=ctx.createOscillator(),g2=ctx.createGain();
+    o2.connect(g2);g2.connect(ctx.destination);o2.type='sine';o2.frequency.setValueAtTime(55,now);
+    g2.gain.setValueAtTime(0,now);g2.gain.linearRampToValueAtTime(0.6,now+0.005);
+    g2.gain.exponentialRampToValueAtTime(0.001,now+0.6);o2.start(now);o2.stop(now+0.65);
+    const o3=ctx.createOscillator(),g3=ctx.createGain();
+    o3.connect(g3);g3.connect(ctx.destination);o3.type='sine';o3.frequency.setValueAtTime(110,now+0.05);
+    g3.gain.setValueAtTime(0,now+0.05);g3.gain.linearRampToValueAtTime(0.2,now+0.06);
+    g3.gain.exponentialRampToValueAtTime(0.001,now+1.25);o3.start(now+0.05);o3.stop(now+1.3);
+    const o4=ctx.createOscillator(),g4=ctx.createGain();
+    o4.connect(g4);g4.connect(ctx.destination);o4.type='sine';o4.frequency.setValueAtTime(1760,now+0.25);
+    g4.gain.setValueAtTime(0,now+0.25);g4.gain.linearRampToValueAtTime(0.3,now+0.258);
+    g4.gain.exponentialRampToValueAtTime(0.001,now+1.25);o4.start(now+0.25);o4.stop(now+1.3);
+    const o5=ctx.createOscillator(),g5=ctx.createGain();
+    o5.connect(g5);g5.connect(ctx.destination);o5.type='sine';o5.frequency.setValueAtTime(3520,now+0.25);
+    g5.gain.setValueAtTime(0,now+0.25);g5.gain.linearRampToValueAtTime(0.1,now+0.258);
+    g5.gain.exponentialRampToValueAtTime(0.001,now+0.75);o5.start(now+0.25);o5.stop(now+0.8);
+  } catch(e) {}
 }
 
 // ── Urgent PO 사이렌 (앰뷸런스 - 5회 반복, 더 강하게)
@@ -14736,22 +14866,16 @@ function playCashRegister() {
   try {
     const ctx = _getAudioCtx();
     const now = ctx.currentTime;
-    // 치칭 — 하이햇 노이즈 버스트
-    const bufSize = ctx.sampleRate * 0.18;
-    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1);
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    // 하이패스 필터로 치칭 느낌
-    const hpf = ctx.createBiquadFilter();
-    hpf.type = 'highpass';
-    hpf.frequency.value = 8000;
-    const gain = ctx.createGain();
-    src.connect(hpf); hpf.connect(gain); gain.connect(ctx.destination);
-    gain.gain.setValueAtTime(0.4, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-    src.start(now); src.stop(now + 0.18);
+    // 이메일 발송 — 슝↗ + 딩
+    const o1=ctx.createOscillator(),g1=ctx.createGain();
+    o1.connect(g1);g1.connect(ctx.destination);o1.type='sine';
+    o1.frequency.setValueAtTime(400,now);o1.frequency.exponentialRampToValueAtTime(2000,now+0.15);
+    g1.gain.setValueAtTime(0.3,now);g1.gain.exponentialRampToValueAtTime(0.001,now+0.15);
+    o1.start(now);o1.stop(now+0.17);
+    const o2=ctx.createOscillator(),g2=ctx.createGain();
+    o2.connect(g2);g2.connect(ctx.destination);o2.type='sine';o2.frequency.setValueAtTime(1760,now+0.18);
+    g2.gain.setValueAtTime(0,now+0.18);g2.gain.linearRampToValueAtTime(0.35,now+0.188);
+    g2.gain.exponentialRampToValueAtTime(0.001,now+0.78);o2.start(now+0.18);o2.stop(now+0.8);
   } catch(e) {}
 }
 
