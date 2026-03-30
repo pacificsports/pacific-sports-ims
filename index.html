@@ -10016,8 +10016,12 @@ function openBoxAssignModal() {
   window._pcrBoxMode = 'grid'; // Save PO 모드 → 스프레드시트 그리드 UI
   window._pcrIsSaveMode = true;
   // 오더 정보 저장 (renderTabs에서 표시용)
-  window._pcrCompleteOrderName = currentInvoiceData?.order?.customer_name || '';
-  window._pcrCompleteOrderPo = currentInvoiceData?.order?.customer_po || '';
+  // PO 저장 전이므로 DOM에서 직접 읽기
+  const _custSelEl = document.getElementById('inv-cust-sel');
+  const _custName = _custSelEl?.value ? (customers.find(c=>c.id===_custSelEl.value)?.name||'') : (currentInvoiceData?.order?.customer_name||'');
+  const _poNum = document.getElementById('inv-cust-po')?.value || currentInvoiceData?.order?.customer_po || '';
+  window._pcrCompleteOrderName = _custName;
+  window._pcrCompleteOrderPo = _poNum;
   const _noticeEl = document.getElementById('pcr-prepare-notice');
   if (_noticeEl) _noticeEl.style.display = 'none';
   renderTabs();
@@ -14799,8 +14803,7 @@ function playNewOrderChime() {
   try {
     const ctx = _getAudioCtx();
     const now = ctx.currentTime;
-    // 튜둠 + 잔향 + 고음 띠잉 (강화버전)
-    // 킥 드럼 — 더 강하고 긴 임팩트
+    // 킥
     const o1=ctx.createOscillator(),g1=ctx.createGain();
     o1.connect(g1);g1.connect(ctx.destination);o1.type='sine';
     o1.frequency.setValueAtTime(220,now);o1.frequency.exponentialRampToValueAtTime(35,now+0.5);
@@ -14814,24 +14817,26 @@ function playNewOrderChime() {
     const gn=ctx.createGain();src.connect(lpf);lpf.connect(gn);gn.connect(ctx.destination);
     gn.gain.setValueAtTime(0.7,now);gn.gain.exponentialRampToValueAtTime(0.001,now+0.08);
     src.start(now);src.stop(now+0.09);
-    // 저음 잔향 — 길고 묵직하게
-    const o2=ctx.createOscillator(),g2=ctx.createGain();
-    o2.connect(g2);g2.connect(ctx.destination);o2.type='sine';o2.frequency.setValueAtTime(55,now);
-    g2.gain.setValueAtTime(0,now);g2.gain.linearRampToValueAtTime(0.7,now+0.005);
-    g2.gain.exponentialRampToValueAtTime(0.001,now+1.0);o2.start(now);o2.stop(now+1.05);
-    const o3=ctx.createOscillator(),g3=ctx.createGain();
-    o3.connect(g3);g3.connect(ctx.destination);o3.type='sine';o3.frequency.setValueAtTime(110,now);
-    g3.gain.setValueAtTime(0,now);g3.gain.linearRampToValueAtTime(0.3,now+0.01);
-    g3.gain.exponentialRampToValueAtTime(0.001,now+1.8);o3.start(now);o3.stop(now+1.85);
-    // 고음 띠잉 — 더 크고 길게
-    const o4=ctx.createOscillator(),g4=ctx.createGain();
-    o4.connect(g4);g4.connect(ctx.destination);o4.type='sine';o4.frequency.setValueAtTime(1760,now+0.35);
-    g4.gain.setValueAtTime(0,now+0.35);g4.gain.linearRampToValueAtTime(0.5,now+0.36);
-    g4.gain.exponentialRampToValueAtTime(0.001,now+2.0);o4.start(now+0.35);o4.stop(now+2.05);
-    const o5=ctx.createOscillator(),g5=ctx.createGain();
-    o5.connect(g5);g5.connect(ctx.destination);o5.type='sine';o5.frequency.setValueAtTime(3520,now+0.35);
-    g5.gain.setValueAtTime(0,now+0.35);g5.gain.linearRampToValueAtTime(0.15,now+0.36);
-    g5.gain.exponentialRampToValueAtTime(0.001,now+1.2);o5.start(now+0.35);o5.stop(now+1.25);
+    // 배음들 퍼짐
+    [[55,0.8,3.5],[110,0.4,3.0],[165,0.2,2.5],[220,0.1,2.0]].forEach(([f,vol,dur],i) => {
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.type='sine';o.frequency.setValueAtTime(f,now+i*0.02);
+      g.gain.setValueAtTime(vol,now+i*0.02);g.gain.exponentialRampToValueAtTime(0.001,now+dur);
+      o.start(now+i*0.02);o.stop(now+dur+0.05);
+    });
+    // 딩딩딩~ 빠르게
+    [[2.4,1047,0.45,0.15],[2.55,1047,0.45,0.15],[2.70,1319,0.5,1.2]].forEach(([t,freq,vol,dur]) => {
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.type='sine';o.frequency.setValueAtTime(freq,now+t);
+      g.gain.setValueAtTime(0,now+t);g.gain.linearRampToValueAtTime(vol,now+t+0.005);
+      g.gain.exponentialRampToValueAtTime(0.001,now+t+dur);
+      o.start(now+t);o.stop(now+t+dur+0.02);
+      const o2=ctx.createOscillator(),g2=ctx.createGain();
+      o2.connect(g2);g2.connect(ctx.destination);o2.type='sine';o2.frequency.setValueAtTime(freq*2,now+t);
+      g2.gain.setValueAtTime(0,now+t);g2.gain.linearRampToValueAtTime(vol*0.2,now+t+0.005);
+      g2.gain.exponentialRampToValueAtTime(0.001,now+t+dur*0.5);
+      o2.start(now+t);o2.stop(now+t+dur*0.5+0.02);
+    });
   } catch(e) {}
 }
 
