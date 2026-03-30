@@ -9768,25 +9768,17 @@ async function savePcrTransferConfirm() {
           .order('qty_on_hand', { ascending: false })
           .limit(1);
         if (invRows && invRows.length > 0) {
-          // 첫 번째 row에만 추가, 나머지 row는 무시 (중복 row 방지)
+          // 첫 번째 row에만 추가 (중복 row 방지 — 절대 insert 안 함)
           const totalExisting = invRows.reduce((s, r) => s + (r.qty_on_hand || 0), 0);
           await db.from('inventory').update({
             qty_on_hand: totalExisting + pcs
           }).eq('id', invRows[0].id);
-        } else {
-          // PCR row 없으면 새로 생성
-          const { data: styleRow } = await db.from('order_lines')
-            .select('style_id').eq('id', ci.lineId).single();
-          await db.from('inventory').insert({
-            warehouse_id: pcrWhRow.id,
-            style_id: styleRow?.style_id || null,
-            color: (ci.color||'').toUpperCase(),
-            size: (ci.size||'').toUpperCase(),
-            location: 'PCR',
-            qty_on_hand: pcs,
-            qty_committed: 0
-          });
+          // 중복 row가 있으면 0으로 초기화
+          for (let ri = 1; ri < invRows.length; ri++) {
+            await db.from('inventory').update({ qty_on_hand: 0, qty_committed: 0 }).eq('id', invRows[ri].id);
+          }
         }
+        // PCR row 없으면 생성 안 함 — 재고 이동은 WH에서 해야 함
       }
     }
   }
