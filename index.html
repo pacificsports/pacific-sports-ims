@@ -15379,17 +15379,25 @@ function applyPoPreview() {
   if (d.due_date) _setVal('inv-ship-date-inp', d.due_date);
 
   // customers DB에서 매칭 시도
-const custName = (d.customer_name||'').toLowerCase().trim();
+  const custName = (d.customer_name||'').toLowerCase().trim();
+  const normalize = s => (s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const custNorm = normalize(custName);
   const matchedCust = customers.find(c => {
     const cName = (c.name||'').toLowerCase().trim();
+    const cNorm = normalize(cName);
+    // 완전 일치
+    if (cNorm === custNorm) return true;
     // 완전 포함 체크
     if (cName.includes(custName) || custName.includes(cName)) return true;
+    // 정규화 포함 체크
+    if (cNorm.includes(custNorm) || custNorm.includes(cNorm)) return true;
     // 앞 6글자 체크
-    if (custName.length >= 4 && (cName.startsWith(custName.substring(0,6)) || custName.startsWith(cName.substring(0,6)))) return true;
+    if (custNorm.length >= 4 && (cNorm.startsWith(custNorm.substring(0,6)) || custNorm.startsWith(cNorm.substring(0,6)))) return true;
     // alias 체크
-    const aliasList = (c.aliases||'').split(',').map(a => a.trim().toLowerCase()).filter(Boolean);
-    return aliasList.some(a => custName.includes(a) || a.includes(custName) || custName.startsWith(a.substring(0,6)));
+    const aliasList = (c.aliases||'').split(',').map(a => normalize(a)).filter(Boolean);
+    return aliasList.some(a => custNorm.includes(a) || a.includes(custNorm));
   });
+  console.log('[applyPoPreview] customer_name:', d.customer_name, '→ matched:', matchedCust?.name || 'NONE');
   if (matchedCust) {
     document.getElementById('inv-cust-sel').value = matchedCust.id;
     window._custPrefWh = matchedCust.preferred_warehouse || 'SC';
