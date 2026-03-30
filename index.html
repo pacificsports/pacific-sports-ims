@@ -10797,7 +10797,7 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
 async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
   const custObj = (customers||[]).find(c => c.id === order.customer_id);
   const toEmail = custObj?.email || order.customer_email || order.email || '';
-  const ccEmail = custObj?.email_cc || '';
+  const ccEmail = (custObj?.email_cc || '').split(',').map(e => e.trim()).filter(e => e && e.includes('@'));
 
   if (!toEmail) return { ok: false, error: 'No customer email' };
 
@@ -10927,7 +10927,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     pl_html: plPdfBase64 ? '' : (plHtml || ''),
     pl_pdf: plPdfBase64 || null,
     bol_files: bolFilesArr,
-    ...(ccEmail && ccEmail.includes('@') ? { cc: ccEmail } : {})
+    ...(ccEmail.length ? { cc: ccEmail } : {})
   };
 
   // payload 크기 확인
@@ -12336,7 +12336,7 @@ async function sendInvoiceEmail() {
     const freightAmt = parseFloat(document.getElementById('invoice-freight-amt')?.value) || 0;
     const custObj = customers.find(c => c.id === order?.customer_id);
     const toEmail = custObj?.accounting_email || order?.email;
-    const ccEmail = custObj?.accounting_email_cc || '';
+    const ccEmail = (custObj?.accounting_email_cc || '').split(',').map(e => e.trim()).filter(e => e && e.includes('@'));
 
     // cs는 outer scope에서 정의 (buildInvoiceEmailBodyHtml 포함 모든 곳에서 사용)
     const cs = {};
@@ -12385,7 +12385,7 @@ async function sendInvoiceEmail() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            order, lines, customer_email: toEmail, ...(ccEmail && ccEmail.includes('@') ? { cc: ccEmail } : {}),
+            order, lines, customer_email: toEmail, ...(ccEmail.length ? { cc: ccEmail } : {}),
             companySettings, freightAmt,
             inv_pdf: invPdfBase64,
             pl_pdf: plPdfBase64,
