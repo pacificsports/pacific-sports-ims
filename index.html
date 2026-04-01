@@ -10965,18 +10965,8 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     customer_name: order.customer_name,
     customer_po: order.customer_po || '',
     customer_email: toEmail,
-    ship_date: order.ship_date,
-    carrier: shippingInfo.carrier || '',
-    tracking_number: shippingInfo.tracking || '',
-    freight_company: shippingInfo.freightCarrier || '',
-    total_pcs: order.total_pcs || 0,
-    total_boxes: totalBoxesShipped || null,
-    total_pallets: totalPalletsShipped || null,
     wh: shippingInfo.wh || 'SC',
-    note: shippingInfo.note || order.ship_note || '',
-    lines: lineItems,
-    email_html: emailHtml,
-    pl_html: plPdfBase64 ? '' : (plHtml || ''),
+    email_html: emailHtml,  // 완성된 HTML만 전달 — lines 불필요
     pl_pdf: plPdfBase64 || null,
     bol_files: bolFilesArr,
     ...(ccEmail.length ? { cc: ccEmail } : {})
@@ -12491,6 +12481,7 @@ async function sendInvoiceEmail() {
             inv_pdf: invPdfBase64,
             pl_pdf: plPdfBase64,
             po_pdf: poPdfBase64,
+            bol_files: _bolFilesDataSingle.length > 0 ? _bolFilesDataSingle.map(b=>({base64:b.base64,filename:b.filename,mime:b.mime})) : (_bolFileData?.base64 ? [{base64:_bolFileData.base64,filename:`BOL_PO${order?.customer_po||''}.pdf`,mime:'application/pdf'}] : []),
             subject: emailSubject,
             invoice_number_display: displayInvNum,
             email_html: invEmailBodyHtml || undefined
@@ -13361,7 +13352,7 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
 // ═══════════════════════════════════════════════════════
 function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySettings, freightAmt) {
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf((s||'').toUpperCase()) + 1) || 99;
-  const fmtDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : null;
+  const fmtDate = d => d ? new Date(d.slice?.(0,10)||d+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : null;
   const invoiceDate = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
   const termsDays = parseInt((order.terms||'N30').replace(/[^0-9]/g,'')) || 30;
   const dueDateObj = new Date(); dueDateObj.setDate(dueDateObj.getDate() + termsDays);
@@ -13377,22 +13368,42 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   let shipViaStr = carrier || '—';
   if (isLtl && freightCo) shipViaStr = freightCo;
   const trackingStr = tracking || '—';
-
-  // WH 기준으로 라인 필터링 (SC shipped 시 SC 라인만, CA shipped 시 CA 라인만)
   const invoiceWh = order.wh_code || 'SC';
   const whLabelInv = invoiceWh === 'CA' ? 'Eastvale, CA' : 'Sumter, SC';
   const billAddr = (order.bill_addr || '').replace(/\n/g,'<br>') || order.customer_name || '—';
   const shipAddr = (order.ship_addr || '').replace(/\n/g,'<br>') || order.customer_name || '—';
   const paymentLines = (paymentInfo || '').replace(/\\n/g,'<br>').replace(/\n/g,'<br>');
 
-  // WH에 맞는 라인만 — qty_filled > 0
+  // 출고 상태 판단
   const isSplit = invoiceWh === 'SC&CA';
+  const scShippedAt = order.sc_shipped_at ? fmtDate(order.sc_shipped_at) : null;
+  const caShippedAt = order.ca_shipped_at ? fmtDate(order.ca_shipped_at) : null;
+  const scStatus = order.sc_status || '';
+  const caStatus = order.ca_status || '';
+
+  let shipmentStatusHtml = '';
+  if (isSplit) {
+    const scDone = !!scShippedAt;
+    const caDone = !!caShippedAt;
+    if (scDone && caDone) {
+      shipmentStatusHtml = `<div style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#166534;font-weight:700;">&#10003; PO Fully Shipped &amp; Completed</div>`;
+    } else if (scDone && !caDone) {
+      const caLabel = caStatus === 'ready_to_ship' ? 'Ready to Ship' : 'Preparing for Shipment';
+      shipmentStatusHtml = `<div style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#854d0e;font-weight:700;">&#9203; Partially Shipped — CA Warehouse: ${caLabel}</div>`;
+    } else if (!scDone && caDone) {
+      const scLabel = scStatus === 'ready_to_ship' ? 'Ready to Ship' : 'Preparing for Shipment';
+      shipmentStatusHtml = `<div style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#854d0e;font-weight:700;">&#9203; Partially Shipped — SC Warehouse: ${scLabel}</div>`;
+    }
+  } else {
+    const shipped = invoiceWh === 'CA' ? caShippedAt : scShippedAt;
+    if (shipped) {
+      shipmentStatusHtml = `<div style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#166534;font-weight:700;">&#10003; PO Fully Shipped &amp; Completed</div>`;
+    }
+  }
+
+  // 라인 — shipped qty > 0 만
   const shippedLines = (lines || [])
-    .filter(l => {
-      const filled = l.qty_filled || 0;
-      if (filled <= 0) return false;
-      return true;
-    })
+    .filter(l => (l.qty_filled || 0) > 0)
     .sort((a,b) => {
       const ca = (a.color||'').localeCompare(b.color||'');
       return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
@@ -13404,128 +13415,131 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     const price = l.unit_price || 0;
     const amt = shipped * price;
     totalShipped += shipped; totalAmt += amt;
-    const styleNum = l.styles?.style_number || '';
-    const desc = l.styles?.description || '';
     return `<tr>
-      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-weight:600;">${styleNum}</td>
-      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:12px;">${desc}</td>
-      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:center;">${(l.color||'').toUpperCase()}</td>
-      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:center;">${l.size||''}</td>
-      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:center;font-weight:700;">${shipped.toLocaleString()}</td>
-      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:center;">PCS</td>
-      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:right;">$${price.toFixed(2)}</td>
-      <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:700;">$${amt.toFixed(2)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;font-weight:600;font-size:11px;">${l.styles?.style_number||''}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;">${l.styles?.description||''}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;text-align:center;">${(l.color||'').toUpperCase()}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;text-align:center;">${l.size||''}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;text-align:center;font-weight:700;">${shipped.toLocaleString()}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;text-align:center;">PCS</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;text-align:right;">$${price.toFixed(2)}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;text-align:right;font-weight:700;">$${amt.toFixed(2)}</td>
     </tr>`;
   }).join('');
 
-  // Back order lines
-  const backLines = (lines||[]).filter(l => (l.qty_backordered||0) > 0);
+  // Back order — 사이즈 순서대로
+  const backLines = (lines||[])
+    .filter(l => (l.qty_backordered||0) > 0)
+    .sort((a,b) => {
+      const ca = (a.color||'').localeCompare(b.color||'');
+      return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
+    });
   const totalBack = backLines.reduce((s,l)=>s+(l.qty_backordered||0),0);
   const backSection = backLines.length ? `
-    <table style="width:100%;border-collapse:collapse;margin-top:20px;border:2px solid #fecaca;border-radius:8px;">
-      <tr><td style="background:#fee2e2;padding:10px 16px;border-radius:6px 6px 0 0;">
-        <span style="font-size:13px;font-weight:700;color:#991b1b;">&#9888;&#65039; Back Order — ${totalBack.toLocaleString()} pcs pending</span><br>
-        <span style="font-size:11px;color:#991b1b;">These items will be shipped as inventory becomes available.</span>
+    <table style="width:100%;border-collapse:collapse;margin-top:12px;border:1px solid #fecaca;border-radius:6px;">
+      <tr><td style="background:#fee2e2;padding:7px 12px;border-radius:5px 5px 0 0;">
+        <span style="font-size:12px;font-weight:700;color:#991b1b;">&#9888; Back Order — ${totalBack.toLocaleString()} pcs pending</span>
       </td></tr>
       <tr><td style="padding:0;">
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
           <thead><tr style="background:#fef2f2;">
-            <th style="padding:6px 10px;text-align:left;color:#991b1b;">Style</th>
-            <th style="padding:6px 10px;text-align:left;color:#991b1b;">Color</th>
-            <th style="padding:6px 10px;text-align:center;color:#991b1b;">Size</th>
-            <th style="padding:6px 10px;text-align:center;color:#991b1b;">Back Qty</th>
+            <th style="padding:5px 8px;text-align:left;color:#991b1b;">Style</th>
+            <th style="padding:5px 8px;text-align:left;color:#991b1b;">Color</th>
+            <th style="padding:5px 8px;text-align:center;color:#991b1b;">Size</th>
+            <th style="padding:5px 8px;text-align:center;color:#991b1b;">Back Qty</th>
           </tr></thead>
           <tbody>${backLines.map(l=>`
             <tr style="border-top:1px solid #fef2f2;">
-              <td style="padding:5px 10px;font-weight:600;">${l.styles?.style_number||''}</td>
-              <td style="padding:5px 10px;">${l.color||''}</td>
-              <td style="padding:5px 10px;text-align:center;">${l.size||''}</td>
-              <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</td>
+              <td style="padding:4px 8px;font-weight:600;">${l.styles?.style_number||''}</td>
+              <td style="padding:4px 8px;">${l.color||''}</td>
+              <td style="padding:4px 8px;text-align:center;">${l.size||''}</td>
+              <td style="padding:4px 8px;text-align:center;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</td>
             </tr>`).join('')}
           </tbody>
         </table>
       </td></tr>
     </table>` : '';
 
-  return `<div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#111;">
+  return `<div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#111;font-size:12px;">
     <!-- Header -->
-    <table style="width:100%;border-collapse:collapse;border-radius:8px 8px 0 0;overflow:hidden;">
+    <table style="width:100%;border-collapse:collapse;">
       <tr style="background:#0f2744;">
-        <td style="padding:16px 24px;"><div style="color:#fff;font-size:18px;font-weight:800;letter-spacing:1px;">PACIFIC SPORTS INC</div></td>
-        <td style="padding:16px 24px;text-align:right;">
-          <div style="color:#fff;font-size:22px;font-weight:900;letter-spacing:2px;">INVOICE</div>
-          <div style="color:#9ca3af;font-size:11px;">INV #: ${invoiceNum||'—'}</div>
+        <td style="padding:12px 20px;"><div style="color:#fff;font-size:16px;font-weight:800;">PACIFIC SPORTS INC</div></td>
+        <td style="padding:12px 20px;text-align:right;">
+          <div style="color:#fff;font-size:20px;font-weight:900;letter-spacing:2px;">INVOICE</div>
+          <div style="color:#9ca3af;font-size:10px;">INV #: ${invoiceNum||'—'}</div>
         </td>
-      </tr>
-    </table>
-    <!-- Dates -->
-    <table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;">
-      <tr>
-        <td style="padding:8px 16px;font-size:12px;color:#374151;"><span style="color:#6b7280;">Invoice Date:</span> <strong>${invoiceDate}</strong></td>
-        <td style="padding:8px 16px;font-size:12px;color:#374151;text-align:center;"><span style="color:#6b7280;">Ship Date:</span> <strong>${shipDate}</strong></td>
-        <td style="padding:8px 16px;font-size:12px;color:#374151;text-align:right;"><span style="color:#6b7280;">Due Date:</span> <strong>${dueDate}</strong></td>
       </tr>
     </table>
     <!-- Dear + intro -->
-    <div style="padding:16px 24px 0;background:#fff;border:1px solid #e5e7eb;border-top:none;">
-      <p style="font-size:14px;margin:0 0 4px;">Dear <strong>${order.customer_name||''}</strong>,</p>
-      <p style="font-size:13px;color:#374151;margin:0 0 16px;">Please find your invoice attached. A copy of your packing list and purchase order are also included for your records.</p>
+    <div style="padding:12px 20px 8px;background:#fff;border:1px solid #e5e7eb;border-top:none;">
+      <p style="font-size:13px;margin:0 0 3px;">Dear <strong>${order.customer_name||''}</strong>,</p>
+      <p style="font-size:12px;color:#374151;margin:0 0 10px;">Please find your invoice attached. A copy of your packing list and purchase order are also included for your records.</p>
+      ${shipmentStatusHtml}
     </div>
+    <!-- Dates -->
+    <table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;">
+      <tr>
+        <td style="padding:7px 14px;font-size:11px;color:#374151;"><span style="color:#6b7280;">Invoice Date:</span> <strong>${invoiceDate}</strong></td>
+        <td style="padding:7px 14px;font-size:11px;color:#374151;text-align:center;"><span style="color:#6b7280;">Ship Date:</span> <strong>${shipDate}</strong></td>
+        <td style="padding:7px 14px;font-size:11px;color:#374151;text-align:right;"><span style="color:#6b7280;">Due Date:</span> <strong>${dueDate}</strong></td>
+      </tr>
+    </table>
     <!-- Addresses -->
     <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">
       <tr>
-        <td style="padding:12px 16px;border-right:1px solid #e5e7eb;width:33%;">
-          <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SOLD TO:</div>
-          <div style="font-size:12px;font-weight:700;">${order.customer_name||'—'}</div>
-          <div style="font-size:11px;color:#374151;margin-top:3px;line-height:1.5;">${billAddr}</div>
+        <td style="padding:10px 14px;border-right:1px solid #e5e7eb;width:33%;vertical-align:top;">
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:4px;">SOLD TO:</div>
+          <div style="font-size:11px;font-weight:700;">${order.customer_name||'—'}</div>
+          <div style="font-size:10px;color:#374151;margin-top:2px;line-height:1.5;">${billAddr}</div>
         </td>
-        <td style="padding:12px 16px;border-right:1px solid #e5e7eb;width:33%;">
-          <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SHIP TO:</div>
-          <div style="font-size:12px;font-weight:700;">${order.customer_name||'—'}</div>
-          <div style="font-size:11px;color:#374151;margin-top:3px;line-height:1.5;">${shipAddr}</div>
+        <td style="padding:10px 14px;border-right:1px solid #e5e7eb;width:33%;vertical-align:top;">
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:4px;">SHIP TO:</div>
+          <div style="font-size:11px;font-weight:700;">${order.customer_name||'—'}</div>
+          <div style="font-size:10px;color:#374151;margin-top:2px;line-height:1.5;">${shipAddr}</div>
         </td>
-        <td style="padding:12px 16px;width:33%;">
-          <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SEND PAYMENT TO:</div>
-          <div style="font-size:11px;color:#374151;line-height:1.5;">${paymentLines}</div>
+        <td style="padding:10px 14px;width:33%;vertical-align:top;">
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:4px;">SEND PAYMENT TO:</div>
+          <div style="font-size:10px;color:#374151;line-height:1.5;">${paymentLines}</div>
         </td>
       </tr>
     </table>
     <!-- Order info -->
     <table style="width:100%;border-collapse:collapse;background:#f1f5f9;border:1px solid #e5e7eb;border-top:none;">
       <tr>
-        <td style="padding:8px 12px;font-size:11px;"><div style="color:#6b7280;font-size:10px;text-transform:uppercase;">Customer P.O.</div><div style="font-weight:700;font-size:13px;">${order.customer_po||'—'}</div></td>
-        <td style="padding:8px 12px;font-size:11px;"><div style="color:#6b7280;font-size:10px;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'Net 30'}</div></td>
-        <td style="padding:8px 12px;font-size:11px;"><div style="color:#6b7280;font-size:10px;text-transform:uppercase;">Ship From</div><div style="font-weight:700;">${whLabelInv}</div></td>
-        <td style="padding:8px 12px;font-size:11px;"><div style="color:#6b7280;font-size:10px;text-transform:uppercase;">Ship Via</div><div style="font-weight:700;">${shipViaStr}</div></td>
-        <td style="padding:8px 12px;font-size:11px;"><div style="color:#6b7280;font-size:10px;text-transform:uppercase;">Tracking / PRO #</div><div style="font-weight:600;font-family:monospace;font-size:10px;word-break:break-all;">${trackingStr}</div></td>
+        <td style="padding:6px 10px;font-size:10px;"><div style="color:#6b7280;font-size:9px;text-transform:uppercase;">Customer P.O.</div><div style="font-weight:700;font-size:12px;">${order.customer_po||'—'}</div></td>
+        <td style="padding:6px 10px;font-size:10px;"><div style="color:#6b7280;font-size:9px;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'Net 30'}</div></td>
+        <td style="padding:6px 10px;font-size:10px;"><div style="color:#6b7280;font-size:9px;text-transform:uppercase;">Ship From</div><div style="font-weight:700;">${whLabelInv}</div></td>
+        <td style="padding:6px 10px;font-size:10px;"><div style="color:#6b7280;font-size:9px;text-transform:uppercase;">Ship Via</div><div style="font-weight:700;">${shipViaStr}</div></td>
+        <td style="padding:6px 10px;font-size:10px;"><div style="color:#6b7280;font-size:9px;text-transform:uppercase;">Tracking / PRO #</div><div style="font-weight:600;font-family:monospace;font-size:9px;word-break:break-all;">${trackingStr}</div></td>
       </tr>
     </table>
     <!-- Line items -->
     <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">
       <thead>
         <tr style="background:#111827;color:#fff;">
-          <th style="padding:7px 10px;text-align:left;font-size:11px;">STYLE</th>
-          <th style="padding:7px 10px;text-align:left;font-size:11px;width:25%;">DESCRIPTION</th>
-          <th style="padding:7px 10px;text-align:center;font-size:11px;">COLOR</th>
-          <th style="padding:7px 10px;text-align:center;font-size:11px;">SIZE</th>
-          <th style="padding:7px 10px;text-align:center;font-size:11px;">SHIPPED</th>
-          <th style="padding:7px 10px;text-align:center;font-size:11px;">UNIT</th>
-          <th style="padding:7px 10px;text-align:right;font-size:11px;">PRICE</th>
-          <th style="padding:7px 10px;text-align:right;font-size:11px;">AMOUNT</th>
+          <th style="padding:6px 8px;text-align:left;font-size:10px;">STYLE</th>
+          <th style="padding:6px 8px;text-align:left;font-size:10px;width:25%;">DESCRIPTION</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;">COLOR</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;">SIZE</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;">SHIPPED</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;">UNIT</th>
+          <th style="padding:6px 8px;text-align:right;font-size:10px;">PRICE</th>
+          <th style="padding:6px 8px;text-align:right;font-size:10px;">AMOUNT</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
       <tfoot>
-        <tr><td colspan="6" style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Total Shipped:</td><td colspan="2" style="padding:6px 10px;text-align:right;font-weight:700;">${totalShipped.toLocaleString()} pcs</td></tr>
-        <tr><td colspan="6" style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td><td colspan="2" style="padding:6px 10px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td></tr>
-        ${freight > 0 ? `<tr><td colspan="6" style="padding:4px 10px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td><td colspan="2" style="padding:4px 10px;text-align:right;">$${freight.toFixed(2)}</td></tr>` : ''}
-        <tr style="background:#111827;color:#fff;"><td colspan="6" style="padding:10px;text-align:right;font-weight:700;font-size:13px;">INVOICE TOTAL:</td><td colspan="2" style="padding:10px;text-align:right;font-weight:900;font-size:16px;">$${(totalAmt+freight).toFixed(2)}</td></tr>
-        <tr style="background:#f1f5f9;"><td colspan="6" style="padding:8px 10px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE:</td><td colspan="2" style="padding:8px 10px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td></tr>
+        <tr><td colspan="6" style="padding:5px 8px;text-align:right;font-size:10px;color:#6b7280;">Total Shipped:</td><td colspan="2" style="padding:5px 8px;text-align:right;font-weight:700;font-size:11px;">${totalShipped.toLocaleString()} pcs</td></tr>
+        <tr><td colspan="6" style="padding:5px 8px;text-align:right;font-size:10px;color:#6b7280;">Net Invoice:</td><td colspan="2" style="padding:5px 8px;text-align:right;font-weight:700;font-size:11px;">$${totalAmt.toFixed(2)}</td></tr>
+        ${freight > 0 ? `<tr><td colspan="6" style="padding:4px 8px;text-align:right;font-size:10px;color:#6b7280;">Freight:</td><td colspan="2" style="padding:4px 8px;text-align:right;font-size:11px;">$${freight.toFixed(2)}</td></tr>` : ''}
+        <tr style="background:#111827;color:#fff;"><td colspan="6" style="padding:8px;text-align:right;font-weight:700;font-size:12px;">INVOICE TOTAL:</td><td colspan="2" style="padding:8px;text-align:right;font-weight:900;font-size:15px;">$${(totalAmt+freight).toFixed(2)}</td></tr>
+        <tr style="background:#f1f5f9;"><td colspan="6" style="padding:6px 8px;text-align:right;font-weight:700;font-size:11px;">INVOICE BALANCE:</td><td colspan="2" style="padding:6px 8px;text-align:right;font-weight:800;font-size:13px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td></tr>
       </tfoot>
     </table>
     ${backSection}
     <!-- Return policy -->
-    <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;padding:12px 16px;font-size:10px;color:#374151;background:#fafafa;">
+    <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 6px 6px;padding:10px 14px;font-size:9px;color:#374151;background:#fafafa;">
       <strong>RETURN POLICY:</strong> ${returnPolicy}
     </div>
   </div>`;
