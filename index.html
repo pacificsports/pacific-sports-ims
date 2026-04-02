@@ -7538,7 +7538,10 @@ async function openPcrComplete(orderId, wh) {
       const allocCA = l.alloc_ca_detail || {};
       const caPcrPcs = Object.entries(allocCA).filter(([k])=>k.includes('CA-PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
       // wh에 따라 해당 PCR pcs만 사용
-      const totalPcrPcs = wh === 'CA' ? caPcrPcs : scPcrPcs;
+      const rawPcrPcs = wh === 'CA' ? caPcrPcs : scPcrPcs;
+      // Back Order 수량 제외 — back order된 수량은 실제 출고 안 하므로 partial box 배정에서 제외
+      const backQty = l.qty_backordered || 0;
+      const totalPcrPcs = Math.max(0, rawPcrPcs - backQty);
 
       if (totalPcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: totalPcrPcs, styleNum: l.styles?.style_number||'', color: l.color||'' });
     });
