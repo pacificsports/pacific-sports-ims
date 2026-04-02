@@ -3239,35 +3239,14 @@ async function parsePoPdf(input) {
   if (msgEl) msgEl.textContent = 'Claude가 PDF를 읽고 있어요...';
 
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch('https://po-confirm-email.hjbae.workers.dev/parse-po', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-            { type: 'text', text: `이 PO PDF에서 다음 정보를 JSON으로 추출해주세요. 반드시 JSON만 출력하고 다른 텍스트는 절대 포함하지 마세요:
-{
-  "customer_po": "PO번호",
-  "customer_name": "거래처명",
-  "ship_to": "배송지 주소 (줄바꿈은 \n)",
-  "bill_to": "청구지 주소 (줄바꿈은 \n)",
-  "terms": "결제조건 (예: Net 30)",
-  "lines": [
-    { "item_code": "아이템코드", "style": "스타일번호", "color": "색상", "size": "사이즈", "qty": 수량, "unit_price": 단가 }
-  ]
-}` }
-          ]
-        }]
-      })
+      body: JSON.stringify({ pdf_base64: base64 })
     });
     const data = await resp.json();
-    const text = data.content?.find(c => c.type === 'text')?.text || '';
-    const clean = text.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    if (!data.ok) throw new Error(data.error || 'Parse failed');
+    const parsed = data.data;
     _parsedPoPreview = parsed;
     _parsedPoPreview._pdfBase64 = base64;
     showPoPreview(parsed);
