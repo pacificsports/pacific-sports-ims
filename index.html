@@ -2251,7 +2251,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
 // INVOICE / PICK TICKET / PACKING LIST / TRANSFER
 // ══════════════════════════════════
 let poLines = [];       // 현재 입력 중인 라인들
-let _parsedPoPreview = null; // PO 파싱 결과 임시 저장
+let parsedPoData = null; // PO 파싱 결과 임시 저장
 let _poPdfBase64 = null;     // 업로드된 PO PDF base64
 let currentInvoiceData = null;
 let pcrInventory = {};  // { "styleNum|COLOR|SIZE": { qty, location } }
@@ -3247,8 +3247,8 @@ async function parsePoPdf(input) {
     const data = await resp.json();
     if (!data.ok) throw new Error(data.error || 'Parse failed');
     const parsed = data.data;
-    _parsedPoPreview = parsed;
-    _parsedPoPreview._pdfBase64 = base64;
+    parsedPoData = parsed;
+    parsedPoData._pdfBase64 = base64;
     showPoPreview(parsed);
   } catch(e) {
     showToast('❌ PO 파싱 오류: ' + e.message);
@@ -3259,84 +3259,107 @@ async function parsePoPdf(input) {
   }
 }
 
-function showPoPreview(parsed) {
-  const section = document.getElementById('po-preview-section');
-  if (!section) return;
-
-  // 기본 정보
-  const infoEl = document.getElementById('po-preview-info');
-  if (infoEl) {
-    infoEl.innerHTML = [
-      ['PO #', parsed.customer_po || '—'],
-      ['거래처', parsed.customer_name || '—'],
-      ['Terms', parsed.terms || '—'],
-      ['라인 수', (parsed.lines||[]).length + '개'],
-    ].map(([k,v]) => `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:8px 10px;">
-      <div style="font-size:10px;color:#6b7280;text-transform:uppercase;">${k}</div>
-      <div style="font-weight:700;font-size:13px;">${v}</div>
-    </div>`).join('');
-  }
-
-  // 라인 테이블 — 편집 가능
-  const linesEl = document.getElementById('po-preview-lines');
-  if (linesEl && parsed.lines) {
-    const renderPreviewLines = () => {
-      linesEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead><tr style="background:#e8f5e9;">
-          <th style="padding:6px 8px;text-align:left;">Item Code</th>
-          <th style="padding:6px 8px;text-align:left;">Style</th>
-          <th style="padding:6px 8px;text-align:left;">Color</th>
-          <th style="padding:6px 8px;text-align:center;">Size</th>
-          <th style="padding:6px 8px;text-align:center;">Qty</th>
-          <th style="padding:6px 8px;text-align:right;">Unit $</th>
-          <th style="padding:6px 8px;text-align:center;">Del</th>
-        </tr></thead>
-        <tbody>${_parsedPoPreview.lines.map((l,i) => `<tr style="border-bottom:1px solid #e5e7eb;">
-          <td style="padding:3px 4px;"><input value="${l.item_code||''}" onchange="_parsedPoPreview.lines[${i}].item_code=this.value" style="width:90px;font-size:11px;padding:3px 5px;border:1px solid #d1d5db;border-radius:4px;"></td>
-          <td style="padding:3px 4px;"><input value="${l.style||''}" onchange="_parsedPoPreview.lines[${i}].style=this.value" style="width:70px;font-size:11px;padding:3px 5px;border:1px solid #d1d5db;border-radius:4px;font-weight:600;"></td>
-          <td style="padding:3px 4px;"><input value="${l.color||''}" onchange="_parsedPoPreview.lines[${i}].color=this.value" style="width:120px;font-size:11px;padding:3px 5px;border:1px solid #d1d5db;border-radius:4px;"></td>
-          <td style="padding:3px 4px;text-align:center;"><input value="${l.size||''}" onchange="_parsedPoPreview.lines[${i}].size=this.value" style="width:50px;font-size:11px;padding:3px 5px;border:1px solid #d1d5db;border-radius:4px;text-align:center;"></td>
-          <td style="padding:3px 4px;text-align:center;"><input type="number" value="${l.qty||0}" onchange="_parsedPoPreview.lines[${i}].qty=parseInt(this.value)||0" style="width:60px;font-size:12px;padding:3px 5px;border:1px solid #d1d5db;border-radius:4px;text-align:center;font-weight:700;"></td>
-          <td style="padding:3px 4px;text-align:right;"><input type="number" step="0.01" value="${(l.unit_price||0).toFixed(2)}" onchange="_parsedPoPreview.lines[${i}].unit_price=parseFloat(this.value)||0" style="width:65px;font-size:11px;padding:3px 5px;border:1px solid #d1d5db;border-radius:4px;text-align:right;"></td>
-          <td style="padding:3px 4px;text-align:center;"><button onclick="_parsedPoPreview.lines.splice(${i},1);document.getElementById('po-preview-lines')._rerender();" style="background:#fee2e2;border:none;border-radius:4px;padding:3px 7px;cursor:pointer;color:#dc2626;font-size:13px;">✕</button></td>
-        </tr>`).join('')}</tbody>
-      </table>
-      <button onclick="_parsedPoPreview.lines.push({item_code:'',style:'',color:'',size:'',qty:0,unit_price:0});document.getElementById('po-preview-lines')._rerender();" style="margin-top:8px;padding:5px 12px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:6px;cursor:pointer;font-size:12px;color:#2e7d32;font-weight:600;">+ 라인 추가</button>`;
-      linesEl._rerender = renderPreviewLines;
-    };
-    renderPreviewLines();
-    linesEl._rerender = renderPreviewLines;
-  }
-  section.style.display = 'block';
-
-  // 경고: 거래처 불일치
-  const custSelect = document.getElementById('inv-customer');
+function showPoPreview(data) {
+  document.getElementById('po-preview-section').style.display = 'block';
   const warnEl = document.getElementById('po-preview-warning');
-  if (warnEl && parsed.customer_name && custSelect) {
-    const selected = custSelect.options[custSelect.selectedIndex]?.text || '';
-    if (selected && !selected.toLowerCase().includes(parsed.customer_name.toLowerCase().slice(0,5))) {
-      warnEl.style.display = 'block';
-      warnEl.textContent = `⚠️ 거래처 불일치: PO는 "${parsed.customer_name}", 선택된 거래처는 "${selected}"`;
-    } else {
-      warnEl.style.display = 'none';
-    }
-  }
+  if (warnEl) { warnEl.style.display = data._warning ? 'block' : 'none'; if(data._warning) warnEl.textContent = '⚠️ ' + data._warning; }
+
+  // 헤더 정보
+  document.getElementById('po-preview-info').innerHTML = `
+    <div style="background:#fff;border-radius:4px;padding:8px 10px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px;">CUSTOMER</div>
+      <div style="font-weight:700;font-size:13px;">${data.customer_name||'—'}</div>
+    </div>
+    <div style="background:#fff;border-radius:4px;padding:8px 10px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px;">PO #</div>
+      <div style="font-weight:700;font-size:13px;font-family:'IBM Plex Mono',monospace;">${data.customer_po||data.po_number||'—'}</div>
+    </div>
+    <div style="background:#fff;border-radius:4px;padding:8px 10px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px;">TERMS</div>
+      <div style="font-weight:700;font-size:13px;">${data.terms||'—'}</div>
+    </div>
+    <div style="background:#fff;border-radius:4px;padding:8px 10px;">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px;">DUE DATE</div>
+      <div style="font-weight:700;font-size:13px;">${data.due_date||'—'}</div>
+    </div>`;
+  renderPoLines();
 }
 
+function renderPoLines() {
+  const lines = parsedPoData?.lines || [];
+  const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf((s||'').toUpperCase())+1)||99;
+  try {
+    lines.sort((a,b) => {
+      const stA = String(a.style||a.style_number||''), stB = String(b.style||b.style_number||'');
+      if (stA!==stB) return stA.localeCompare(stB,undefined,{numeric:true});
+      const ca=(a.color||'').toLowerCase(), cb=(b.color||'').toLowerCase();
+      if (ca!==cb) return ca.localeCompare(cb);
+      return sizeOrd(a.size)-sizeOrd(b.size);
+    });
+  } catch(e) {}
+  const totalQty = lines.reduce((s,l)=>s+(parseInt(l.qty)||0),0);
+
+  const inp = (val, field, idx, type='text', w='100%', extra='') =>
+    `<input class="fi" value="${String(val||'').replace(/"/g,'&quot;')}" type="${type}"
+      style="width:${w};height:24px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:center;padding:2px 4px;${extra}"
+      oninput="parsedPoData.lines[${idx}]['${field}']=this.${type==='number'?'valueAsNumber':'value'};renderPoLines()"/>`;
+
+  const linesEl = document.getElementById('po-preview-lines');
+  if (!linesEl) return;
+  linesEl.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr style="background:#0f2744;color:#fff;">
+          <th style="padding:7px 10px;text-align:center;width:36px;">#</th>
+          <th style="padding:7px 10px;text-align:left;">Style</th>
+          <th style="padding:7px 10px;text-align:left;">Color</th>
+          <th style="padding:7px 10px;text-align:center;">Size</th>
+          <th style="padding:7px 10px;text-align:center;">Qty</th>
+          <th style="padding:7px 10px;text-align:right;">Unit $</th>
+          <th style="padding:7px 10px;text-align:center;width:36px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${lines.map((l,i) => `<tr style="border-bottom:1px solid #e5e7eb;${i%2===0?'background:#fafafa;':''}">
+          <td style="padding:5px 10px;text-align:center;color:#9ca3af;">${i+1}</td>
+          <td style="padding:4px 6px;">${inp(l.style||l.style_number,'style',i,'text','90px','font-weight:700;')}</td>
+          <td style="padding:4px 6px;">${inp(l.color,'color',i,'text','140px','text-align:left;')}</td>
+          <td style="padding:4px 6px;">${inp(l.size,'size',i,'text','52px')}</td>
+          <td style="padding:4px 6px;">${inp(l.qty,'qty',i,'number','60px','font-weight:700;font-size:12px;')}</td>
+          <td style="padding:4px 6px;">${inp(l.unit_price,'unit_price',i,'number','65px','text-align:right;')}</td>
+          <td style="padding:4px 6px;text-align:center;">
+            <button onclick="parsedPoData.lines.splice(${i},1);renderPoLines();" 
+              style="background:#fee2e2;border:none;border-radius:4px;padding:2px 7px;cursor:pointer;color:#dc2626;font-size:12px;">✕</button>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="background:#0f2744;color:#fff;font-weight:700;">
+          <td colspan="4" style="padding:8px 10px;">Total</td>
+          <td style="padding:8px 10px;text-align:center;font-size:14px;">${totalQty}</td>
+          <td colspan="2"></td>
+        </tr>
+      </tfoot>
+    </table>
+    <button onclick="parsedPoData.lines.push({style:'',color:'',size:'',qty:0,unit_price:0});renderPoLines();" 
+      style="margin-top:8px;padding:5px 14px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:6px;cursor:pointer;font-size:12px;color:#2e7d32;font-weight:600;">+ 라인 추가</button>`;
+}
+
+
 function applyPoPreview() {
-  if (!_parsedPoPreview) return;
-  const p = _parsedPoPreview;
+  if (!parsedPoData) return;
+  const p = parsedPoData;
 
   // PO# 적용
-  if (p.customer_po) {
-    const poEl = document.getElementById('inv-customer-po');
-    if (poEl) poEl.value = p.customer_po;
-  }
+  const poNum = p.customer_po || p.po_number || '';
+  if (poNum) { const el = document.getElementById('inv-customer-po'); if (el) el.value = poNum; }
+
   // Terms 적용
   if (p.terms) {
     const termsEl = document.getElementById('inv-terms');
     if (termsEl) {
-      [...termsEl.options].forEach(o => { if (o.value.includes(p.terms.replace(/[^0-9]/g,''))) termsEl.value = o.value; });
+      const tNum = p.terms.replace(/[^0-9]/g,'');
+      [...termsEl.options].forEach(o => { if (o.value.includes(tNum)) termsEl.value = o.value; });
     }
   }
   // 주소 적용
@@ -3346,8 +3369,8 @@ function applyPoPreview() {
   // 라인 적용
   if (p.lines && p.lines.length > 0) {
     poLines = p.lines.map(l => ({
-      item_code: l.item_code || '',
-      style: l.style || '',
+      item_code: l.item_code || l.style || '',
+      style: l.style || l.style_number || '',
       color: l.color || '',
       size: l.size || '',
       qty: parseInt(l.qty) || 0,
@@ -3357,9 +3380,7 @@ function applyPoPreview() {
   }
 
   // PDF base64 저장
-  if (p._pdfBase64) {
-    window._poPdfBase64ForSave = p._pdfBase64;
-  }
+  if (p._pdfBase64) window._poPdfBase64ForSave = p._pdfBase64;
 
   clearPoPreview();
   liveRenderDocs();
@@ -3367,7 +3388,7 @@ function applyPoPreview() {
 }
 
 function clearPoPreview() {
-  _parsedPoPreview = null;
+  parsedPoData = null;
   const section = document.getElementById('po-preview-section');
   if (section) section.style.display = 'none';
 }
