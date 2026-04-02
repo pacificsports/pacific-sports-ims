@@ -7497,19 +7497,22 @@ async function openPcrComplete(orderId, wh) {
     : lines;
 
   // Partial pcs가 있는 라인만 (wh에 따라 SC-PCR 또는 CA-PCR 기준)
+  // Back Order 수량 제외 — 전량 back order면 partial box 배정 불필요
   const pcrKeyPrefix = wh === 'CA' ? 'CA-PCR|PCR' : 'SC-PCR|PCR';
   const pcrLines = filteredLines.filter(l => {
     const alloc = wh === 'CA' ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
     const pcrEntry = Object.entries(alloc).find(([k]) => k.includes(pcrKeyPrefix));
     const pcrPcs = pcrEntry ? (typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0)) : 0;
-    return pcrPcs > 0;
+    const backQty = l.qty_backordered || 0;
+    return Math.max(0, pcrPcs - backQty) > 0;
   });
 
   _pcrCompleteLines = pcrLines.map((l,i) => {
     const ppb = l.pcs_per_box || 72;
     const alloc = wh === 'CA' ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
     const pcrEntry = Object.entries(alloc).find(([k]) => k.includes(pcrKeyPrefix));
-    const partialQty = pcrEntry ? (typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0)) : 0;
+    const rawPartialQty = pcrEntry ? (typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0)) : 0;
+    const partialQty = Math.max(0, rawPartialQty - (l.qty_backordered || 0));
     const pcrBinId = pcrEntry ? pcrEntry[0] : null;
     const fullBoxes = Object.entries(alloc)
       .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
