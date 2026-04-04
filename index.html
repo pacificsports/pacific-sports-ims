@@ -14985,39 +14985,18 @@ function playNewOrderChime() {
   try {
     const ctx = _getAudioCtx();
     const now = ctx.currentTime;
-    // 킥
-    const o1=ctx.createOscillator(),g1=ctx.createGain();
-    o1.connect(g1);g1.connect(ctx.destination);o1.type='sine';
-    o1.frequency.setValueAtTime(220,now);o1.frequency.exponentialRampToValueAtTime(35,now+0.5);
-    g1.gain.setValueAtTime(1.5,now);g1.gain.exponentialRampToValueAtTime(0.001,now+0.5);
-    o1.start(now);o1.stop(now+0.55);
-    // 킥 노이즈
-    const buf=ctx.createBuffer(1,Math.floor(ctx.sampleRate*0.08),ctx.sampleRate);
-    const bd=buf.getChannelData(0);for(let i=0;i<bd.length;i++)bd[i]=Math.random()*2-1;
-    const src=ctx.createBufferSource();src.buffer=buf;
-    const lpf=ctx.createBiquadFilter();lpf.type='lowpass';lpf.frequency.value=300;
-    const gn=ctx.createGain();src.connect(lpf);lpf.connect(gn);gn.connect(ctx.destination);
-    gn.gain.setValueAtTime(1.2,now);gn.gain.exponentialRampToValueAtTime(0.001,now+0.08);
-    src.start(now);src.stop(now+0.09);
-    // 배음들 퍼짐
-    [[55,1.4,3.5],[110,0.8,3.0],[165,0.4,2.5],[220,0.2,2.0]].forEach(([f,vol,dur],i) => {
-      const o=ctx.createOscillator(),g=ctx.createGain();
-      o.connect(g);g.connect(ctx.destination);o.type='sine';o.frequency.setValueAtTime(f,now+i*0.02);
-      g.gain.setValueAtTime(vol,now+i*0.02);g.gain.exponentialRampToValueAtTime(0.001,now+dur);
-      o.start(now+i*0.02);o.stop(now+dur+0.05);
-    });
-    // 딩딩딩~ 빠르게
-    [[2.4,1047,0.8,0.15],[2.55,1047,0.8,0.15],[2.70,1319,1.0,1.2]].forEach(([t,freq,vol,dur]) => {
-      const o=ctx.createOscillator(),g=ctx.createGain();
-      o.connect(g);g.connect(ctx.destination);o.type='sine';o.frequency.setValueAtTime(freq,now+t);
-      g.gain.setValueAtTime(0,now+t);g.gain.linearRampToValueAtTime(vol,now+t+0.005);
-      g.gain.exponentialRampToValueAtTime(0.001,now+t+dur);
-      o.start(now+t);o.stop(now+t+dur+0.02);
-      const o2=ctx.createOscillator(),g2=ctx.createGain();
-      o2.connect(g2);g2.connect(ctx.destination);o2.type='sine';o2.frequency.setValueAtTime(freq*2,now+t);
-      g2.gain.setValueAtTime(0,now+t);g2.gain.linearRampToValueAtTime(vol*0.2,now+t+0.005);
-      g2.gain.exponentialRampToValueAtTime(0.001,now+t+dur*0.5);
-      o2.start(now+t);o2.stop(now+t+dur*0.5+0.02);
+    // 띠링~ 3번 연속 (sweep 600→2400Hz × 3회)
+    [0, 0.18, 0.36].forEach(offset => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.type = 'sine';
+      o.frequency.setValueAtTime(600, now + offset);
+      o.frequency.exponentialRampToValueAtTime(2400, now + offset + 0.12);
+      g.gain.setValueAtTime(0, now + offset);
+      g.gain.linearRampToValueAtTime(0.5, now + offset + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.14);
+      o.start(now + offset);
+      o.stop(now + offset + 0.15);
     });
   } catch(e) {}
 }
@@ -15056,21 +15035,29 @@ function _playUrgentSirenFallback() {
   } catch(e) {}
 }
 
-// ── Invoice 발송 돈소리 (치칭! 캐쉬레지스터)
+// ── Invoice 발송 성공음 (뽀잉 + 벨)
 function playCashRegister() {
   try {
     const ctx = _getAudioCtx();
     const now = ctx.currentTime;
-    // 이메일 발송 — 슝↗ + 딩
-    const o1=ctx.createOscillator(),g1=ctx.createGain();
-    o1.connect(g1);g1.connect(ctx.destination);o1.type='sine';
-    o1.frequency.setValueAtTime(400,now);o1.frequency.exponentialRampToValueAtTime(2000,now+0.15);
-    g1.gain.setValueAtTime(0.3,now);g1.gain.exponentialRampToValueAtTime(0.001,now+0.15);
-    o1.start(now);o1.stop(now+0.17);
-    const o2=ctx.createOscillator(),g2=ctx.createGain();
-    o2.connect(g2);g2.connect(ctx.destination);o2.type='sine';o2.frequency.setValueAtTime(1760,now+0.18);
-    g2.gain.setValueAtTime(0,now+0.18);g2.gain.linearRampToValueAtTime(0.35,now+0.188);
-    g2.gain.exponentialRampToValueAtTime(0.001,now+0.78);o2.start(now+0.18);o2.stop(now+0.8);
+    // sweep 200→800Hz 뽀잉
+    const o1 = ctx.createOscillator(), g1 = ctx.createGain();
+    o1.connect(g1); g1.connect(ctx.destination);
+    o1.type = 'sine';
+    o1.frequency.setValueAtTime(200, now);
+    o1.frequency.exponentialRampToValueAtTime(800, now + 0.15);
+    g1.gain.setValueAtTime(0, now);
+    g1.gain.linearRampToValueAtTime(0.4, now + 0.01);
+    g1.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    o1.start(now); o1.stop(now + 0.2);
+    // 1319Hz 벨
+    const o2 = ctx.createOscillator(), g2 = ctx.createGain();
+    o2.connect(g2); g2.connect(ctx.destination);
+    o2.type = 'sine'; o2.frequency.setValueAtTime(1319, now + 0.18);
+    g2.gain.setValueAtTime(0, now + 0.18);
+    g2.gain.linearRampToValueAtTime(0.45, now + 0.19);
+    g2.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+    o2.start(now + 0.18); o2.stop(now + 0.95);
   } catch(e) {}
 }
 
