@@ -7375,12 +7375,12 @@ async function openWhComplete(orderId, wh) {
 
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const filteredLines = isSplit
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
+    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
     : lines;
 
   // Full Box가 있는 라인만 (alloc_detail의 non-PCR, non-TRANSFER boxes 합산)
   const whLines = filteredLines.filter(l => {
-    const alloc = l.alloc_detail || l.alloc_ca_detail || {};
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail || l.alloc_detail || {}) : (l.alloc_detail || l.alloc_ca_detail || {});
     return Object.entries(alloc).some(([k,v]) => 
       !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|') && 
       (typeof v==='object' ? (v.boxes||0) > 0 : (v||0) > 0)
@@ -7389,7 +7389,8 @@ async function openWhComplete(orderId, wh) {
 
   _whCompleteLines = whLines.map((l,i) => {
     const ppb = l.pcs_per_box || 72;
-    const alloc = l.alloc_detail || l.alloc_ca_detail || {};
+    // SC&CA 라인은 해당 WH의 alloc만 사용
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
     // alloc_detail의 non-PCR, non-TRANSFER boxes 합산
     const fullBoxes = Object.entries(alloc)
       .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
@@ -14991,18 +14992,24 @@ function playNewOrderChime() {
   try {
     const ctx = _getAudioCtx();
     const now = ctx.currentTime;
-    // 띠링~ 3번 연속 (sweep 600→2400Hz × 3회)
-    [0, 0.18, 0.36].forEach(offset => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.type = 'sine';
-      o.frequency.setValueAtTime(600, now + offset);
-      o.frequency.exponentialRampToValueAtTime(2400, now + offset + 0.12);
-      g.gain.setValueAtTime(0, now + offset);
-      g.gain.linearRampToValueAtTime(0.5, now + offset + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.14);
-      o.start(now + offset);
-      o.stop(now + offset + 0.15);
+    // 딩동~ 3번 (벨 2음 × 3세트)
+    [0, 0.9, 1.8].forEach(offset => {
+      [[0, 1047], [0.35, 784]].forEach(([t, f]) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination); o.type = 'sine';
+        o.frequency.setValueAtTime(f, now + offset + t);
+        g.gain.setValueAtTime(0, now + offset + t);
+        g.gain.linearRampToValueAtTime(0.5, now + offset + t + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.001, now + offset + t + 0.8);
+        o.start(now + offset + t); o.stop(now + offset + t + 0.85);
+        const o2 = ctx.createOscillator(), g2 = ctx.createGain();
+        o2.connect(g2); g2.connect(ctx.destination); o2.type = 'sine';
+        o2.frequency.setValueAtTime(f * 2.76, now + offset + t);
+        g2.gain.setValueAtTime(0, now + offset + t);
+        g2.gain.linearRampToValueAtTime(0.18, now + offset + t + 0.005);
+        g2.gain.exponentialRampToValueAtTime(0.001, now + offset + t + 0.4);
+        o2.start(now + offset + t); o2.stop(now + offset + t + 0.45);
+      });
     });
   } catch(e) {}
 }
