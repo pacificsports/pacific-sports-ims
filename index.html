@@ -5137,11 +5137,10 @@ function renderCustomerPOTable() {
         + '<td style="font-size:11px;color:#6b7280;">' + preparedBy + '</td>'
         + '<td><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:' + st.bg + ';color:' + st.color + ';">' + st.label + '</span></td>'
         + '<td style="white-space:nowrap;" onclick="event.stopPropagation()">'
-        + '<div style="display:flex;flex-direction:column;gap:3px;min-width:150px;">'
-        + '<button class="btn btn-sm" style="' + btnStyle('#f0f9ff','#0369a1','#bae6fd') + '" onclick="resendShippedEmail(\'' + oid + '\',\'' + wh + '\')">📧 Re-send Shipped</button>'
-        + '<button class="btn btn-sm" style="' + btnStyle('#f5f3ff','#7c3aed','#c4b5fd') + '" onclick="reviewAndSendInvoice(\'' + oid + '\',\'' + wh + '\')">🧾 Re-send Invoice</button>'
-        + '<button class="btn btn-sm" style="' + btnStyle('#f0fdf4','#15803d','#86efac') + '" onclick="printPackingListFromCard(\'' + oid + '\',\'' + wh + '\')">📋 Print PL</button>'
-        + '<button class="btn btn-sm" style="' + btnStyle('#fef2f2','#dc2626','#fca5a5') + '" onclick="openReturnModal(\'' + oid + '\')">↩ Return</button>'
+        + '<div style="display:flex;flex-wrap:wrap;gap:3px;">'
+        + '<button class="btn btn-sm" style="background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;font-size:10px;" onclick="showDocPopover(this,\'' + oid + '\',\'' + wh + '\',\'invoice\')">🧾 Invoice</button>'
+        + '<button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;font-size:10px;" onclick="showDocPopover(this,\'' + oid + '\',\'' + wh + '\',\'packing\')">📋 Packing List</button>'
+        + (o.po_file ? '<button class="btn btn-sm" style="background:#f0fdf4;color:#15803d;border-color:#86efac;font-size:10px;" onclick="showDocPopover(this,\'' + oid + '\',\'' + wh + '\',\'po\')">📄 Customer PO</button>' : '')
         + '</div>'
         + '</td>'
         + '</tr>';
@@ -5174,8 +5173,12 @@ function renderCustomerPOTable() {
         const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
         const whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
         let actionBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
-        if (o.status === 'invoiced' || o.status === 'completed') {
-          actionBtns += ' <button class="btn btn-sm" style="background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();openInvoiceDocsModal(\'' + oid + '\',\'' + wh + '\')">📄 Docs</button>';
+        if (o.status === 'invoiced' || o.status === 'completed' || o.status === 'shipped') {
+          const _mkB = (label, bg, color, border, dtype) =>
+            '<button class="btn btn-sm" style="background:' + bg + ';color:' + color + ';border-color:' + border + ';" onclick="event.stopPropagation();showDocPopover(this,\'' + oid + '\',\'' + wh + '\',\'' + dtype + '\')">' + label + '</button>';
+          actionBtns += ' ' + _mkB('🧾 Invoice', '#f5f3ff', '#6d28d9', '#c4b5fd', 'invoice');
+          actionBtns += ' ' + _mkB('📋 Packing List', '#f0f9ff', '#0369a1', '#bae6fd', 'packing');
+          if (o.po_file) actionBtns += ' ' + _mkB('📄 Customer PO', '#f0fdf4', '#15803d', '#86efac', 'po');
         }
         if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
           actionBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕ Cancel</button>'
@@ -5207,9 +5210,14 @@ function renderCustomerPOTable() {
       const caAmt = o.ca_total_amount || 0;
 
       // SC 액션 버튼
+      const mkDocBtn = (label, bg, color, border, oid2, wh2, docType) =>
+        '<button class="btn btn-sm" style="background:' + bg + ';color:' + color + ';border-color:' + border + ';" onclick="event.stopPropagation();showDocPopover(this,\'' + oid2 + '\',\'' + wh2 + '\',\'' + docType + '\')">' + label + '</button>';
+
       let scBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
       if (['invoiced','completed','shipped'].includes(scStatusKey)) {
-        scBtns += ' <button class="btn btn-sm" style="background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();openInvoiceDocsModal(\'' + oid + '\',\'SC\')">📄 SC Docs</button>';
+        scBtns += ' ' + mkDocBtn('🧾 Invoice', '#f5f3ff', '#6d28d9', '#c4b5fd', oid, 'SC', 'invoice');
+        scBtns += ' ' + mkDocBtn('📋 Packing List', '#f0f9ff', '#0369a1', '#bae6fd', oid, 'SC', 'packing');
+        if (o.po_file) scBtns += ' ' + mkDocBtn('📄 Customer PO', '#f0fdf4', '#15803d', '#86efac', oid, 'SC', 'po');
       }
       if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
         scBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕</button>'
@@ -5219,7 +5227,9 @@ function renderCustomerPOTable() {
       // CA 액션 버튼
       let caBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
       if (['invoiced','completed','shipped'].includes(caStatusKey)) {
-        caBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;" onclick="event.stopPropagation();openInvoiceDocsModal(\'' + oid + '\',\'CA\')">📄 CA Docs</button>';
+        caBtns += ' ' + mkDocBtn('🧾 Invoice', '#fff7ed', '#c2410c', '#fdba74', oid, 'CA', 'invoice');
+        caBtns += ' ' + mkDocBtn('📋 Packing List', '#fff7ed', '#c2410c', '#fdba74', oid, 'CA', 'packing');
+        if (o.po_file) caBtns += ' ' + mkDocBtn('📄 Customer PO', '#fff7ed', '#c2410c', '#fdba74', oid, 'CA', 'po');
       }
 
       const scRow = '<tr style="cursor:pointer;' + rowBg + 'border-bottom:none;" onclick="openPODetail(\'' + oid + '\'">'
@@ -11212,6 +11222,92 @@ async function openInvoiceDocsModal(orderId, wh) {
   });
 }
 
+// ── Inline doc popover (Invoice / PL / Customer PO 버튼용)
+function showDocPopover(btn, orderId, wh, docType) {
+  event.stopPropagation();
+  // 이미 열린 팝오버 닫기
+  document.querySelectorAll('.doc-popover').forEach(p => p.remove());
+
+  const rect = btn.getBoundingClientRect();
+  const pop = document.createElement('div');
+  pop.className = 'doc-popover';
+  pop.style.cssText = 'position:fixed;z-index:999999;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.15);min-width:190px;padding:6px 0;';
+  pop.style.top = (rect.bottom + 4) + 'px';
+  pop.style.left = Math.min(rect.left, window.innerWidth - 200) + 'px';
+
+  const items = [
+    { icon: '👁️', label: 'View / Download', action: 'view' },
+    { icon: '📧', label: 'Resend to Customer', action: 'resend' },
+  ];
+
+  items.forEach(item => {
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:8px 14px;cursor:pointer;font-size:12px;display:flex;align-items:center;gap:8px;color:#111;';
+    row.innerHTML = `<span>${item.icon}</span><span>${item.label}</span>`;
+    row.onmouseenter = () => row.style.background = '#f5f3ff';
+    row.onmouseleave = () => row.style.background = '';
+    row.onclick = async (e) => {
+      e.stopPropagation();
+      pop.remove();
+      if (item.action === 'view') {
+        await _openDocPdfById(docType, orderId, wh);
+      } else {
+        await _resendDocToCustomer(docType, orderId, wh);
+      }
+    };
+    pop.appendChild(row);
+  });
+
+  document.body.appendChild(pop);
+  // 바깥 클릭 시 닫기
+  setTimeout(() => {
+    const close = (e) => { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('click', close); } };
+    document.addEventListener('click', close);
+  }, 0);
+}
+
+async function _openDocPdfById(type, orderId, wh) {
+  try {
+    showToast('⏳ PDF 생성 중...');
+    const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
+    const { data: allLines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+    const { data: settingsRows } = await db.from('company_settings').select('key,value');
+    const cs = {}; (settingsRows||[]).forEach(s => { cs[s.key] = s.value; });
+    const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+    const lines = (isSplit && wh)
+      ? (allLines||[]).filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+      : (allLines||[]);
+    const invWhPfx = wh === 'CA' ? 'CA' : 'SC';
+    const invNum = order.invoice_number ? (invWhPfx + order.invoice_number) : '—';
+    const shipInfo = { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'' };
+
+    let b64 = null;
+    if (type === 'po' && order.po_file) {
+      b64 = order.po_file;
+    } else {
+      const html = type === 'invoice'
+        ? buildInvoiceHtml(order, lines, false, invNum, shipInfo, cs, 0)
+        : buildPackingListHtml(order, allLines||[], isSplit, wh||'SC', shipInfo, '');
+      if (!html) { showToast('❌ PDF 생성 실패'); return; }
+      b64 = await htmlToPdfBase64(html);
+    }
+    if (!b64) { showToast('❌ PDF 변환 실패'); return; }
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch(e) { showToast('❌ 오류: ' + e.message); }
+}
+
+async function _resendDocToCustomer(type, orderId, wh) {
+  if (type === 'invoice') {
+    await reviewAndSendInvoice(orderId, wh);
+  } else {
+    showToast('🔧 준비 중입니다');
+  }
+}
+
 async function _openDocPdf(type, orderId, wh, order, invNum) {
   try {
     showToast('⏳ PDF 생성 중...');
@@ -13849,25 +13945,23 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     const sorted = [...sectionLines]
       .filter(l => getWhShippedQty(l) > 0)  // 이 WH에서 shipped 수량 있는 라인만
       .sort((a,b) => { const ca = (a.color||'').localeCompare(b.color||''); return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size); });
-    let totalOrdered = 0, totalShipped = 0, totalAmt = 0;
+    let totalShipped = 0, totalAmt = 0;
     const rows = sorted.map(l => {
-      const ordered = l.qty_pieces || 0;
       const shipped = getWhShippedQty(l);  // WH별 정확한 수량
       const price = l.unit_price || 0;
       const amt = shipped * price;
-      totalOrdered += ordered; totalShipped += shipped; totalAmt += amt;
+      totalShipped += shipped; totalAmt += amt;
       const styleNum = l.styles?.style_number || '';
       const desc = l.styles?.description || '';
       const color = (l.color||'').toUpperCase();
       const size = l.size || '';
-      const itemNo = styleNum ? (desc ? styleNum + ' ' + desc.toUpperCase() + ' - ' + color + ' - ' + size : styleNum + ' - ' + color + ' - ' + size) : '';
-      return `<tr><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;font-family:monospace;font-weight:600;">${styleNum}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;">${desc}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${color}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${size}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${ordered.toLocaleString()}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;font-weight:700;">${shipped.toLocaleString()}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">PCS</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">$${price.toFixed(2)}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;font-weight:700;">$${amt.toFixed(2)}</td></tr>`;
+      return `<tr><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;font-family:monospace;font-weight:600;">${styleNum}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;">${desc}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${color}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${size}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;font-weight:700;">${shipped.toLocaleString()}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">PCS</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">$${price.toFixed(2)}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;font-weight:700;">$${amt.toFixed(2)}</td></tr>`;
     }).join('');
     // 빈 행으로 페이지 꽉 채우기
     const MIN_ROWS = 18;
     const emptyRowsNeeded = Math.max(0, MIN_ROWS - sorted.length);
     const emptyRows = Array(emptyRowsNeeded).fill('').map(() =>
-      `<tr><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">&nbsp;</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td></tr>`
+      `<tr><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">&nbsp;</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td></tr>`
     ).join('');
     const carrier = (shipInfo && shipInfo.carrier) || order.carrier || '';
     const tracking = (shipInfo && shipInfo.tracking) || order.tracking_number || '';
@@ -13883,7 +13977,7 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     const paymentLines = (paymentInfo || '').replace(/\\n/g, '<br>').replace(/\n/g, '<br>').replace(/\r/g, '');
     const custNo = order.customer_no || '—';
     const salesperson = order.salesperson || '—';
-    return `<div style="font-family:Arial,sans-serif;font-size:12px;color:#111;width:100%;"><div style="background:#111827;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;"><img src="${LOGO_B64}" style="height:44px;width:auto;"><div style="text-align:right;"><div style="color:#fff;font-size:24px;font-weight:900;letter-spacing:3px;">INVOICE</div><div style="color:#9ca3af;font-size:10px;margin-top:2px;">Page: 1</div></div></div><div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:10px 24px;display:flex;justify-content:space-between;margin-bottom:14px;"><div style="font-size:11px;color:#374151;line-height:1.6;"><div style="font-weight:700;font-size:12px;">PEACE TEXTILE AMERICA, INC.</div><div>d.b.a Pacific Sports</div><div>1605 South Guignard Parkway<br>Sumter SC 29150</div><div>Ph: (803) 760-6251</div></div><div style="font-size:11px;text-align:right;color:#374151;line-height:1.8;"><div style="font-weight:700;font-size:12px;">INV #: ${invNo}</div><div style="font-weight:700;">INVOICE DATE: ${invoiceDate}</div><div style="font-weight:700;">DUE DATE: ${dueDate}</div><div style="margin-top:6px;border-top:1px solid #d1d5db;padding-top:6px;">ORDER DATE: ${orderDate}</div><div>SHIP DATE: ${shipDate}</div></div></div><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;"><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SOLD TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'\u2014'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${billAddr}</div></div><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SHIP TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'\u2014'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${shipAddr}</div></div><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SEND PAYMENT TO:</div><div style="font-size:11px;color:#374151;line-height:1.5;">${paymentLines}</div></div></div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px;background:#f1f5f9;border-radius:6px;padding:10px;"><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Customer P.O.</div><div style="font-weight:700;font-size:13px;">${order.customer_po||'\u2014'}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'Net 30'}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Ship From</div><div style="font-weight:700;">${whLabelInv}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Ship Via</div><div style="font-weight:700;">${shipViaStr}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Tracking / PRO #</div><div style="font-weight:600;font-family:monospace;font-size:11px;">${trackingStr}</div></div></div><table style="width:100%;border-collapse:collapse;margin-bottom:0;"><thead><tr style="background:#111827;color:#fff;"><th style="padding:7px 8px;text-align:left;font-size:11px;">STYLE</th><th style="padding:7px 8px;text-align:left;font-size:11px;width:30%;">DESCRIPTION</th><th style="padding:7px 8px;text-align:center;font-size:11px;">COLOR</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SIZE</th><th style="padding:7px 8px;text-align:center;font-size:11px;">ORDERED</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SHIPPED</th><th style="padding:7px 8px;text-align:center;font-size:11px;">UNIT</th><th style="padding:7px 8px;text-align:right;font-size:11px;">PRICE</th><th style="padding:7px 8px;text-align:right;font-size:11px;">AMOUNT</th></tr></thead><tbody>${rows}${emptyRows}</tbody><tfoot><tr><td colspan="7" style="padding:6px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td><td colspan="2" style="padding:6px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td></tr>${freight > 0 ? '<tr><td colspan="7" style="padding:4px 6px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td><td colspan="2" style="padding:4px 6px;text-align:right;">$'+ freight.toFixed(2) +'</td></tr>' : ''}<tr style="background:#111827;color:#fff;"><td colspan="7" style="padding:10px 6px;text-align:right;font-weight:700;font-size:13px;">INVOICE TOTAL:</td><td colspan="2" style="padding:10px 6px;text-align:right;font-weight:900;font-size:16px;">$${(totalAmt+freight).toFixed(2)}</td></tr><tr style="background:#f1f5f9;"><td colspan="7" style="padding:8px 6px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE:</td><td colspan="2" style="padding:8px 6px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td></tr></tfoot></table><div style="margin-top:12px;border:1px solid #e5e7eb;border-radius:6px;padding:12px;font-size:10px;color:#374151;display:flex;gap:16px;"><div style="flex:2;"><div style="font-weight:700;margin-bottom:4px;">RETURN POLICY:</div><div style="line-height:1.5;">${returnPolicy}</div></div></div></div>`;
+    return `<div style="font-family:Arial,sans-serif;font-size:12px;color:#111;width:100%;"><div style="background:#111827;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;"><img src="${LOGO_B64}" style="height:44px;width:auto;"><div style="text-align:right;"><div style="color:#fff;font-size:24px;font-weight:900;letter-spacing:3px;">INVOICE</div><div style="color:#9ca3af;font-size:10px;margin-top:2px;">Page: 1</div></div></div><div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:10px 24px;display:flex;justify-content:space-between;margin-bottom:14px;"><div style="font-size:11px;color:#374151;line-height:1.6;"><div style="font-weight:700;font-size:12px;">PEACE TEXTILE AMERICA, INC.</div><div>d.b.a Pacific Sports</div><div>1605 South Guignard Parkway<br>Sumter SC 29150</div><div>Ph: (803) 760-6251</div></div><div style="font-size:11px;text-align:right;color:#374151;line-height:1.8;"><div style="font-weight:700;font-size:12px;">INV #: ${invNo}</div><div style="font-weight:700;">INVOICE DATE: ${invoiceDate}</div><div style="font-weight:700;">DUE DATE: ${dueDate}</div><div style="margin-top:6px;border-top:1px solid #d1d5db;padding-top:6px;">ORDER DATE: ${orderDate}</div><div>SHIP DATE: ${shipDate}</div></div></div><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;"><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SOLD TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'\u2014'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${billAddr}</div></div><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SHIP TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'\u2014'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${shipAddr}</div></div><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SEND PAYMENT TO:</div><div style="font-size:11px;color:#374151;line-height:1.5;">${paymentLines}</div></div></div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px;background:#f1f5f9;border-radius:6px;padding:10px;"><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Customer P.O.</div><div style="font-weight:700;font-size:13px;">${order.customer_po||'\u2014'}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'Net 30'}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Ship From</div><div style="font-weight:700;">${whLabelInv}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Ship Via</div><div style="font-weight:700;">${shipViaStr}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Tracking / PRO #</div><div style="font-weight:600;font-family:monospace;font-size:11px;">${trackingStr}</div></div></div><table style="width:100%;border-collapse:collapse;margin-bottom:0;"><thead><tr style="background:#111827;color:#fff;"><th style="padding:7px 8px;text-align:left;font-size:11px;">STYLE</th><th style="padding:7px 8px;text-align:left;font-size:11px;width:30%;">DESCRIPTION</th><th style="padding:7px 8px;text-align:center;font-size:11px;">COLOR</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SIZE</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SHIPPED</th><th style="padding:7px 8px;text-align:center;font-size:11px;">UNIT</th><th style="padding:7px 8px;text-align:right;font-size:11px;">PRICE</th><th style="padding:7px 8px;text-align:right;font-size:11px;">AMOUNT</th></tr></thead><tbody>${rows}${emptyRows}</tbody><tfoot><tr><td colspan="6" style="padding:6px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td><td colspan="2" style="padding:6px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td></tr>${freight > 0 ? '<tr><td colspan="6" style="padding:4px 6px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td><td colspan="2" style="padding:4px 6px;text-align:right;">$'+ freight.toFixed(2) +'</td></tr>' : ''}<tr style="background:#111827;color:#fff;"><td colspan="6" style="padding:10px 6px;text-align:right;font-weight:700;font-size:13px;">INVOICE TOTAL:</td><td colspan="2" style="padding:10px 6px;text-align:right;font-weight:900;font-size:16px;">$${(totalAmt+freight).toFixed(2)}</td></tr><tr style="background:#f1f5f9;"><td colspan="6" style="padding:8px 6px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE:</td><td colspan="2" style="padding:8px 6px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td></tr></tfoot></table><div style="margin-top:12px;border:1px solid #e5e7eb;border-radius:6px;padding:12px;font-size:10px;color:#374151;display:flex;gap:16px;"><div style="flex:2;"><div style="font-weight:700;margin-bottom:4px;">RETURN POLICY:</div><div style="line-height:1.5;">${returnPolicy}</div></div></div></div>`;
   };
   if (isSplit) {
     // SC&CA 라인은 양쪽 섹션 모두에 포함 (qty_filled는 WH별로 따로 계산 필요)
