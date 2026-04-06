@@ -12009,7 +12009,8 @@ async function _doShippedCore(emp) {
 
     let filled = 0;
     if (lineWh === 'SC&CA') {
-      filled = allocPcs(allocSC) + allocPcs(allocCA);
+      // SC ship이면 SC alloc만, CA ship이면 CA alloc만 (각자 독립적으로 계산)
+      filled = wh === 'CA' ? allocPcs(allocCA) : allocPcs(allocSC);
     } else if (lineWh === 'CA') {
       filled = allocPcs(allocCA) || allocPcs(allocSC);
     } else {
@@ -12086,10 +12087,18 @@ async function _doShippedCore(emp) {
     }
 
     // order_line 업데이트
+    // CA ship 시 SC&CA 라인은 CA filled qty를 alloc_ca_detail에 기록 (invoice용)
+    let caAllocUpdate = {};
+    if (wh === 'CA' && lineWh === 'SC&CA' && filled > 0 && Object.keys(allocCA).length === 0) {
+      // alloc_ca_detail이 비어있으면 CA에서 나간 수량을 기록
+      const ppbLine = l.pcs_per_box || 72;
+      caAllocUpdate = { alloc_ca_detail: { 'CA': { boxes: Math.floor(filled / ppbLine), partial: filled % ppbLine, pcs: filled } } };
+    }
     await db.from('order_lines').update({
       qty_filled: filled,
       qty_backordered: backQty,
-      is_backordered: backQty > 0
+      is_backordered: backQty > 0,
+      ...caAllocUpdate
     }).eq('id', l.id);
   }
 
@@ -13591,6 +13600,9 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
           }
           return s + (v||0);
         }, 0);
+      // SC&CA 라인은 alloc이 없으면 0 — qty_filled는 양쪽 합산이라 fallback 금지
+      if (l.wh === 'SC&CA') return allocTotal;
+      // 단일 WH 라인만 qty_filled fallback 허용
       return allocTotal || l.qty_filled || 0;
     };
 
