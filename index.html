@@ -5170,6 +5170,9 @@ function renderCustomerPOTable() {
       const oid = o.id, onum = o.order_number, ocust = (o.customer_name||'').replace(/'/g,'');
       const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
       let actionBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
+      if (o.status === 'invoiced' || o.status === 'completed') {
+        actionBtns += ' <button class="btn btn-sm" style="background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();openInvoiceDocsModal(\'' + oid + '\',\'' + wh + '\')">📄 Documents</button>';
+      }
       if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
         actionBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕ Cancel</button>'
           + ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑 Delete</button>';
@@ -11079,6 +11082,83 @@ function openReturnModal(orderId) {
   showToast('🔧 Return 기능은 준비 중입니다');
 }
 
+// ── Invoice Documents Modal ──────────────────────────────
+async function openInvoiceDocsModal(orderId, wh) {
+  const modal = document.getElementById('modal-invoice-docs');
+  const infoEl = document.getElementById('inv-docs-order-info');
+  const btnsEl = document.getElementById('inv-docs-buttons');
+  infoEl.textContent = '로딩 중...';
+  btnsEl.innerHTML = '';
+  modal.style.display = 'flex';
+
+  let order = (allCustomerPOs||[]).find(o => o.id === orderId);
+  if (!order) {
+    const { data } = await db.from('orders').select('*').eq('id', orderId).single();
+    order = data;
+  }
+  if (!order) { infoEl.textContent = '오더를 찾을 수 없습니다.'; return; }
+
+  const invWh = wh || (order.wh_code === 'CA' ? 'CA' : 'SC');
+  const invNum = order.invoice_number ? (invWh + order.invoice_number) : '—';
+  infoEl.innerHTML = '<strong>' + (order.customer_name||'') + '</strong> &nbsp;·&nbsp; PO# ' + (order.customer_po||'—') + ' &nbsp;·&nbsp; INV# ' + invNum + ' &nbsp;·&nbsp; Ship: ' + (order.ship_date||'—');
+
+  const mkBtn = (label, bgColor, textColor, borderColor, onClickFn) => {
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.style.cssText = 'background:' + bgColor + ';color:' + textColor + ';border-color:' + borderColor + ';padding:10px 16px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:space-between;width:100%;';
+    b.innerHTML = label + '<span style="font-size:11px;opacity:0.6;">▶</span>';
+    b.onclick = onClickFn;
+    btnsEl.appendChild(b);
+    return b;
+  };
+
+  mkBtn('🧾 Invoice PDF — View / Download', '#f5f3ff', '#6d28d9', '#c4b5fd', async () => {
+    await _openDocPdf('invoice', orderId, invWh, order, invNum);
+  });
+  mkBtn('📋 Packing List PDF — View / Download', '#f0f9ff', '#0369a1', '#bae6fd', async () => {
+    await _openDocPdf('packing', orderId, invWh, order, invNum);
+  });
+  if (order.po_file) {
+    mkBtn('📄 Customer PO PDF — View / Download', '#f0fdf4', '#15803d', '#86efac', async () => {
+      await _openDocPdf('po', orderId, invWh, order, invNum);
+    });
+  }
+  mkBtn('📧 Re-send Invoice to Customer', '#fff7ed', '#c2410c', '#fdba74', async () => {
+    document.getElementById('modal-invoice-docs').style.display = 'none';
+    await reviewAndSendInvoice(orderId, invWh);
+  });
+}
+
+async function _openDocPdf(type, orderId, wh, order, invNum) {
+  try {
+    showToast('⏳ PDF 생성 중...');
+    const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+    const { data: settingsRows } = await db.from('company_settings').select('key,value');
+    const cs = {}; (settingsRows||[]).forEach(s => { cs[s.key] = s.value; });
+    const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+    const filteredLines = (isSplit && wh)
+      ? (lines||[]).filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+      : (lines||[]);
+    const shipInfo = { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'' };
+    let b64 = null;
+    if (type === 'po' && order.po_file) {
+      b64 = order.po_file;
+    } else {
+      const html = type === 'invoice'
+        ? buildInvoiceHtml(order, filteredLines, false, invNum, shipInfo, cs, 0)
+        : buildPackingListHtml(order, lines||[], isSplit, wh, shipInfo, '');
+      if (!html) { showToast('❌ PDF 생성 실패'); return; }
+      b64 = await htmlToPdfBase64(html);
+    }
+    if (!b64) { showToast('❌ PDF 변환 실패'); return; }
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch(e) { showToast('❌ 오류: ' + e.message); }
+}
+
 async function printPackingListFromCard(orderId, whFilter) {
   showToast('📋 Packing List 로딩중...');
   let order = (allOrders||[]).find(o => o.id === orderId);
@@ -12132,34 +12212,65 @@ async function _doShippedCore(emp) {
 
   // Back Order가 있으면 별도 Back Order 레코드 생성
   if (totalBackQty > 0) {
-    // Split 오더면 WH별로 BO 번호 구분
-    const boNum = isSplitOrder ? order.order_number + '-BO-' + (wh||'SC') : order.order_number + '-BO';
-    const { data: existingBo } = await db.from('orders').select('id').eq('order_number', boNum).single();
-    const finalBoNum = existingBo ? boNum + '-2' : boNum;
-    const { data: boOrder } = await db.from('orders').insert({
-      order_number: finalBoNum,
-      customer_name: order.customer_name,
-      customer_po: (order.customer_po || '') + '-BO',
-      customer_id: order.customer_id,
-      warehouse_id: order.warehouse_id,
-      wh_code: order.wh_code,
-      is_split_warehouse: order.is_split_warehouse,
-      ship_date: null,
-      status: 'backordered',
-      total_pcs: totalBackQty,
-      total_amount: backLines.reduce((s,l) => s + (l.qty_backordered||0) * (l.unit_price||0), 0),
-      bill_addr: order.bill_addr,
-      ship_addr: order.ship_addr,
-      terms: order.terms,
-      priority: order.priority,
-      parent_order_id: orderId,
-      created_by: order.created_by
-    }).select().single().then(r => r.data);
+    // Split 오더: WH별이 아닌 단일 BO로 통합 (SC&CA 라인 중복 방지)
+    const boNum = order.order_number + '-BO';
+    const { data: existingBo } = await db.from('orders').select('id,order_number').eq('order_number', boNum).single();
+    // 이미 BO가 존재하면 (다른 WH가 먼저 ship된 경우) 해당 BO에 라인 추가
+    // 기존 BO가 있으면 (다른 WH가 먼저 ship된 경우) 라인만 추가, 없으면 새로 생성
+    let boOrderId = existingBo ? existingBo.id : null;
 
-    if (boOrder) {
+    if (!existingBo) {
+      const { data: newBo } = await db.from('orders').insert({
+        order_number: finalBoNum,
+        customer_name: order.customer_name,
+        customer_po: (order.customer_po || '') + '-BO',
+        customer_id: order.customer_id,
+        warehouse_id: order.warehouse_id,
+        wh_code: order.wh_code,
+        is_split_warehouse: order.is_split_warehouse,
+        ship_date: null,
+        status: 'backordered',
+        total_pcs: totalBackQty,
+        total_amount: backLines.reduce((s,l) => s + (l.qty_backordered||0) * (l.unit_price||0), 0),
+        bill_addr: order.bill_addr,
+        ship_addr: order.ship_addr,
+        terms: order.terms,
+        priority: order.priority,
+        parent_order_id: orderId,
+        created_by: order.created_by
+      }).select().single().then(r => r.data);
+      boOrderId = newBo?.id;
+    } else {
+      // 기존 BO total 업데이트
+      const { data: existingLines } = await db.from('order_lines').select('qty_backordered,unit_price').eq('order_id', existingBo.id);
+      const existingTotal = (existingLines||[]).reduce((s,l) => s + (l.qty_backordered||0)*(l.unit_price||0), 0);
+      const addTotal = backLines.reduce((s,l) => s + (l.qty_backordered||0)*(l.unit_price||0), 0);
+      const existingPcs = (existingLines||[]).reduce((s,l) => s + (l.qty_backordered||0), 0);
+      await db.from('orders').update({
+        total_pcs: existingPcs + totalBackQty,
+        total_amount: existingTotal + addTotal
+      }).eq('id', existingBo.id);
+    }
+
+    if (boOrderId) {
       for (const l of backLines) {
+        // 기존 BO에 같은 color+size 라인이 이미 있으면 수량 합산
+        if (existingBo) {
+          const { data: dupLine } = await db.from('order_lines')
+            .select('id,qty_backordered,qty_pieces')
+            .eq('order_id', boOrderId)
+            .eq('color', l.color).eq('size', l.size)
+            .single().then(r => ({ data: r.data })).catch(() => ({ data: null }));
+          if (dupLine) {
+            await db.from('order_lines').update({
+              qty_pieces: (dupLine.qty_pieces||0) + l.qty_backordered,
+              qty_backordered: (dupLine.qty_backordered||0) + l.qty_backordered
+            }).eq('id', dupLine.id);
+            continue;
+          }
+        }
         await db.from('order_lines').insert({
-          order_id: boOrder.id,
+          order_id: boOrderId,
           style_id: l.style_id,
           warehouse_id: l.warehouse_id,
           wh: l.wh,
@@ -12172,7 +12283,7 @@ async function _doShippedCore(emp) {
           unit_price: l.unit_price
         });
       }
-      showToast(`🚚 Shipped! Back Order ${boNum} 생성됨 (${totalBackQty.toLocaleString()} pcs)`);
+      showToast(`🚚 Shipped! Back Order ${boNum} ${existingBo ? '업데이트' : '생성'}됨 (${totalBackQty.toLocaleString()} pcs)`);
     }
   } else {
     showToast(`🚚 PO# ${order.customer_po||order.order_number} Shipped 완료!`);
@@ -18984,6 +19095,24 @@ function showCreditHoldFlash(overAmt) {
       <button class="btn" onclick="document.getElementById('modal-signed-bol').style.display='none'">닫기</button>
       <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;" onclick="printSignedBol()">🖨️ Print</button>
       <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="saveAndAttachBol()">✅ Save & Attach</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ── Invoice Documents Modal ── -->
+<div id="modal-invoice-docs" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:500px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;">
+      <span style="color:#fff;font-weight:700;font-size:14px;">📄 Documents</span>
+      <button onclick="document.getElementById('modal-invoice-docs').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;line-height:1;">✕</button>
+    </div>
+    <div style="padding:20px;">
+      <div id="inv-docs-order-info" style="font-size:12px;color:#6b7280;margin-bottom:16px;padding:10px 14px;background:#f9fafb;border-radius:6px;border:1px solid #e5e7eb;"></div>
+      <div style="display:flex;flex-direction:column;gap:10px;" id="inv-docs-buttons"></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;">
+      <button class="btn" onclick="document.getElementById('modal-invoice-docs').style.display='none'">닫기</button>
     </div>
   </div>
 </div>
