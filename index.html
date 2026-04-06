@@ -6573,21 +6573,55 @@ async function openRaModal(orderId) {
   document.getElementById('ra-date').value = new Date().toISOString().slice(0,10);
   document.getElementById('ra-notes').value = '';
 
-  // 라인 목록 — shipped qty > 0인 라인만
-  const shippedLines = (lines||[]).filter(l => (l.qty_filled||0) > 0 || (l.qty_pieces||0) > 0);
+  // Return To WH 선택 초기화
+  const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const returnWhEl = document.getElementById('ra-return-wh');
+  if (returnWhEl) {
+    returnWhEl.innerHTML = isSplit
+      ? '<option value="SC">SC — Sumter, SC</option><option value="CA">CA — Eastvale, CA</option>'
+      : (order.wh_code === 'CA'
+          ? '<option value="CA">CA — Eastvale, CA</option>'
+          : '<option value="SC">SC — Sumter, SC</option>');
+  }
+
+  // 사이즈 정렬 순서
+  const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL','YOUTH XS','YOUTH S','YOUTH M','YOUTH L','YOUTH XL','2T','3T','4T','5T'];
+  const sizeOrd = s => { const i = SIZE_ORDER.indexOf((s||'').toUpperCase()); return i >= 0 ? i : 99; };
+
+  // SC+CA 합산 shipped qty 계산
+  const allocPcs = (alloc) => Object.entries(alloc||{})
+    .filter(([k]) => !k.includes('TRANSFER|'))
+    .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+
+  // 라인 목록 — SC+CA 합산 shipped qty > 0인 라인, 사이즈 정렬
+  const shippedLines = (lines||[])
+    .map(l => {
+      const scQty = allocPcs(l.alloc_detail||{});
+      const caQty = allocPcs(l.alloc_ca_detail||{});
+      const totalShipped = scQty + caQty || l.qty_filled || 0;
+      return { ...l, _totalShipped: totalShipped, _scQty: scQty, _caQty: caQty };
+    })
+    .filter(l => l._totalShipped > 0)
+    .sort((a,b) => {
+      const colorCmp = (a.color||'').localeCompare(b.color||'');
+      return colorCmp !== 0 ? colorCmp : sizeOrd(a.size) - sizeOrd(b.size);
+    });
+
   const reasonOptions = RA_REASONS.map(r => '<option value="' + r + '">' + r + '</option>').join('');
 
   const linesHtml = shippedLines.map((l, i) => {
     const styleNum = l.styles?.style_number || '';
     const desc = l.styles?.description || '';
-    const shipped = l.qty_filled || l.qty_pieces || 0;
+    const shipped = l._totalShipped;
+    const scLabel = l._scQty > 0 ? `<span style="font-size:9px;color:#1e40af;">SC:${l._scQty}</span>` : '';
+    const caLabel = l._caQty > 0 ? `<span style="font-size:9px;color:#ea580c;margin-left:4px;">CA:${l._caQty}</span>` : '';
     return `<div class="ra-line-row" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 2fr auto;gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;">
       <div style="font-size:11px;">
         <span style="font-weight:700;">${styleNum}</span>
         <span style="color:#6b7280;margin-left:4px;">${(l.color||'').toUpperCase()} / ${l.size||''}</span>
         <div style="color:#9ca3af;font-size:10px;">${desc}</div>
       </div>
-      <div style="font-size:11px;color:#6b7280;text-align:center;">${shipped} pcs<br><span style="font-size:9px;">shipped</span></div>
+      <div style="font-size:11px;color:#374151;text-align:center;font-weight:600;">${shipped} pcs<br>${scLabel}${caLabel}</div>
       <input type="number" min="0" max="${shipped}" value="0" class="fi ra-qty-input" data-idx="${i}" placeholder="Qty"
         style="font-size:13px;font-weight:700;text-align:center;color:#dc2626;">
       <input type="text" class="fi ra-unit-input" data-idx="${i}" placeholder="$/pcs" value="${(l.unit_price||0).toFixed(2)}"
@@ -6612,6 +6646,45 @@ async function openRaModal(orderId) {
   window._raOrder = order;
   window._raNum = raNum;
   window._raShippedLines = shippedLines;
+
+  // 드래그 초기화
+  _initDraggableModal('ra-modal', 'ra-modal-header');
+}
+
+function _initDraggableModal(modalId, headerId) {
+  const modal = document.getElementById(modalId);
+  const header = document.getElementById(headerId);
+  if (!modal || !header) return;
+  let isDragging = false, startX, startY, origLeft, origTop;
+  // 처음 열릴 때 position 설정
+  const inner = modal.firstElementChild;
+  if (!inner) return;
+  inner.style.position = 'relative';
+  inner.style.left = '0px';
+  inner.style.top = '0px';
+  header.style.cursor = 'grab';
+  header.onmousedown = (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+    isDragging = true;
+    startX = e.clientX; startY = e.clientY;
+    const rect = inner.getBoundingClientRect();
+    origLeft = rect.left; origTop = rect.top;
+    inner.style.position = 'fixed';
+    inner.style.left = origLeft + 'px';
+    inner.style.top = origTop + 'px';
+    inner.style.margin = '0';
+    header.style.cursor = 'grabbing';
+    e.preventDefault();
+  };
+  document.onmousemove = (e) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    inner.style.left = (origLeft + dx) + 'px';
+    inner.style.top = (origTop + dy) + 'px';
+  };
+  document.onmouseup = () => {
+    if (isDragging) { isDragging = false; header.style.cursor = 'grab'; }
+  };
 }
 
 async function submitRa() {
@@ -6621,6 +6694,10 @@ async function submitRa() {
 
   const raDate = document.getElementById('ra-date').value;
   const notes = document.getElementById('ra-notes').value;
+  const returnWh = document.getElementById('ra-return-wh')?.value || 'SC';
+  const returnAddr = returnWh === 'CA'
+    ? '14129 The Merge St Unit B, Eastvale CA 92880'
+    : '1605 South Guignard Parkway, Sumter SC 29150';
 
   // 라인 수집
   const rows = document.querySelectorAll('#ra-lines-body .ra-line-row');
@@ -6655,12 +6732,12 @@ async function submitRa() {
     const toEmail = custObj?.accounting_email || custObj?.email || order.email || '';
 
     if (toEmail) {
-      const emailHtml = buildRaEmailHtml(order, raNum, raDate, raItems, totalQty, totalAmt, notes);
+      const emailHtml = buildRaEmailHtml(order, raNum, raDate, raItems, totalQty, totalAmt, notes, returnWh, returnAddr);
 
       // Return Slip PDF 생성 (프린트용 첨부)
       let slipPdfBase64 = null;
       try {
-        const slipHtml = buildRaSlipHtml(order, raNum, raDate, raItems, totalQty, totalAmt, notes);
+        const slipHtml = buildRaSlipHtml(order, raNum, raDate, raItems, totalQty, totalAmt, notes, returnWh, returnAddr);
         slipPdfBase64 = await htmlToPdfBase64(slipHtml);
       } catch(e) { console.warn('RA slip PDF error:', e); }
 
@@ -6687,7 +6764,9 @@ async function submitRa() {
   }
 }
 
-function buildRaEmailHtml(order, raNum, raDate, items, totalQty, totalAmt, notes) {
+function buildRaEmailHtml(order, raNum, raDate, items, totalQty, totalAmt, notes, returnWh, returnAddr) {
+  returnWh = returnWh || 'SC';
+  returnAddr = returnAddr || '1605 South Guignard Parkway, Sumter SC 29150';
   const fmtDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : '';
   const rows = items.map(item => `
     <tr style="border-bottom:1px solid #f3f4f6;">
@@ -6724,7 +6803,8 @@ function buildRaEmailHtml(order, raNum, raDate, items, totalQty, totalAmt, notes
           <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #fecaca;">RA Number<br><strong style="font-size:16px;color:#dc2626;">${raNum}</strong></td>
           <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #fecaca;">Your PO #<br><strong style="font-size:14px;color:#111;">${order.customer_po||'—'}</strong></td>
           <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #fecaca;">RA Date<br><strong style="font-size:14px;color:#111;">${fmtDate(raDate)}</strong></td>
-          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Return Total<br><strong style="font-size:16px;color:#dc2626;">$${totalAmt.toFixed(2)}</strong></td>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #fecaca;">Return Total<br><strong style="font-size:16px;color:#dc2626;">$${totalAmt.toFixed(2)}</strong></td>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Return To<br><strong style="font-size:13px;color:#111;">${returnWh} Warehouse</strong><br><span style="font-size:10px;color:#6b7280;">${returnAddr}</span></td>
         </tr>
       </table>
 
@@ -6760,7 +6840,9 @@ function buildRaEmailHtml(order, raNum, raDate, items, totalQty, totalAmt, notes
 }
 
 // Return Slip — 프린트용 PDF 슬립 (박스 안에 넣는 용도)
-function buildRaSlipHtml(order, raNum, raDate, items, totalQty, totalAmt, notes) {
+function buildRaSlipHtml(order, raNum, raDate, items, totalQty, totalAmt, notes, returnWh, returnAddr) {
+  returnWh = returnWh || 'SC';
+  returnAddr = returnAddr || '1605 South Guignard Parkway, Sumter SC 29150';
   const fmtDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : '';
   const rows = items.map(item => `
     <tr style="border-bottom:1px solid #e5e7eb;">
@@ -6783,12 +6865,8 @@ function buildRaSlipHtml(order, raNum, raDate, items, totalQty, totalAmt, notes)
         </td>
         <td style="width:40%;vertical-align:top;text-align:right;border-left:3px solid #dc2626;padding-left:16px;">
           <div style="font-size:10px;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">Return To:</div>
-          <div style="font-size:13px;font-weight:800;color:#111;">PACIFIC SPORTS INC</div>
-          <div style="font-size:12px;color:#374151;line-height:1.6;">
-            1605 South Guignard Parkway<br>
-            Sumter, SC 29150<br>
-            Ph: (803) 760-6251
-          </div>
+          <div style="font-size:13px;font-weight:800;color:#111;">PACIFIC SPORTS — ${returnWh} WAREHOUSE</div>
+          <div style="font-size:12px;color:#374151;line-height:1.6;">${returnAddr}<br>Ph: (803) 760-6251</div>
         </td>
       </tr>
     </table>
@@ -10615,6 +10693,24 @@ async function _openSignedBolModalLegacy() {
     ' ' + new Date().toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit' });
   document.getElementById('bol-driver-name').value = '';
 
+  // 기존 저장된 BOL 확인 및 표시
+  const wh = _shippedWh || 'SC';
+  const existingBol = wh === 'CA' ? order?.bol_file_ca : order?.bol_file;
+  const existingBolEl = document.getElementById('bol-existing-file');
+  if (existingBolEl) {
+    if (existingBol) {
+      existingBolEl.style.display = 'flex';
+      existingBolEl.innerHTML = `
+        <span style="font-size:12px;color:#15803d;font-weight:600;">✅ Saved Signed BOL (${wh})</span>
+        <button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;margin-left:8px;" onclick="_viewSavedBol('${wh}')">👁 View</button>
+        <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;margin-left:4px;" onclick="_deleteSavedBol('${wh}',this)">🗑 Delete</button>
+      `;
+    } else {
+      existingBolEl.style.display = 'none';
+      existingBolEl.innerHTML = '';
+    }
+  }
+
   // 모달 열기
   document.getElementById('modal-signed-bol').style.display = 'flex';
 
@@ -10623,6 +10719,26 @@ async function _openSignedBolModalLegacy() {
     initBolCanvas();
     previewSignedBol();
   });
+}
+
+async function _viewSavedBol(wh) {
+  const { data: order } = await db.from('orders').select('bol_file,bol_file_ca').eq('id', _bolOrder?.id).single();
+  const b64 = wh === 'CA' ? order?.bol_file_ca : order?.bol_file;
+  if (!b64) { showToast('저장된 BOL이 없습니다.'); return; }
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  window.open(URL.createObjectURL(blob), '_blank');
+}
+
+async function _deleteSavedBol(wh, btn) {
+  if (!confirm('저장된 Signed BOL을 삭제할까요?')) return;
+  const bolField = wh === 'CA' ? 'bol_file_ca' : 'bol_file';
+  await db.from('orders').update({ [bolField]: null }).eq('id', _bolOrder?.id);
+  const existingBolEl = document.getElementById('bol-existing-file');
+  if (existingBolEl) { existingBolEl.style.display = 'none'; existingBolEl.innerHTML = ''; }
+  showToast('🗑 Signed BOL 삭제됨');
 }
 
 function initBolCanvas() {
@@ -10810,6 +10926,12 @@ async function saveAndAttachBol() {
     _bolFilesDataSingle.push({ base64: pdfBase64, mimeType: 'application/pdf', fileName });
     _bolFileData = { base64: pdfBase64, mimeType: 'application/pdf', fileName };
 
+    // DB에 BOL 저장 (Signed BOL 버튼에서 나중에 꺼낼 수 있도록)
+    if (_bolOrder?.id) {
+      const bolField = wh === 'CA' ? 'bol_file_ca' : 'bol_file';
+      await db.from('orders').update({ [bolField]: pdfBase64 }).eq('id', _bolOrder.id);
+    }
+
     const list = document.getElementById('bol-file-list');
     if (list) {
       const item = document.createElement('div');
@@ -10819,7 +10941,7 @@ async function saveAndAttachBol() {
     }
 
     document.getElementById('modal-signed-bol').style.display = 'none';
-    showToast('✅ BOL PDF 첨부 완료!');
+    showToast('✅ BOL PDF 첨부 및 저장 완료!');
 
   } catch(e) {
     console.error('BOL PDF error:', e);
@@ -11013,6 +11135,21 @@ function processBolFile(file) {
     const base64 = e.target.result.split(',')[1];
     _bolFileData = { base64, mimeType: file.type, fileName: file.name }; // 하위 호환
     _bolFilesDataSingle.push({ base64, mimeType: file.type, fileName: file.name });
+    // DB에도 저장 (나중에 Signed BOL 버튼에서 볼 수 있도록)
+    if (_bolOrder?.id) {
+      const wh = _shippedWh || 'SC';
+      const bolField = wh === 'CA' ? 'bol_file_ca' : 'bol_file';
+      db.from('orders').update({ [bolField]: base64 }).eq('id', _bolOrder.id).then(() => {
+        // 기존 BOL 표시 영역 업데이트
+        const existingBolEl = document.getElementById('bol-existing-file');
+        if (existingBolEl) {
+          existingBolEl.style.display = 'flex';
+          existingBolEl.innerHTML = `<span style="font-size:12px;color:#15803d;font-weight:600;">✅ Saved Signed BOL (${wh})</span>
+            <button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;margin-left:8px;" onclick="_viewSavedBol('${wh}')">👁 View</button>
+            <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;margin-left:4px;" onclick="_deleteSavedBol('${wh}',this)">🗑 Delete</button>`;
+        }
+      });
+    }
     // 파일 목록 UI 업데이트
     const list = document.getElementById('bol-file-list');
     if (list) {
@@ -19796,6 +19933,8 @@ function showCreditHoldFlash(overAmt) {
     </div>
     <!-- Body: BOL Preview + Driver Signature -->
     <div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:20px;">
+      <!-- 기존 저장된 BOL 표시 -->
+      <div id="bol-existing-file" style="display:none;align-items:center;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:10px 14px;"></div>
       <!-- BOL Content -->
       <div id="bol-preview-content" style="border:1px solid #e5e7eb;border-radius:6px;padding:20px;background:#fff;"></div>
       <!-- Driver Signature Section -->
@@ -19917,10 +20056,11 @@ function showCreditHoldFlash(overAmt) {
 <div id="ra-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:12px;width:820px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
     <!-- Header -->
-    <div style="background:#7f1d1d;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+    <div id="ra-modal-header" style="background:#7f1d1d;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;user-select:none;">
       <div>
         <span style="color:#fff;font-weight:800;font-size:15px;">↩ Return Authorization</span>
         <span id="ra-number-display" style="color:#fca5a5;font-size:13px;margin-left:12px;font-family:'IBM Plex Mono',monospace;font-weight:700;"></span>
+        <span style="color:#fca5a5;font-size:10px;margin-left:8px;opacity:0.7;">⠿ drag</span>
       </div>
       <button onclick="document.getElementById('ra-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fca5a5;line-height:1;">✕</button>
     </div>
@@ -19930,11 +20070,17 @@ function showCreditHoldFlash(overAmt) {
       <!-- Order info -->
       <div style="font-size:12px;color:#6b7280;margin-bottom:12px;" id="ra-order-info"></div>
 
-      <!-- Date + Notes -->
-      <div style="display:grid;grid-template-columns:160px 1fr;gap:12px;margin-bottom:14px;">
+      <!-- Date + Notes + Return To -->
+      <div style="display:grid;grid-template-columns:160px 120px 1fr;gap:12px;margin-bottom:14px;">
         <div>
           <label style="font-size:11px;color:#374151;font-weight:600;display:block;margin-bottom:4px;">RA Date</label>
           <input type="date" id="ra-date" class="fi" style="width:100%;">
+        </div>
+        <div>
+          <label style="font-size:11px;color:#374151;font-weight:600;display:block;margin-bottom:4px;">Return To WH</label>
+          <select id="ra-return-wh" class="fi" style="width:100%;font-size:12px;">
+            <option value="SC">SC — Sumter</option>
+          </select>
         </div>
         <div>
           <label style="font-size:11px;color:#374151;font-weight:600;display:block;margin-bottom:4px;">Notes (optional)</label>
