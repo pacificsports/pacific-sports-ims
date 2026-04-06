@@ -2211,9 +2211,10 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
     window._osRealtimeChannel = db.channel('orders-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         console.log('[Realtime] orders changed:', payload);
-        // INSERT 이벤트 = 새 오더 → 소리 재생 (자기 자신이 저장한 오더 제외)
+        // INSERT 이벤트 = 새 오더 → 소리 재생 (자기 자신이 저장한 오더 제외, BO 제외)
         if (payload.eventType === 'INSERT' && payload.new?.id) {
-          if (!_knownOrderIds || !_knownOrderIds.has(payload.new.id)) {
+          const isBO = payload.new?.status === 'backordered' || (payload.new?.order_number||'').includes('-BO');
+          if (!isBO && (!_knownOrderIds || !_knownOrderIds.has(payload.new.id))) {
             playNewOrderChime();
           }
         }
@@ -5263,7 +5264,9 @@ async function loadOrderStatus() {
   // 새 오더 감지 — 최초 로드 이후부터 체크
   const currentIds = new Set(orders.map(o => o.id));
   if (_knownOrderIds !== null) {
-    const newOrders = orders.filter(o => !_knownOrderIds.has(o.id));
+    const newOrders = orders.filter(o => !_knownOrderIds.has(o.id)
+      && o.status !== 'backordered'
+      && !(o.order_number||'').includes('-BO'));
     if (newOrders.length > 0) {
       playNewOrderChime();
     }
@@ -12297,6 +12300,8 @@ async function _doShippedCore(emp) {
           unit_price: l.unit_price
         });
       }
+      // 방금 생성/업데이트된 BO를 미리 등록해서 realtime/loadOrderStatus에서 새 오더 소리 방지
+      if (_knownOrderIds && boOrderId) _knownOrderIds.add(boOrderId);
       showToast(`🚚 Shipped! Back Order ${boNum} ${existingBo ? '업데이트' : '생성'}됨 (${totalBackQty.toLocaleString()} pcs)`);
     }
   } else {
