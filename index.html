@@ -12841,6 +12841,15 @@ async function confirmShipped() {
 async function _doShippedCore(emp) {
   // AudioContext를 user gesture 시점에 미리 활성화 (await 이후엔 gesture 컨텍스트 만료될 수 있음)
   try { _getAudioCtx(); } catch(e) {}
+  try {
+    await _doShippedCoreInner(emp);
+  } catch(err) {
+    console.error('[_doShippedCore] FATAL ERROR:', err);
+    showToast('❌ Shipped 처리 오류: ' + err.message);
+  }
+}
+
+async function _doShippedCoreInner(emp) {
 
   const shipDate = document.getElementById('ship-date-inp').value;
   const carrier = document.getElementById('ship-carrier').value;
@@ -13038,7 +13047,7 @@ async function _doShippedCore(emp) {
 
     if (!existingBo) {
       const { data: newBo } = await db.from('orders').insert({
-        order_number: finalBoNum,
+        order_number: boNum,
         customer_name: order.customer_name,
         customer_po: (order.customer_po || '') + '-BO',
         customer_id: order.customer_id,
@@ -13165,7 +13174,7 @@ async function _doShippedCore(emp) {
   _bolFileData = null;
   _bolFilesDataSingle = [];
   loadOrderStatus();
-}
+} // end _doShippedCoreInner
 
 // ── 4단계: Review & Send Invoice
 async function reviewAndSendInvoice(orderId, wh) {
