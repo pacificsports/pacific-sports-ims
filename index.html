@@ -10752,17 +10752,28 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
     const caQty = l.ca_qty||0;
     const backQty = l.back_qty||0;
 
-    const scDisplayDate = scShippedDate || (currentWh === 'SC' ? shipDateStr : null);
+    // scCell: SC 수량이 있고 실제로 SC가 shipped된 경우만 체크마크
+    // - 이번에 SC ship이거나, 이전에 SC가 이미 shipped된 경우 (sc_shipped_at 있음)
+    const scActuallyShipped = (currentWh === 'SC') || !!order.sc_shipped_at;
+    const scDisplayDate = (scQty > 0 && scActuallyShipped)
+      ? (currentWh === 'SC' ? shipDateStr : fmtDate(order.sc_shipped_at))
+      : null;
     const scCell = scQty > 0
-      ? `<td style="padding:7px 10px;text-align:center;"><span style="color:#1e40af;font-weight:800;">&#10003;</span>${scDisplayDate?`<div style="font-size:10px;color:#6b7280;">${scDisplayDate}</div>`:''}<div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
+      ? scActuallyShipped
+        ? `<td style="padding:7px 10px;text-align:center;"><span style="color:#1e40af;font-weight:800;">&#10003;</span>${scDisplayDate?`<div style="font-size:10px;color:#6b7280;">${scDisplayDate}</div>`:''}<div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
+        : `<td style="padding:7px 10px;text-align:center;"><div style="font-size:11px;color:#d97706;font-weight:600;">${order.sc_status==='ready_to_ship'?'Ready':'Preparing'}</div><div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
       : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
 
-    const caDisplayDate = caShippedDate || (currentWh === 'CA' ? shipDateStr : null);
-    const caStatusText = caDisplayDate
-      ? `<span style="color:#16a34a;font-weight:700;">&#10003;</span><div style="font-size:10px;color:#6b7280;">${caDisplayDate}</div>${caQty>0?`<div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`:''}` 
-      : caQty > 0
-        ? `<div style="font-size:12px;color:#ea580c;font-weight:600;">${order.ca_status==='ready_to_ship'?'Ready to Ship':'Preparing'}</div><div style="font-size:11px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`
-        : `<span style="color:#d1d5db;">&mdash;</span>`;
+    // caDisplayDate: CA 수량이 있을 때만 날짜 표시
+    const caDisplayDate = caQty > 0
+      ? (currentWh === 'CA' ? shipDateStr : (order.ca_shipped_at ? fmtDate(order.ca_shipped_at) : null))
+      : null;
+    // CA status: 수량 있고 날짜 있으면 Shipped, 수량 있고 날짜 없으면 상태 표시, 수량 없으면 —
+    const caStatusText = caQty > 0
+      ? (caDisplayDate
+          ? `<span style="color:#16a34a;font-weight:700;">&#10003;</span><div style="font-size:10px;color:#6b7280;">${caDisplayDate}</div><div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`
+          : `<div style="font-size:12px;color:#ea580c;font-weight:600;">${order.ca_status==='ready_to_ship'?'Ready to Ship':'Preparing'}</div><div style="font-size:11px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`)
+      : `<span style="color:#d1d5db;">&mdash;</span>`;
     const caStatusCell = `<td style="padding:7px 10px;text-align:center;">${caStatusText}</td>`;
 
     const backCell = backQty > 0
@@ -10903,7 +10914,9 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     const scQty = allocPcs(allocSC, ['TRANSFER']);
     const caQty = allocPcs(allocCA, ['TRANSFER']);
 
-    const backQty = l.qty_backordered || 0;
+    // back qty: 총 주문 - SC alloc - CA alloc (qty_backordered는 ship 시점 기준이라 부정확할 수 있음)
+    const totalAllocated = scQty + caQty;
+    const backQty = Math.max(0, (l.qty_pieces || 0) - totalAllocated);
 
     // 날짜 포맷 M/D
     const fmtDate = d => d ? new Date(d).toLocaleDateString('en-US',{month:'numeric',day:'numeric'}) : '';
@@ -10916,9 +10929,10 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     const scPrevShipped = !!order.sc_shipped_at && currentWh !== 'SC';
     const caPrevShipped = !!order.ca_shipped_at && currentWh !== 'CA';
 
-    // 날짜: 이번 ship이면 오늘, 이전 ship이면 DB 날짜
-    const scShippedDate = scShippedNow ? fmtDate(new Date()) : (scPrevShipped ? fmtDate(order.sc_shipped_at) : '');
-    const caShippedDate = caShippedNow ? fmtDate(new Date()) : (caPrevShipped ? fmtDate(order.ca_shipped_at) : '');
+    // 날짜: 이번 ship이면 ship_date(실제 출고일), 이전 ship이면 DB 날짜
+    const shipDateForLine = shippingInfo.shipDate || shippingInfo.ship_date || new Date().toISOString().slice(0,10);
+    const scShippedDate = scShippedNow ? fmtDate(shipDateForLine) : (scPrevShipped ? fmtDate(order.sc_shipped_at) : '');
+    const caShippedDate = caShippedNow ? fmtDate(shipDateForLine) : (caPrevShipped ? fmtDate(order.ca_shipped_at) : '');
 
     return {
       style: l.styles?.style_number || '',
@@ -12304,7 +12318,7 @@ async function _doShippedCore(emp) {
       weight = document.getElementById('ship-weight')?.value || '';
     }
     const freightClass = document.getElementById('ship-freight-class')?.value || '70';
-    const shippingInfo = { carrier, tracking, freightCarrier, weight, freightClass };
+    const shippingInfo = { carrier, tracking, freightCarrier, weight, freightClass, shipDate: shipDate || '', wh: wh || 'SC' };
 
     // Packing List HTML 생성
     const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
