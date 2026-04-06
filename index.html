@@ -13302,6 +13302,17 @@ async function reviewAndSendInvoice(orderId, wh) {
   if (order.po_file) {
     _attEl.appendChild(_makeAttBtn('Customer PO PDF', async () => order.po_file));
   }
+  // Signed BOL — DB에서 WH별로
+  const _bolWh = wh || order.wh_code || 'SC';
+  const _savedBol = _bolWh === 'CA' ? order.bol_file_ca : order.bol_file;
+  if (_savedBol) {
+    _attEl.appendChild(_makeAttBtn('Signed BOL (' + _bolWh + ')', async () => _savedBol));
+  } else {
+    const _noBolNote = document.createElement('span');
+    _noBolNote.style.cssText = 'font-size:11px;color:#9ca3af;margin-right:10px;';
+    _noBolNote.textContent = '⚠️ Signed BOL 없음';
+    _attEl.appendChild(_noBolNote);
+  }
   // Send 모드 복원
   document.querySelector('#modal-invoice-review .modal-head span').textContent = '📧 Review & Send Invoice';
   document.getElementById('invoice-review-email-row').style.display = 'flex';
@@ -13428,6 +13439,16 @@ async function sendInvoiceEmail() {
         invEmailBodyHtml = buildInvoiceEmailBodyHtml(order, lines, displayInvNum, invShipInfo2, cs, freightAmt);
       } catch(e) { console.warn('Invoice email body error:', e); }
 
+      // Signed BOL — DB에서 가져오기 (WH별)
+      const invWh = _invoiceWh || order.wh_code || 'SC';
+      const bolB64 = invWh === 'CA' ? order.bol_file_ca : order.bol_file;
+      // 메모리(_bolFilesDataSingle) 우선, 없으면 DB 저장본 사용
+      const bolFilesForInv = _bolFilesDataSingle.length > 0
+        ? _bolFilesDataSingle.map(b => ({ base64: b.base64, filename: b.fileName||b.filename, mime: b.mimeType||b.mime||'application/pdf' }))
+        : bolB64
+          ? [{ base64: bolB64, filename: `SignedBOL_PO${order?.customer_po||''}_${invWh}.pdf`, mime: 'application/pdf' }]
+          : (_bolFileData?.base64 ? [{ base64: _bolFileData.base64, filename: `SignedBOL_PO${order?.customer_po||''}.pdf`, mime: 'application/pdf' }] : []);
+
       try {
         await fetch('https://po-confirm-email.hjbae.workers.dev/send-invoice', {
           method: 'POST',
@@ -13438,7 +13459,7 @@ async function sendInvoiceEmail() {
             inv_pdf: invPdfBase64,
             pl_pdf: plPdfBase64,
             po_pdf: poPdfBase64,
-            bol_files: _bolFilesDataSingle.length > 0 ? _bolFilesDataSingle.map(b=>({base64:b.base64,filename:b.filename,mime:b.mime})) : (_bolFileData?.base64 ? [{base64:_bolFileData.base64,filename:`BOL_PO${order?.customer_po||''}.pdf`,mime:'application/pdf'}] : []),
+            bol_files: bolFilesForInv,
             subject: emailSubject,
             invoice_number_display: displayInvNum,
             email_html: invEmailBodyHtml || undefined
@@ -13464,6 +13485,8 @@ async function sendInvoiceEmail() {
     } else {
       loadCustomerPOs();
     }
+    // Order Status 칸반도 갱신 (invoiced/completed 오더 사라지게)
+    loadOrderStatus();
   }
 }
 
@@ -14348,10 +14371,14 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   };
 
   let statusBanner = '';
-  // isSplit이면 양쪽 모두 invoiced/completed일 때만 backSection 표시 (마지막 invoice)
+  // isSplit이면 마지막 invoice일 때만 backSection 표시
+  // "마지막"이란: 현재 발송 WH invoice 후 반대쪽도 이미 invoiced/completed/shipped 상태
+  const otherWhStatus = isSplit
+    ? (invWh === 'CA' ? (order.sc_status||'') : (order.ca_status||''))
+    : '';
   const isLastInvoice = !isSplit || (
-    ['invoiced','completed','shipped'].includes(order.sc_status||'') &&
-    ['invoiced','completed','shipped'].includes(order.ca_status||'')
+    // 반대쪽 WH가 이미 처리 완료됐으면 → 현재 invoice가 마지막
+    ['invoiced','completed','shipped'].includes(otherWhStatus)
   );
 
   if (isSplit) {
@@ -14404,9 +14431,21 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   }).join('');
 
   // Back order — SC&CA 오더는 양쪽 모두 완료됐을 때(마지막 invoice)만 표시
-  const backLines = isLastInvoice ? (lines||[]).filter(l => (l.qty_backordered||0) > 0) : []
-    .sort((a,b) => { const c=(a.color||'').localeCompare(b.color||''); return c!==0?c:sizeOrd(a.size)-sizeOrd(b.size); });
-  const totalBack = backLines.reduce((s,l)=>s+(l.qty_backordered||0),0);
+  // SC&CA의 경우 qty_backordered는 마지막 ship 시점 기준이므로
+  // qty_pieces - (SC alloc + CA alloc) 로 재계산
+  const calcBackQty = (l) => {
+    if (!isSplit) return l.qty_backordered || 0;
+    const scPcs = allocPcs(l.alloc_detail||{});
+    const caPcs = allocPcs(l.alloc_ca_detail||{});
+    return Math.max(0, (l.qty_pieces||0) - scPcs - caPcs);
+  };
+  const backLines = isLastInvoice
+    ? (lines||[])
+        .map(l => ({ ...l, _backQty: calcBackQty(l) }))
+        .filter(l => l._backQty > 0)
+        .sort((a,b) => { const c=(a.color||'').localeCompare(b.color||''); return c!==0?c:sizeOrd(a.size)-sizeOrd(b.size); })
+    : [];
+  const totalBack = backLines.reduce((s,l)=>s+(l._backQty||l.qty_backordered||0),0);
   const backSection = backLines.length ? `
     <table style="width:100%;border-collapse:collapse;margin-top:16px;border:1px solid #fecaca;border-radius:8px;">
       <tr><td style="background:#fee2e2;padding:8px 14px;border-radius:6px 6px 0 0;">
@@ -14425,7 +14464,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
               <td style="padding:5px 10px;font-weight:600;">${l.styles?.style_number||''}</td>
               <td style="padding:5px 10px;">${l.color||''}</td>
               <td style="padding:5px 10px;text-align:center;">${l.size||''}</td>
-              <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</td>
+              <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l._backQty||l.qty_backordered||0).toLocaleString()} pcs</td>
             </tr>`).join('')}
           </tbody>
         </table>
@@ -14442,7 +14481,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
       <tr style="background:#0f2744;">
         <td style="padding:16px 24px;">
           <div style="color:#fff;font-size:18px;font-weight:800;">Pacific Sports</div>
-          <div style="color:#93c5fd;font-size:12px;margin-top:2px;">Invoice #${invoiceNum||'—'} &#129534;</div>
+          <div style="color:#93c5fd;font-size:12px;margin-top:2px;">Invoice #${invoiceNum||'—'}</div>
         </td>
         <td style="padding:16px 24px;text-align:right;">
           <div style="color:#9ca3af;font-size:11px;">INV DATE</div>
