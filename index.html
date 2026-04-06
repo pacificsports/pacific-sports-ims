@@ -13691,8 +13691,11 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     if (!sectionLines.length) return '';
     const freight = freightAmt || 0;
     const invNo = invoiceNum ? invoiceNum + (suffix||'') : '—';
-    // suffix로 현재 섹션 WH 판단: '-SC' → SC, '-CA' → CA, '' → 싱글WH
-    const sectionWh = suffix === '-CA' ? 'CA' : 'SC';
+    // suffix로 현재 섹션 WH 판단: '-SC' → SC, '-CA' → CA, '' → 싱글WH (invoiceNum prefix 또는 order wh_code로 판단)
+    const sectionWh = suffix === '-CA' ? 'CA'
+      : suffix === '-SC' ? 'SC'
+      : (invoiceNum && invoiceNum.startsWith('CA')) ? 'CA'
+      : (order.wh_code === 'CA' || order.warehouses?.code === 'CA') ? 'CA' : 'SC';
 
     // SC&CA 라인의 shipped qty: alloc pcs 기준 (WH별로 정확히 분리)
     const getWhShippedQty = (l) => {
@@ -13745,8 +13748,8 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     const freightCo = (shipInfo && shipInfo.freightCarrier) || order.pickup_company || '';
     let shipViaStr = carrier || '—';
     if (carrier === 'LTL' && freightCo) shipViaStr = freightCo;
-    // split 오더는 섹션별 WH 레이블 사용
-    const whCodeInv = isSplit ? sectionWh : (order.wh_code || order.warehouses?.code || 'SC');
+    // sectionWh가 이미 CA/SC 정확히 판단됨 (CA invoice면 CA, SC면 SC)
+    const whCodeInv = sectionWh;
     const whLabelInv = whCodeInv === 'CA' ? 'Eastvale, CA' : 'Sumter, SC';
     const trackingStr = tracking || '—';
     const billAddr = (order.bill_addr || '').replace(/\n/g, '<br>') || order.customer_name || '—';
