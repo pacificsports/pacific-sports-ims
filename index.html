@@ -10635,21 +10635,18 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
   const scShippedDate = order.sc_shipped_at ? fmtDate(order.sc_shipped_at) : null;
   const caShippedDate = order.ca_shipped_at ? fmtDate(order.ca_shipped_at) : null;
 
-  // SC/CA status 표시
+  const shipDateStr = order.ship_date ? fmtDate(order.ship_date) : fmtDate(new Date().toISOString().slice(0,10));
+
+  // SC/CA status 표시 — 이번에 ship되는 WH는 무조건 최우선 Shipped 처리
   const getWhStatus = (wh) => {
+    if (wh === currentWh) return `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped ${shipDateStr}</span>`;
     const shippedDate = wh === 'CA' ? caShippedDate : scShippedDate;
-    if (shippedDate) {
-      return `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped ${shippedDate}</span>`;
-    }
+    if (shippedDate) return `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped ${shippedDate}</span>`;
     const status = wh === 'CA' ? order.ca_status : order.sc_status;
     if (status === 'ready_to_ship') return `<span style="color:#1e40af;font-weight:600;">Ready to Ship</span>`;
     if (status === 'preparing' || status === 'po_entered') return `<span style="color:#d97706;font-weight:600;">Preparing for Shipment</span>`;
-    // 이번에 ship되는 WH면 Shipped로 표시
-    if (wh === currentWh) return `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped ${fmtDate(new Date().toISOString().slice(0,10))}</span>`;
     return `<span style="color:#6b7280;">Pending</span>`;
   };
-
-  const shipDateStr = order.ship_date ? fmtDate(order.ship_date) : fmtDate(new Date().toISOString().slice(0,10));
 
   // Shipped From 블록
   const shippedFromHtml = isSplit ? `
@@ -10752,12 +10749,14 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
     const caQty = l.ca_qty||0;
     const backQty = l.back_qty||0;
 
+    const scDisplayDate = scShippedDate || (currentWh === 'SC' ? shipDateStr : null);
     const scCell = scQty > 0
-      ? `<td style="padding:7px 10px;text-align:center;"><span style="color:#1e40af;font-weight:800;">&#10003;</span>${scShippedDate?`<div style="font-size:10px;color:#6b7280;">${scShippedDate}</div>`:''}<div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
+      ? `<td style="padding:7px 10px;text-align:center;"><span style="color:#1e40af;font-weight:800;">&#10003;</span>${scDisplayDate?`<div style="font-size:10px;color:#6b7280;">${scDisplayDate}</div>`:''}<div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
       : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
 
-    const caStatusText = caShippedDate
-      ? `<span style="color:#16a34a;font-weight:700;">&#10003;</span><div style="font-size:10px;color:#6b7280;">${caShippedDate}</div>${caQty>0?`<div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`:''}`
+    const caDisplayDate = caShippedDate || (currentWh === 'CA' ? shipDateStr : null);
+    const caStatusText = caDisplayDate
+      ? `<span style="color:#16a34a;font-weight:700;">&#10003;</span><div style="font-size:10px;color:#6b7280;">${caDisplayDate}</div>${caQty>0?`<div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`:''}` 
       : caQty > 0
         ? `<div style="font-size:12px;color:#ea580c;font-weight:600;">${order.ca_status==='ready_to_ship'?'Ready to Ship':'Preparing'}</div><div style="font-size:11px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`
         : `<span style="color:#d1d5db;">&mdash;</span>`;
