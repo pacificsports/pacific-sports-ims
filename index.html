@@ -5157,40 +5157,100 @@ function renderCustomerPOTable() {
 
   } else {
     // ── Active / All 테이블 ──────────────────────────────
-    const rows = filtered.map(o => {
-      const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
-      const whCode = o.wh_code || o.warehouses?.code || '—';
-      const whBadge = (whCode === 'SC&CA' || o.is_split_warehouse)
-                    ? '<span class="loc-sc">SC</span> <span class="loc-ca">CA</span>'
-                    : whCode === 'CA' ? '<span class="loc-ca">CA</span>'
-                    : '<span class="loc-sc">SC</span>';
+    const getWhStatusBadge = (status, color, bg) =>
+      '<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:' + bg + ';color:' + color + ';">' + status + '</span>';
+
+    const rows = filtered.flatMap(o => {
+      const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
       const priBadge = o.priority === 'urgent'
         ? '<span style="font-size:10px;font-weight:700;padding:3px 8px;border-radius:12px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">🔴 Urgent</span>'
         : '<span style="font-size:10px;color:#9ca3af;">—</span>';
       const rowBg = o.priority === 'urgent' ? 'background:#fff5f5;' : '';
       const oid = o.id, onum = o.order_number, ocust = (o.customer_name||'').replace(/'/g,'');
-      const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
-      let actionBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
-      if (o.status === 'invoiced' || o.status === 'completed') {
-        actionBtns += ' <button class="btn btn-sm" style="background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();openInvoiceDocsModal(\'' + oid + '\',\'' + wh + '\')">📄 Documents</button>';
+
+      if (!isSplit) {
+        // ── 싱글 WH 오더 (기존 방식)
+        const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
+        const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
+        const whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+        let actionBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
+        if (o.status === 'invoiced' || o.status === 'completed') {
+          actionBtns += ' <button class="btn btn-sm" style="background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();openInvoiceDocsModal(\'' + oid + '\',\'' + wh + '\')">📄 Docs</button>';
+        }
+        if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
+          actionBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕ Cancel</button>'
+            + ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑 Delete</button>';
+        }
+        return ['<tr style="cursor:pointer;' + rowBg + '" onclick="openPODetail(\'' + oid + '\'">'
+          + '<td style="font-weight:700;color:#111827;">' + o.customer_name + '</td>'
+          + '<td class="mono" style="font-weight:700;">' + (o.customer_po||'—') + '</td>'
+          + '<td>' + whBadge + '</td>'
+          + '<td style="text-align:center">' + (o.total_pcs||0).toLocaleString() + '</td>'
+          + '<td style="font-weight:700;color:var(--primary)">$' + (o.total_amount||0).toLocaleString() + '</td>'
+          + '<td>' + (o.ship_date||'—') + '</td>'
+          + '<td>' + priBadge + '</td>'
+          + '<td>' + getWhStatusBadge(st.label, st.color, st.bg) + '</td>'
+          + '<td style="font-size:11px;color:var(--text3)">' + (o.created_at||'').slice(0,10) + '</td>'
+          + '<td style="white-space:nowrap;">' + actionBtns + '</td>'
+          + '</tr>'];
+      }
+
+      // ── SC&CA 분할 오더 → SC행 + CA행 두 줄
+      const scStatusKey = o.sc_status || o.status || 'po_entered';
+      const caStatusKey = o.ca_status || o.status || 'po_entered';
+      const scSt = statusLabel[scStatusKey] || { label: scStatusKey, color: '#6b7280', bg: '#f3f4f6' };
+      const caSt = statusLabel[caStatusKey] || { label: caStatusKey, color: '#6b7280', bg: '#f3f4f6' };
+
+      const scPcs = o.sc_total_pcs || Math.round((o.total_pcs||0) * 0.5);
+      const caPcs = o.ca_total_pcs || ((o.total_pcs||0) - scPcs);
+      const scAmt = o.sc_total_amount || 0;
+      const caAmt = o.ca_total_amount || 0;
+
+      // SC 액션 버튼
+      let scBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
+      if (['invoiced','completed','shipped'].includes(scStatusKey)) {
+        scBtns += ' <button class="btn btn-sm" style="background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();openInvoiceDocsModal(\'' + oid + '\',\'SC\')">📄 SC Docs</button>';
       }
       if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
-        actionBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕ Cancel</button>'
-          + ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑 Delete</button>';
+        scBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕</button>'
+          + ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑</button>';
       }
-      return '<tr style="cursor:pointer;' + rowBg + '" onclick="openPODetail(\'' + oid + '\')">'
-        + '<td style="font-weight:700;color:#111827;">' + o.customer_name + '</td>'
-        + '<td class="mono" style="font-weight:700;">' + (o.customer_po||'—') + '</td>'
-        + '<td>' + whBadge + '</td>'
-        + '<td style="text-align:center">' + (o.total_pcs||0).toLocaleString() + '</td>'
-        + '<td style="font-weight:700;color:var(--primary)">$' + (o.total_amount||0).toLocaleString() + '</td>'
-        + '<td>' + (o.ship_date||'—') + '</td>'
-        + '<td>' + priBadge + '</td>'
-        + '<td><span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:12px;background:' + st.bg + ';color:' + st.color + ';">' + st.label + '</span></td>'
-        + '<td style="font-size:11px;color:var(--text3)">' + (o.created_at||'').slice(0,10) + '</td>'
-        + '<td style="white-space:nowrap;">' + actionBtns + '</td>'
+
+      // CA 액션 버튼
+      let caBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
+      if (['invoiced','completed','shipped'].includes(caStatusKey)) {
+        caBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;" onclick="event.stopPropagation();openInvoiceDocsModal(\'' + oid + '\',\'CA\')">📄 CA Docs</button>';
+      }
+
+      const scRow = '<tr style="cursor:pointer;' + rowBg + 'border-bottom:none;" onclick="openPODetail(\'' + oid + '\'">'
+        + '<td style="font-weight:700;color:#111827;border-bottom:none;">' + o.customer_name + '</td>'
+        + '<td class="mono" style="font-weight:700;border-bottom:none;">' + (o.customer_po||'—') + '</td>'
+        + '<td style="border-bottom:none;"><span class="loc-sc">SC</span></td>'
+        + '<td style="text-align:center;border-bottom:none;">' + scPcs.toLocaleString() + '</td>'
+        + '<td style="font-weight:700;color:var(--primary);border-bottom:none;">' + (scAmt > 0 ? '$' + scAmt.toLocaleString() : '—') + '</td>'
+        + '<td style="border-bottom:none;">' + (o.ship_date||'—') + '</td>'
+        + '<td style="border-bottom:none;">' + priBadge + '</td>'
+        + '<td style="border-bottom:none;">' + getWhStatusBadge(scSt.label, scSt.color, scSt.bg) + '</td>'
+        + '<td style="font-size:11px;color:var(--text3);border-bottom:none;">' + (o.created_at||'').slice(0,10) + '</td>'
+        + '<td style="white-space:nowrap;border-bottom:none;">' + scBtns + '</td>'
         + '</tr>';
+
+      const caRow = '<tr style="cursor:pointer;background:#fffbf5;" onclick="openPODetail(\'' + oid + '\'">'
+        + '<td style="color:#9ca3af;font-size:11px;"></td>'
+        + '<td class="mono" style="color:#9ca3af;font-size:11px;"></td>'
+        + '<td><span class="loc-ca">CA</span></td>'
+        + '<td style="text-align:center;">' + caPcs.toLocaleString() + '</td>'
+        + '<td style="font-weight:700;color:var(--ca);">' + (caAmt > 0 ? '$' + caAmt.toLocaleString() : '—') + '</td>'
+        + '<td>' + (o.ship_date||'—') + '</td>'
+        + '<td></td>'
+        + '<td>' + getWhStatusBadge(caSt.label, caSt.color, caSt.bg) + '</td>'
+        + '<td></td>'
+        + '<td style="white-space:nowrap;">' + caBtns + '</td>'
+        + '</tr>';
+
+      return [scRow, caRow];
     }).join('');
+
     document.getElementById('customerpo-table-wrap').innerHTML =
       '<table class="tbl"><thead><tr>'
       + '<th>Customer</th><th>PO #</th><th>WH</th>'
@@ -10866,11 +10926,17 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
 }
 
 async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
-  const custObj = (customers||[]).find(c => c.id === order.customer_id);
-  const toEmail = custObj?.email || order.customer_email || order.email || '';
-  const ccEmail = (custObj?.email_cc || '').split(',').map(e => e.trim()).filter(e => e && e.includes('@'));
+  let custObj = (customers||[]).find(c => c.id === order.customer_id);
+  // customers 캐시에 없으면 DB에서 직접 조회
+  if (!custObj && order.customer_id) {
+    const { data: custData } = await db.from('customers').select('*').eq('id', order.customer_id).single();
+    if (custData) custObj = custData;
+  }
+  const toEmail = custObj?.accounting_email || custObj?.email || order.customer_email || order.email || '';
+  const ccEmail = (custObj?.accounting_email_cc || custObj?.email_cc || '').split(',').map(e => e.trim()).filter(e => e && e.includes('@'));
 
-  if (!toEmail) return { ok: false, error: 'No customer email' };
+  console.log('[sendShippedEmail] toEmail:', toEmail, '| customer_id:', order.customer_id, '| custObj:', !!custObj);
+  if (!toEmail) { console.warn('[sendShippedEmail] No email found'); return { ok: false, error: 'No customer email' }; }
 
   // order_lines 가져오기 — style → color → size 정렬
   const { data: lines } = await db.from('order_lines')
@@ -11596,7 +11662,7 @@ async function doShipped(orderId, wh) {
 
   // 고객 이메일 표시
   const custObj = (customers||[]).find(c => c.id === orderCard?.customer_id);
-  const custEmail = custObj?.email || orderCard?.email || '';
+  const custEmail = custObj?.accounting_email || custObj?.email || orderCard?.email || '';
   const emailToEl = document.getElementById('ship-email-to');
   const noEmailWarn = document.getElementById('ship-no-email-warn');
   if (emailToEl) emailToEl.textContent = custEmail || '—';
@@ -12042,6 +12108,9 @@ async function confirmShipped() {
 
 // Batch Ship에서 PIN 없이 직접 호출하는 코어 로직
 async function _doShippedCore(emp) {
+  // AudioContext를 user gesture 시점에 미리 활성화 (await 이후엔 gesture 컨텍스트 만료될 수 있음)
+  try { _getAudioCtx(); } catch(e) {}
+
   const shipDate = document.getElementById('ship-date-inp').value;
   const carrier = document.getElementById('ship-carrier').value;
   // UPS/FedEx는 다중 tracking, Will Call은 pickup 정보, 나머지는 단일 tracking
@@ -13528,14 +13597,35 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   // 출고 상태 배너
   const scShippedAt = order.sc_shipped_at ? fmtDate(order.sc_shipped_at) : null;
   const caShippedAt = order.ca_shipped_at ? fmtDate(order.ca_shipped_at) : null;
+
+  // 반대쪽 WH 상태 텍스트
+  const getOtherWhStatus = (whStatus) => {
+    if (!whStatus || whStatus === 'po_entered') return 'Preparing for Shipment';
+    if (whStatus === 'preparing') return 'Preparing for Shipment';
+    if (whStatus === 'ready_to_ship') return 'Ready to Ship';
+    if (whStatus === 'shipped' || whStatus === 'invoiced' || whStatus === 'completed') return 'Shipped ✓';
+    return whStatus;
+  };
+
   let statusBanner = '';
+  // isSplit이면 양쪽 모두 invoiced/completed일 때만 backSection 표시 (마지막 invoice)
+  const isLastInvoice = !isSplit || (
+    ['invoiced','completed','shipped'].includes(order.sc_status||'') &&
+    ['invoiced','completed','shipped'].includes(order.ca_status||'')
+  );
+
   if (isSplit) {
     const scDone = !!scShippedAt; const caDone = !!caShippedAt;
     if (scDone && caDone) {
       statusBanner = `<table style="width:100%;border-collapse:collapse;background:#dcfce7;border:1px solid #86efac;border-radius:6px;margin-bottom:16px;"><tr><td style="padding:10px 16px;font-size:13px;font-weight:700;color:#166534;">&#10003; PO Fully Shipped &amp; Invoiced</td></tr></table>`;
-    } else {
-      const pending = !scDone ? 'SC Warehouse pending' : 'CA Warehouse pending';
-      statusBanner = `<table style="width:100%;border-collapse:collapse;background:#fef9c3;border:1px solid #fde047;border-radius:6px;margin-bottom:16px;"><tr><td style="padding:10px 16px;font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced — ${pending}</td></tr></table>`;
+    } else if (invWh === 'CA' && !scDone) {
+      // CA invoice인데 SC 아직 안 나감
+      const scLabel = getOtherWhStatus(order.sc_status);
+      statusBanner = `<table style="width:100%;border-collapse:collapse;background:#fef9c3;border:1px solid #fde047;border-radius:6px;margin-bottom:16px;"><tr><td style="padding:10px 16px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced — CA Warehouse</span><span style="font-size:12px;color:#92400e;margin-left:10px;">SC Warehouse: <strong>${scLabel}</strong></span></td></tr></table>`;
+    } else if (invWh === 'SC' && !caDone) {
+      // SC invoice인데 CA 아직 안 나감
+      const caLabel = getOtherWhStatus(order.ca_status);
+      statusBanner = `<table style="width:100%;border-collapse:collapse;background:#fef9c3;border:1px solid #fde047;border-radius:6px;margin-bottom:16px;"><tr><td style="padding:10px 16px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced — SC Warehouse</span><span style="font-size:12px;color:#92400e;margin-left:10px;">CA Warehouse: <strong>${caLabel}</strong></span></td></tr></table>`;
     }
   }
 
@@ -13573,8 +13663,8 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     </tr>`;
   }).join('');
 
-  // Back order
-  const backLines = (lines||[]).filter(l => (l.qty_backordered||0) > 0)
+  // Back order — SC&CA 오더는 양쪽 모두 완료됐을 때(마지막 invoice)만 표시
+  const backLines = isLastInvoice ? (lines||[]).filter(l => (l.qty_backordered||0) > 0) : []
     .sort((a,b) => { const c=(a.color||'').localeCompare(b.color||''); return c!==0?c:sizeOrd(a.size)-sizeOrd(b.size); });
   const totalBack = backLines.reduce((s,l)=>s+(l.qty_backordered||0),0);
   const backSection = backLines.length ? `
@@ -13624,7 +13714,8 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     <!-- Body -->
     <div style="padding:20px 24px;background:#fff;border:1px solid #e5e7eb;border-top:none;">
       <p style="font-size:14px;margin:0 0 4px;">Dear <strong>${order.customer_name||''}</strong>,</p>
-      <p style="font-size:13px;color:#374151;margin:0 0 16px;">Please find your invoice details below. Your invoice PDF, packing list, and purchase order are attached to this email.</p>
+      <p style="font-size:13px;color:#374151;margin:0 0 4px;">Please find your invoice details below.</p>
+      <p style="font-size:13px;color:#374151;margin:0 0 16px;">Your invoice PDF, packing list, and purchase order are attached to this email.</p>
 
       ${statusBanner}
 
@@ -13633,7 +13724,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
         <tr>
           <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">Your PO #<br><strong style="font-size:16px;color:#111;">${order.customer_po||'—'}</strong></td>
           <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">Ship Date<br><strong style="font-size:14px;color:#111;">${shipDate}</strong></td>
-          <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">Due Date<br><strong style="font-size:14px;color:#dc2626;">${dueDate}</strong></td>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">Invoice Due Date<br><strong style="font-size:14px;color:#dc2626;">${dueDate}</strong></td>
           <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Invoice Total<br><strong style="font-size:16px;color:#1e40af;">$${(totalAmt+freight).toFixed(2)}</strong></td>
         </tr>
       </table>
@@ -15134,8 +15225,7 @@ function playDefectAlert() {
 }
 
 function playShippedSound() {
-  try {
-    const ctx = _getAudioCtx();
+  const play = (ctx) => {
     const now = ctx.currentTime;
     // 성공 팡파레 — 도미솔도↑
     [[0,523],[0.1,659],[0.2,784],[0.3,1047]].forEach(([t,f]) => {
@@ -15144,7 +15234,21 @@ function playShippedSound() {
       g.gain.setValueAtTime(0,now+t);g.gain.linearRampToValueAtTime(0.4,now+t+0.01);
       g.gain.exponentialRampToValueAtTime(0.001,now+t+0.3);o.start(now+t);o.stop(now+t+0.35);
     });
-  } catch(e) {}
+  };
+  try {
+    const ctx = _getAudioCtx();
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => play(ctx)).catch(() => {});
+    } else {
+      play(ctx);
+    }
+  } catch(e) {
+    // fallback: 새 AudioContext로 재시도
+    try {
+      const ctx2 = new (window.AudioContext || window.webkitAudioContext)();
+      ctx2.resume().then(() => play(ctx2)).catch(() => {});
+    } catch(e2) {}
+  }
 }
 
 function playNewOrderChime() {
