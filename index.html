@@ -12169,6 +12169,7 @@ async function _doShippedCore(emp) {
   } else {
     showToast(`🚚 PO# ${order.customer_po||order.order_number} Shipped 완료!`);
   }
+  playShippedSound();
 
   // 이메일 발송
   const sendEmail = document.getElementById('ship-send-email')?.checked;
@@ -13570,26 +13571,20 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
 
     // SC&CA 라인의 shipped qty: alloc pcs 기준 (WH별로 정확히 분리)
     const getWhShippedQty = (l) => {
-      if (l.wh === 'SC&CA') {
-        const activeAlloc = sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
-        const ppb = l.pcs_per_box || 72;
-        return Object.entries(activeAlloc)
-          .filter(([k]) => !k.includes('TRANSFER|'))
-          .reduce((s,[,v]) => {
-            if (typeof v === 'object') {
-              // boxes * ppb + partial pcs
-              return s + ((v.boxes||0) * ppb) + (v.pcs ? v.pcs % ppb : 0);
-            }
-            return s + (v||0);
-          }, 0);
-      }
-      // SC 또는 CA 단일 라인 — alloc_detail에서 직접 읽기 (qty_filled는 0으로 저장됨)
-      const alloc = l.wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
       const ppb = l.pcs_per_box || 72;
+      const alloc = l.wh === 'SC&CA'
+        ? (sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{}))
+        : (l.wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{}));
       const allocTotal = Object.entries(alloc)
         .filter(([k]) => !k.includes('TRANSFER|'))
         .reduce((s,[,v]) => {
-          if (typeof v === 'object') return s + ((v.boxes||0) * ppb) + (v.pcs ? v.pcs % ppb : 0);
+          if (typeof v === 'object') {
+            // boxes가 있으면 boxes*ppb, pcs가 있으면 pcs 그대로 (% 연산 안 함)
+            if (v.boxes > 0 && v.pcs > 0) return s + (v.boxes * ppb) + v.pcs;
+            if (v.boxes > 0) return s + (v.boxes * ppb);
+            if (v.pcs > 0) return s + v.pcs;
+            return s;
+          }
           return s + (v||0);
         }, 0);
       return allocTotal || l.qty_filled || 0;
