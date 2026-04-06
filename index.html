@@ -5141,6 +5141,7 @@ function renderCustomerPOTable() {
         + '<button class="btn btn-sm" style="background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;font-size:10px;" onclick="showDocPopover(this,\'' + oid + '\',\'' + wh + '\',\'invoice\')">🧾 Invoice</button>'
         + '<button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;font-size:10px;" onclick="showDocPopover(this,\'' + oid + '\',\'' + wh + '\',\'packing\')">📋 Packing List</button>'
         + (o.po_file ? '<button class="btn btn-sm" style="background:#f0fdf4;color:#15803d;border-color:#86efac;font-size:10px;" onclick="showDocPopover(this,\'' + oid + '\',\'' + wh + '\',\'po\')">📄 Customer PO</button>' : '')
+        + '<button class="btn btn-sm" style="background:#fdf4ff;color:#7e22ce;border-color:#d8b4fe;font-size:10px;" onclick="event.stopPropagation();openPodModal(\'' + oid + '\',\'' + wh + '\')"">📦 POD</button>'
         + '</div>'
         + '</td>'
         + '</tr>';
@@ -5179,6 +5180,7 @@ function renderCustomerPOTable() {
           actionBtns += ' ' + _mkB('🧾 Invoice', '#f5f3ff', '#6d28d9', '#c4b5fd', 'invoice');
           actionBtns += ' ' + _mkB('📋 Packing List', '#f0f9ff', '#0369a1', '#bae6fd', 'packing');
           if (o.po_file) actionBtns += ' ' + _mkB('📄 Customer PO', '#f0fdf4', '#15803d', '#86efac', 'po');
+          actionBtns += ' <button class="btn btn-sm" style="background:#fdf4ff;color:#7e22ce;border-color:#d8b4fe;" onclick="event.stopPropagation();openPodModal(\'' + oid + '\',\'' + wh + '\')">📦 POD</button>';
         }
         if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
           actionBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕ Cancel</button>'
@@ -5218,10 +5220,10 @@ function renderCustomerPOTable() {
         scBtns += ' ' + mkDocBtn('🧾 Invoice', '#f5f3ff', '#6d28d9', '#c4b5fd', oid, 'SC', 'invoice');
         scBtns += ' ' + mkDocBtn('📋 Packing List', '#f0f9ff', '#0369a1', '#bae6fd', oid, 'SC', 'packing');
         if (o.po_file) scBtns += ' ' + mkDocBtn('📄 Customer PO', '#f0fdf4', '#15803d', '#86efac', oid, 'SC', 'po');
+        scBtns += ' <button class="btn btn-sm" style="background:#fdf4ff;color:#7e22ce;border-color:#d8b4fe;" onclick="event.stopPropagation();openPodModal(\'' + oid + '\',\'SC\')">📦 POD</button>';
       }
       if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
-        scBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕</button>'
-          + ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑</button>';
+        scBtns += ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteWhLinesConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\',\'SC\')">🗑 SC 삭제</button>';
       }
 
       // CA 액션 버튼
@@ -5230,11 +5232,17 @@ function renderCustomerPOTable() {
         caBtns += ' ' + mkDocBtn('🧾 Invoice', '#fff7ed', '#c2410c', '#fdba74', oid, 'CA', 'invoice');
         caBtns += ' ' + mkDocBtn('📋 Packing List', '#fff7ed', '#c2410c', '#fdba74', oid, 'CA', 'packing');
         if (o.po_file) caBtns += ' ' + mkDocBtn('📄 Customer PO', '#fff7ed', '#c2410c', '#fdba74', oid, 'CA', 'po');
+        caBtns += ' <button class="btn btn-sm" style="background:#fdf4ff;color:#7e22ce;border-color:#d8b4fe;" onclick="event.stopPropagation();openPodModal(\'' + oid + '\',\'CA\')">📦 POD</button>';
+      }
+      if (!['shipped','invoiced','cancelled','completed'].includes(o.status) || ['preparing','ready_to_ship','po_entered'].includes(caStatusKey)) {
+        if (!['shipped','invoiced','cancelled','completed'].includes(caStatusKey)) {
+          caBtns += ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteWhLinesConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\',\'CA\')">🗑 CA 삭제</button>';
+        }
       }
 
       const scRow = '<tr style="cursor:pointer;' + rowBg + 'border-bottom:none;" onclick="openPODetail(\'' + oid + '\'">'
         + '<td style="font-weight:700;color:#111827;border-bottom:none;">' + o.customer_name + '</td>'
-        + '<td class="mono" style="font-weight:700;border-bottom:none;">' + (o.customer_po||'—') + '</td>'
+        + '<td class="mono" style="font-weight:700;border-bottom:none;">' + (o.customer_po||'—') + (!['shipped','invoiced','cancelled','completed'].includes(o.status) ? ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;font-size:9px;padding:1px 5px;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑 전체삭제</button>' : '') + '</td>'
         + '<td style="border-bottom:none;"><span class="loc-sc">SC</span></td>'
         + '<td style="text-align:center;border-bottom:none;">' + scPcs.toLocaleString() + '</td>'
         + '<td style="font-weight:700;color:var(--primary);border-bottom:none;">' + (scAmt > 0 ? '$' + scAmt.toLocaleString() : '—') + '</td>'
@@ -6180,6 +6188,102 @@ async function submitCancelOrder() {
   document.getElementById('cancel-order-modal').style.display = 'none';
   showToast('✕ '+_cancelOrderNum+' 취소 완료 — 재고 복구됨');
   loadCustomerPOs(); loadOrderStatus();
+}
+
+// ── WH별 라인 삭제 (SC만 or CA만)
+let _deleteWhOrderId = null, _deleteWhOrderNum = null, _deleteWh = null, _deleteWhCust = null;
+
+function deleteWhLinesConfirm(orderId, orderNum, customerName, wh) {
+  _deleteWhOrderId = orderId;
+  _deleteWhOrderNum = orderNum;
+  _deleteWh = wh;
+  _deleteWhCust = customerName;
+  document.getElementById('delete-wh-info').innerHTML =
+    '<b>' + orderNum + '</b> — ' + customerName + '<br><span style="color:#dc2626;font-weight:700;">' + wh + ' Warehouse 라인만 삭제됩니다.</span>';
+  document.getElementById('delete-wh-pin-input').value = '';
+  document.getElementById('delete-wh-pin-error').textContent = '';
+  document.getElementById('delete-wh-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('delete-wh-pin-input')?.focus(), 100);
+}
+
+async function submitDeleteWhLines() {
+  const pin = document.getElementById('delete-wh-pin-input').value;
+  const errEl = document.getElementById('delete-wh-pin-error');
+  if (pin.length < 4) { errEl.textContent = 'PIN 4자리를 입력하세요.'; return; }
+
+  if (_pinEmployees.length === 0) await loadPinEmployees();
+  const emp = _pinEmployees.find(e => e.pin === pin);
+  if (!emp || !['manager','supervisor','admin'].includes(emp.role)) {
+    errEl.textContent = '❌ PIN이 올바르지 않습니다.'; return;
+  }
+
+  document.getElementById('delete-wh-modal').style.display = 'none';
+  showToast('⏳ ' + _deleteWh + ' 라인 삭제 중...');
+
+  try {
+    const { data: lines } = await db.from('order_lines').select('*').eq('order_id', _deleteWhOrderId);
+    const whLines = (lines||[]).filter(l =>
+      _deleteWh === 'CA'
+        ? (l.wh === 'CA' || l.wh === 'SC&CA')
+        : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)
+    );
+
+    // 재고 committed 복구 (해당 WH alloc만)
+    const { data: allInv } = await db.from('inventory').select('id,location,qty_committed,qty_on_hand,warehouses(code)');
+    const invByLoc = {};
+    (allInv||[]).forEach(inv => {
+      const key = (inv.warehouses?.code||'') + '|' + inv.location;
+      if (!invByLoc[key]) invByLoc[key] = [];
+      invByLoc[key].push(inv);
+    });
+
+    for (const line of whLines) {
+      const alloc = _deleteWh === 'CA' ? (line.alloc_ca_detail||{}) : (line.alloc_detail||{});
+      for (const [key, val] of Object.entries(alloc)) {
+        if (key.includes('TRANSFER|')) continue;
+        const pcs = typeof val === 'object' ? (val.pcs||0) : (val||0);
+        if (pcs <= 0) continue;
+        const isPcr = key.includes('PCR|PCR');
+        const whBin = isPcr ? (_deleteWh + '-PCR') : _deleteWh;
+        const loc = isPcr ? 'PCR' : key;
+        const matches = invByLoc[whBin+'|'+loc] || [];
+        let rem = pcs;
+        for (const inv of matches) {
+          if (rem <= 0) break;
+          const release = Math.min(rem, inv.qty_committed||0);
+          if (release > 0) {
+            await db.from('inventory').update({ qty_committed: Math.max(0, (inv.qty_committed||0) - release) }).eq('id', inv.id);
+            rem -= release;
+          }
+        }
+      }
+      // SC&CA 라인이면 해당 WH alloc만 지우고 라인은 유지 (반대 WH 남아있음)
+      if (line.wh === 'SC&CA') {
+        if (_deleteWh === 'CA') {
+          await db.from('order_lines').update({ alloc_ca_detail: null, wh: 'SC' }).eq('id', line.id);
+        } else {
+          await db.from('order_lines').update({ alloc_detail: null, wh: 'CA' }).eq('id', line.id);
+        }
+      } else {
+        await db.from('order_lines').delete().eq('id', line.id);
+      }
+    }
+
+    // orders 테이블 wh_code 업데이트 (SC&CA → 단일 WH로)
+    const remaining = _deleteWh === 'CA' ? 'SC' : 'CA';
+    const statusField = _deleteWh === 'CA' ? 'ca_status' : 'sc_status';
+    await db.from('orders').update({
+      wh_code: remaining,
+      is_split_warehouse: false,
+      [statusField]: 'cancelled'
+    }).eq('id', _deleteWhOrderId);
+
+    showToast('🗑 ' + _deleteWh + ' 라인 삭제 완료!');
+    _deleteWhOrderId = null; _deleteWhOrderNum = null; _deleteWh = null;
+    loadCustomerPOs(); loadOrderStatus();
+  } catch(e) {
+    showToast('❌ 오류: ' + e.message);
+  }
 }
 
 function deleteOrderConfirm(orderId, orderNum, customerName) {
@@ -11175,6 +11279,93 @@ function openReturnModal(orderId) {
   showToast('🔧 Return 기능은 준비 중입니다');
 }
 
+// ── POD (Proof of Delivery) Modal ──────────────────────────────
+let _podOrderId = null, _podWh = null, _podFileData = null;
+
+async function openPodModal(orderId, wh) {
+  _podOrderId = orderId;
+  _podWh = wh || 'SC';
+  _podFileData = null;
+
+  const modal = document.getElementById('modal-pod');
+  if (!modal) return;
+
+  // 기존 POD 파일 확인
+  const { data: order } = await db.from('orders').select('pod_file, pod_file_ca, customer_name, customer_po').eq('id', orderId).single();
+  const existingFile = wh === 'CA' ? order?.pod_file_ca : order?.pod_file;
+
+  document.getElementById('pod-wh-label').textContent = wh === 'CA' ? 'CA Warehouse (Eastvale)' : 'SC Warehouse (Sumter)';
+  document.getElementById('pod-order-info').textContent = (order?.customer_name||'') + '  PO# ' + (order?.customer_po||'—');
+  document.getElementById('pod-upload-status').textContent = existingFile ? '✅ POD 파일 저장됨' : '파일 없음';
+  document.getElementById('pod-upload-status').style.color = existingFile ? '#16a34a' : '#9ca3af';
+  document.getElementById('pod-file-input').value = '';
+  document.getElementById('pod-preview-wrap').style.display = 'none';
+  document.getElementById('pod-view-btn').style.display = existingFile ? 'inline-flex' : 'none';
+
+  modal.style.display = 'flex';
+}
+
+function closePodModal() {
+  document.getElementById('modal-pod').style.display = 'none';
+  _podOrderId = null; _podWh = null; _podFileData = null;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const fi = document.getElementById('pod-file-input');
+  if (fi) fi.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      _podFileData = ev.target.result.split(',')[1];
+      document.getElementById('pod-upload-status').textContent = '📎 ' + file.name + ' 선택됨';
+      document.getElementById('pod-upload-status').style.color = '#1e40af';
+      // PDF면 미리보기
+      if (file.type === 'application/pdf') {
+        document.getElementById('pod-preview-wrap').style.display = 'none';
+      } else {
+        const img = document.getElementById('pod-preview-img');
+        img.src = ev.target.result;
+        document.getElementById('pod-preview-wrap').style.display = 'block';
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+});
+
+async function savePod() {
+  if (!_podFileData) { showToast('파일을 먼저 선택해주세요.'); return; }
+  const btn = document.getElementById('pod-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 저장 중...'; }
+  try {
+    const field = _podWh === 'CA' ? 'pod_file_ca' : 'pod_file';
+    await db.from('orders').update({ [field]: _podFileData }).eq('id', _podOrderId);
+    showToast('✅ POD 저장 완료!');
+    closePodModal();
+  } catch(e) {
+    showToast('❌ 저장 오류: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '💾 저장'; }
+  }
+}
+
+async function viewPod() {
+  const { data: order } = await db.from('orders').select('pod_file, pod_file_ca').eq('id', _podOrderId).single();
+  const b64 = _podWh === 'CA' ? order?.pod_file_ca : order?.pod_file;
+  if (!b64) { showToast('저장된 POD 파일이 없습니다.'); return; }
+  try {
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    // PDF 또는 이미지 자동 판단
+    const isPdf = b64.startsWith('JVBER'); // PDF magic bytes in base64
+    const mime = isPdf ? 'application/pdf' : 'image/jpeg';
+    const blob = new Blob([bytes], { type: mime });
+    window.open(URL.createObjectURL(blob), '_blank');
+  } catch(e) { showToast('❌ 파일 열기 오류'); }
+}
+
+// showDocPopover에 POD 추가
 // ── Invoice Documents Modal ──────────────────────────────
 async function openInvoiceDocsModal(orderId, wh) {
   const modal = document.getElementById('modal-invoice-docs');
@@ -11287,7 +11478,7 @@ async function _openDocPdfById(type, orderId, wh) {
     } else {
       const html = type === 'invoice'
         ? buildInvoiceHtml(order, lines, false, invNum, shipInfo, cs, 0)
-        : buildPackingListHtml(order, allLines||[], isSplit, wh||'SC', shipInfo, '');
+        : buildPackingListHtml(order, lines||[], false, wh||'SC', shipInfo, '');
       if (!html) { showToast('❌ PDF 생성 실패'); return; }
       b64 = await htmlToPdfBase64(html);
     }
@@ -11325,7 +11516,7 @@ async function _openDocPdf(type, orderId, wh, order, invNum) {
     } else {
       const html = type === 'invoice'
         ? buildInvoiceHtml(order, filteredLines, false, invNum, shipInfo, cs, 0)
-        : buildPackingListHtml(order, lines||[], isSplit, wh, shipInfo, '');
+        : buildPackingListHtml(order, lines||[], false, wh, shipInfo, '');
       if (!html) { showToast('❌ PDF 생성 실패'); return; }
       b64 = await htmlToPdfBase64(html);
     }
@@ -19349,6 +19540,67 @@ function showCreditHoldFlash(overAmt) {
     </div>
     <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;">
       <button class="btn" onclick="document.getElementById('modal-invoice-docs').style.display='none'">닫기</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ── POD Modal ── -->
+<div id="modal-pod" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:460px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="background:#581c87;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;">
+      <span style="color:#fff;font-weight:700;font-size:14px;">📦 Proof of Delivery (POD)</span>
+      <button onclick="closePodModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#d8b4fe;line-height:1;">✕</button>
+    </div>
+    <div style="padding:20px;">
+      <div style="font-size:12px;color:#6b7280;margin-bottom:4px;" id="pod-wh-label"></div>
+      <div style="font-size:13px;font-weight:600;color:#111;margin-bottom:16px;" id="pod-order-info"></div>
+
+      <!-- 현재 상태 -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <span id="pod-upload-status" style="font-size:12px;color:#9ca3af;"></span>
+        <button id="pod-view-btn" class="btn btn-sm" style="display:none;background:#fdf4ff;color:#7e22ce;border-color:#d8b4fe;" onclick="viewPod()">👁 View Current POD</button>
+      </div>
+
+      <!-- 업로드 영역 -->
+      <div style="border:2px dashed #d8b4fe;border-radius:8px;padding:20px;text-align:center;background:#fdf4ff;cursor:pointer;" onclick="document.getElementById('pod-file-input').click()">
+        <div style="font-size:24px;margin-bottom:6px;">📎</div>
+        <div style="font-size:13px;color:#6d28d9;font-weight:600;">클릭하여 파일 선택</div>
+        <div style="font-size:11px;color:#9ca3af;margin-top:4px;">PDF, JPG, PNG 지원</div>
+        <input type="file" id="pod-file-input" accept=".pdf,.jpg,.jpeg,.png" style="display:none;">
+      </div>
+
+      <!-- 이미지 미리보기 -->
+      <div id="pod-preview-wrap" style="display:none;margin-top:12px;text-align:center;">
+        <img id="pod-preview-img" style="max-width:100%;max-height:200px;border-radius:6px;border:1px solid #e5e7eb;">
+      </div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;">
+      <button class="btn" onclick="closePodModal()">취소</button>
+      <button id="pod-save-btn" class="btn" style="background:#581c87;color:#fff;border-color:#581c87;" onclick="savePod()">💾 저장</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ── WH별 라인 삭제 확인 모달 ── -->
+<div id="delete-wh-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:400px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="background:#dc2626;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;">
+      <span style="color:#fff;font-weight:700;font-size:14px;">🗑 WH 라인 삭제</span>
+      <button onclick="document.getElementById('delete-wh-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fca5a5;line-height:1;">✕</button>
+    </div>
+    <div style="padding:20px;">
+      <div id="delete-wh-info" style="font-size:13px;margin-bottom:16px;line-height:1.6;"></div>
+      <p style="font-size:12px;color:#6b7280;margin-bottom:12px;">해당 WH의 라인과 재고 배정이 해제됩니다. 계속하려면 Manager PIN을 입력하세요.</p>
+      <input type="password" id="delete-wh-pin-input" class="fi" placeholder="Manager PIN" maxlength="6"
+        style="width:100%;font-size:18px;letter-spacing:8px;text-align:center;font-family:'IBM Plex Mono',monospace;"
+        onkeydown="if(event.key==='Enter')submitDeleteWhLines()">
+      <div id="delete-wh-pin-error" style="color:#dc2626;font-size:12px;margin-top:6px;min-height:18px;"></div>
+    </div>
+    <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;">
+      <button class="btn" onclick="document.getElementById('delete-wh-modal').style.display='none'">취소</button>
+      <button class="btn" style="background:#dc2626;color:#fff;border-color:#dc2626;" onclick="submitDeleteWhLines()">🗑 삭제 확인</button>
     </div>
   </div>
 </div>
