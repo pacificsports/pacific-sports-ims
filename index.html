@@ -12416,7 +12416,13 @@ async function sendInvoiceEmail() {
 
   try {
     const { data: order } = await db.from('orders').select('*').eq('id', _invoiceOrderId).single();
-    const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', _invoiceOrderId);
+    const { data: allLines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', _invoiceOrderId);
+    const isSplitInvEmail = order?.wh_code === 'SC&CA' || order?.is_split_warehouse;
+    const lines = (isSplitInvEmail && _invoiceWh)
+      ? (allLines||[]).filter(l => _invoiceWh === 'CA'
+          ? (l.wh === 'CA' || l.wh === 'SC&CA')
+          : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+      : (allLines||[]);
     const { data: settingsRows } = await db.from('company_settings').select('key,value');
     const companySettings = {};
     (settingsRows||[]).forEach(s => { companySettings[s.key] = s.value; });
