@@ -5302,13 +5302,13 @@ let _knownOrderIds = null;
 
 async function loadOrderStatus() {
   const whFilter = document.getElementById('os-filter-wh')?.value || '';
-  ['entered','preparing','ready','shipped','invoiced'].forEach(k =>
+  ['entered','preparing','ready','shipped'].forEach(k =>
     document.getElementById(`os-col-${k}`).innerHTML = '<div style="font-size:11px;color:#9ca3af;padding:8px;">로딩 중...</div>'
   );
 
   const { data } = await db.from('orders')
     .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail)')
-    .not('status', 'in', '(cancelled,completed)')
+    .not('status', 'in', '(cancelled,completed,invoiced)')
     .order('created_at', { ascending: false });
 
   // Emergency + Defect pending 맵 미리 로드 (카드 배지용)
@@ -5409,7 +5409,7 @@ async function loadOrderStatus() {
     entered:   sortByUrgency(allCards.filter(c => statusMatch(c, ['po_entered','open','credit_hold','rejected']))),
     preparing: sortByUrgency(allCards.filter(c => statusMatch(c, ['preparing']))),
     ready:     sortByUrgency(allCards.filter(c => statusMatch(c, ['ready_to_ship']))),
-    shipped:   allCards.filter(c => statusMatch(c, ['shipped','invoiced'])),
+    shipped:   allCards.filter(c => statusMatch(c, ['shipped'])),
     backorder: sortByUrgency(allCards.filter(c => statusMatch(c, ['backordered','partial']))),
   };
 
@@ -13384,17 +13384,18 @@ async function sendInvoiceEmail() {
   // WH별 completed 처리
   const isSplitInv = currentOrder?.wh_code === 'SC&CA' || currentOrder?.is_split_warehouse;
   if (isSplitInv) {
-    // Split: 현재 WH만 completed, 반대쪽도 이미 invoiced/completed면 메인도 completed
     const thisWh = _invoiceWh || 'SC';
     const col = thisWh === 'CA' ? 'ca_status' : 'sc_status';
     const otherStatus = thisWh === 'CA' ? currentOrder?.sc_status : currentOrder?.ca_status;
     const bothDone = ['invoiced','completed','shipped'].includes(otherStatus);
+    // 메인 status도 항상 invoiced로 업데이트 → 칸반 invoiced 컬럼에서 사라짐
+    // 양쪽 다 완료됐으면 completed로
     await db.from('orders').update({
-      [col]: 'completed',
-      ...(bothDone ? { status: 'completed' } : {})
+      [col]: 'invoiced',
+      status: bothDone ? 'completed' : 'invoiced'
     }).eq('id', _invoiceOrderId);
   } else {
-    // 싱글 WH: 메인 status + wh status 모두 completed
+    // 싱글 WH: 바로 completed
     const col = (_invoiceWh || 'SC') === 'CA' ? 'ca_status' : 'sc_status';
     await db.from('orders').update({ status: 'completed', [col]: 'completed' }).eq('id', _invoiceOrderId);
   }
