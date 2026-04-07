@@ -13039,7 +13039,14 @@ async function _doShippedCoreInner(emp) {
       }
     }
 
-    const backQty = Math.max(0, l.qty_pieces - filled);
+    // back qty: 현재 WH filled + 반대쪽 WH에서 이미 나간 수량도 차감
+    const allocPcsTotal = (alloc) => Object.entries(alloc||{})
+      .filter(([k]) => !k.includes('TRANSFER|'))
+      .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+    const otherWhFilled = lineWh === 'SC&CA'
+      ? (wh === 'CA' ? allocPcsTotal(allocSC) : allocPcsTotal(allocCA))
+      : 0;
+    const backQty = Math.max(0, l.qty_pieces - filled - otherWhFilled);
     if (backQty > 0) {
       totalBackQty += backQty;
       backLines.push({ ...l, qty_filled: filled, qty_backordered: backQty });
@@ -14412,76 +14419,67 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
 // ═══════════════════════════════════════════════════════
 function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySettings, freightAmt) {
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf((s||'').toUpperCase()) + 1) || 99;
-  const fmtDate = d => d ? new Date((d.slice?.(0,10)||d)+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : null;
+  const fmtDate = d => {
+    if (!d) return null;
+    const s = typeof d === 'string' ? d.slice(0,10) : d.toISOString().slice(0,10);
+    return new Date(s+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+  };
   const invoiceDate = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
   const termsDays = parseInt((order.terms||'N30').replace(/[^0-9]/g,'')) || 30;
   const dueDateObj = new Date(); dueDateObj.setDate(dueDateObj.getDate() + termsDays);
   const dueDate = dueDateObj.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
-  // 실제 출고일 — WH별 sc_shipped_at/ca_shipped_at 우선, fallback은 ship_date
-  const actualShipDate = invWh === 'CA'
-    ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
-    : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date);
-  const shipDate = actualShipDate ? fmtDate(actualShipDate) : invoiceDate;
-  const freight = freightAmt || 0;
-  const carrier = (shipInfo && shipInfo.carrier) || order.carrier || '';
-  const tracking = (shipInfo && shipInfo.tracking) || order.tracking_number || '';
-  const freightCo = (shipInfo && shipInfo.freightCarrier) || order.pickup_company || '';
-  const isLtl = carrier === 'LTL';
-  const trackingLabel = isLtl ? 'PRO #' : 'Tracking #';
-  let shipViaStr = carrier || '—';
-  if (isLtl && freightCo) shipViaStr = freightCo;
-  const trackingStr = tracking || '—';
 
-  // WH 판단 — invoiceNum prefix 우선
+  // WH 판단
   const invWh = (invoiceNum && invoiceNum.startsWith('CA')) ? 'CA'
     : (order.wh_code === 'CA' || order.warehouses?.code === 'CA') ? 'CA' : 'SC';
   const whLabel = invWh === 'CA' ? 'Eastvale, CA' : 'Sumter, SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
+  // 실제 출고일
+  const actualShipRaw = invWh === 'CA'
+    ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
+    : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date);
+  const shipDate = actualShipRaw ? fmtDate(actualShipRaw) : invoiceDate;
+
+  const freight = freightAmt || 0;
+  const carrier = (shipInfo && shipInfo.carrier) || order.carrier || '';
+  const tracking = (shipInfo && shipInfo.tracking) || order.tracking_number || '';
+  const freightCo = (shipInfo && shipInfo.freightCarrier) || order.pickup_company || '';
+  const isLtl = carrier === 'LTL';
+  let shipViaStr = carrier || '';
+  if (isLtl && freightCo) shipViaStr = freightCo;
+
   const paymentInfo = (companySettings && companySettings.payment_info) || 'Hana Commercial Finance\nDept. LA 24406\nPasadena, CA 91185-4406';
-  const returnPolicy = (companySettings && companySettings.return_policy) || 'Returns are accepted within 30 days from date of shipment.';
+  const returnPolicy = (companySettings && companySettings.return_policy) || 'Returns are accepted within 30 days from date of shipment. All returns must be accompanied by a Return Authorization (RA) number. Returns are subject to a 15% restocking fee.';
   const paymentLines = (paymentInfo||'').replace(/\\n/g,'<br>').replace(/\n/g,'<br>');
 
-  // 출고 상태 배너
-  const scShippedAt = order.sc_shipped_at ? fmtDate(order.sc_shipped_at) : null;
-  const caShippedAt = order.ca_shipped_at ? fmtDate(order.ca_shipped_at) : null;
-
-  // 반대쪽 WH 상태 텍스트
-  const getOtherWhStatus = (whStatus) => {
-    if (!whStatus || whStatus === 'po_entered') return 'Preparing for Shipment';
-    if (whStatus === 'preparing') return 'Preparing for Shipment';
-    if (whStatus === 'ready_to_ship') return 'Ready to Ship';
-    if (whStatus === 'shipped' || whStatus === 'invoiced' || whStatus === 'completed') return 'Shipped ✓';
-    return whStatus;
+  // Partially Invoiced 배너
+  const otherWhStatus = isSplit ? (invWh === 'CA' ? (order.sc_status||'') : (order.ca_status||'')) : '';
+  const isLastInvoice = !isSplit || ['invoiced','completed','shipped'].includes(otherWhStatus);
+  const getOtherWhStatus = (s) => {
+    if (!s || s === 'po_entered') return 'Preparing for Shipment';
+    if (s === 'preparing') return 'Preparing for Shipment';
+    if (s === 'ready_to_ship') return 'Ready to Ship';
+    if (['shipped','invoiced','completed'].includes(s)) return 'Shipped ✓';
+    return s;
   };
 
   let statusBanner = '';
-  // isSplit이면 마지막 invoice일 때만 backSection 표시
-  // "마지막"이란: 현재 발송 WH invoice 후 반대쪽도 이미 invoiced/completed/shipped 상태
-  const otherWhStatus = isSplit
-    ? (invWh === 'CA' ? (order.sc_status||'') : (order.ca_status||''))
-    : '';
-  const isLastInvoice = !isSplit || (
-    // 반대쪽 WH가 이미 처리 완료됐으면 → 현재 invoice가 마지막
-    ['invoiced','completed','shipped'].includes(otherWhStatus)
-  );
-
   if (isSplit) {
-    const scDone = !!scShippedAt; const caDone = !!caShippedAt;
+    const scDone = !!order.sc_shipped_at;
+    const caDone = !!order.ca_shipped_at;
     if (scDone && caDone) {
-      statusBanner = `<table style="width:100%;border-collapse:collapse;background:#dcfce7;border:1px solid #86efac;border-radius:6px;margin-bottom:16px;"><tr><td style="padding:10px 16px;font-size:13px;font-weight:700;color:#166534;">&#10003; PO Fully Shipped &amp; Invoiced</td></tr></table>`;
+      statusBanner = `<tr><td style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:10px 14px;font-size:13px;font-weight:700;color:#166534;margin-bottom:16px;">&#10003; PO Fully Shipped &amp; Invoiced</td></tr>`;
     } else if (invWh === 'CA' && !scDone) {
-      // CA invoice인데 SC 아직 안 나감
       const scLabel = getOtherWhStatus(order.sc_status);
-      statusBanner = `<table style="width:100%;border-collapse:collapse;background:#fef9c3;border:1px solid #fde047;border-radius:6px;margin-bottom:16px;"><tr><td style="padding:10px 16px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced — CA Warehouse</span><span style="font-size:12px;color:#92400e;margin-left:10px;">SC Warehouse: <strong>${scLabel}</strong></span></td></tr></table>`;
+      statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; CA Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#92400e;">SC Warehouse: <strong>${scLabel}</strong></span></td></tr>`;
     } else if (invWh === 'SC' && !caDone) {
-      // SC invoice인데 CA 아직 안 나감
       const caLabel = getOtherWhStatus(order.ca_status);
-      statusBanner = `<table style="width:100%;border-collapse:collapse;background:#fef9c3;border:1px solid #fde047;border-radius:6px;margin-bottom:16px;"><tr><td style="padding:10px 16px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced — SC Warehouse</span><span style="font-size:12px;color:#92400e;margin-left:10px;">CA Warehouse: <strong>${caLabel}</strong></span></td></tr></table>`;
+      statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; SC Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#92400e;">CA Warehouse: <strong>${caLabel}</strong></span></td></tr>`;
     }
   }
 
-  // 라인 필터 — 이 WH의 shipped qty > 0만
+  // 라인 필터 (WH별 shipped qty > 0)
   const allocPcs = (alloc) => Object.entries(alloc||{})
     .filter(([k]) => !k.includes('TRANSFER|'))
     .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
@@ -14504,20 +14502,18 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     const price = l.unit_price||0;
     const amt = shipped * price;
     totalShipped += shipped; totalAmt += amt;
-    return `<tr style="border-bottom:1px solid #f3f4f6;">
-      <td style="padding:7px 10px;font-weight:600;font-size:12px;">${l.styles?.style_number||''}</td>
-      <td style="padding:7px 10px;font-size:12px;">${l.styles?.description||''}</td>
-      <td style="padding:7px 10px;font-size:12px;text-align:center;">${(l.color||'').toUpperCase()}</td>
-      <td style="padding:7px 10px;font-size:12px;text-align:center;">${l.size||''}</td>
-      <td style="padding:7px 10px;font-size:12px;text-align:center;font-weight:700;color:#1e40af;">${shipped.toLocaleString()} pcs</td>
-      <td style="padding:7px 10px;font-size:12px;text-align:right;">$${price.toFixed(2)}</td>
-      <td style="padding:7px 10px;font-size:12px;text-align:right;font-weight:700;">$${amt.toFixed(2)}</td>
+    return `<tr>
+      <td style="padding:6px 10px;font-size:13px;font-weight:600;">${l.styles?.style_number||''}</td>
+      <td style="padding:6px 10px;font-size:13px;">${l.styles?.description||''}</td>
+      <td style="padding:6px 10px;font-size:13px;">${(l.color||'').toUpperCase()}</td>
+      <td style="padding:6px 10px;font-size:13px;text-align:center;">${l.size||''}</td>
+      <td style="padding:6px 10px;font-size:13px;text-align:center;font-weight:700;color:#1e40af;">${shipped} pcs</td>
+      <td style="padding:6px 10px;font-size:13px;text-align:right;">$${price.toFixed(2)}</td>
+      <td style="padding:6px 10px;font-size:13px;text-align:right;font-weight:700;">$${amt.toFixed(2)}</td>
     </tr>`;
   }).join('');
 
-  // Back order — SC&CA 오더는 양쪽 모두 완료됐을 때(마지막 invoice)만 표시
-  // SC&CA의 경우 qty_backordered는 마지막 ship 시점 기준이므로
-  // qty_pieces - (SC alloc + CA alloc) 로 재계산
+  // Back order
   const calcBackQty = (l) => {
     if (!isSplit) return l.qty_backordered || 0;
     const scPcs = allocPcs(l.alloc_detail||{});
@@ -14525,140 +14521,160 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     return Math.max(0, (l.qty_pieces||0) - scPcs - caPcs);
   };
   const backLines = isLastInvoice
-    ? (lines||[])
-        .map(l => ({ ...l, _backQty: calcBackQty(l) }))
-        .filter(l => l._backQty > 0)
+    ? (lines||[]).map(l => ({...l, _bq: calcBackQty(l)})).filter(l => l._bq > 0)
         .sort((a,b) => { const c=(a.color||'').localeCompare(b.color||''); return c!==0?c:sizeOrd(a.size)-sizeOrd(b.size); })
     : [];
-  const totalBack = backLines.reduce((s,l)=>s+(l._backQty||l.qty_backordered||0),0);
+  const totalBack = backLines.reduce((s,l) => s+(l._bq||0), 0);
   const backSection = backLines.length ? `
-    <table style="width:100%;border-collapse:collapse;margin-top:16px;border:1px solid #fecaca;border-radius:8px;">
-      <tr><td style="background:#fee2e2;padding:8px 14px;border-radius:6px 6px 0 0;">
-        <span style="font-size:13px;font-weight:700;color:#991b1b;">&#9888;&#65039; Back Order — ${totalBack.toLocaleString()} pcs pending</span>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:16px;border:1px solid #fecaca;border-radius:6px;">
+      <tr><td style="background:#fee2e2;padding:8px 14px;border-radius:5px 5px 0 0;">
+        <span style="font-size:13px;font-weight:700;color:#991b1b;">&#9888;&#65039; Back Order &#8212; ${totalBack.toLocaleString()} pcs pending</span>
       </td></tr>
       <tr><td style="padding:0;">
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <thead><tr style="background:#fef2f2;">
-            <th style="padding:6px 10px;text-align:left;color:#991b1b;">Style</th>
-            <th style="padding:6px 10px;text-align:left;color:#991b1b;">Color</th>
-            <th style="padding:6px 10px;text-align:center;color:#991b1b;">Size</th>
-            <th style="padding:6px 10px;text-align:center;color:#991b1b;">Back Qty</th>
-          </tr></thead>
-          <tbody>${backLines.map(l=>`
-            <tr style="border-top:1px solid #fef2f2;">
-              <td style="padding:5px 10px;font-weight:600;">${l.styles?.style_number||''}</td>
-              <td style="padding:5px 10px;">${l.color||''}</td>
-              <td style="padding:5px 10px;text-align:center;">${l.size||''}</td>
-              <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l._backQty||l.qty_backordered||0).toLocaleString()} pcs</td>
-            </tr>`).join('')}
-          </tbody>
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;">
+          <tr style="background:#fef2f2;">
+            <th style="padding:5px 10px;text-align:left;color:#991b1b;">Style</th>
+            <th style="padding:5px 10px;text-align:left;color:#991b1b;">Color</th>
+            <th style="padding:5px 10px;text-align:center;color:#991b1b;">Size</th>
+            <th style="padding:5px 10px;text-align:center;color:#991b1b;">Back Qty</th>
+          </tr>
+          ${backLines.map(l=>`<tr>
+            <td style="padding:5px 10px;">${l.styles?.style_number||''}</td>
+            <td style="padding:5px 10px;">${l.color||''}</td>
+            <td style="padding:5px 10px;text-align:center;">${l.size||''}</td>
+            <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${l._bq} pcs</td>
+          </tr>`).join('')}
         </table>
       </td></tr>
-      <tr><td style="padding:8px 14px;background:#fff5f5;font-size:11px;color:#991b1b;border-top:1px solid #fecaca;border-radius:0 0 6px 6px;">
+      <tr><td style="padding:8px 14px;background:#fff5f5;font-size:11px;color:#991b1b;border-top:1px solid #fecaca;border-radius:0 0 5px 5px;">
         We will ship your remaining items as soon as inventory is available.
       </td></tr>
     </table>` : '';
 
-  return `
-  <div style="font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#111;">
+  return `<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;font-size:13px;">
+
     <!-- Header -->
-    <table style="width:100%;border-collapse:collapse;border-radius:8px 8px 0 0;overflow:hidden;">
-      <tr style="background:#0f2744;">
-        <td style="padding:16px 24px;">
-          <div style="color:#fff;font-size:18px;font-weight:800;">Pacific Sports</div>
-          <div style="color:#93c5fd;font-size:12px;margin-top:2px;">Invoice #${invoiceNum||'—'}</div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f2744;border-radius:6px 6px 0 0;">
+      <tr>
+        <td style="padding:14px 20px;">
+          <div style="color:#fff;font-size:17px;font-weight:800;">Pacific Sports</div>
         </td>
-        <td style="padding:16px 24px;text-align:right;">
-          <div style="color:#9ca3af;font-size:11px;">INV DATE</div>
-          <div style="color:#fff;font-weight:700;font-size:13px;">${invoiceDate}</div>
+        <td style="padding:14px 20px;text-align:right;">
+          <div style="color:#9ca3af;font-size:10px;text-transform:uppercase;letter-spacing:1px;">INV DATE</div>
+          <div style="color:#fff;font-weight:700;font-size:14px;">${invoiceDate}</div>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="2" style="padding:0 20px 12px;">
+          <div style="color:#93c5fd;font-size:12px;">Invoice #${invoiceNum||'—'}</div>
         </td>
       </tr>
     </table>
 
     <!-- Body -->
-    <div style="padding:20px 24px;background:#fff;border:1px solid #e5e7eb;border-top:none;">
-      <p style="font-size:14px;margin:0 0 4px;">Dear <strong>${order.customer_name||''}</strong>,</p>
-      <p style="font-size:13px;color:#374151;margin:0 0 4px;">Please find your invoice details below.</p>
-      <p style="font-size:13px;color:#374151;margin:0 0 16px;">Your invoice PDF, packing list, and purchase order are attached to this email.</p>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-top:none;background:#fff;">
+      <tr><td style="padding:18px 20px;">
 
-      ${statusBanner}
+        <p style="margin:0 0 4px;font-size:14px;">Dear <strong>${order.customer_name||''}</strong>,</p>
+        <p style="margin:0 0 4px;font-size:13px;color:#374151;">Please find your invoice details below.</p>
+        <p style="margin:0 0 16px;font-size:13px;color:#374151;">Your invoice PDF, packing list, and purchase order are attached to this email.</p>
 
-      <!-- Key info cards -->
-      <table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:16px;">
-        <tr>
-          <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">Your PO #<br><strong style="font-size:16px;color:#111;">${order.customer_po||'—'}</strong></td>
-          <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">Ship Date<br><strong style="font-size:14px;color:#111;">${shipDate}</strong></td>
-          <td style="padding:10px 16px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">Invoice Due Date<br><strong style="font-size:14px;color:#dc2626;">${dueDate}</strong></td>
-          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Invoice Total<br><strong style="font-size:16px;color:#1e40af;">$${(totalAmt+freight).toFixed(2)}</strong></td>
-        </tr>
-      </table>
+        ${statusBanner ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px;">${statusBanner}</table>` : ''}
 
-      <!-- Shipping info -->
-      <table style="width:100%;border-collapse:collapse;background:#f0f7ff;border:1px solid #bfdbfe;border-radius:8px;margin-bottom:16px;">
-        <tr><td style="padding:12px 16px;">
-          <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:8px;">&#128666; Shipping Information</div>
-          <table style="border-collapse:collapse;font-size:13px;width:100%;">
-            <tr>
-              <td style="padding:3px 0;color:#6b7280;width:110px;">Ship From</td>
-              <td style="font-weight:700;">${whLabel}</td>
-              ${carrier ? `<td style="padding:3px 0;color:#6b7280;width:80px;">Carrier</td><td style="font-weight:700;">${shipViaStr}</td>` : ''}
+        <!-- Key info -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;margin-bottom:14px;background:#f8fafc;">
+          <tr>
+            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">
+              Your PO #<br><strong style="font-size:15px;color:#111;">${order.customer_po||'—'}</strong>
+            </td>
+            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">
+              Ship Date<br><strong style="font-size:14px;color:#111;">${shipDate}</strong>
+            </td>
+            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">
+              Due Date<br><strong style="font-size:14px;color:#dc2626;">${dueDate}</strong>
+            </td>
+            <td style="padding:10px 14px;font-size:12px;color:#6b7280;">
+              Invoice Total<br><strong style="font-size:15px;color:#1e40af;">$${(totalAmt+freight).toFixed(2)}</strong>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Shipping Info -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f7ff;border:1px solid #bfdbfe;border-radius:6px;margin-bottom:14px;">
+          <tr><td style="padding:12px 14px;">
+            <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:8px;">&#128666; Shipping Information</div>
+            <table cellpadding="0" cellspacing="0" style="font-size:13px;width:100%;">
+              <tr>
+                <td style="padding:2px 0;color:#6b7280;width:90px;">Ship From</td>
+                <td style="font-weight:600;">${whLabel}</td>
+                ${shipViaStr ? `<td style="padding:2px 0;color:#6b7280;width:70px;">Carrier</td><td style="font-weight:600;">${shipViaStr}</td>` : '<td colspan="2"></td>'}
+              </tr>
+              ${tracking ? `<tr>
+                <td style="padding:2px 0;color:#6b7280;">${isLtl?'PRO #':'Tracking #'}</td>
+                <td colspan="3" style="font-weight:600;font-family:monospace;">${tracking}</td>
+              </tr>` : ''}
+              <tr>
+                <td style="padding:2px 0;color:#6b7280;">Terms</td>
+                <td style="font-weight:600;">${order.terms||'Net 30'}</td>
+                <td style="padding:2px 0;color:#6b7280;">Send Payment To</td>
+                <td style="font-size:11px;color:#374151;line-height:1.4;">${paymentLines}</td>
+              </tr>
+            </table>
+          </td></tr>
+        </table>
+
+        <!-- Line items -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="border-bottom:2px solid #e5e7eb;">
+              <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px;">Style</th>
+              <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px;">Description</th>
+              <th style="padding:7px 10px;text-align:left;font-weight:600;font-size:12px;">Color</th>
+              <th style="padding:7px 10px;text-align:center;font-weight:600;font-size:12px;">Size</th>
+              <th style="padding:7px 10px;text-align:center;font-weight:700;font-size:12px;color:#1e40af;">Shipped</th>
+              <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px;">Unit $</th>
+              <th style="padding:7px 10px;text-align:right;font-weight:600;font-size:12px;">Amount</th>
             </tr>
-            ${tracking ? `<tr><td style="padding:3px 0;color:#6b7280;">${trackingLabel}</td><td style="font-weight:600;font-family:monospace;" colspan="3">${trackingStr}</td></tr>` : ''}
-            <tr>
-              <td style="padding:3px 0;color:#6b7280;">Terms</td>
-              <td style="font-weight:700;">${order.terms||'Net 30'}</td>
-              <td style="padding:3px 0;color:#6b7280;">Send Payment To</td>
-              <td style="font-size:11px;color:#374151;">${paymentLines}</td>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr style="border-top:1px solid #e5e7eb;">
+              <td colspan="4" style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Total Shipped:</td>
+              <td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${totalShipped.toLocaleString()} pcs</td>
+              <td style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td>
+              <td style="padding:6px 10px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td>
             </tr>
-          </table>
-        </td></tr>
-      </table>
+            ${freight > 0 ? `<tr>
+              <td colspan="5"></td>
+              <td style="padding:4px 10px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td>
+              <td style="padding:4px 10px;text-align:right;">$${freight.toFixed(2)}</td>
+            </tr>` : ''}
+            <tr style="background:#0f2744;">
+              <td colspan="5" style="padding:10px;text-align:right;font-weight:700;font-size:13px;color:#fff;">INVOICE TOTAL:</td>
+              <td colspan="2" style="padding:10px;text-align:right;font-weight:900;font-size:16px;color:#fff;">$${(totalAmt+freight).toFixed(2)}</td>
+            </tr>
+            <tr style="background:#f1f5f9;">
+              <td colspan="5" style="padding:8px 10px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE DUE:</td>
+              <td colspan="2" style="padding:8px 10px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td>
+            </tr>
+          </tfoot>
+        </table>
 
-      <!-- Line items -->
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr style="background:#f3f4f6;border-bottom:2px solid #e5e7eb;">
-            <th style="padding:8px 10px;text-align:left;font-weight:600;">Style</th>
-            <th style="padding:8px 10px;text-align:left;font-weight:600;">Description</th>
-            <th style="padding:8px 10px;text-align:center;font-weight:600;">Color</th>
-            <th style="padding:8px 10px;text-align:center;font-weight:600;">Size</th>
-            <th style="padding:8px 10px;text-align:center;color:#1e40af;font-weight:700;">Shipped</th>
-            <th style="padding:8px 10px;text-align:right;font-weight:600;">Unit $</th>
-            <th style="padding:8px 10px;text-align:right;font-weight:600;">Amount</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-        <tfoot>
-          <tr style="background:#f8fafc;">
-            <td colspan="4" style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Total Shipped:</td>
-            <td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${totalShipped.toLocaleString()} pcs</td>
-            <td style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td>
-            <td style="padding:6px 10px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td>
-          </tr>
-          ${freight > 0 ? `<tr><td colspan="6" style="padding:4px 10px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td><td style="padding:4px 10px;text-align:right;">$${freight.toFixed(2)}</td></tr>` : ''}
-          <tr style="background:#0f2744;color:#fff;">
-            <td colspan="6" style="padding:10px;text-align:right;font-weight:700;font-size:13px;">INVOICE TOTAL:</td>
-            <td style="padding:10px;text-align:right;font-weight:900;font-size:16px;">$${(totalAmt+freight).toFixed(2)}</td>
-          </tr>
-          <tr style="background:#f1f5f9;">
-            <td colspan="6" style="padding:8px 10px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE DUE:</td>
-            <td style="padding:8px 10px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td>
-          </tr>
-        </tfoot>
-      </table>
+        ${backSection}
 
-      ${backSection}
+        <!-- Return Policy -->
+        <div style="margin-top:16px;border:1px solid #e5e7eb;border-radius:4px;padding:10px 14px;font-size:10px;color:#374151;background:#fafafa;">
+          <strong>RETURN POLICY:</strong> ${returnPolicy}
+        </div>
 
-      <!-- Return policy -->
-      <div style="margin-top:16px;border:1px solid #e5e7eb;border-radius:6px;padding:12px;font-size:10px;color:#374151;background:#fafafa;">
-        <strong>RETURN POLICY:</strong> ${returnPolicy}
-      </div>
-    </div>
+      </td></tr>
+    </table>
 
     <!-- Footer -->
-    <div style="padding:12px 24px;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;font-size:11px;color:#9ca3af;text-align:center;">
+    <div style="padding:10px 20px;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 6px 6px;font-size:11px;color:#9ca3af;text-align:center;">
       Pacific Sports Inc &middot; 1605 South Guignard Pkwy, Sumter SC 29150 &middot; (803) 773-2177
     </div>
+
   </div>`;
 }
 
@@ -14753,7 +14769,7 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     const paymentLines = (paymentInfo || '').replace(/\\n/g, '<br>').replace(/\n/g, '<br>').replace(/\r/g, '');
     const custNo = order.customer_no || '—';
     const salesperson = order.salesperson || '—';
-    return `<div style="font-family:Arial,sans-serif;font-size:12px;color:#111;width:100%;"><div style="background:#111827;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;"><img src="${LOGO_B64}" style="height:44px;width:auto;"><div style="text-align:right;"><div style="color:#fff;font-size:24px;font-weight:900;letter-spacing:3px;">INVOICE</div><div style="color:#9ca3af;font-size:10px;margin-top:2px;">Page: 1</div></div></div><div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:10px 24px;display:flex;justify-content:space-between;margin-bottom:14px;"><div style="font-size:11px;color:#374151;line-height:1.6;"><div style="font-weight:700;font-size:12px;">PEACE TEXTILE AMERICA, INC.</div><div>d.b.a Pacific Sports</div><div>1605 South Guignard Parkway<br>Sumter SC 29150</div><div>Ph: (803) 760-6251</div></div><div style="font-size:11px;text-align:right;color:#374151;line-height:1.8;"><div style="font-weight:700;font-size:12px;">INV #: ${invNo}</div><div style="font-weight:700;">INVOICE DATE: ${invoiceDate}</div><div style="font-weight:700;">DUE DATE: ${dueDate}</div><div style="margin-top:6px;border-top:1px solid #d1d5db;padding-top:6px;">ORDER DATE: ${orderDate}</div><div>SHIP DATE: ${shipDate}</div></div></div><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px;"><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SOLD TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'\u2014'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${billAddr}</div></div><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SHIP TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'\u2014'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${shipAddr}</div></div><div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SEND PAYMENT TO:</div><div style="font-size:11px;color:#374151;line-height:1.5;">${paymentLines}</div></div></div><div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px;background:#f1f5f9;border-radius:6px;padding:10px;"><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Customer P.O.</div><div style="font-weight:700;font-size:13px;">${order.customer_po||'\u2014'}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'Net 30'}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Ship From</div><div style="font-weight:700;">${whLabelInv}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Ship Via</div><div style="font-weight:700;">${shipViaStr}</div></div><div><div style="font-size:10px;color:#6b7280;text-transform:uppercase;">Tracking / PRO #</div><div style="font-weight:600;font-family:monospace;font-size:11px;">${trackingStr}</div></div></div><table style="width:100%;border-collapse:collapse;margin-bottom:0;"><thead><tr style="background:#111827;color:#fff;"><th style="padding:7px 8px;text-align:left;font-size:11px;">STYLE</th><th style="padding:7px 8px;text-align:left;font-size:11px;width:30%;">DESCRIPTION</th><th style="padding:7px 8px;text-align:center;font-size:11px;">COLOR</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SIZE</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SHIPPED</th><th style="padding:7px 8px;text-align:center;font-size:11px;">UNIT</th><th style="padding:7px 8px;text-align:right;font-size:11px;">PRICE</th><th style="padding:7px 8px;text-align:right;font-size:11px;">AMOUNT</th></tr></thead><tbody>${rows}${emptyRows}</tbody><tfoot><tr><td colspan="6" style="padding:6px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td><td colspan="2" style="padding:6px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td></tr>${freight > 0 ? '<tr><td colspan="6" style="padding:4px 6px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td><td colspan="2" style="padding:4px 6px;text-align:right;">$'+ freight.toFixed(2) +'</td></tr>' : ''}<tr style="background:#111827;color:#fff;"><td colspan="6" style="padding:10px 6px;text-align:right;font-weight:700;font-size:13px;">INVOICE TOTAL:</td><td colspan="2" style="padding:10px 6px;text-align:right;font-weight:900;font-size:16px;">$${(totalAmt+freight).toFixed(2)}</td></tr><tr style="background:#f1f5f9;"><td colspan="6" style="padding:8px 6px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE:</td><td colspan="2" style="padding:8px 6px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td></tr></tfoot></table><div style="margin-top:12px;border:1px solid #e5e7eb;border-radius:6px;padding:12px;font-size:10px;color:#374151;display:flex;gap:16px;"><div style="flex:2;"><div style="font-weight:700;margin-bottom:4px;">RETURN POLICY:</div><div style="line-height:1.5;">${returnPolicy}</div></div></div></div>`;
+    return `<div style="font-family:Arial,sans-serif;font-size:12px;color:#111;width:100%;"><div style="background:#111827;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;"><img src="${LOGO_B64}" style="height:44px;width:auto;"><div style="text-align:right;"><div style="color:#fff;font-size:24px;font-weight:900;letter-spacing:3px;">INVOICE</div><div style="color:#9ca3af;font-size:10px;margin-top:2px;">Page: 1</div></div></div><table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;margin-bottom:14px;"><tr><td style="padding:10px 24px;vertical-align:top;font-size:11px;color:#374151;line-height:1.6;"><div style="font-weight:700;font-size:12px;">PEACE TEXTILE AMERICA, INC.</div><div>d.b.a Pacific Sports</div><div>1605 South Guignard Parkway, Sumter SC 29150</div><div>Ph: (803) 760-6251</div></td><td style="padding:10px 24px;vertical-align:top;text-align:right;font-size:11px;color:#374151;line-height:1.8;"><div style="font-weight:700;font-size:12px;">INV #: ${invNo}</div><div style="font-weight:700;">INVOICE DATE: ${invoiceDate}</div><div style="font-weight:700;">DUE DATE: ${dueDate}</div><div style="margin-top:6px;border-top:1px solid #d1d5db;padding-top:6px;">ORDER DATE: ${orderDate}</div><div>SHIP DATE: ${shipDate}</div></td></tr></table><table style="width:100%;border-collapse:collapse;margin-bottom:12px;"><tr><td style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;width:33%;vertical-align:top;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SOLD TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'—'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${billAddr}</div></td><td style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;width:33%;vertical-align:top;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SHIP TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'—'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${shipAddr}</div></td><td style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;width:33%;vertical-align:top;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SEND PAYMENT TO:</div><div style="font-size:11px;color:#374151;line-height:1.5;">${paymentLines}</div></td></tr></table><table style="width:100%;border-collapse:collapse;margin-bottom:12px;background:#f1f5f9;border-radius:6px;"><tr><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Customer P.O.</div><div style="font-weight:700;font-size:13px;">${order.customer_po||'—'}</div></td><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Terms</div><div style="font-weight:700;">${order.terms||'Net 30'}</div></td><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Ship From</div><div style="font-weight:700;">${whLabelInv}</div></td><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Ship Via</div><div style="font-weight:700;">${shipViaStr}</div></td><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Tracking / PRO #</div><div style="font-weight:600;font-family:monospace;font-size:11px;">${trackingStr}</div></td></tr></table><table style="width:100%;border-collapse:collapse;margin-bottom:0;"><thead><tr style="background:#111827;color:#fff;"><th style="padding:7px 8px;text-align:left;font-size:11px;">STYLE</th><th style="padding:7px 8px;text-align:left;font-size:11px;width:30%;">DESCRIPTION</th><th style="padding:7px 8px;text-align:center;font-size:11px;">COLOR</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SIZE</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SHIPPED</th><th style="padding:7px 8px;text-align:center;font-size:11px;">UNIT</th><th style="padding:7px 8px;text-align:right;font-size:11px;">PRICE</th><th style="padding:7px 8px;text-align:right;font-size:11px;">AMOUNT</th></tr></thead><tbody>${rows}${emptyRows}</tbody><tfoot><tr><td colspan="6" style="padding:6px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td><td colspan="2" style="padding:6px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td></tr>${freight > 0 ? '<tr><td colspan="6" style="padding:4px 6px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td><td colspan="2" style="padding:4px 6px;text-align:right;">$'+ freight.toFixed(2) +'</td></tr>' : ''}<tr style="background:#111827;color:#fff;"><td colspan="6" style="padding:10px 6px;text-align:right;font-weight:700;font-size:13px;">INVOICE TOTAL:</td><td colspan="2" style="padding:10px 6px;text-align:right;font-weight:900;font-size:16px;">$${(totalAmt+freight).toFixed(2)}</td></tr><tr style="background:#f1f5f9;"><td colspan="6" style="padding:8px 6px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE:</td><td colspan="2" style="padding:8px 6px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td></tr></tfoot></table><div style="margin-top:12px;border:1px solid #e5e7eb;border-radius:6px;padding:12px;font-size:10px;color:#374151;"><div style="font-weight:700;margin-bottom:4px;">RETURN POLICY:</div><div style="line-height:1.5;">${returnPolicy}</div></div></div>`;
   };
   if (isSplit) {
     // SC&CA 라인은 양쪽 섹션 모두에 포함 (qty_filled는 WH별로 따로 계산 필요)
