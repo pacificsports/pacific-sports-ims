@@ -11399,8 +11399,8 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
     const status = wh === 'CA' ? order.ca_status : order.sc_status;
     // shipped_at 날짜 있으면 날짜 포함 표시
     if (shippedDate) return `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped ${shippedDate}</span>`;
-    // 날짜 없어도 status가 shipped/invoiced/completed면 Shipped 표시
-    if (['shipped','invoiced','completed'].includes(status)) return `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped</span>`;
+    // 날짜 없어도 status가 shipped/invoiced/completed면 오늘 날짜로 Shipped 표시
+    if (['shipped','invoiced','completed'].includes(status)) return `<span style="color:#16a34a;font-weight:600;">&#10003; Shipped ${shipDateStr}</span>`;
     if (status === 'ready_to_ship') return `<span style="color:#1e40af;font-weight:600;">Ready to Ship</span>`;
     if (status === 'preparing' || status === 'po_entered') return `<span style="color:#d97706;font-weight:600;">Preparing for Shipment</span>`;
     return `<span style="color:#6b7280;">Pending</span>`;
@@ -13252,13 +13252,16 @@ async function _doShippedCoreInner(emp) {
   const whTrackingField   = wh === 'CA' ? 'ca_tracking_number' : 'sc_tracking_number';
   const whFreightField    = wh === 'CA' ? 'ca_pickup_company'  : 'sc_pickup_company';
 
+  const isSplitOrderShip = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   await db.from('orders').update({
     ship_date: shipDate,
     invoice_number: invoiceNumber,
-    // 공통 필드 — 싱글 WH는 그대로, 분할 오더는 마지막 ship WH 값 (fallback용)
-    carrier: carrier || null,
-    tracking_number: tracking || null,
-    pickup_company: freightCarrier || null,
+    // 공통 필드 — 싱글 WH만 업데이트, SC&CA는 WH별 필드만 사용
+    ...(isSplitOrderShip ? {} : {
+      carrier: carrier || null,
+      tracking_number: tracking || null,
+      pickup_company: freightCarrier || null,
+    }),
     // WH별 전용 필드
     [whCarrierField]: carrier || null,
     [whTrackingField]: tracking || null,
@@ -13479,7 +13482,7 @@ async function reviewAndSendInvoice(orderId, wh) {
 
   // WH별 carrier/tracking 우선 사용 (SC&CA 분할 오더)
   const invWh2 = wh || order.wh_code || 'SC';
-  const whCarrier   = invWh2 === 'CA' ? (order.ca_carrier         || order.carrier)         : (order.sc_carrier         || order.carrier);
+  const whCarrier   = invWh2 === 'CA' ? (order.ca_carrier         || (_isSplitInv ? '' : order.carrier))         : (order.sc_carrier         || (_isSplitInv ? '' : order.carrier));
   const whTracking  = invWh2 === 'CA' ? (order.ca_tracking_number || order.tracking_number) : (order.sc_tracking_number || order.tracking_number);
   const whFreight   = invWh2 === 'CA' ? (order.ca_pickup_company  || order.pickup_company)  : (order.sc_pickup_company  || order.pickup_company);
 
@@ -17150,8 +17153,8 @@ function showPoPreview(data) {
       <input id="po-edit-date" class="fi" type="date" value="${data.due_date||''}" style="width:100%;height:26px;font-size:12px;font-weight:700;"/>
     </div>`;
 
-  // 라인 테이블 — 각 셀 인라인 편집
-  renderPoLines();
+  // 라인 테이블 — 각 셀 인라인 편집 (styles 목록 로드 후 자동매칭)
+  loadAllStylesList().then(() => renderPoLines());
 }
 
 function renderPoLines() {
@@ -17174,12 +17177,16 @@ lines.sort((a, b) => {
       style="width:100%;height:24px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:center;padding:2px 4px;${extra}"
       oninput="parsedPoData.lines[${idx}]['${field}']=this.${type==='number'?'valueAsNumber':'value'};updatePoTotal()"/>`;
 
+  // 우리 스타일 번호 매칭 (styles 테이블에서 이미 로드된 경우 활용)
+  const allStyles = window._allStylesList || [];
+
   document.getElementById('po-preview-lines').innerHTML = `
     <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border-radius:4px;overflow:hidden;">
       <thead>
         <tr style="background:var(--header);color:#fff;">
           <th style="padding:6px 8px;width:32px;">#</th>
-          <th style="padding:6px 8px;text-align:left;min-width:80px;">Style</th>
+          <th style="padding:6px 8px;text-align:left;min-width:80px;">PO Style</th>
+          <th style="padding:6px 8px;text-align:left;min-width:90px;color:#fbbf24;">Our Item #</th>
           <th style="padding:6px 8px;text-align:left;min-width:120px;">Color</th>
           <th style="padding:6px 8px;min-width:70px;">Size</th>
           <th style="padding:6px 8px;min-width:70px;">Qty</th>
@@ -17188,10 +17195,28 @@ lines.sort((a, b) => {
         </tr>
       </thead>
       <tbody id="po-lines-tbody">
-        ${lines.map((l,i) => `
+        ${lines.map((l,i) => {
+          // 우리 스타일 자동 매칭 — style_number 또는 description으로 찾기
+          if (!l.our_style_number && allStyles.length > 0) {
+            const poSty = String(l.style_number||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+            const matched = allStyles.find(s => {
+              const sn = String(s.style_number||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+              const desc = String(s.description||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+              return sn === poSty || desc.includes(poSty) || poSty.includes(sn);
+            });
+            if (matched) { l.our_style_number = matched.style_number; l.our_style_id = matched.id; }
+          }
+          const ourStyleColor = l.our_style_number ? '#16a34a' : '#9ca3af';
+          const ourStyleInp = `<input class="fi" value="${String(l.our_style_number||'').replace(/"/g,'&quot;')}"
+            placeholder="검색..."
+            style="width:100%;height:24px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:center;padding:2px 4px;color:${ourStyleColor};font-weight:${l.our_style_number?'700':'400'};"
+            oninput="updateOurStyle(${i}, this.value)"
+            list="our-style-datalist"/>`;
+          return `
           <tr style="background:${i%2===0?'#fff':'#f9f9f9'}">
             <td style="padding:4px 8px;color:var(--text3);text-align:center;font-size:11px;">${i+1}</td>
             <td style="padding:4px 6px;">${inp(l.style_number,'style_number',i,'text','font-weight:700;')}</td>
+            <td style="padding:4px 6px;">${ourStyleInp}</td>
             <td style="padding:4px 6px;">${inp(l.color,'color',i,'text','text-align:left;')}</td>
             <td style="padding:4px 6px;">${inp(l.size,'size',i)}</td>
             <td style="padding:4px 6px;">${inp(l.qty,'qty',i,'number','font-weight:700;')}</td>
@@ -17199,7 +17224,8 @@ lines.sort((a, b) => {
             <td style="padding:4px 6px;text-align:center;">
               <button onclick="removePoLine(${i})" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button>
             </td>
-          </tr>`).join('')}
+          </tr>`;
+        }).join('')}
       </tbody>
       <tfoot>
         <tr style="background:#f0f0f0;">
@@ -17220,6 +17246,26 @@ function updatePoTotal() {
   const total = (parsedPoData?.lines||[]).reduce((s,l)=>s+(parseInt(l.qty)||0),0);
   const el = document.getElementById('po-total-qty');
   if (el) el.textContent = total.toLocaleString();
+}
+
+function updateOurStyle(idx, val) {
+  if (!parsedPoData?.lines[idx]) return;
+  parsedPoData.lines[idx].our_style_number = val;
+  // DB에서 style_id 찾기
+  const allStyles = window._allStylesList || [];
+  const matched = allStyles.find(s => s.style_number === val);
+  parsedPoData.lines[idx].our_style_id = matched?.id || null;
+}
+
+// styles 목록 로드 (PO 파싱 자동매칭용)
+async function loadAllStylesList() {
+  if (window._allStylesList) return;
+  const { data } = await db.from('styles').select('id, style_number, description').order('style_number');
+  window._allStylesList = data || [];
+  // datalist 업데이트
+  let dl = document.getElementById('our-style-datalist');
+  if (!dl) { dl = document.createElement('datalist'); dl.id = 'our-style-datalist'; document.body.appendChild(dl); }
+  dl.innerHTML = (window._allStylesList||[]).map(s => `<option value="${s.style_number}">${s.style_number} — ${s.description||''}</option>`).join('');
 }
 
 function removePoLine(idx) {
