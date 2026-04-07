@@ -7581,10 +7581,10 @@ async function submitPartialShip() {
   if (totalShip === 0) { alert('출고 수량을 1개 이상 입력해주세요.'); return; }
   if (!confirm(`총 ${totalShip.toLocaleString()} pcs 출고, ${totalBO.toLocaleString()} pcs Back Order 처리하시겠습니까?`)) return;
 
-  // 각 라인 업데이트
+  // 각 라인 업데이트 — qty_pieces(주문수량)는 건드리지 않음, qty_filled/backordered만 업데이트
   for (const u of updates) {
     await db.from('order_lines').update({
-      qty_pieces: u.shipNow,
+      qty_filled: u.shipNow,
       qty_backordered: u.remaining,
       is_backordered: u.remaining > 0
     }).eq('id', u.lineId);
@@ -7594,8 +7594,7 @@ async function submitPartialShip() {
   const newStatus = totalBO > 0 ? 'partial' : 'shipped';
   await db.from('orders').update({
     status: newStatus,
-    ship_date: shipDate,
-    total_pcs: totalShip
+    ship_date: shipDate
   }).eq('id', orderId);
 
   // totalBO > 0이면 Back Order 오더 별도 생성
@@ -9331,7 +9330,8 @@ async function preparationComplete(orderId, wh) {
     carrier: document.getElementById('pl-carrier')?.value || document.getElementById('ship-carrier')?.value || '',
     tracking: document.getElementById('pl-tracking')?.value || document.getElementById('ship-tracking')?.value || '',
     freightCarrier: document.getElementById('pl-ltl-carrier')?.value || document.getElementById('ship-freight-carrier')?.value || '',
-    pro: document.getElementById('pl-pro')?.value || ''
+    pro: document.getElementById('pl-pro')?.value || '',
+    shipDate: document.getElementById('ship-date-inp')?.value || ''  // 실제 출고일
   };
   if (plShipInfo.pro) plShipInfo.tracking = plShipInfo.pro;
   document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC', plShipInfo, document.getElementById('ship-note')?.value || '');
@@ -13565,7 +13565,10 @@ async function sendInvoiceEmail() {
       try {
         const wh = _invoiceWh || order.wh_code || 'SC';
         const { data: plLines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', _invoiceOrderId);
-        const plShipInfo = { carrier: order.carrier||'', tracking: order.tracking_number||'' };
+        const _plShipDate = (wh === 'CA')
+          ? (order.ca_shipped_at || order.sc_shipped_at)
+          : (order.sc_shipped_at || order.ca_shipped_at);
+        const plShipInfo = { carrier: order.carrier||'', tracking: order.tracking_number||'', shipDate: _plShipDate || '' };
         const plHtml = buildPackingListHtml(order, plLines||[], order.wh_code === 'SC&CA', wh, plShipInfo, '');
         if (plHtml) plPdfBase64 = await htmlToPdfBase64(plHtml);
       } catch(e) { console.warn('PL PDF error:', e); }
@@ -14250,7 +14253,14 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Customer</div><div style="font-weight:700;">${order.customer_name}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">PO #</div><div style="font-weight:700;">${order.customer_po||'—'}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship To</div><div style="font-weight:700;">${order.customer_name||'—'}</div><div style="font-weight:400;color:#374151;margin-top:2px;line-height:1.4;">${(() => { const addr = order.ship_addr||''; const lines = addr.split('\n'); const cn = (order.customer_name||'').toLowerCase().replace(/[^a-z0-9]/g,''); const fl = (lines[0]||'').toLowerCase().replace(/[^a-z0-9]/g,''); const clean = (cn && (fl.includes(cn.slice(0,6)) || cn.includes(fl.slice(0,6)))) ? lines.slice(1).join('\n').trim() : addr; return clean.replace(/\n/g,'<br>'); })()}</div></div>
-      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${(() => { const raw = (shippingInfo && (shippingInfo.shipDate||shippingInfo.ship_date)) || (whFilter==='CA' ? (order.ca_shipped_at||order.sc_shipped_at) : (order.sc_shipped_at||order.ca_shipped_at)); return raw ? new Date(raw.slice(0,10)+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}) : '—'; })()}</div></div>
+      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${(() => {
+  const raw = (shippingInfo && (shippingInfo.shipDate || shippingInfo.ship_date))
+    || (whFilter==='CA'
+      ? (order.ca_shipped_at || order.sc_shipped_at)
+      : (order.sc_shipped_at || order.ca_shipped_at))
+    || order.ship_date;
+  return raw ? new Date(raw.slice(0,10)+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}) : '—';
+})()}</div></div>
     </div>
     <!-- Shipping Info -->
     ${note ? `<div style="margin-bottom:12px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:11px;"><span style="font-weight:700;color:#d97706;">📝 Note:</span> ${note}</div>` : ''}
