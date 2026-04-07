@@ -6590,9 +6590,11 @@ async function openRaModal(orderId) {
   const sizeOrd = s => { const i = SIZE_ORDER.indexOf((s||'').toUpperCase()); return i >= 0 ? i : 99; };
 
   // SC+CA 합산 shipped qty 계산
-  const allocPcs = (alloc) => Object.entries(alloc||{})
-    .filter(([k]) => !k.includes('TRANSFER|'))
-    .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+  const allocPcs = (alloc) => {
+    const _e = Object.entries(alloc||{}).filter(([k]) => !k.includes('TRANSFER|'));
+    const _hp = _e.some(([k]) => k.includes('PCR|PCR'));
+    return _e.filter(([k]) => !_hp || k.includes('PCR') || k.includes('|')).reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+  };
 
   // 라인 목록 — SC+CA 합산 shipped qty > 0인 라인, 사이즈 정렬
   const shippedLines = (lines||[])
@@ -11682,12 +11684,15 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     const allocCA = l.alloc_ca_detail || {};
 
     // alloc_detail value는 {pcs: N} 또는 숫자 N (boxes 필드 없음)
-    const allocPcs = (alloc, excludeKeys=[]) =>
-      Object.entries(alloc)
-        .filter(([k]) => !excludeKeys.some(ex => k.includes(ex)))
+    const allocPcs = (alloc, excludeKeys=[]) => {
+      const entries = Object.entries(alloc).filter(([k]) => !excludeKeys.some(ex => k.includes(ex)));
+      // PCR alloc이 있으면 단순 'CA'/'SC' 키는 중복이므로 제외 (두 번 저장된 케이스 방지)
+      const hasPcr = entries.some(([k]) => k.includes('PCR|PCR'));
+      return entries
+        .filter(([k]) => !hasPcr || k.includes('PCR') || k.includes('|'))
         .reduce((s,[,v]) => s + ((typeof v==='object' ? v.pcs||0 : v)||0), 0);
+    };
 
-    // 수량 계산 헬퍼 — pcr_box_allocation 최우선, 없으면 alloc_detail
     // 실제 출고 수량 — alloc_detail의 PCR + prepared_lines 오버라이드
     const getActualQty = (allocObj, prepJsonKey) => {
       let qty = allocPcs(allocObj, ['TRANSFER']);
@@ -13203,8 +13208,14 @@ async function _doShippedCoreInner(emp) {
     let allocUpdate = {};
     if (filled > 0) {
       if (wh === 'CA' && (lineWh === 'SC&CA' || lineWh === 'CA')) {
-        // CA ship → alloc_ca_detail 저장
-        allocUpdate = { alloc_ca_detail: { 'CA': { boxes: Math.floor(filled / ppbLine), partial: filled % ppbLine, pcs: filled } } };
+        // CA ship → alloc_ca_detail이 비어있을 때만 저장 (PCR에서 이미 저장된 경우 건드리지 않음)
+        const existingAllocCA = l.alloc_ca_detail || {};
+        const hasPcrAlloc = Object.keys(existingAllocCA).some(k => k.includes('PCR'));
+        if (!hasPcrAlloc) {
+          // PCR alloc이 없는 경우만 CA ship 수량 저장
+          allocUpdate = { alloc_ca_detail: { 'CA': { boxes: Math.floor(filled / ppbLine), partial: filled % ppbLine, pcs: filled } } };
+        }
+        // PCR alloc이 있으면 그게 이미 정확한 수량 — 별도 저장 불필요
       } else if (wh !== 'CA' && (lineWh === 'SC&CA' || lineWh === 'SC' || !lineWh)) {
         // SC ship → alloc_detail이 비어있으면 저장 (Pick Ticket에서 이미 저장된 경우 덮어쓰지 않음)
         const existingAlloc = l.alloc_detail || {};
@@ -14716,9 +14727,11 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   }
 
   // alloc pcs 계산
-  const allocPcs = (alloc) => Object.entries(alloc||{})
-    .filter(([k]) => !k.includes('TRANSFER|'))
-    .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+  const allocPcs = (alloc) => {
+    const entries = Object.entries(alloc||{}).filter(([k]) => !k.includes('TRANSFER|'));
+    const hasPcr = entries.some(([k]) => k.includes('PCR|PCR'));
+    return entries.filter(([k]) => !hasPcr || k.includes('PCR') || k.includes('|')).reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+  };
 
   // 라인 필터 (WH별 shipped qty > 0)
   // 실제 출고 수량 헬퍼
