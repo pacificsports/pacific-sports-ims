@@ -1543,6 +1543,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <th style="padding:7px 10px;text-align:center;background:#b71c1c;">🔴 Back Qty</th>
               <th style="padding:7px 10px;text-align:center;background:#1b5e20;">재고 (SC)</th>
               <th style="padding:7px 10px;text-align:center;background:#1b5e20;">재고 (CA)</th>
+              <th style="padding:7px 10px;text-align:center;background:#0d47a1;">Ship From</th>
               <th style="padding:7px 10px;text-align:center;background:#0d47a1;">채울 수량 ✏️</th>
               <th style="padding:7px 10px;text-align:center;">Status</th>
             </tr>
@@ -14472,17 +14473,18 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const whLabel = invWh === 'CA' ? 'Eastvale, CA' : 'Sumter, SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
-  // 실제 출고일 — shipInfo.shipDate 최우선
+  // 실제 출고일 — shipInfo.shipDate 최우선, 없으면 WH별 shipped_at
   const actualShipRaw = (shipInfo && (shipInfo.shipDate || shipInfo.ship_date))
     || (invWh === 'CA'
-      ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
-      : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date));
+      ? (order.ca_shipped_at || order.sc_shipped_at)
+      : (order.sc_shipped_at || order.ca_shipped_at))
+    || order.ship_date;
   const shipDate = actualShipRaw ? fmtDate(actualShipRaw) : invoiceDate;
 
   const freight = freightAmt || 0;
-  const carrier = (shipInfo && shipInfo.carrier) || order.carrier || '';
-  const tracking = (shipInfo && shipInfo.tracking) || order.tracking_number || '';
-  const freightCo = (shipInfo && shipInfo.freightCarrier) || order.pickup_company || '';
+  const carrier = (shipInfo && shipInfo.carrier) || (invWh==='CA' ? order.ca_carrier : order.sc_carrier) || order.carrier || '';
+  const tracking = (shipInfo && shipInfo.tracking) || (invWh==='CA' ? order.ca_tracking_number : order.sc_tracking_number) || order.tracking_number || '';
+  const freightCo = (shipInfo && shipInfo.freightCarrier) || (invWh==='CA' ? order.ca_pickup_company : order.sc_pickup_company) || order.pickup_company || '';
   const isLtl = carrier === 'LTL';
   let shipViaStr = carrier || '';
   if (isLtl && freightCo) shipViaStr = freightCo;
@@ -14491,13 +14493,16 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const returnPolicy = (companySettings && companySettings.return_policy) || 'Returns are accepted within 30 days from date of shipment. All returns must be accompanied by a Return Authorization (RA) number. Returns are subject to a 15% restocking fee.';
   const paymentLines = (paymentInfo||'').replace(/\\n/g,'<br>').replace(/\n/g,'<br>');
 
-  // Status Update 섹션
+  // STATUS UPDATE 섹션
   const getWhStatusLabel = (wh) => {
     const st = wh === 'CA' ? order.ca_status : order.sc_status;
     const shippedAt = wh === 'CA' ? order.ca_shipped_at : order.sc_shipped_at;
+    // 현재 invoice 발송 WH
     if (wh === invWh) return { label: 'Invoiced', color: '#7c3aed' };
-    if (shippedAt || ['shipped','invoiced','completed'].includes(st))
-      return { label: 'Shipped ✓', color: '#16a34a' };
+    // 반대쪽 WH가 invoiced/completed면 Invoiced 표시
+    if (['invoiced','completed'].includes(st)) return { label: 'Invoiced', color: '#7c3aed' };
+    // shipped면 Shipped
+    if (shippedAt || st === 'shipped') return { label: 'Shipped ✓', color: '#16a34a' };
     if (st === 'ready_to_ship') return { label: 'Ready to Ship', color: '#0891b2' };
     if (st === 'preparing' || st === 'po_entered') return { label: 'Preparing for Shipment', color: '#d97706' };
     return { label: 'Pending', color: '#6b7280' };
@@ -14525,11 +14530,12 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     </table>`;
   }
 
-  // 라인 필터 (WH별 shipped qty > 0)
+  // alloc pcs 계산
   const allocPcs = (alloc) => Object.entries(alloc||{})
     .filter(([k]) => !k.includes('TRANSFER|'))
     .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
 
+  // 라인 필터 (WH별 shipped qty > 0)
   const shippedLines = (lines||[])
     .filter(l => {
       if (isSplit) {
@@ -14559,14 +14565,16 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     </tr>`;
   }).join('');
 
-  // Back order
+  // Back order — 양쪽 WH 모두 완료됐을 때만 표시
   const otherWhStatus = isSplit ? (invWh === 'CA' ? (order.sc_status||'') : (order.ca_status||'')) : '';
   const isLastInvoice = !isSplit || ['invoiced','completed','shipped'].includes(otherWhStatus);
   const calcBackQty = (l) => {
-    if (!isSplit) return l.qty_backordered || 0;
     const scPcs = allocPcs(l.alloc_detail||{});
     const caPcs = allocPcs(l.alloc_ca_detail||{});
-    return Math.max(0, (l.qty_pieces||0) - scPcs - caPcs);
+    const totalFilled = scPcs + caPcs;
+    if (totalFilled > 0) return Math.max(0, (l.qty_pieces||0) - totalFilled);
+    // alloc이 없으면 qty_backordered fallback
+    return l.qty_backordered || 0;
   };
   const backLines = isLastInvoice
     ? (lines||[]).map(l => ({...l, _bq: calcBackQty(l)})).filter(l => l._bq > 0)
@@ -14629,20 +14637,23 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
 
         ${statusSection}
 
-        <!-- Key info -->
+        <!-- Key info + Send Payment To -->
         <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;margin-bottom:14px;background:#f8fafc;">
           <tr>
-            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">
+            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;vertical-align:top;">
               Your PO #<br><strong style="font-size:15px;color:#111;">${order.customer_po||'—'}</strong>
             </td>
-            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">
+            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;vertical-align:top;">
               Ship Date<br><strong style="font-size:14px;color:#111;">${shipDate}</strong>
             </td>
-            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">
+            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;vertical-align:top;">
               Due Date (${order.terms||'N30'})<br><strong style="font-size:14px;color:#dc2626;">${dueDate}</strong>
             </td>
-            <td style="padding:10px 14px;font-size:12px;color:#6b7280;">
+            <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;vertical-align:top;">
               Invoice Total<br><strong style="font-size:15px;color:#1e40af;">$${(totalAmt+freight).toFixed(2)}</strong>
+            </td>
+            <td style="padding:10px 14px;font-size:11px;color:#6b7280;vertical-align:top;">
+              Send Payment To<br><span style="color:#374151;line-height:1.5;">${paymentLines}</span>
             </td>
           </tr>
         </table>
@@ -14654,20 +14665,16 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
             <table cellpadding="0" cellspacing="0" style="font-size:13px;width:100%;">
               <tr>
                 <td style="padding:3px 0;color:#6b7280;width:110px;">Ship From</td>
-                <td colspan="3" style="font-weight:600;">${whLabel}</td>
+                <td style="font-weight:600;">${whLabel}</td>
               </tr>
               ${shipViaStr ? `<tr>
                 <td style="padding:3px 0;color:#6b7280;">Carrier</td>
-                <td colspan="3" style="font-weight:600;">${shipViaStr}</td>
+                <td style="font-weight:600;">${shipViaStr}</td>
               </tr>` : ''}
               ${tracking ? `<tr>
                 <td style="padding:3px 0;color:#6b7280;">${isLtl?'PRO #':'Tracking #'}</td>
-                <td colspan="3" style="font-weight:600;font-family:monospace;">${tracking}</td>
+                <td style="font-weight:600;font-family:monospace;">${tracking}</td>
               </tr>` : ''}
-              <tr>
-                <td style="padding:6px 0 3px;color:#6b7280;border-top:1px solid #dbeafe;vertical-align:top;">Send Payment To</td>
-                <td colspan="3" style="font-size:12px;color:#374151;line-height:1.5;padding-top:6px;border-top:1px solid #dbeafe;">${paymentLines}</td>
-              </tr>
             </table>
           </td></tr>
         </table>
@@ -15316,7 +15323,7 @@ async function openBackOrderDetail(orderId) {
   document.getElementById('bo-cancel-btn').style.display = 'none';
   document.getElementById('bo-fulfill-section').style.display = 'none';
   document.getElementById('bo-still-short').style.display = 'none';
-  document.getElementById('bo-lines-body').innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px"><div class="spinner"></div></td></tr>';
+  document.getElementById('bo-lines-body').innerHTML = '<tr><td colspan="10" style="text-align:center;padding:20px"><div class="spinner"></div></td></tr>';
 
   // ETA / 메모 불러오기
   document.getElementById('bo-eta').value = order.eta_date || '';
@@ -15340,7 +15347,7 @@ async function openBackOrderDetail(orderId) {
     .eq('is_backordered', true);
 
   if (!lines || lines.length === 0) {
-    document.getElementById('bo-lines-body').innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--green)">✅ Back Order 라인 없음</td></tr>';
+    document.getElementById('bo-lines-body').innerHTML = '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--green)">✅ Back Order 라인 없음</td></tr>';
     return;
   }
 
@@ -15386,6 +15393,9 @@ async function openBackOrderDetail(orderId) {
     const statusColor = remain === 0 ? 'var(--green)' : filled > 0 ? 'var(--orange)' : 'var(--red)';
     const statusText  = remain === 0 ? '✅ 충족' : filled > 0 ? `⚠️ ${remain.toLocaleString()} 부족` : '🔴 재고 없음';
 
+    // WH 자동 선택: SC 재고 있으면 SC, 없으면 CA
+    const defaultWh = l.scStock > 0 ? 'SC' : (l.caStock > 0 ? 'CA' : 'SC');
+
     return `<tr style="${filled > 0 ? 'background:#f1f8f1' : 'background:#fff8f8'}">
       <td style="padding:7px 10px;font-weight:700;font-family:'IBM Plex Mono',monospace">#${l.styles?.style_number||'?'}</td>
       <td style="padding:7px 10px">${l.color}</td>
@@ -15393,12 +15403,18 @@ async function openBackOrderDetail(orderId) {
       <td style="padding:7px 10px;text-align:center;font-family:'IBM Plex Mono',monospace">${(l.qty_pieces||0).toLocaleString()}</td>
       <td style="padding:7px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red)">${(l.qty_backordered||0).toLocaleString()}</td>
       <td style="padding:7px 10px;text-align:center;">
-        <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--green)">${l.scStock.toLocaleString()}</span>
-        ${l.scStock > 0 ? '<span style="font-size:9px;color:var(--text3);display:block;">SC</span>' : '<span style="font-size:9px;color:var(--red)">SC 없음</span>'}
+        <div style="font-size:12px;font-weight:700;color:var(--green)">${l.scStock.toLocaleString()}</div>
+        <div style="font-size:9px;color:var(--text3)">SC</div>
       </td>
       <td style="padding:7px 10px;text-align:center;">
-        <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--primary)">${l.caStock.toLocaleString()}</span>
-        ${l.caStock > 0 ? '<span style="font-size:9px;color:var(--text3);display:block;">CA</span>' : '<span style="font-size:9px;color:var(--red)">CA 없음</span>'}
+        <div style="font-size:12px;font-weight:700;color:#ea580c">${l.caStock.toLocaleString()}</div>
+        <div style="font-size:9px;color:var(--text3)">CA</div>
+      </td>
+      <td style="padding:7px 10px;text-align:center;">
+        <select id="bo-wh-${idx}" style="width:60px;height:28px;border:1px solid var(--border);border-radius:3px;font-size:12px;font-weight:700;text-align:center;" onchange="updateBoFulfillSummary()">
+          <option value="SC" ${defaultWh==='SC'?'selected':''} ${l.scStock===0?'style="color:#ccc"':''}>SC</option>
+          <option value="CA" ${defaultWh==='CA'?'selected':''} ${l.caStock===0?'style="color:#ccc"':''}>CA</option>
+        </select>
       </td>
       <td style="padding:7px 10px;text-align:center">
         <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
@@ -15478,10 +15494,16 @@ async function fulfillBackOrder() {
     const fillQty = parseInt(document.getElementById(`bo-fill-${idx}`)?.value || 0);
     if (fillQty <= 0) { if ((l.qty_backordered || 0) > 0) allFulfilled = false; continue; }
 
-    // FIFO 차감: 오더 창고 우선, 부족하면 다른 창고에서 보충
+    // 선택된 WH 기준으로 재고 차감
+    const selectedWh = document.getElementById(`bo-wh-${idx}`)?.value || 'SC';
+    const scWh = warehouses.find(w => w.code === 'SC');
+    const caWh = warehouses.find(w => w.code === 'CA');
+    const primaryRows = selectedWh === 'CA' ? l.caRows : l.scRows;
+    const fallbackRows = selectedWh === 'CA' ? l.scRows : l.caRows;
+    const orderedRows = [...primaryRows, ...fallbackRows]; // 선택 WH 우선, 부족 시 반대 WH
+
     let remaining = fillQty;
-    const allRows = [...l.orderRows, ...l.otherRows]; // FIFO sorted already
-    for (const inv of allRows) {
+    for (const inv of orderedRows) {
       if (remaining <= 0) break;
       const deduct = Math.min(remaining, inv.qty_on_hand || 0);
       if (deduct > 0) {
@@ -15490,7 +15512,8 @@ async function fulfillBackOrder() {
           style_number: l.styles?.style_number || '',
           color: l.color, size: l.size,
           qty: deduct, location: inv.location || '',
-          warehouse_id: inv.warehouse_id
+          warehouse_id: inv.warehouse_id,
+          ship_wh: selectedWh
         });
         remaining -= deduct;
       }
