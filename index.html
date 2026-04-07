@@ -13102,13 +13102,58 @@ async function _doShippedCoreInner(emp) {
         .reduce((s, [, v]) => s + (typeof v === 'object' ? (v.pcs || 0) : (v || 0)), 0);
 
     let filled = 0;
+    // 실제 출고 수량 결정 우선순위:
+    // 1. pcr_box_allocation에서 이 라인의 수량 (가장 정확)
+    // 2. pcr_prepared_lines (직원이 수량 줄인 경우)
+    // 3. alloc_detail/alloc_ca_detail
+    // 4. inventory fallback
+
+    // 1. pcr_box_allocation에서 수량 가져오기
+    const _boxAllocKey = wh === 'CA' ? 'ca_pcr_box_allocation' : 'sc_pcr_box_allocation';
+    const _boxAlloc = order[_boxAllocKey];
+    let _boxAllocQty = 0;
+    if (_boxAlloc && Array.isArray(_boxAlloc)) {
+      _boxAlloc.forEach(box => {
+        (box.items||[]).forEach(item => {
+          if (item.color === l.color && item.size === l.size) _boxAllocQty += (item.qty||0);
+        });
+      });
+    }
+
+    // 2. pcr_prepared_lines
+    const _prepKey = wh === 'CA' ? 'ca_pcr_prepared_lines' : 'sc_pcr_prepared_lines';
+    const _prepJson = order[_prepKey];
+    let _preparedQty = null;
+    if (_prepJson) {
+      try {
+        const _prepArr = typeof _prepJson === 'string' ? JSON.parse(_prepJson) : _prepJson;
+        const _prepMatch = _prepArr.find(pl => pl.color === l.color && pl.size === l.size);
+        if (_prepMatch && _prepMatch.preparedQty !== undefined) _preparedQty = _prepMatch.preparedQty;
+      } catch(e) {}
+    }
+
+    // 3. alloc_detail
     if (lineWh === 'SC&CA') {
-      // SC ship이면 SC alloc만, CA ship이면 CA alloc만 (각자 독립적으로 계산)
-      filled = wh === 'CA' ? allocPcs(allocCA) : allocPcs(allocSC);
+      filled = wh === 'CA' ? (allocPcs(allocCA) || 0) : (allocPcs(allocSC) || 0);
     } else if (lineWh === 'CA') {
       filled = allocPcs(allocCA) || allocPcs(allocSC);
     } else {
       filled = allocPcs(allocSC);
+    }
+
+    // box_allocation이 있으면 최우선 사용 (PCR full box + partial 합산)
+    if (_boxAllocQty > 0) {
+      // non-PCR alloc(full box)은 그대로 + PCR은 box allocation 사용
+      const _allocObj = wh === 'CA' ? allocCA : allocSC;
+      const _nonPcrFilled = Object.entries(_allocObj)
+        .filter(([k]) => !k.includes('PCR|PCR') && !k.includes('TRANSFER|'))
+        .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||v.boxes*(l.pcs_per_box||72)||0) : (v||0)), 0);
+      filled = _nonPcrFilled + _boxAllocQty;
+    } else if (_preparedQty !== null) {
+      // prepared_lines 오버라이드
+      const _allocObj = wh === 'CA' ? allocCA : allocSC;
+      const _pcrOrig = Object.entries(_allocObj).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+((typeof v==='object'?v.pcs:v)||0),0);
+      filled = (filled - _pcrOrig) + _preparedQty;
     }
 
     // alloc이 없으면 기존 inventory 차감 방식으로 fallback
