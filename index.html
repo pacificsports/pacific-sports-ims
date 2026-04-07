@@ -10955,7 +10955,13 @@ async function saveAndAttachBol() {
     // DB에 BOL 저장 (Signed BOL 버튼에서 나중에 꺼낼 수 있도록)
     if (_bolOrder?.id) {
       const bolField = wh === 'CA' ? 'bol_file_ca' : 'bol_file';
-      await db.from('orders').update({ [bolField]: pdfBase64 }).eq('id', _bolOrder.id);
+      const { error: bolSaveErr } = await db.from('orders').update({ [bolField]: pdfBase64 }).eq('id', _bolOrder.id);
+      if (bolSaveErr) {
+        console.error('[BOL save error]', bolSaveErr);
+        showToast('⚠️ BOL DB 저장 실패: ' + bolSaveErr.message + ' — bol_file 컬럼이 없을 수 있습니다');
+      } else {
+        console.log('[BOL saved] field:', bolField, 'orderId:', _bolOrder.id);
+      }
     }
 
     const list = document.getElementById('bol-file-list');
@@ -11165,16 +11171,19 @@ function processBolFile(file) {
     if (_bolOrder?.id) {
       const wh = _shippedWh || 'SC';
       const bolField = wh === 'CA' ? 'bol_file_ca' : 'bol_file';
-      db.from('orders').update({ [bolField]: base64 }).eq('id', _bolOrder.id).then(() => {
-        // 기존 BOL 표시 영역 업데이트
-        const existingBolEl = document.getElementById('bol-existing-file');
-        if (existingBolEl) {
-          existingBolEl.style.display = 'flex';
-          existingBolEl.innerHTML = `<span style="font-size:12px;color:#15803d;font-weight:600;">✅ Saved Signed BOL (${wh})</span>
-            <button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;margin-left:8px;" onclick="_viewSavedBol('${wh}')">👁 View</button>
-            <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;margin-left:4px;" onclick="_deleteSavedBol('${wh}',this)">🗑 Delete</button>`;
+      db.from('orders').update({ [bolField]: base64 }).eq('id', _bolOrder.id).then(({ error }) => {
+        if (error) { console.error('[BOL upload save error]', error); showToast('⚠️ BOL 저장 실패: ' + error.message); }
+        else {
+          // 기존 BOL 표시 영역 업데이트
+          const existingBolEl = document.getElementById('bol-existing-file');
+          if (existingBolEl) {
+            existingBolEl.style.display = 'flex';
+            existingBolEl.innerHTML = `<span style="font-size:12px;color:#15803d;font-weight:600;">✅ Saved Signed BOL (${wh})</span>
+              <button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;margin-left:8px;" onclick="_viewSavedBol('${wh}')">👁 View</button>
+              <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;margin-left:4px;" onclick="_deleteSavedBol('${wh}',this)">🗑 Delete</button>`;
+          }
         }
-      });
+      }).catch(e => { console.error('[BOL upload save catch]', e); });
     }
     // 파일 목록 UI 업데이트
     const list = document.getElementById('bol-file-list');
@@ -13361,16 +13370,33 @@ async function reviewAndSendInvoice(orderId, wh) {
   if (order.po_file) {
     _attEl.appendChild(_makeAttBtn('Customer PO PDF', async () => order.po_file));
   }
-  // Signed BOL — DB에서 WH별로
-  const _bolWh = wh || order.wh_code || 'SC';
+  // Signed BOL — DB에서 WH별로 (wh_code가 SC&CA인 경우 _invoiceWh 기준)
+  const _bolWh = (_invoiceWh === 'CA' || order.wh_code === 'CA') ? 'CA' : 'SC';
   const _savedBol = _bolWh === 'CA' ? order.bol_file_ca : order.bol_file;
-  if (_savedBol) {
-    _attEl.appendChild(_makeAttBtn('Signed BOL (' + _bolWh + ')', async () => _savedBol));
+  // SC&CA 오더면 양쪽 BOL 모두 확인
+  const _savedBolSC = order.bol_file;
+  const _savedBolCA = order.bol_file_ca;
+  const isSplitInvoice = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+
+  if (isSplitInvoice) {
+    // 분할 오더 — 현재 invoice WH BOL만 표시
+    if (_savedBol) {
+      _attEl.appendChild(_makeAttBtn('Signed BOL (' + _bolWh + ')', async () => _savedBol));
+    } else {
+      const _noBolNote = document.createElement('span');
+      _noBolNote.style.cssText = 'font-size:11px;color:#f97316;margin-right:10px;';
+      _noBolNote.textContent = '⚠️ Signed BOL (' + _bolWh + ') 없음';
+      _attEl.appendChild(_noBolNote);
+    }
   } else {
-    const _noBolNote = document.createElement('span');
-    _noBolNote.style.cssText = 'font-size:11px;color:#9ca3af;margin-right:10px;';
-    _noBolNote.textContent = '⚠️ Signed BOL 없음';
-    _attEl.appendChild(_noBolNote);
+    if (_savedBol) {
+      _attEl.appendChild(_makeAttBtn('Signed BOL', async () => _savedBol));
+    } else {
+      const _noBolNote = document.createElement('span');
+      _noBolNote.style.cssText = 'font-size:11px;color:#f97316;margin-right:10px;';
+      _noBolNote.textContent = '⚠️ Signed BOL 없음';
+      _attEl.appendChild(_noBolNote);
+    }
   }
   // Send 모드 복원
   document.querySelector('#modal-invoice-review .modal-head span').textContent = '📧 Review & Send Invoice';
@@ -13499,8 +13525,8 @@ async function sendInvoiceEmail() {
         invEmailBodyHtml = buildInvoiceEmailBodyHtml(order, lines, displayInvNum, invShipInfo2, cs, freightAmt);
       } catch(e) { console.warn('Invoice email body error:', e); }
 
-      // Signed BOL — DB에서 가져오기 (WH별)
-      const invWh = _invoiceWh || order.wh_code || 'SC';
+      // Signed BOL — DB에서 가져오기 (WH별, SC&CA는 _invoiceWh 기준)
+      const invWh = (_invoiceWh === 'CA' || order.wh_code === 'CA') ? 'CA' : 'SC';
       const bolB64 = invWh === 'CA' ? order.bol_file_ca : order.bol_file;
       // 메모리(_bolFilesDataSingle) 우선, 없으면 DB 저장본 사용
       const bolFilesForInv = _bolFilesDataSingle.length > 0
