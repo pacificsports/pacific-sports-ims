@@ -11167,14 +11167,16 @@ function processBolFile(file) {
     const base64 = e.target.result.split(',')[1];
     _bolFileData = { base64, mimeType: file.type, fileName: file.name }; // 하위 호환
     _bolFilesDataSingle.push({ base64, mimeType: file.type, fileName: file.name });
-    // DB에도 저장 (나중에 Signed BOL 버튼에서 볼 수 있도록)
-    if (_bolOrder?.id) {
-      const wh = _shippedWh || 'SC';
+    // DB에도 저장 — _bolOrder.id 또는 _shippedOrderId 사용
+    const saveOrderId = _bolOrder?.id || _shippedOrderId;
+    const wh = _shippedWh || 'SC';
+    if (saveOrderId) {
       const bolField = wh === 'CA' ? 'bol_file_ca' : 'bol_file';
-      db.from('orders').update({ [bolField]: base64 }).eq('id', _bolOrder.id).then(({ error }) => {
+      db.from('orders').update({ [bolField]: base64 }).eq('id', saveOrderId).then(({ error }) => {
         if (error) { console.error('[BOL upload save error]', error); showToast('⚠️ BOL 저장 실패: ' + error.message); }
         else {
-          // 기존 BOL 표시 영역 업데이트
+          console.log('[BOL uploaded & saved] field:', bolField, 'orderId:', saveOrderId);
+          // 기존 BOL 표시 영역 업데이트 (BOL 서명 모달에 있을 때만)
           const existingBolEl = document.getElementById('bol-existing-file');
           if (existingBolEl) {
             existingBolEl.style.display = 'flex';
