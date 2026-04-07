@@ -12740,7 +12740,19 @@ function handleBatchBolFileSelect(input) {
   files.forEach(file => {
     const reader = new FileReader();
     reader.onload = (e) => {
-      _bolFilesData.push({ base64: e.target.result.split(',')[1], mimeType: file.type, fileName: file.name });
+      const base64 = e.target.result.split(',')[1];
+      _bolFilesData.push({ base64, mimeType: file.type, fileName: file.name });
+      // DB에도 저장
+      const saveOrderId = _shippedOrderId;
+      const wh = _shippedWh || 'SC';
+      if (saveOrderId) {
+        const bolField = wh === 'CA' ? 'bol_file_ca' : 'bol_file';
+        db.from('orders').update({ [bolField]: base64 }).eq('id', saveOrderId)
+          .then(({ error }) => {
+            if (error) console.error('[Batch BOL save error]', error);
+            else console.log('[Batch BOL saved]', bolField, saveOrderId);
+          });
+      }
       const item = document.createElement('div');
       item.style.cssText = 'display:flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px;padding:5px 10px;font-size:11px;';
       item.innerHTML = '✅ <span style="font-weight:600;color:#15803d;">' + file.name + '</span>'
@@ -14447,7 +14459,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const whLabel = invWh === 'CA' ? 'Eastvale, CA' : 'Sumter, SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
-  // 실제 출고일 — shipInfo.shipDate(invoice 발송 시 전달) 최우선, DB 날짜 fallback
+  // 실제 출고일 — shipInfo.shipDate 최우선
   const actualShipRaw = (shipInfo && (shipInfo.shipDate || shipInfo.ship_date))
     || (invWh === 'CA'
       ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
@@ -14466,38 +14478,38 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const returnPolicy = (companySettings && companySettings.return_policy) || 'Returns are accepted within 30 days from date of shipment. All returns must be accompanied by a Return Authorization (RA) number. Returns are subject to a 15% restocking fee.';
   const paymentLines = (paymentInfo||'').replace(/\\n/g,'<br>').replace(/\n/g,'<br>');
 
-  // Partially Invoiced 배너
-  const otherWhStatus = isSplit ? (invWh === 'CA' ? (order.sc_status||'') : (order.ca_status||'')) : '';
-  const isLastInvoice = !isSplit || ['invoiced','completed','shipped'].includes(otherWhStatus);
-  const getOtherWhStatus = (s) => {
-    if (!s || s === 'po_entered') return 'Preparing for Shipment';
-    if (s === 'preparing') return 'Preparing for Shipment';
-    if (s === 'ready_to_ship') return 'Ready to Ship';
-    if (['shipped','invoiced','completed'].includes(s)) return 'Shipped ✓';
-    return s;
+  // Status Update 섹션
+  const getWhStatusLabel = (wh) => {
+    const st = wh === 'CA' ? order.ca_status : order.sc_status;
+    const shippedAt = wh === 'CA' ? order.ca_shipped_at : order.sc_shipped_at;
+    if (wh === invWh) return { label: 'Invoiced', color: '#7c3aed' };
+    if (shippedAt || ['shipped','invoiced','completed'].includes(st))
+      return { label: 'Shipped ✓', color: '#16a34a' };
+    if (st === 'ready_to_ship') return { label: 'Ready to Ship', color: '#0891b2' };
+    if (st === 'preparing' || st === 'po_entered') return { label: 'Preparing for Shipment', color: '#d97706' };
+    return { label: 'Pending', color: '#6b7280' };
   };
 
-  let statusBanner = '';
+  let statusSection = '';
   if (isSplit) {
-    const scDone = !!order.sc_shipped_at;
-    const caDone = !!order.ca_shipped_at;
-    if (scDone && caDone) {
-      statusBanner = `<tr><td style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:10px 14px;font-size:13px;font-weight:700;color:#166534;margin-bottom:16px;">&#10003; PO Fully Shipped &amp; Invoiced</td></tr>`;
-    } else if (invWh === 'CA' && !scDone) {
-      // CA invoice 발송 — SC 아직 pending
-      const scLabel = getOtherWhStatus(order.sc_status);
-      statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; CA Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#92400e;">SC Warehouse: <strong>${scLabel}</strong></span></td></tr>`;
-    } else if (invWh === 'SC' && !caDone) {
-      // SC invoice 발송 — CA 아직 pending
-      const caLabel = getOtherWhStatus(order.ca_status);
-      statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; SC Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#92400e;">CA Warehouse: <strong>${caLabel}</strong></span></td></tr>`;
-    } else if (invWh === 'SC' && caDone) {
-      // SC invoice 발송 — CA는 이미 shipped
-      statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; SC Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#15803d;">CA Warehouse: <strong>Shipped &#10003;</strong></span></td></tr>`;
-    } else if (invWh === 'CA' && scDone) {
-      // CA invoice 발송 — SC는 이미 shipped
-      statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; CA Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#15803d;">SC Warehouse: <strong>Shipped &#10003;</strong></span></td></tr>`;
-    }
+    const scSt = getWhStatusLabel('SC');
+    const caSt = getWhStatusLabel('CA');
+    statusSection = `
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:14px;">
+      <tr><td style="padding:10px 16px;">
+        <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Status Update</div>
+        <table cellpadding="0" cellspacing="0" style="font-size:13px;width:100%;">
+          <tr>
+            <td style="padding:3px 0;color:#6b7280;width:130px;">SC Warehouse</td>
+            <td style="font-weight:700;color:${scSt.color};">${scSt.label}</td>
+          </tr>
+          <tr>
+            <td style="padding:3px 0;color:#6b7280;">CA Warehouse</td>
+            <td style="font-weight:700;color:${caSt.color};">${caSt.label}</td>
+          </tr>
+        </table>
+      </td></tr>
+    </table>`;
   }
 
   // 라인 필터 (WH별 shipped qty > 0)
@@ -14524,17 +14536,19 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     const amt = shipped * price;
     totalShipped += shipped; totalAmt += amt;
     return `<tr>
-      <td style="padding:6px 10px;font-size:13px;font-weight:600;">${l.styles?.style_number||''}</td>
-      <td style="padding:6px 10px;font-size:13px;">${l.styles?.description||''}</td>
-      <td style="padding:6px 10px;font-size:13px;">${(l.color||'').toUpperCase()}</td>
-      <td style="padding:6px 10px;font-size:13px;text-align:center;">${l.size||''}</td>
-      <td style="padding:6px 10px;font-size:13px;text-align:center;font-weight:700;color:#1e40af;">${shipped} pcs</td>
-      <td style="padding:6px 10px;font-size:13px;text-align:right;">$${price.toFixed(2)}</td>
-      <td style="padding:6px 10px;font-size:13px;text-align:right;font-weight:700;">$${amt.toFixed(2)}</td>
+      <td style="padding:6px 10px;font-size:13px;font-weight:600;border-bottom:1px solid #f3f4f6;">${l.styles?.style_number||''}</td>
+      <td style="padding:6px 10px;font-size:13px;border-bottom:1px solid #f3f4f6;">${l.styles?.description||''}</td>
+      <td style="padding:6px 10px;font-size:13px;border-bottom:1px solid #f3f4f6;">${(l.color||'').toUpperCase()}</td>
+      <td style="padding:6px 10px;font-size:13px;text-align:center;border-bottom:1px solid #f3f4f6;">${l.size||''}</td>
+      <td style="padding:6px 10px;font-size:13px;text-align:center;font-weight:700;color:#1e40af;border-bottom:1px solid #f3f4f6;">${shipped} pcs</td>
+      <td style="padding:6px 10px;font-size:13px;text-align:right;border-bottom:1px solid #f3f4f6;">$${price.toFixed(2)}</td>
+      <td style="padding:6px 10px;font-size:13px;text-align:right;font-weight:700;border-bottom:1px solid #f3f4f6;">$${amt.toFixed(2)}</td>
     </tr>`;
   }).join('');
 
   // Back order
+  const otherWhStatus = isSplit ? (invWh === 'CA' ? (order.sc_status||'') : (order.ca_status||'')) : '';
+  const isLastInvoice = !isSplit || ['invoiced','completed','shipped'].includes(otherWhStatus);
   const calcBackQty = (l) => {
     if (!isSplit) return l.qty_backordered || 0;
     const scPcs = allocPcs(l.alloc_detail||{});
@@ -14598,9 +14612,9 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
 
         <p style="margin:0 0 4px;font-size:14px;">Dear <strong>${order.customer_name||''}</strong>,</p>
         <p style="margin:0 0 4px;font-size:13px;color:#374151;">Please find your invoice details below.</p>
-        <p style="margin:0 0 16px;font-size:13px;color:#374151;">Your invoice PDF, packing list, and purchase order are attached to this email.</p>
+        <p style="margin:0 0 16px;font-size:13px;color:#374151;">Your invoice, packing list, and purchase order are attached to this email.</p>
 
-        ${statusBanner ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px;">${statusBanner}</table>` : ''}
+        ${statusSection}
 
         <!-- Key info -->
         <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;margin-bottom:14px;background:#f8fafc;">
@@ -14612,7 +14626,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
               Ship Date<br><strong style="font-size:14px;color:#111;">${shipDate}</strong>
             </td>
             <td style="padding:10px 14px;font-size:12px;color:#6b7280;border-right:1px solid #e5e7eb;">
-              Due Date<br><strong style="font-size:14px;color:#dc2626;">${dueDate}</strong>
+              Due Date (${order.terms||'N30'})<br><strong style="font-size:14px;color:#dc2626;">${dueDate}</strong>
             </td>
             <td style="padding:10px 14px;font-size:12px;color:#6b7280;">
               Invoice Total<br><strong style="font-size:15px;color:#1e40af;">$${(totalAmt+freight).toFixed(2)}</strong>
@@ -14626,19 +14640,20 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
             <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:8px;">&#128666; Shipping Information</div>
             <table cellpadding="0" cellspacing="0" style="font-size:13px;width:100%;">
               <tr>
-                <td style="padding:2px 0;color:#6b7280;width:90px;">Ship From</td>
-                <td style="font-weight:600;">${whLabel}</td>
-                ${shipViaStr ? `<td style="padding:2px 0;color:#6b7280;width:70px;">Carrier</td><td style="font-weight:600;">${shipViaStr}</td>` : '<td colspan="2"></td>'}
+                <td style="padding:3px 0;color:#6b7280;width:110px;">Ship From</td>
+                <td colspan="3" style="font-weight:600;">${whLabel}</td>
               </tr>
+              ${shipViaStr ? `<tr>
+                <td style="padding:3px 0;color:#6b7280;">Carrier</td>
+                <td colspan="3" style="font-weight:600;">${shipViaStr}</td>
+              </tr>` : ''}
               ${tracking ? `<tr>
-                <td style="padding:2px 0;color:#6b7280;">${isLtl?'PRO #':'Tracking #'}</td>
+                <td style="padding:3px 0;color:#6b7280;">${isLtl?'PRO #':'Tracking #'}</td>
                 <td colspan="3" style="font-weight:600;font-family:monospace;">${tracking}</td>
               </tr>` : ''}
               <tr>
-                <td style="padding:2px 0;color:#6b7280;">Terms</td>
-                <td style="font-weight:600;">${order.terms||'Net 30'}</td>
-                <td style="padding:2px 0;color:#6b7280;">Send Payment To</td>
-                <td style="font-size:11px;color:#374151;line-height:1.4;">${paymentLines}</td>
+                <td style="padding:6px 0 3px;color:#6b7280;border-top:1px solid #dbeafe;vertical-align:top;">Send Payment To</td>
+                <td colspan="3" style="font-size:12px;color:#374151;line-height:1.5;padding-top:6px;border-top:1px solid #dbeafe;">${paymentLines}</td>
               </tr>
             </table>
           </td></tr>
@@ -14659,7 +14674,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
           </thead>
           <tbody>${rows}</tbody>
           <tfoot>
-            <tr style="border-top:1px solid #e5e7eb;">
+            <tr>
               <td colspan="4" style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Total Shipped:</td>
               <td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${totalShipped.toLocaleString()} pcs</td>
               <td style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td>
