@@ -9271,101 +9271,73 @@ async function submitPcrComplete() {
     }
   }
 
-  // alloc_detail 업데이트 — 실제 준비된 수량으로 갱신 (Back Order 처리)
-  const { data: orderLines } = await db.from('order_lines')
-    .select('id, color, size, wh, alloc_detail, alloc_ca_detail, qty_pieces, qty_backordered')
-    .eq('order_id', _pcrCompleteOrderId);
-
-  let totalBoQty = 0;
-  const boLines = [];
-
-  for (const pl of preparedLines) {
-    const origLine = (orderLines||[]).find(l => l.id === pl.lineId);
-    if (!origLine) continue;
-
-    const ppb = pl.ppb || 72;
-    const allocKey = _pcrCompleteWh === 'CA' ? 'CA-PCR|PCR' : 'SC-PCR|PCR';
-    const allocField = _pcrCompleteWh === 'CA' ? 'alloc_ca_detail' : 'alloc_detail';
-    const currentAlloc = (_pcrCompleteWh === 'CA' ? origLine.alloc_ca_detail : origLine.alloc_detail) || {};
-    const originalPcrQty = pl.partialQty;  // 원래 alloc된 PCR 수량
-    const actualPrepared = pl.preparedQty;  // 실제 준비된 수량
-
-    if (actualPrepared < originalPcrQty) {
-      // 수량이 줄었으면 alloc_detail의 PCR 수량 업데이트
-      const newAlloc = { ...currentAlloc };
-      const pcrEntries = Object.entries(newAlloc).filter(([k]) => k.includes(allocKey));
-      if (pcrEntries.length > 0) {
-        const [pcrKey] = pcrEntries[0];
-        if (actualPrepared === 0) {
-          delete newAlloc[pcrKey];
-        } else {
-          newAlloc[pcrKey] = { boxes: Math.floor(actualPrepared / ppb), partial: actualPrepared % ppb, pcs: actualPrepared };
-        }
-        await db.from('order_lines').update({ [allocField]: newAlloc }).eq('id', origLine.id);
-      }
-
-      // 차이만큼 Back Order 생성
-      const boQty = originalPcrQty - actualPrepared;
-      totalBoQty += boQty;
-      boLines.push({ ...origLine, boQty });
-    }
-  }
-
-  // Back Order 생성
-  if (totalBoQty > 0) {
-    const { data: existOrder } = await db.from('orders').select('id').eq('order_number', _pcrCompleteOrderId + '-PCR-BO').single().catch(() => ({ data: null }));
-    const boOrderNum = (await db.from('orders').select('order_number').eq('id', _pcrCompleteOrderId).single().then(r => r.data?.order_number) || '') + '-BO';
-    const { data: existingBo } = await db.from('orders').select('id').eq('order_number', boOrderNum).single().catch(() => ({ data: null }));
-
-    let boOrderId = existingBo?.id;
-    if (!boOrderId) {
+  // Back Order 처리 — alloc_detail은 건드리지 않음
+  // preparedLines에서 partialQty(배정) vs preparedQty(실제 찾은 수량) 비교
+  try {
+    const shortLines = preparedLines.filter(pl => pl.preparedQty < pl.partialQty);
+    if (shortLines.length > 0) {
       const { data: origOrder } = await db.from('orders').select('*').eq('id', _pcrCompleteOrderId).single();
-      const { data: newBo } = await db.from('orders').insert({
-        order_number: boOrderNum,
-        customer_name: origOrder?.customer_name,
-        customer_po: origOrder?.customer_po,
-        customer_id: origOrder?.customer_id,
-        warehouse_id: origOrder?.warehouse_id,
-        wh_code: origOrder?.wh_code,
-        is_split_warehouse: origOrder?.is_split_warehouse,
-        status: 'backordered',
-        total_pcs: totalBoQty,
-        total_amount: 0,
-        bill_addr: origOrder?.bill_addr,
-        ship_addr: origOrder?.ship_addr,
-        terms: origOrder?.terms,
-        parent_order_id: _pcrCompleteOrderId
-      }).select().single();
-      boOrderId = newBo?.id;
-    } else {
-      // 기존 BO에 수량 추가
-      const { data: existBoLines } = await db.from('order_lines').select('qty_backordered,unit_price').eq('order_id', boOrderId);
-      const existPcs = (existBoLines||[]).reduce((s,l) => s+(l.qty_backordered||0), 0);
-      await db.from('orders').update({ total_pcs: existPcs + totalBoQty }).eq('id', boOrderId);
-    }
+      const { data: origOrderLines } = await db.from('order_lines')
+        .select('id,style_id,color,size,wh,alloc_detail,alloc_ca_detail,qty_pieces,unit_price,warehouse_id')
+        .eq('order_id', _pcrCompleteOrderId);
 
-    if (boOrderId) {
-      for (const bl of boLines) {
-        const { data: dupLine } = await db.from('order_lines').select('id,qty_backordered').eq('order_id', boOrderId).eq('color', bl.color).eq('size', bl.size).single().catch(() => ({ data: null }));
-        if (dupLine) {
-          await db.from('order_lines').update({ qty_backordered: (dupLine.qty_backordered||0) + bl.boQty, qty_pieces: (dupLine.qty_backordered||0) + bl.boQty }).eq('id', dupLine.id);
-        } else {
-          await db.from('order_lines').insert({
-            order_id: boOrderId,
-            style_id: bl.style_id,
-            warehouse_id: bl.warehouse_id,
-            wh: bl.wh,
-            color: bl.color,
-            size: bl.size,
-            qty_pieces: bl.boQty,
-            qty_backordered: bl.boQty,
-            is_backordered: true,
-            unit_price: bl.unit_price || 0
-          });
-        }
+      const boOrderNum = (origOrder?.order_number || '') + '-BO';
+      const { data: boList } = await db.from('orders').select('id').eq('order_number', boOrderNum);
+      let boOrderId = boList?.[0]?.id;
+      const totalBoQty = shortLines.reduce((s, pl) => s + (pl.partialQty - pl.preparedQty), 0);
+
+      if (!boOrderId) {
+        const { data: newBo } = await db.from('orders').insert({
+          order_number: boOrderNum,
+          customer_name: origOrder?.customer_name,
+          customer_po: origOrder?.customer_po,
+          customer_id: origOrder?.customer_id,
+          warehouse_id: origOrder?.warehouse_id,
+          wh_code: origOrder?.wh_code,
+          is_split_warehouse: origOrder?.is_split_warehouse,
+          status: 'backordered',
+          total_pcs: totalBoQty,
+          total_amount: 0,
+          bill_addr: origOrder?.bill_addr,
+          ship_addr: origOrder?.ship_addr,
+          terms: origOrder?.terms,
+          parent_order_id: _pcrCompleteOrderId
+        }).select().single();
+        boOrderId = newBo?.id;
+      } else {
+        const { data: existBoLines } = await db.from('order_lines').select('qty_backordered').eq('order_id', boOrderId);
+        const existPcs = (existBoLines||[]).reduce((s,l) => s+(l.qty_backordered||0), 0);
+        await db.from('orders').update({ total_pcs: existPcs + totalBoQty }).eq('id', boOrderId);
       }
-      showToast(`📦 Back Order ${totalBoQty} pcs 생성됨 — ${boOrderNum}`);
+
+      if (boOrderId) {
+        for (const pl of shortLines) {
+          const boQty = pl.partialQty - pl.preparedQty;
+          const origLine = (origOrderLines||[]).find(l => l.id === pl.lineId);
+          const { data: dupList } = await db.from('order_lines').select('id,qty_backordered,qty_pieces').eq('order_id', boOrderId).eq('color', pl.color).eq('size', pl.size);
+          if (dupList?.[0]) {
+            await db.from('order_lines').update({
+              qty_backordered: (dupList[0].qty_backordered||0) + boQty,
+              qty_pieces: (dupList[0].qty_pieces||0) + boQty
+            }).eq('id', dupList[0].id);
+          } else {
+            await db.from('order_lines').insert({
+              order_id: boOrderId,
+              style_id: origLine?.style_id,
+              warehouse_id: origLine?.warehouse_id,
+              wh: origLine?.wh,
+              color: pl.color, size: pl.size,
+              qty_pieces: boQty, qty_backordered: boQty,
+              is_backordered: true,
+              unit_price: origLine?.unit_price || 0
+            });
+          }
+        }
+        showToast(`📦 못 찾은 ${totalBoQty}pcs → Back Order 생성 (${boOrderNum})`);
+      }
     }
+  } catch(boErr) {
+    console.error('[PCR BO error]', boErr);
   }
 
   // orders 테이블에 완료 기록
@@ -14073,7 +14045,17 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       const activeAlloc = isCA ? allocCA : alloc;
       const scPcrPcs = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
       const caPcrPcs = Object.entries(allocCA).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-      const pcrPcs = isCA ? caPcrPcs : scPcrPcs;
+      let pcrPcs = isCA ? caPcrPcs : scPcrPcs;
+      // pcr_prepared_lines가 있으면 실제 준비된 수량으로 오버라이드 (수량 줄인 경우)
+      const preparedKey = isCA ? 'ca_pcr_prepared_lines' : 'sc_pcr_prepared_lines';
+      const preparedLinesJson = order[preparedKey];
+      if (preparedLinesJson) {
+        try {
+          const prepLines = typeof preparedLinesJson === 'string' ? JSON.parse(preparedLinesJson) : preparedLinesJson;
+          const match = prepLines.find(pl => pl.color === l.color && pl.size === l.size);
+          if (match && match.preparedQty !== undefined) pcrPcs = match.preparedQty;
+        } catch(e) {}
+      }
       const fullBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?(v.boxes||0):Math.floor((v||0)/ppb)),0);
       if (fullBoxes > 0) groups[key].sizes.push({ size: l.size||'', qty: fullBoxes * ppb, isFullBox: true, ppb });
       if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs, isPartial: true });
