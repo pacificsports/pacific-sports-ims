@@ -14469,10 +14469,19 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
       .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0)*ppb + (v.partial||0) : (v||0)), 0);
 
-    // PCR partial pcs
-    const pcrPcs = Object.entries(alloc)
+    // PCR partial pcs — pcr_prepared_lines 오버라이드 적용
+    let pcrPcs = Object.entries(alloc)
       .filter(([k]) => k.includes('PCR|PCR'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+    const _bolPrepKey = isCA ? 'ca_pcr_prepared_lines' : 'sc_pcr_prepared_lines';
+    const _bolPrepJson = order[_bolPrepKey];
+    if (_bolPrepJson && pcrPcs > 0) {
+      try {
+        const _bolPrep = typeof _bolPrepJson==='string' ? JSON.parse(_bolPrepJson) : _bolPrepJson;
+        const _bolMatch = _bolPrep.find(pl => pl.color===l.color && pl.size===l.size);
+        if (_bolMatch && _bolMatch.preparedQty !== undefined) pcrPcs = _bolMatch.preparedQty;
+      } catch(e) {}
+    }
 
     const shipPcs = fullBoxPcs + pcrPcs;
     if (shipPcs === 0) return '';
