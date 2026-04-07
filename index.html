@@ -13349,10 +13349,17 @@ async function reviewAndSendInvoice(orderId, wh) {
   const whTracking  = invWh2 === 'CA' ? (order.ca_tracking_number || order.tracking_number) : (order.sc_tracking_number || order.tracking_number);
   const whFreight   = invWh2 === 'CA' ? (order.ca_pickup_company  || order.pickup_company)  : (order.sc_pickup_company  || order.pickup_company);
 
+  // 실제 출고일 — WH별 shipped_at 우선, fallback ship_date
+  const invWh3 = wh || order.wh_code || 'SC';
+  const invActualShipDate2 = (invWh3 === 'CA')
+    ? (order.ca_shipped_at || order.sc_shipped_at)
+    : (order.sc_shipped_at || order.ca_shipped_at);
+
   const invShipInfo = {
     carrier: whCarrier || _fb.carrier || _domCarrier || '',
     tracking: whTracking || _fb.tracking || _domTracking || '',
-    freightCarrier: whFreight || _fb.freightCarrier || _domFreightCarrier || ''
+    freightCarrier: whFreight || _fb.freightCarrier || _domFreightCarrier || '',
+    shipDate: invActualShipDate2 || ''   // PO 입력 날짜 제외, 실제 출고일만
   };
   document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, displayInvoiceNum, invShipInfo, companySettings, 0);
 
@@ -13923,7 +13930,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;font-size:11px;">
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Customer</div><div style="font-weight:700;">${order.customer_name}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">PO #</div><div style="font-weight:700;">${order.customer_po||'—'}</div></div>
-      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date||'—'}</div></div>
+      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${(() => { const d = (whOverride==='CA') ? (order.ca_shipped_at||order.sc_shipped_at) : (order.sc_shipped_at||order.ca_shipped_at); return d ? d.slice(0,10) : (order.ship_date||'—'); })()}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Terms</div><div style="font-weight:700;">${order.terms||'N30'}</div></div>
     </div>
     ${body}
@@ -14243,7 +14250,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Customer</div><div style="font-weight:700;">${order.customer_name}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">PO #</div><div style="font-weight:700;">${order.customer_po||'—'}</div></div>
       <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship To</div><div style="font-weight:700;">${order.customer_name||'—'}</div><div style="font-weight:400;color:#374151;margin-top:2px;line-height:1.4;">${(() => { const addr = order.ship_addr||''; const lines = addr.split('\n'); const cn = (order.customer_name||'').toLowerCase().replace(/[^a-z0-9]/g,''); const fl = (lines[0]||'').toLowerCase().replace(/[^a-z0-9]/g,''); const clean = (cn && (fl.includes(cn.slice(0,6)) || cn.includes(fl.slice(0,6)))) ? lines.slice(1).join('\n').trim() : addr; return clean.replace(/\n/g,'<br>'); })()}</div></div>
-      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${order.ship_date || new Date().toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'})}</div></div>
+      <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Ship Date</div><div style="font-weight:700;">${(() => { const raw = (shippingInfo && (shippingInfo.shipDate||shippingInfo.ship_date)) || (whFilter==='CA' ? (order.ca_shipped_at||order.sc_shipped_at) : (order.sc_shipped_at||order.ca_shipped_at)); return raw ? new Date(raw.slice(0,10)+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}) : '—'; })()}</div></div>
     </div>
     <!-- Shipping Info -->
     ${note ? `<div style="margin-bottom:12px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:11px;"><span style="font-weight:700;color:#d97706;">📝 Note:</span> ${note}</div>` : ''}
@@ -14745,12 +14752,14 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
   const orderDate = order.created_at
     ? new Date(order.created_at).toLocaleDateString('en-US', { year:'numeric', month:'numeric', day:'numeric' })
     : invoiceDate;
-  // 실제 출고일 — sc_shipped_at/ca_shipped_at 우선, fallback ship_date
+  // 실제 출고일 — shipInfo.shipDate 최우선, 없으면 sc/ca_shipped_at
   const _invWhForDate = (invoiceNum && invoiceNum.startsWith('CA')) ? 'CA'
     : (order.wh_code === 'CA' || order.warehouses?.code === 'CA') ? 'CA' : 'SC';
-  const _actualShipRaw = _invWhForDate === 'CA'
-    ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
-    : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date);
+  const _actualShipRaw = (shipInfo && (shipInfo.shipDate || shipInfo.ship_date))
+    || (_invWhForDate === 'CA'
+      ? (order.ca_shipped_at || order.sc_shipped_at)
+      : (order.sc_shipped_at || order.ca_shipped_at))
+    || order.ship_date;
   const shipDate = _actualShipRaw
     ? new Date((_actualShipRaw.slice?.(0,10)||_actualShipRaw)+'T00:00:00').toLocaleDateString('en-US', { year:'numeric', month:'numeric', day:'numeric' })
     : invoiceDate;
