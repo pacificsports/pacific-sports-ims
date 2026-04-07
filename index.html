@@ -11422,9 +11422,9 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
 
     // scCell: SC 수량이 있고 실제로 SC가 shipped된 경우만 체크마크
     // - 이번에 SC ship이거나, 이전에 SC가 이미 shipped된 경우 (sc_shipped_at 있음)
-    const scActuallyShipped = (currentWh === 'SC') || !!order.sc_shipped_at;
+    const scActuallyShipped = (currentWh === 'SC') || !!order.sc_shipped_at || ['shipped','invoiced','completed'].includes(order.sc_status);
     const scDisplayDate = (scQty > 0 && scActuallyShipped)
-      ? (currentWh === 'SC' ? shipDateStr : fmtDate(order.sc_shipped_at))
+      ? (currentWh === 'SC' ? shipDateStr : (order.sc_shipped_at ? fmtDate(order.sc_shipped_at) : scShippedDate))
       : null;
     const scCell = scQty > 0
       ? scActuallyShipped
@@ -11432,24 +11432,26 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
         : `<td style="padding:7px 10px;text-align:center;"><div style="font-size:11px;color:#d97706;font-weight:600;">${order.sc_status==='ready_to_ship'?'Ready':'Preparing'}</div><div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
       : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
 
-    // caDisplayDate: CA shipped_at 있으면 날짜 표시 (수량 0이어도 shipped 표시)
+    // CA status 날짜 결정
     const caShippedAt = order.ca_shipped_at ? fmtDate(order.ca_shipped_at) : null;
-    const caDisplayDate = currentWh === 'CA' ? shipDateStr : caShippedAt;
+    // 현재 CA ship이면 오늘 날짜, 이미 shipped면 ca_shipped_at, 둘 다 없으면 ca_status로 판단
+    const caDisplayDate = currentWh === 'CA' ? shipDateStr
+      : caShippedAt
+      ? caShippedAt
+      : (['shipped','invoiced','completed'].includes(order.ca_status) ? caShippedDate : null);
     // CA status 결정
     let caStatusText;
     if (caQty > 0) {
-      // CA 수량 있음 — shipped 여부에 따라 표시
       if (caDisplayDate) {
+        // 날짜 있으면 체크마크 + 날짜 + 수량
         caStatusText = `<span style="color:#16a34a;font-weight:700;">&#10003;</span><div style="font-size:10px;color:#6b7280;">${caDisplayDate}</div><div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`;
+      } else if (['shipped','invoiced','completed'].includes(order.ca_status)) {
+        // 날짜 없어도 shipped면 체크마크 + 수량
+        caStatusText = `<span style="color:#16a34a;font-weight:700;">&#10003;</span><div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`;
       } else {
-        const caStatusLabel = order.ca_status === 'ready_to_ship' ? 'Ready to Ship'
-          : order.ca_status === 'shipped' ? 'Shipped'
-          : 'Preparing';
+        const caStatusLabel = order.ca_status === 'ready_to_ship' ? 'Ready to Ship' : 'Preparing';
         caStatusText = `<div style="font-size:12px;color:#ea580c;font-weight:600;">${caStatusLabel}</div><div style="font-size:11px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`;
       }
-    } else if (caDisplayDate) {
-      // CA 수량은 0이지만 ca_shipped_at 있음 (이 라인은 CA에서 안 나간 것)
-      caStatusText = `<span style="color:#d1d5db;">&mdash;</span>`;
     } else {
       caStatusText = `<span style="color:#d1d5db;">&mdash;</span>`;
     }
@@ -13070,17 +13072,27 @@ async function _doShippedCoreInner(emp) {
     }
 
     // order_line 업데이트
-    // CA ship 시 CA alloc을 alloc_ca_detail에 기록 (이메일/invoice에서 caQty 계산용)
-    let caAllocUpdate = {};
-    if (wh === 'CA' && filled > 0 && (lineWh === 'SC&CA' || lineWh === 'CA')) {
-      const ppbLine = l.pcs_per_box || 72;
-      caAllocUpdate = { alloc_ca_detail: { 'CA': { boxes: Math.floor(filled / ppbLine), partial: filled % ppbLine, pcs: filled } } };
+    // WH별 alloc_detail 저장 (invoice/이메일에서 WH별 shipped qty 계산용)
+    const ppbLine = l.pcs_per_box || 72;
+    let allocUpdate = {};
+    if (filled > 0) {
+      if (wh === 'CA' && (lineWh === 'SC&CA' || lineWh === 'CA')) {
+        // CA ship → alloc_ca_detail 저장
+        allocUpdate = { alloc_ca_detail: { 'CA': { boxes: Math.floor(filled / ppbLine), partial: filled % ppbLine, pcs: filled } } };
+      } else if (wh !== 'CA' && (lineWh === 'SC&CA' || lineWh === 'SC' || !lineWh)) {
+        // SC ship → alloc_detail이 비어있으면 저장 (Pick Ticket에서 이미 저장된 경우 덮어쓰지 않음)
+        const existingAlloc = l.alloc_detail || {};
+        const existingPcs = Object.values(existingAlloc).reduce((s,v) => s + (typeof v==='object'?v.pcs||0:v||0), 0);
+        if (existingPcs === 0) {
+          allocUpdate = { alloc_detail: { 'SC': { boxes: Math.floor(filled / ppbLine), partial: filled % ppbLine, pcs: filled } } };
+        }
+      }
     }
     await db.from('order_lines').update({
       qty_filled: filled,
       qty_backordered: backQty,
       is_backordered: backQty > 0,
-      ...caAllocUpdate
+      ...allocUpdate
     }).eq('id', l.id);
   }
 
