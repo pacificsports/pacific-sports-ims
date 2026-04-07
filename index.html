@@ -17177,7 +17177,6 @@ lines.sort((a, b) => {
       style="width:100%;height:24px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:center;padding:2px 4px;${extra}"
       oninput="parsedPoData.lines[${idx}]['${field}']=this.${type==='number'?'valueAsNumber':'value'};updatePoTotal()"/>`;
 
-  // 우리 스타일 번호 매칭 (styles 테이블에서 이미 로드된 경우 활용)
   const allStyles = window._allStylesList || [];
 
   document.getElementById('po-preview-lines').innerHTML = `
@@ -17186,7 +17185,7 @@ lines.sort((a, b) => {
         <tr style="background:var(--header);color:#fff;">
           <th style="padding:6px 8px;width:32px;">#</th>
           <th style="padding:6px 8px;text-align:left;min-width:80px;">PO Style</th>
-          <th style="padding:6px 8px;text-align:left;min-width:90px;color:#fbbf24;">Our Item #</th>
+          <th style="padding:6px 8px;text-align:left;min-width:140px;color:#fbbf24;">Our Item # ▾</th>
           <th style="padding:6px 8px;text-align:left;min-width:120px;">Color</th>
           <th style="padding:6px 8px;min-width:70px;">Size</th>
           <th style="padding:6px 8px;min-width:70px;">Qty</th>
@@ -17196,27 +17195,23 @@ lines.sort((a, b) => {
       </thead>
       <tbody id="po-lines-tbody">
         ${lines.map((l,i) => {
-          // 우리 스타일 자동 매칭 — style_number 또는 description으로 찾기
-          if (!l.our_style_number && allStyles.length > 0) {
-            const poSty = String(l.style_number||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-            const matched = allStyles.find(s => {
-              const sn = String(s.style_number||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-              const desc = String(s.description||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-              return sn === poSty || desc.includes(poSty) || poSty.includes(sn);
-            });
-            if (matched) { l.our_style_number = matched.style_number; l.our_style_id = matched.id; }
-          }
-          const ourStyleColor = l.our_style_number ? '#16a34a' : '#9ca3af';
-          const ourStyleInp = `<input class="fi" value="${String(l.our_style_number||'').replace(/"/g,'&quot;')}"
-            placeholder="검색..."
-            style="width:100%;height:24px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:center;padding:2px 4px;color:${ourStyleColor};font-weight:${l.our_style_number?'700':'400'};"
-            oninput="updateOurStyle(${i}, this.value)"
-            list="our-style-datalist"/>`;
+          const selVal = l.our_style_id || '';
+          const selLabel = l.our_style_id
+            ? (allStyles.find(s => s.id === l.our_style_id)
+                ? allStyles.find(s => s.id === l.our_style_id).style_number + ' — ' + (allStyles.find(s => s.id === l.our_style_id).description||'')
+                : (l.our_style_number||''))
+            : '';
+          const selectHtml = `<select
+            style="width:100%;height:26px;font-size:11px;border:1px solid var(--border);border-radius:3px;padding:0 4px;color:${selVal?'#16a34a':'#9ca3af'};font-weight:${selVal?'700':'400'};"
+            onchange="updateOurStyleById(${i}, this.value)">
+            <option value="">— 선택 —</option>
+            ${allStyles.map(s => `<option value="${s.id}" ${s.id===selVal?'selected':''}>${s.style_number}${s.description?' — '+s.description:''}</option>`).join('')}
+          </select>`;
           return `
           <tr style="background:${i%2===0?'#fff':'#f9f9f9'}">
             <td style="padding:4px 8px;color:var(--text3);text-align:center;font-size:11px;">${i+1}</td>
             <td style="padding:4px 6px;">${inp(l.style_number,'style_number',i,'text','font-weight:700;')}</td>
-            <td style="padding:4px 6px;">${ourStyleInp}</td>
+            <td style="padding:4px 6px;">${selectHtml}</td>
             <td style="padding:4px 6px;">${inp(l.color,'color',i,'text','text-align:left;')}</td>
             <td style="padding:4px 6px;">${inp(l.size,'size',i)}</td>
             <td style="padding:4px 6px;">${inp(l.qty,'qty',i,'number','font-weight:700;')}</td>
@@ -17251,10 +17246,21 @@ function updatePoTotal() {
 function updateOurStyle(idx, val) {
   if (!parsedPoData?.lines[idx]) return;
   parsedPoData.lines[idx].our_style_number = val;
-  // DB에서 style_id 찾기
   const allStyles = window._allStylesList || [];
   const matched = allStyles.find(s => s.style_number === val);
   parsedPoData.lines[idx].our_style_id = matched?.id || null;
+}
+
+function updateOurStyleById(idx, styleId) {
+  if (!parsedPoData?.lines[idx]) return;
+  parsedPoData.lines[idx].our_style_id = styleId || null;
+  const allStyles = window._allStylesList || [];
+  const matched = allStyles.find(s => s.id === styleId);
+  parsedPoData.lines[idx].our_style_number = matched?.style_number || '';
+  // 선택한 스타일의 색상을 업데이트 (선택된 경우 드롭다운 색상 변경)
+  const sel = document.querySelector(`#po-lines-tbody tr:nth-child(${idx+1}) select`);
+  if (sel) sel.style.color = styleId ? '#16a34a' : '#9ca3af';
+  if (sel) sel.style.fontWeight = styleId ? '700' : '400';
 }
 
 // styles 목록 로드 (PO 파싱 자동매칭용)
