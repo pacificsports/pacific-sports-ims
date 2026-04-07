@@ -11340,14 +11340,21 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
       </td></tr>
     </table>` : '';
 
-  // Back Order 섹션
-  const scBackLines = isSplit ? lineItems.filter(l => (l.back_qty||0) > 0 && (l.wh==='SC'||l.wh==='SC&CA'||!l.wh)) : lineItems.filter(l => (l.back_qty||0) > 0);
-  const caBackLines = isSplit ? lineItems.filter(l => (l.back_qty||0) > 0 && (l.wh==='CA'||l.wh==='SC&CA')) : [];
+  // Back Order 섹션 — SC/CA 구분 없이 합산 (미출고 수량만 표시)
+  const SIZE_ORDER_BO = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+  const sizeOrdBO = s => { const i = SIZE_ORDER_BO.indexOf((s||'').toUpperCase()); return i>=0?i:99; };
+  const allBackLines = lineItems
+    .filter(l => (l.back_qty||0) > 0)
+    .sort((a,b) => {
+      const c = (a.color||'').localeCompare(b.color||'');
+      return c !== 0 ? c : sizeOrdBO(a.size) - sizeOrdBO(b.size);
+    });
+  const totalBackQtyAll = allBackLines.reduce((s,l) => s+(l.back_qty||0), 0);
 
-  const renderBackTable = (lines, label) => lines.length ? `
-    <table style="width:100%;border-collapse:collapse;margin-bottom:8px;border:1px solid #fecaca;border-radius:8px;">
+  const backOrderHtml = hasBackOrder ? `<div style="margin-bottom:16px;">
+    <table style="width:100%;border-collapse:collapse;border:1px solid #fecaca;border-radius:8px;">
       <tr><td style="background:#fee2e2;padding:8px 14px;border-radius:6px 6px 0 0;">
-        <span style="font-size:13px;font-weight:700;color:#991b1b;">&#9888;&#65039; ${label}Back Order — ${lines.reduce((s,l)=>s+(l.back_qty||0),0)} pcs pending</span>
+        <span style="font-size:13px;font-weight:700;color:#991b1b;">&#9888;&#65039; Back Order — ${totalBackQtyAll} pcs pending</span>
       </td></tr>
       <tr><td style="padding:0;">
         <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -11357,7 +11364,7 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
             <th style="padding:6px 10px;text-align:center;color:#991b1b;">Size</th>
             <th style="padding:6px 10px;text-align:center;color:#991b1b;">Back Qty</th>
           </tr></thead>
-          <tbody>${lines.map(l=>`
+          <tbody>${allBackLines.map(l=>`
             <tr style="border-top:1px solid #fef2f2;">
               <td style="padding:5px 10px;font-weight:600;">${l.style}</td>
               <td style="padding:5px 10px;">${l.color}</td>
@@ -11370,13 +11377,8 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
       <tr><td style="padding:8px 14px;background:#fff5f5;font-size:11px;color:#991b1b;border-top:1px solid #fecaca;border-radius:0 0 6px 6px;">
         We will ship your remaining items as soon as inventory is available.
       </td></tr>
-    </table>` : '';
-
-  const backOrderHtml = hasBackOrder ? `<div style="margin-bottom:16px;">${
-    isSplit
-      ? renderBackTable(scBackLines,'SC ') + renderBackTable(caBackLines,'CA ')
-      : renderBackTable(scBackLines,'')
-  }</div>` : '';
+    </table>
+  </div>` : '';
 
   // Note 블록
   const noteHtml = note ? `
@@ -11390,9 +11392,9 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
   const colHeader = isSplit
     ? `<th style="padding:8px 10px;text-align:center;color:#1e40af;font-weight:700;">SC Shipped</th>
        <th style="padding:8px 10px;text-align:center;color:#ea580c;font-weight:700;">CA Status</th>
-       <th style="padding:8px 10px;text-align:center;color:#dc2626;font-weight:600;">Back</th>`
+       <th style="padding:8px 10px;text-align:center;color:#dc2626;font-weight:600;">Back Order</th>`
     : `<th style="padding:8px 10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};font-weight:700;">Shipped</th>
-       <th style="padding:8px 10px;text-align:center;color:#dc2626;font-weight:600;">Back</th>`;
+       <th style="padding:8px 10px;text-align:center;color:#dc2626;font-weight:600;">Back Order</th>`;
 
   const renderRow = l => {
     const scQty = l.sc_qty||0;
@@ -14357,7 +14359,11 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const termsDays = parseInt((order.terms||'N30').replace(/[^0-9]/g,'')) || 30;
   const dueDateObj = new Date(); dueDateObj.setDate(dueDateObj.getDate() + termsDays);
   const dueDate = dueDateObj.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
-  const shipDate = order.ship_date ? fmtDate(order.ship_date) : invoiceDate;
+  // 실제 출고일 — WH별 sc_shipped_at/ca_shipped_at 우선, fallback은 ship_date
+  const actualShipDate = invWh === 'CA'
+    ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
+    : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date);
+  const shipDate = actualShipDate ? fmtDate(actualShipDate) : invoiceDate;
   const freight = freightAmt || 0;
   const carrier = (shipInfo && shipInfo.carrier) || order.carrier || '';
   const tracking = (shipInfo && shipInfo.tracking) || order.tracking_number || '';
@@ -14496,7 +14502,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     </table>` : '';
 
   return `
-  <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;">
+  <div style="font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#111;">
     <!-- Header -->
     <table style="width:100%;border-collapse:collapse;border-radius:8px 8px 0 0;overflow:hidden;">
       <tr style="background:#0f2744;">
@@ -14609,7 +14615,15 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
   const orderDate = order.created_at
     ? new Date(order.created_at).toLocaleDateString('en-US', { year:'numeric', month:'numeric', day:'numeric' })
     : invoiceDate;
-  const shipDate = order.ship_date ? new Date(order.ship_date + 'T00:00:00').toLocaleDateString('en-US', { year:'numeric', month:'numeric', day:'numeric' }) : invoiceDate;
+  // 실제 출고일 — sc_shipped_at/ca_shipped_at 우선, fallback ship_date
+  const _invWhForDate = (invoiceNum && invoiceNum.startsWith('CA')) ? 'CA'
+    : (order.wh_code === 'CA' || order.warehouses?.code === 'CA') ? 'CA' : 'SC';
+  const _actualShipRaw = _invWhForDate === 'CA'
+    ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
+    : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date);
+  const shipDate = _actualShipRaw
+    ? new Date((_actualShipRaw.slice?.(0,10)||_actualShipRaw)+'T00:00:00').toLocaleDateString('en-US', { year:'numeric', month:'numeric', day:'numeric' })
+    : invoiceDate;
   const paymentInfo = (companySettings && companySettings.payment_info) || 'Hana Commercial Finance\nDept. LA 24406\nPasadena, CA 91185-4406';
   const returnPolicy = (companySettings && companySettings.return_policy) || 'Returns are accepted within 30 days from date of shipment. All returns must be accompanied by a Return Authorization (RA) number. Returns are subject to a 15% restocking fee.';
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf((s||'').toUpperCase()) + 1) || 99;
