@@ -13508,9 +13508,13 @@ async function sendInvoiceEmail() {
     const rawInvNum = order.invoice_number || '';
     const displayInvNum = rawInvNum ? (invWhPrefix + rawInvNum) : '—';
     // _invoiceShipInfo (모달에서 직접 수정한 값) 우선, 없으면 DB 값
+    // shipDate 포함 — 실제 출고일을 invoice 이메일에 전달
+    const invActualShipDate = (_invoiceWh === 'CA' || order.wh_code === 'CA')
+      ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
+      : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date);
     const invShipInfo2 = window._invoiceShipInfo && (window._invoiceShipInfo.carrier || window._invoiceShipInfo.tracking)
-      ? window._invoiceShipInfo
-      : { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'' };
+      ? { ...window._invoiceShipInfo, shipDate: invActualShipDate || window._invoiceShipInfo.shipDate }
+      : { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'', shipDate: invActualShipDate };
 
     if (toEmail) {
       const emailSubject = `Invoice #${displayInvNum} : ${order.customer_name || ''} (PO#${order.customer_po || '—'})`;
@@ -14443,10 +14447,11 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const whLabel = invWh === 'CA' ? 'Eastvale, CA' : 'Sumter, SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
-  // 실제 출고일
-  const actualShipRaw = invWh === 'CA'
-    ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
-    : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date);
+  // 실제 출고일 — shipInfo.shipDate(invoice 발송 시 전달) 최우선, DB 날짜 fallback
+  const actualShipRaw = (shipInfo && (shipInfo.shipDate || shipInfo.ship_date))
+    || (invWh === 'CA'
+      ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
+      : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date));
   const shipDate = actualShipRaw ? fmtDate(actualShipRaw) : invoiceDate;
 
   const freight = freightAmt || 0;
@@ -14479,11 +14484,19 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     if (scDone && caDone) {
       statusBanner = `<tr><td style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:10px 14px;font-size:13px;font-weight:700;color:#166534;margin-bottom:16px;">&#10003; PO Fully Shipped &amp; Invoiced</td></tr>`;
     } else if (invWh === 'CA' && !scDone) {
+      // CA invoice 발송 — SC 아직 pending
       const scLabel = getOtherWhStatus(order.sc_status);
       statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; CA Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#92400e;">SC Warehouse: <strong>${scLabel}</strong></span></td></tr>`;
     } else if (invWh === 'SC' && !caDone) {
+      // SC invoice 발송 — CA 아직 pending
       const caLabel = getOtherWhStatus(order.ca_status);
       statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; SC Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#92400e;">CA Warehouse: <strong>${caLabel}</strong></span></td></tr>`;
+    } else if (invWh === 'SC' && caDone) {
+      // SC invoice 발송 — CA는 이미 shipped
+      statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; SC Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#15803d;">CA Warehouse: <strong>Shipped &#10003;</strong></span></td></tr>`;
+    } else if (invWh === 'CA' && scDone) {
+      // CA invoice 발송 — SC는 이미 shipped
+      statusBanner = `<tr><td style="background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;margin-bottom:4px;"><span style="font-size:13px;font-weight:700;color:#854d0e;">&#9203; Partially Invoiced &#8212; CA Warehouse</span>&nbsp;&nbsp;<span style="font-size:12px;color:#15803d;">SC Warehouse: <strong>Shipped &#10003;</strong></span></td></tr>`;
     }
   }
 
