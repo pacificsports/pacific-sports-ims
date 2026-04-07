@@ -7515,8 +7515,11 @@ async function openPartialShip(orderId) {
       <tbody>
         ${(lines||[]).map(l => {
           const ordered = l.qty_pieces || 0;
-          const backQty = l.qty_backordered || 0;
-          const canShip = ordered - backQty;
+          const alreadyFilled = l.qty_filled || 0;
+          const backQty = l.qty_backordered || Math.max(0, ordered - alreadyFilled);
+          const canShip = Math.max(0, ordered - alreadyFilled - (backQty > 0 ? 0 : 0));
+          // 실제 남은 출고 가능 수량 = 주문 - 이미 출고됨 - 백오더
+          const shipableNow = Math.max(0, ordered - alreadyFilled);
           const rowBg = backQty > 0 ? 'background:#fff8f8;' : '';
           return `<tr style="border-bottom:1px solid #f3f4f6;${rowBg}">
             <td style="padding:7px 8px;font-weight:600;">${l.styles?.style_number || '—'}</td>
@@ -7525,8 +7528,8 @@ async function openPartialShip(orderId) {
             <td style="text-align:center;padding:7px 8px;">${ordered.toLocaleString()}</td>
             <td style="text-align:center;padding:7px 8px;color:#dc2626;font-weight:700;">${backQty > 0 ? backQty.toLocaleString() : '—'}</td>
             <td style="text-align:center;padding:7px 8px;">
-              <input type="number" class="fi partial-ship-qty" data-line-id="${l.id}" data-ordered="${ordered}" data-backqty="${backQty}"
-                min="0" max="${ordered}" value="${canShip}"
+              <input type="number" class="fi partial-ship-qty" data-line-id="${l.id}" data-ordered="${ordered}" data-filled="${alreadyFilled}" data-backqty="${backQty}"
+                min="0" max="${shipableNow}" value="${shipableNow}"
                 style="width:70px;text-align:center;font-family:monospace;font-weight:700;color:#16a34a;"
                 oninput="updateRemainingBO(this)"/>
             </td>
@@ -7571,20 +7574,24 @@ async function submitPartialShip() {
   qtyInputs.forEach(inp => {
     const lineId = inp.dataset.lineId;
     const ordered = parseInt(inp.dataset.ordered) || 0;
+    const alreadyFilled = parseInt(inp.dataset.filled) || 0;
     const shipNow = parseInt(inp.value) || 0;
-    const remaining = ordered - shipNow;
+    const remaining = ordered - alreadyFilled - shipNow;  // 전체 주문 - 이미출고 - 이번출고
     totalShip += shipNow;
-    totalBO += remaining;
-    updates.push({ lineId, shipNow, remaining });
+    totalBO += Math.max(0, remaining);
+    updates.push({ lineId, shipNow, remaining: Math.max(0, remaining) });
   });
 
   if (totalShip === 0) { alert('출고 수량을 1개 이상 입력해주세요.'); return; }
   if (!confirm(`총 ${totalShip.toLocaleString()} pcs 출고, ${totalBO.toLocaleString()} pcs Back Order 처리하시겠습니까?`)) return;
 
-  // 각 라인 업데이트 — qty_pieces(주문수량)는 건드리지 않음, qty_filled/backordered만 업데이트
+  // 각 라인 업데이트 — qty_filled(출고량) + qty_backordered(미출고) 업데이트, qty_pieces는 유지
   for (const u of updates) {
+    // 기존 qty_filled에 누적 (이미 이전에 일부 출고된 경우)
+    const { data: curLine } = await db.from('order_lines').select('qty_filled').eq('id', u.lineId).single();
+    const prevFilled = curLine?.qty_filled || 0;
     await db.from('order_lines').update({
-      qty_filled: u.shipNow,
+      qty_filled: prevFilled + u.shipNow,
       qty_backordered: u.remaining,
       is_backordered: u.remaining > 0
     }).eq('id', u.lineId);
@@ -13568,7 +13575,10 @@ async function sendInvoiceEmail() {
         const _plShipDate = (wh === 'CA')
           ? (order.ca_shipped_at || order.sc_shipped_at)
           : (order.sc_shipped_at || order.ca_shipped_at);
-        const plShipInfo = { carrier: order.carrier||'', tracking: order.tracking_number||'', shipDate: _plShipDate || '' };
+        // WH별 carrier/tracking 사용
+        const _plCarrier = (wh==='CA' ? order.ca_carrier : order.sc_carrier) || order.carrier || '';
+        const _plTracking = (wh==='CA' ? order.ca_tracking_number : order.sc_tracking_number) || order.tracking_number || '';
+        const plShipInfo = { carrier: _plCarrier, tracking: _plTracking, shipDate: _plShipDate || order.ship_date || '' };
         const plHtml = buildPackingListHtml(order, plLines||[], order.wh_code === 'SC&CA', wh, plShipInfo, '');
         if (plHtml) plPdfBase64 = await htmlToPdfBase64(plHtml);
       } catch(e) { console.warn('PL PDF error:', e); }
