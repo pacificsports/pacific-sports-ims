@@ -10642,14 +10642,40 @@ async function confirmBoxAndSave() {
 
 // Customer POs 테이블에서 Signed BOL 열기 (orderId, wh 직접 전달)
 async function openSignedBolModal(orderId, wh) {
-  // orderId가 없으면 기존 ship 모달 방식 (호환성 유지)
+  // orderId 없으면 Mark as Shipped 모달 방식 (서명 모달 그대로)
   if (!orderId) {
     return _openSignedBolModalLegacy();
   }
-  // _shippedOrderId 세팅해서 기존 함수 재활용
-  _shippedOrderId = orderId;
-  _shippedWh = wh || 'SC';
-  return _openSignedBolModalLegacy();
+
+  // Customer POs 테이블에서 호출 — 저장된 BOL 확인 먼저
+  const { data: order } = await db.from('orders')
+    .select('bol_file, bol_file_ca, customer_po, customer_name')
+    .eq('id', orderId).single();
+
+  const bolWh = wh || 'SC';
+  const savedBol = bolWh === 'CA' ? order?.bol_file_ca : order?.bol_file;
+
+  if (savedBol) {
+    // 저장된 BOL 있으면 바로 새 탭으로 열기
+    try {
+      const binary = atob(savedBol);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      window.open(URL.createObjectURL(blob), '_blank');
+    } catch(e) {
+      showToast('❌ BOL 파일 열기 오류: ' + e.message);
+    }
+    return;
+  }
+
+  // 저장된 BOL 없으면 — 작은 안내 팝업
+  const confirmed = confirm(bolWh + ' Warehouse Signed BOL not found.\n\nWould you like to open the BOL signing modal?');
+  if (confirmed) {
+    _shippedOrderId = orderId;
+    _shippedWh = bolWh;
+    return _openSignedBolModalLegacy();
+  }
 }
 
 async function _openSignedBolModalLegacy() {
