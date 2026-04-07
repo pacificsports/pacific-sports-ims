@@ -14152,9 +14152,19 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       const isCA = sectionWh === 'CA';
       const activeAlloc = isCA ? allocCA : alloc;
       // WH bin pcs: v.pcs 직접 사용 (v.boxes*ppb는 partial 누락 버그 있음)
-      const pcrPcs = Object.entries(activeAlloc)
+      let pcrPcs = Object.entries(activeAlloc)
         .filter(([k])=>k.includes('PCR|PCR'))
         .reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0), 0);
+      // pcr_prepared_lines가 있으면 실제 준비된 수량으로 오버라이드
+      const _prepKey = isCA ? 'ca_pcr_prepared_lines' : 'sc_pcr_prepared_lines';
+      const _prepJson = order[_prepKey];
+      if (_prepJson && pcrPcs > 0) {
+        try {
+          const _prepLines = typeof _prepJson === 'string' ? JSON.parse(_prepJson) : _prepJson;
+          const _match = _prepLines.find(pl => pl.color === l.color && pl.size === l.size);
+          if (_match && _match.preparedQty !== undefined) pcrPcs = _match.preparedQty;
+        } catch(e) {}
+      }
       const fullBinEntries = Object.entries(activeAlloc)
         .filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|'));
       const fullBoxes = fullBinEntries.reduce((s,[,v])=>s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
@@ -14177,7 +14187,17 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       const ppb = l.pcs_per_box || 60;
       const isCA = sectionWh === 'CA';
       const activeAlloc = isCA ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
-      const pPcs = Object.entries(activeAlloc).filter(([k])=>k.includes('PCR|PCR')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.pcs||0:v||0),0);
+      let pPcs = Object.entries(activeAlloc).filter(([k])=>k.includes('PCR|PCR')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.pcs||0:v||0),0);
+      // pcr_prepared_lines 오버라이드
+      const _pk2 = isCA ? 'ca_pcr_prepared_lines' : 'sc_pcr_prepared_lines';
+      const _pj2 = order[_pk2];
+      if (_pj2 && pPcs > 0) {
+        try {
+          const _pl2 = typeof _pj2 === 'string' ? JSON.parse(_pj2) : _pj2;
+          const _m2 = _pl2.find(pl => pl.color === l.color && pl.size === l.size);
+          if (_m2 && _m2.preparedQty !== undefined) pPcs = _m2.preparedQty;
+        } catch(e) {}
+      }
       const fPcs = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'?(v.pcs||v.boxes*ppb||0):(v||0)),0);
       return s + fPcs + pPcs;
     }, 0);
