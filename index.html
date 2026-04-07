@@ -6590,11 +6590,9 @@ async function openRaModal(orderId) {
   const sizeOrd = s => { const i = SIZE_ORDER.indexOf((s||'').toUpperCase()); return i >= 0 ? i : 99; };
 
   // SC+CA 합산 shipped qty 계산
-  const allocPcs = (alloc) => {
-    const _e = Object.entries(alloc||{}).filter(([k]) => !k.includes('TRANSFER|'));
-    const _hp = _e.some(([k]) => k.includes('PCR|PCR'));
-    return _e.filter(([k]) => !_hp || k.includes('PCR') || k.includes('|')).reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
-  };
+  const allocPcs = (alloc) => Object.entries(alloc||{})
+    .filter(([k]) => !k.includes('TRANSFER|'))
+    .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
 
   // 라인 목록 — SC+CA 합산 shipped qty > 0인 라인, 사이즈 정렬
   const shippedLines = (lines||[])
@@ -11684,29 +11682,29 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     const allocCA = l.alloc_ca_detail || {};
 
     // alloc_detail value는 {pcs: N} 또는 숫자 N (boxes 필드 없음)
-    const allocPcs = (alloc, excludeKeys=[]) => {
-      const entries = Object.entries(alloc).filter(([k]) => !excludeKeys.some(ex => k.includes(ex)));
-      // PCR alloc이 있으면 단순 'CA'/'SC' 키는 중복이므로 제외 (두 번 저장된 케이스 방지)
-      const hasPcr = entries.some(([k]) => k.includes('PCR|PCR'));
-      return entries
-        .filter(([k]) => !hasPcr || k.includes('PCR') || k.includes('|'))
+    const allocPcs = (alloc, excludeKeys=[]) =>
+      Object.entries(alloc)
+        .filter(([k]) => !excludeKeys.some(ex => k.includes(ex)))
         .reduce((s,[,v]) => s + ((typeof v==='object' ? v.pcs||0 : v)||0), 0);
-    };
 
-    // 실제 출고 수량 — alloc_detail의 PCR + prepared_lines 오버라이드
+    // 실제 출고 수량 — alloc_detail 기준, PCR 키 있을 때만 prepared_lines 오버라이드
     const getActualQty = (allocObj, prepJsonKey) => {
       let qty = allocPcs(allocObj, ['TRANSFER']);
-      // pcr_prepared_lines 오버라이드 (직원이 수량 줄인 경우)
-      const _prepJson = order[prepJsonKey];
-      if (_prepJson && qty > 0) {
-        try {
-          const _prep = typeof _prepJson==='string' ? JSON.parse(_prepJson) : _prepJson;
-          const _match = _prep.find(pl => pl.color===l.color && pl.size===l.size);
-          if (_match && _match.preparedQty !== undefined) {
-            const _pcrOrig = Object.entries(allocObj).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+((typeof v==='object'?v.pcs:v)||0),0);
-            qty = (qty - _pcrOrig) + _match.preparedQty;
-          }
-        } catch(e) {}
+      // pcr_prepared_lines 오버라이드는 alloc에 PCR 키가 있을 때만 적용
+      // (alloc에 이미 ship 수량이 직접 저장된 경우 오버라이드 불필요)
+      const hasPcrKey = Object.keys(allocObj).some(k => k.includes('PCR|PCR'));
+      if (hasPcrKey) {
+        const _prepJson = order[prepJsonKey];
+        if (_prepJson && qty > 0) {
+          try {
+            const _prep = typeof _prepJson==='string' ? JSON.parse(_prepJson) : _prepJson;
+            const _match = _prep.find(pl => pl.color===l.color && pl.size===l.size);
+            if (_match && _match.preparedQty !== undefined) {
+              const _pcrOrig = Object.entries(allocObj).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+((typeof v==='object'?v.pcs:v)||0),0);
+              qty = (qty - _pcrOrig) + _match.preparedQty;
+            }
+          } catch(e) {}
+        }
       }
       return qty;
     };
@@ -14206,7 +14204,9 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       // pcr_prepared_lines가 있으면 실제 준비된 수량으로 오버라이드
       const _prepKey = isCA ? 'ca_pcr_prepared_lines' : 'sc_pcr_prepared_lines';
       const _prepJson = order[_prepKey];
-      if (_prepJson && pcrPcs > 0) {
+      // PCR alloc 키가 있을 때만 오버라이드 (CA 직접 저장된 경우 건드리지 않음)
+      const _hasPcrAlloc = Object.keys(activeAlloc).some(k => k.includes('PCR|PCR'));
+      if (_hasPcrAlloc && _prepJson) {
         try {
           const _prepLines = typeof _prepJson === 'string' ? JSON.parse(_prepJson) : _prepJson;
           const _match = _prepLines.find(pl => pl.color === l.color && pl.size === l.size);
@@ -14738,17 +14738,20 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const getPreparedQty = (l, wh) => {
     const baseAlloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
     let base = allocPcs(baseAlloc);
-    // pcr_prepared_lines 오버라이드 (직원이 수량 줄인 경우)
-    const _pJson = order[wh==='CA'?'ca_pcr_prepared_lines':'sc_pcr_prepared_lines'];
-    if (_pJson && base > 0) {
-      try {
-        const _pl = typeof _pJson==='string' ? JSON.parse(_pJson) : _pJson;
-        const _m = _pl.find(pl => pl.color===l.color && pl.size===l.size);
-        if (_m && _m.preparedQty !== undefined) {
-          const _po = Object.entries(baseAlloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+((typeof v==='object'?v.pcs:v)||0),0);
-          base = base - _po + _m.preparedQty;
-        }
-      } catch(e) {}
+    // pcr_prepared_lines 오버라이드 — PCR 키 있을 때만 적용
+    const _hasPcr2 = Object.keys(baseAlloc).some(k => k.includes('PCR|PCR'));
+    if (_hasPcr2) {
+      const _pJson = order[wh==='CA'?'ca_pcr_prepared_lines':'sc_pcr_prepared_lines'];
+      if (_pJson && base > 0) {
+        try {
+          const _pl = typeof _pJson==='string' ? JSON.parse(_pJson) : _pJson;
+          const _m = _pl.find(pl => pl.color===l.color && pl.size===l.size);
+          if (_m && _m.preparedQty !== undefined) {
+            const _po = Object.entries(baseAlloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+((typeof v==='object'?v.pcs:v)||0),0);
+            base = base - _po + _m.preparedQty;
+          }
+        } catch(e) {}
+      }
     }
     return base;
   };
@@ -14997,17 +15000,20 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
         .filter(([k]) => !k.includes('TRANSFER|'))
         .reduce((s,[,v]) => { if (typeof v==='object') { if (v.pcs>0) return s+v.pcs; if (v.boxes>0) return s+(v.boxes*ppb); return s; } return s+(v||0); }, 0);
 
-      // pcr_prepared_lines 오버라이드 (직원이 수량 줄인 경우)
-      const _prepJson = order[sectionWh==='CA'?'ca_pcr_prepared_lines':'sc_pcr_prepared_lines'];
-      if (_prepJson && allocTotal > 0) {
-        try {
-          const _pl = typeof _prepJson==='string'?JSON.parse(_prepJson):_prepJson;
-          const _m = _pl.find(pl=>pl.color===l.color&&pl.size===l.size);
-          if (_m && _m.preparedQty!==undefined) {
-            const _po = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+((typeof v==='object'?v.pcs:v)||0),0);
-            allocTotal = allocTotal - _po + _m.preparedQty;
-          }
-        } catch(e) {}
+      // pcr_prepared_lines 오버라이드 — PCR 키 있을 때만 적용
+      const _hasPcrKey = Object.keys(alloc).some(k => k.includes('PCR|PCR'));
+      if (_hasPcrKey) {
+        const _prepJson = order[sectionWh==='CA'?'ca_pcr_prepared_lines':'sc_pcr_prepared_lines'];
+        if (_prepJson && allocTotal > 0) {
+          try {
+            const _pl = typeof _prepJson==='string'?JSON.parse(_prepJson):_prepJson;
+            const _m = _pl.find(pl=>pl.color===l.color&&pl.size===l.size);
+            if (_m && _m.preparedQty!==undefined) {
+              const _po = Object.entries(alloc).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+((typeof v==='object'?v.pcs:v)||0),0);
+              allocTotal = allocTotal - _po + _m.preparedQty;
+            }
+          } catch(e) {}
+        }
       }
       if (l.wh === 'SC&CA') return allocTotal;
       return allocTotal || l.qty_filled || 0;
