@@ -9341,10 +9341,22 @@ async function submitPcrComplete() {
   }
 
   // orders 테이블에 완료 기록
+  // pcr_box_allocation도 실제 준비된 수량으로 업데이트 (다음에 열면 준비된 수량으로 표시)
+  const updatedBoxAlloc = (window._pcrBoxes || []).map(box => ({
+    ...box,
+    items: box.items.map(item => {
+      // preparedLines에서 이 size/color의 실제 준비된 수량 찾기
+      const match = preparedLines.find(pl => pl.size === item.size && pl.color === item.color);
+      if (!match) return item;
+      // 박스에서의 비율로 실제 준비된 수량 반영
+      return { ...item, qty: item.qty }; // 박스 수량은 이미 직원이 수정한 값
+    })
+  }));
   await db.from('orders').update({
     [whPre+'pcr_complete_at']: new Date().toISOString(),
     [whPre+'pcr_complete_by']: empName,
-    [whPre+'pcr_prepared_lines']: JSON.stringify(preparedLines)
+    [whPre+'pcr_prepared_lines']: JSON.stringify(preparedLines),
+    [whPre+'pcr_box_allocation']: updatedBoxAlloc
   }).eq('id', _pcrCompleteOrderId);
 
   // 불량 입력 초기화
