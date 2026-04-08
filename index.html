@@ -14137,8 +14137,14 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
           if (match && match.preparedQty !== undefined) pcrPcs = match.preparedQty;
         } catch(e) {}
       }
-      const fullBoxes = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(typeof v==='object'?(v.boxes||0):Math.floor((v||0)/ppb)),0);
-      if (fullBoxes > 0) groups[key].sizes.push({ size: l.size||'', qty: fullBoxes * ppb, isFullBox: true, ppb });
+      // boxes=0이어도 pcs가 있으면 실제 박스에서 꺼내므로 1박스로 처리
+      const fullBoxEntries = Object.entries(activeAlloc).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|'));
+      const fullBoxes = fullBoxEntries.reduce((s,[,v])=>s+(typeof v==='object'
+        ? (v.boxes||0) > 0 ? v.boxes : (v.pcs||0) > 0 ? 1 : 0
+        : Math.floor((v||0)/ppb)),0);
+      // fullBoxes의 실제 pcs: boxes>0이면 boxes*ppb, 아니면 실제 pcs
+      const fullBoxActualPcs = fullBoxEntries.reduce((s,[,v])=>s+(typeof v==='object'?(v.pcs||v.boxes*ppb||0):(v||0)),0);
+      if (fullBoxes > 0) groups[key].sizes.push({ size: l.size||'', qty: fullBoxActualPcs, isFullBox: true, ppb });
       if (pcrPcs > 0) groups[key].sizes.push({ size: l.size||'', qty: pcrPcs, isPartial: true });
     });
 
@@ -14238,7 +14244,10 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       }
       const fullBinEntries = Object.entries(activeAlloc)
         .filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|'));
-      const fullBoxes = fullBinEntries.reduce((s,[,v])=>s+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
+      // v.boxes가 0이어도 pcs가 있으면 실제 박스에서 꺼내는 것 → 1박스로 카운트
+      const fullBoxes = fullBinEntries.reduce((s,[,v])=>s+(typeof v==='object'
+        ? (v.boxes||0) > 0 ? v.boxes : (v.pcs||0) > 0 ? 1 : 0
+        : Math.floor((v||0)/ppb)),0);
       // v.pcs가 있으면 직접 사용, 없으면 boxes*ppb fallback
       const fullPcs = fullBinEntries.reduce((s,[,v])=>s+(typeof v==='object'?(v.pcs||v.boxes*ppb||0):(v||0)),0);
       const whTotalPcs = fullPcs + pcrPcs;
