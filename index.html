@@ -13833,11 +13833,22 @@ async function startBackOrder(orderId, wh) {
 // ═══════════════════════════════════════════════════════
 // Pick Ticket HTML 빌더
 // ═══════════════════════════════════════════════════════
+// ── 전역 colorLabel 헬퍼 — Side Seam 표시
+function colorLabel(l, withHtml) {
+  if (!l) return '';
+  const c = l.color || '';
+  const isSS = l.is_side_seam || l.isSideSeam;
+  if (!isSS) return c;
+  return withHtml
+    ? c + ' <span style="font-size:9px;color:#7c3aed;font-weight:700;">(Side Seam)</span>'
+    : c + ' (Side Seam)';
+}
+
 function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ticketType) {
   const fromAddr = whOverride === 'CA'
     ? '5601 Milliken Ave Suite A<br>Eastvale CA 91752'
     : '1605 South Guignard Parkway<br>Sumter SC 29150';
-  const colorLabel = (l) => l.is_side_seam ? (l.color||'') + ' <span style="font-size:9px;color:#7c3aed;font-weight:700;">(Side Seam)</span>' : (l.color||'');
+  // colorLabel은 전역 함수 사용
   const dateStr = new Date().toLocaleDateString();
   const sizeOrd = s => (['2T','3T','4T','5T','XS','YS','YM','YL','XS','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'].indexOf(s)+1)||99;
 
@@ -13848,14 +13859,14 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
     // 전체 아이템 flat 리스트: 색상별 총량 내림차순 → 사이즈 오름차순
     const colorTotals = {};
     pcrLines.forEach(l => {
-      const ck = `${l.styles?.style_number||''}|||${colorLabel(l)}`;
+      const ck = `${l.styles?.style_number||''}|||${colorLabel(l, true)}`;
       colorTotals[ck] = (colorTotals[ck]||0) + (l._pcrQty||0);
     });
 
     const allItems = [];
     const grouped = {};
     pcrLines.forEach(l => {
-      const key = `${l.styles?.style_number||''}|||${colorLabel(l)}`;
+      const key = `${l.styles?.style_number||''}|||${colorLabel(l, true)}`;
       if (!grouped[key]) grouped[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', items: [] };
       if ((l._pcrQty||0) > 0) grouped[key].items.push({ size: l.size||'', qty: l._pcrQty, styleNum: l.styles?.style_number||'', color: l.color||'' });
     });
@@ -13970,7 +13981,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
                 rows.push(`<tr style="border-bottom:1px solid #fee2e2;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${fromBin}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
-                <td style="padding:6px 8px;font-size:11px;">${colorLabel(l)}</td>
+                <td style="padding:6px 8px;font-size:11px;">${colorLabel(l, true)}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : '—'}</td>
               </tr>`);
@@ -14014,7 +14025,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
                 return [`<tr style="border-bottom:1px solid #dcfce7;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${bin}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
-                <td style="padding:6px 8px;font-size:11px;">${colorLabel(l)}</td>
+                <td style="padding:6px 8px;font-size:11px;">${colorLabel(l, true)}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${qtyDisplay}</td>
               </tr>`];
@@ -14106,7 +14117,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
 // ═══════════════════════════════════════════════════════
 function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, note) {
   const dateStr = new Date().toLocaleDateString();
-  const colorLabel = (l) => l.is_side_seam ? (l.color||'') + ' <span style="font-size:9px;color:#7c3aed;font-weight:700;">(Side Seam)</span>' : (l.color||'');
+  // colorLabel은 전역 함수 사용
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
   // 수량 0인 라인 제외
@@ -14118,7 +14129,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
     const groups = {};
     sectionLines.forEach(l => {
       const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
-      const key = `${l.styles?.style_number||''}|||${colorLabel(l)}`;
+      const key = `${l.styles?.style_number||''}|||${colorLabel(l, true)}`;
       if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], ppb };
       const alloc = l.alloc_detail || {};
       const allocCA = l.alloc_ca_detail || {};
@@ -14255,7 +14266,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       const pcrDisplay = pcrPcs > 0 ? pcrPcs + ' pcs' : '—';
       return `<tr style="border-bottom:1px solid #f3f4f6;">
         <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
-        <td style="padding:6px 8px;font-size:11px;">${colorLabel(l)}</td>
+        <td style="padding:6px 8px;font-size:11px;">${colorLabel(l, true)}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${whTotalPcs.toLocaleString()}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;">${fullBoxes > 0 ? fullBoxes : '—'}</td>
@@ -15012,7 +15023,7 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
   const paymentInfo = (companySettings && companySettings.payment_info) || 'Hana Commercial Finance\nDept. LA 24406\nPasadena, CA 91185-4406';
   const returnPolicy = (companySettings && companySettings.return_policy) || 'Returns are accepted within 30 days from date of shipment. All returns must be accompanied by a Return Authorization (RA) number. Returns are subject to a 15% restocking fee.';
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf((s||'').toUpperCase()) + 1) || 99;
-  const colorLabel = (l) => l.is_side_seam ? (l.color||'') + ' (Side Seam)' : (l.color||'');
+  // colorLabel은 전역 함수 사용
   const renderSection = (sectionLines, suffix) => {
     if (!sectionLines.length) return '';
     const freight = freightAmt || 0;
