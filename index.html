@@ -4526,6 +4526,12 @@ async function _doSaveInvoice() {
       const hasAnyBackorder = emailLines.some(l => l.back_qty > 0);
       // 백그라운드로 이메일 발송 (await 제거 - 느린 이메일 때문에 저장 지연 방지)
       const custCcArr = (custObj?.email_cc || '').split(',').map(e => e.trim()).filter(e => e && e.includes('@'));
+      // Order Confirmation HTML 직접 빌드해서 전달 (Worker 정렬 방지)
+      const confirmEmailHtml = buildOrderConfirmEmailHtml({
+        orderNum, cust, po, shipDate, whName,
+        totalPcs, totalAmt, hasAnyBackorder, emailLines,
+        scTotalPcs, caTotalPcs
+      });
       fetch('https://po-confirm-email.hjbae.workers.dev/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4540,7 +4546,8 @@ async function _doSaveInvoice() {
           ship_date: shipDate || '',
           warehouse: whName,
           has_backorder: hasAnyBackorder,
-          lines: emailLines
+          lines: emailLines,
+          email_html: confirmEmailHtml
         })
       }).catch(e => console.warn('PO confirm email error:', e));
     }
@@ -11463,6 +11470,120 @@ async function htmlToPdfBase64(htmlString) {
 // Shipped 이메일 HTML 빌더 (이 파일에서 직접 생성 → Worker에 전달)
 // SC: 파란색 체크, CA: 주황색 체크, 이전 배송 완료: 녹색 체크
 // ══════════════════════════════════════════════════════
+function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, totalPcs, totalAmt, hasAnyBackorder, emailLines, scTotalPcs, caTotalPcs }) {
+  const SIZE_ORDER = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
+  const isSplit = scTotalPcs > 0 && caTotalPcs > 0;
+  const backLines = emailLines.filter(l => l.back_qty > 0);
+  const totalBack = backLines.reduce((s,l) => s+(l.back_qty||0), 0);
+
+  const fmtAmt = n => '$' + (n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+
+  const backSection = (hasAnyBackorder && backLines.length) ? `
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:16px;border:1px solid #fecaca;border-radius:6px;">
+      <tr><td style="background:#fee2e2;padding:8px 14px;border-radius:5px 5px 0 0;">
+        <span style="font-size:13px;font-weight:700;color:#991b1b;">⚠️ Partial Backorder — ${totalBack.toLocaleString()} pcs</span>
+      </td></tr>
+      <tr><td style="padding:8px 14px;font-size:12px;color:#991b1b;">
+        Some items are currently out of stock and will be shipped as inventory becomes available. Our team will contact you with an estimated ship date for backordered items.
+      </td></tr>
+      <tr><td style="padding:0;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;">
+          <tr style="background:#fef2f2;">
+            <th style="padding:5px 10px;text-align:left;color:#991b1b;">Style</th>
+            <th style="padding:5px 10px;text-align:left;color:#991b1b;">Color</th>
+            <th style="padding:5px 10px;text-align:center;color:#991b1b;">Size</th>
+            <th style="padding:5px 10px;text-align:center;color:#991b1b;">Backordered</th>
+          </tr>
+          ${backLines.map(l=>`<tr>
+            <td style="padding:5px 10px;">${l.style||''}</td>
+            <td style="padding:5px 10px;">${l.color||''}</td>
+            <td style="padding:5px 10px;text-align:center;">${l.size||''}</td>
+            <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0).toLocaleString()} pcs</td>
+          </tr>`).join('')}
+        </table>
+      </td></tr>
+    </table>` : '';
+
+  const colHeaders = isSplit
+    ? `<th style="padding:6px 10px;text-align:center;color:#1e40af;">SC</th>
+       <th style="padding:6px 10px;text-align:center;color:#ea580c;">CA</th>
+       <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`
+    : `<th style="padding:6px 10px;text-align:center;">Qty</th>
+       <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`;
+
+  const lineRows = emailLines.map(l => {
+    const colCells = isSplit
+      ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${(l.sc_qty||0)>0?(l.sc_qty||0).toLocaleString():'—'}</td>
+         <td style="padding:6px 10px;text-align:center;font-weight:700;color:#ea580c;">${(l.ca_qty||0)>0?(l.ca_qty||0).toLocaleString():'—'}</td>
+         <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`
+      : `<td style="padding:6px 10px;text-align:center;font-weight:700;">${(l.fill_qty||0).toLocaleString()}</td>
+         <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`;
+    return `<tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:6px 10px;font-family:monospace;font-weight:600;">${l.style||''}</td>
+      <td style="padding:6px 10px;">${l.color||''}</td>
+      <td style="padding:6px 10px;text-align:center;">${l.size||''}</td>
+      <td style="padding:6px 10px;text-align:center;">${(l.qty||0).toLocaleString()}</td>
+      ${colCells}
+      <td style="padding:6px 10px;text-align:right;">${fmtAmt(l.unit_price)}</td>
+      <td style="padding:6px 10px;text-align:right;font-weight:700;">${fmtAmt((l.fill_qty||0)*(l.unit_price||0))}</td>
+    </tr>`;
+  }).join('');
+
+  const scRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#1e40af;font-weight:700;">SC Warehouse (Sumter, SC): ${(scTotalPcs||0).toLocaleString()} pcs</span></li>` : '';
+  const caRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#ea580c;font-weight:700;">CA Warehouse (Eastvale, CA): ${(caTotalPcs||0).toLocaleString()} pcs</span></li>` : `<li style="margin:2px 0;">${whName}: <strong>${totalPcs.toLocaleString()} pcs</strong></li>`;
+
+  return `<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;font-size:13px;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f2744;border-radius:6px 6px 0 0;">
+      <tr><td style="padding:14px 20px;">
+        <div style="color:#fff;font-size:17px;font-weight:800;">Pacific Sports</div>
+        <div style="color:#93c5fd;font-size:12px;">Order Confirmation</div>
+      </td></tr>
+    </table>
+    <div style="padding:20px;background:#fff;border:1px solid #e5e7eb;border-top:none;">
+      <p style="margin:0 0 4px;">Dear <strong>${cust}</strong>,</p>
+      <p style="font-size:12px;color:#6b7280;margin:0 0 16px;">Thank you for your order. We're pleased to confirm that your PO has been received and is being processed.</p>
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:16px;">
+        <tr>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Your PO #<br><strong style="font-size:16px;color:#111;">${po}</strong></td>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Date Received<br><strong style="font-size:14px;color:#111;">${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}</strong></td>
+          <td style="padding:10px 16px;font-size:12px;color:#6b7280;">Est. Ship Date<br><strong style="font-size:14px;color:#111;">${shipDate ? new Date(shipDate+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) : '—'}</strong></td>
+        </tr>
+      </table>
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 16px;margin-bottom:16px;">
+        <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px;">📦 Shipping From</div>
+        <ul style="margin:0;padding-left:16px;font-size:13px;">${scRow}${caRow}</ul>
+      </div>
+      ${backSection}
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+        <thead><tr style="background:#f3f4f6;">
+          <th style="padding:6px 10px;text-align:left;">Style</th>
+          <th style="padding:6px 10px;text-align:left;">Color</th>
+          <th style="padding:6px 10px;text-align:center;">Size</th>
+          <th style="padding:6px 10px;text-align:center;">Ordered</th>
+          ${colHeaders}
+          <th style="padding:6px 10px;text-align:right;">Price</th>
+          <th style="padding:6px 10px;text-align:right;">Total</th>
+        </tr></thead>
+        <tbody>${lineRows}</tbody>
+        <tfoot><tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb;">
+          <td colspan="3" style="padding:8px 10px;text-align:right;">Total:</td>
+          <td style="padding:8px 10px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
+          ${isSplit
+            ? `<td style="padding:8px 10px;text-align:center;color:#1e40af;">${(scTotalPcs||0).toLocaleString()} pcs</td>
+               <td style="padding:8px 10px;text-align:center;color:#ea580c;">${(caTotalPcs||0).toLocaleString()} pcs</td>
+               <td style="padding:8px 10px;text-align:center;color:#dc2626;">${(totalBack||0).toLocaleString()} pcs</td>`
+            : `<td style="padding:8px 10px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
+               <td style="padding:8px 10px;text-align:center;color:#dc2626;">${(totalBack||0).toLocaleString()} pcs</td>`}
+          <td colspan="2" style="padding:8px 10px;text-align:right;">${fmtAmt(totalAmt)}</td>
+        </tr></tfoot>
+      </table>
+    </div>
+    <div style="padding:8px 20px;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 6px 6px;font-size:11px;color:#9ca3af;text-align:center;">
+      Pacific Sports Inc · 1605 South Guignard Pkwy, Sumter SC 29150 · (803) 773-2177
+    </div>
+  </div>`;
+}
+
 function buildShippedEmailHtml(order, shippingInfo, lineItems) {
   const currentWh = shippingInfo.wh || 'SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
