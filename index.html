@@ -14693,11 +14693,17 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
 function buildBolHtml(order, lines, shipInfo, signatureData) {
   const dateStr = shipInfo?.shipDate || new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
   const bolNum = (order.customer_po || order.order_number || '').replace(/[^A-Z0-9]/gi,'-').replace(/-+/g,'-').replace(/^-|-$/g,'') + '-' + new Date().toISOString().slice(2,10).replace(/-/g,'');
-  const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
+  const SIZE_ORDER_BOL = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
+  const sizeOrd = s => (SIZE_ORDER_BOL.indexOf((s||'').toUpperCase()) + 1) || 99;
 
   const sorted = [...lines].sort((a,b) => {
-    const ca = (a.color||'').localeCompare(b.color||'');
-    return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
+    const colorA = (a.color||'').replace(' (Side Seam)','').trim();
+    const colorB = (b.color||'').replace(' (Side Seam)','').trim();
+    const ca = colorA.localeCompare(colorB);
+    if (ca !== 0) return ca;
+    const sa = sizeOrd(a.size), sb = sizeOrd(b.size);
+    if (sa !== sb) return sa - sb;
+    return (a.is_side_seam ? 1 : 0) - (b.is_side_seam ? 1 : 0);
   });
 
   // 실제 출고 수량 계산 (alloc_detail 기준, WH 파라미터로 SC/CA 구분)
@@ -14746,7 +14752,7 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
     return `<tr style="border-bottom:1px solid #e5e7eb;">
       <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
       <td style="padding:6px 8px;font-size:11px;">${l.styles?.description||''}</td>
-      <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
+      <td style="padding:6px 8px;font-size:11px;">${colorLabel(l, true)}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
       <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${shipPcs.toLocaleString()}</td>
     </tr>`;
