@@ -1568,6 +1568,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <div class="modal-foot" style="flex-shrink:0;">
       <button class="btn" onclick="closeModal('modal-backorder')">닫기</button>
       <button class="btn" id="bo-cancel-btn" onclick="cancelBackOrderModal()" style="color:var(--red);border-color:var(--red);display:none;">✕ Back Order 취소</button>
+      <button class="btn" id="bo-assign-btn" onclick="assignBoWarehouses()" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;">📦 WH 지정 & 분리</button>
       <button class="btn btn-green" id="bo-fulfill-btn" onclick="fulfillBackOrder()" style="display:none">✓ 재고 차감 & Pick Ticket 생성</button>
     </div>
   </div>
@@ -4546,6 +4547,57 @@ async function _doSaveInvoice() {
   } catch(e) { console.warn('PO confirm email error:', e); }
   } // end if (!isEditMode) for email
 
+  // ── PO 저장 시 Back Order 자동 생성 (재고 부족 라인)
+  if (!isEditMode && order?.id) {
+    const boLines = lineChecks.filter(l => l.backQty > 0);
+    if (boLines.length > 0) {
+      const totalBoQty = boLines.reduce((s,l) => s + l.backQty, 0);
+      const boOrderNum = orderNum + '-BO';
+      // 기존 BO 있는지 확인
+      const { data: existingBoList } = await db.from('orders').select('id').eq('order_number', boOrderNum);
+      let boOrderId = existingBoList?.[0]?.id;
+      if (!boOrderId) {
+        const { data: newBo } = await db.from('orders').insert({
+          order_number: boOrderNum,
+          customer_name: cust,
+          customer_po: (po || '') + '-BO',
+          customer_id: order.customer_id,
+          warehouse_id: order.warehouse_id,
+          wh_code: order.wh_code,
+          is_split_warehouse: order.is_split_warehouse,
+          status: 'backordered',
+          total_pcs: totalBoQty,
+          total_amount: boLines.reduce((s,l) => s + l.backQty * (l.price||0), 0),
+          bill_addr: order.bill_addr,
+          ship_addr: order.ship_addr,
+          terms: order.terms,
+          priority: order.priority,
+          parent_order_id: order.id,
+          created_by: _currentEmployee?.name || ''
+        }).select().single();
+        boOrderId = newBo?.id;
+      }
+      if (boOrderId) {
+        for (const l of boLines) {
+          const s = styles.find(x => x.style_number === l.styleNum);
+          await db.from('order_lines').insert({
+            order_id: boOrderId,
+            style_id: s?.id || null,
+            warehouse_id: l.wh === 'CA' ? (caWhId||whId) : (scWhId||whId),
+            wh: l.wh || 'SC',
+            color: l.color, size: l.size,
+            qty_pieces: l.backQty,
+            qty_backordered: l.backQty,
+            is_backordered: true,
+            pcs_per_box: l.ppb || 72,
+            unit_price: l.price || 0
+          });
+        }
+        showToast(`📦 Back Order ${totalBoQty}pcs 자동 생성 — ${boOrderNum}`);
+      }
+    }
+  }
+
   // ── 결과 알림
   const toastMsg = isEditMode
     ? `✅ ${orderNum} 수정 저장됨`
@@ -6626,9 +6678,16 @@ async function openRaModal(orderId) {
   const sizeOrd = s => { const i = SIZE_ORDER.indexOf((s||'').toUpperCase()); return i >= 0 ? i : 99; };
 
   // SC+CA 합산 shipped qty 계산
-  const allocPcs = (alloc) => Object.entries(alloc||{})
-    .filter(([k]) => !k.includes('TRANSFER|'))
-    .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+  const allocPcs = (alloc) => {
+    const entries = Object.entries(alloc||{});
+    // transfer된 fromBin 목록 수집 — 해당 bin은 중복이므로 제외
+    const transferredBins = new Set(
+      entries.filter(([k]) => k.includes('TRANSFER|')).map(([k]) => k.split('|')[1])
+    );
+    return entries
+      .filter(([k]) => !k.includes('TRANSFER|') && !transferredBins.has(k))
+      .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+  };
 
   // 라인 목록 — SC+CA 합산 shipped qty > 0인 라인, 사이즈 정렬
   const shippedLines = (lines||[])
@@ -11733,10 +11792,15 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     const allocCA = l.alloc_ca_detail || {};
 
     // alloc_detail value는 {pcs: N} 또는 숫자 N (boxes 필드 없음)
-    const allocPcs = (alloc, excludeKeys=[]) =>
-      Object.entries(alloc)
-        .filter(([k]) => !excludeKeys.some(ex => k.includes(ex)))
+    const allocPcs = (alloc, excludeKeys=[]) => {
+      const entries = Object.entries(alloc);
+      const transferredBins = new Set(
+        entries.filter(([k]) => k.includes('TRANSFER|')).map(([k]) => k.split('|')[1])
+      );
+      return entries
+        .filter(([k]) => !excludeKeys.some(ex => k.includes(ex)) && !transferredBins.has(k))
         .reduce((s,[,v]) => s + ((typeof v==='object' ? v.pcs||0 : v)||0), 0);
+    };
 
     // 실제 출고 수량 — alloc_detail 기준, PCR 키 있을 때만 prepared_lines 오버라이드
     const getActualQty = (allocObj, prepJsonKey) => {
@@ -13153,10 +13217,12 @@ async function _doShippedCoreInner(emp) {
     const allocSC = l.alloc_detail || {};
     const allocCA = l.alloc_ca_detail || {};
 
-    const allocPcs = (allocObj) =>
-      Object.entries(allocObj)
-        .filter(([k]) => !k.includes('TRANSFER|'))
+    const allocPcs = (allocObj) => {
+      const _ents = Object.entries(allocObj);
+      const _trBins = new Set(_ents.filter(([k]) => k.includes('TRANSFER|')).map(([k]) => k.split('|')[1]));
+      return _ents.filter(([k]) => !k.includes('TRANSFER|') && !_trBins.has(k))
         .reduce((s, [, v]) => s + (typeof v === 'object' ? (v.pcs || 0) : (v || 0)), 0);
+    };
 
     let filled = 0;
     // pcr_prepared_lines에서 실제 준비된 수량 확인 (직원이 줄인 경우)
@@ -13342,7 +13408,8 @@ async function _doShippedCoreInner(emp) {
   if (totalBackQty > 0) {
     // Split 오더: WH별이 아닌 단일 BO로 통합 (SC&CA 라인 중복 방지)
     const boNum = order.order_number + '-BO';
-    const { data: existingBo } = await db.from('orders').select('id,order_number').eq('order_number', boNum).single();
+    const { data: existingBoList } = await db.from('orders').select('id,order_number').eq('order_number', boNum);
+    const existingBo = existingBoList?.[0] || null;
     // 이미 BO가 존재하면 (다른 WH가 먼저 ship된 경우) 해당 BO에 라인 추가
     // 기존 BO가 있으면 (다른 WH가 먼저 ship된 경우) 라인만 추가, 없으면 새로 생성
     let boOrderId = existingBo ? existingBo.id : null;
@@ -13384,11 +13451,11 @@ async function _doShippedCoreInner(emp) {
       for (const l of backLines) {
         // 기존 BO에 같은 color+size 라인이 이미 있으면 수량 합산
         if (existingBo) {
-          const { data: dupLine } = await db.from('order_lines')
+          const { data: dupLines } = await db.from('order_lines')
             .select('id,qty_backordered,qty_pieces')
             .eq('order_id', boOrderId)
-            .eq('color', l.color).eq('size', l.size)
-            .single().then(r => ({ data: r.data })).catch(() => ({ data: null }));
+            .eq('color', l.color).eq('size', l.size);
+          const dupLine = dupLines?.[0] || null;
           if (dupLine) {
             await db.from('order_lines').update({
               qty_pieces: (dupLine.qty_pieces||0) + l.qty_backordered,
@@ -15081,8 +15148,12 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
         ? (sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{}))
         : (l.wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{}));
 
-      let allocTotal = Object.entries(alloc)
-        .filter(([k]) => !k.includes('TRANSFER|'))
+      const _allocEntries = Object.entries(alloc);
+      const _transferredBins = new Set(
+        _allocEntries.filter(([k]) => k.includes('TRANSFER|')).map(([k]) => k.split('|')[1])
+      );
+      let allocTotal = _allocEntries
+        .filter(([k]) => !k.includes('TRANSFER|') && !_transferredBins.has(k))
         .reduce((s,[,v]) => { if (typeof v==='object') { if (v.pcs>0) return s+v.pcs; if (v.boxes>0) return s+(v.boxes*ppb); return s; } return s+(v||0); }, 0);
 
       // pcr_prepared_lines 오버라이드 — PCR 키 있을 때만 적용
@@ -15745,6 +15816,7 @@ async function openBackOrderDetail(orderId) {
 
   document.getElementById('bo-fulfill-btn').style.display = anyFillable ? 'inline-flex' : 'none';
   document.getElementById('bo-cancel-btn').style.display = 'inline-flex';
+  document.getElementById('bo-assign-btn').style.display = 'inline-flex';
   if (anyFillable) {
     document.getElementById('bo-fulfill-section').style.display = 'block';
     updateBoFulfillSummary();
@@ -15782,6 +15854,102 @@ async function saveBOnote() {
   await db.from('orders').update({ bo_note: note }).eq('id', currentBoOrderId);
   showToast('📝 메모 저장됨');
 }
+async function assignBoWarehouses() {
+  if (!currentBoOrderId) return;
+  const order = allOrders.find(o => o.id === currentBoOrderId);
+  if (!order) return;
+
+  // 각 라인의 선택된 WH 수집
+  const scLines = [], caLines = [];
+  boLineData.forEach((l, idx) => {
+    const selectedWh = document.getElementById(`bo-wh-${idx}`)?.value || 'SC';
+    if (selectedWh === 'CA') caLines.push(l);
+    else scLines.push(l);
+  });
+
+  const bothSides = scLines.length > 0 && caLines.length > 0;
+  const scWhObj = warehouses.find(w => w.code === 'SC');
+  const caWhObj = warehouses.find(w => w.code === 'CA');
+
+  // SC/CA 같은 경우 그냥 wh만 업데이트
+  if (!bothSides) {
+    const allCA = caLines.length > 0;
+    const targetWh = allCA ? 'CA' : 'SC';
+    const targetWhId = allCA ? caWhObj?.id : scWhObj?.id;
+    for (const l of boLineData) {
+      await db.from('order_lines').update({ wh: targetWh, warehouse_id: targetWhId }).eq('id', l.id);
+    }
+    await db.from('orders').update({ wh_code: targetWh, warehouse_id: targetWhId }).eq('id', currentBoOrderId);
+    showToast(`✅ Back Order WH → ${targetWh} 지정 완료`);
+    closeModal('modal-backorder');
+    loadBackOrders();
+    return;
+  }
+
+  // SC + CA 혼합 → SC BO와 CA BO로 분리
+  if (!confirm(`SC ${scLines.length}개 사이즈, CA ${caLines.length}개 사이즈로 분리하시겠습니까?
+현재 Back Order가 2개로 나눠집니다.`)) return;
+
+  const scTotalPcs = scLines.reduce((s,l) => s+(l.qty_backordered||0), 0);
+  const caTotalPcs = caLines.reduce((s,l) => s+(l.qty_backordered||0), 0);
+  const scTotalAmt = scLines.reduce((s,l) => s+(l.qty_backordered||0)*(l.unit_price||0), 0);
+  const caTotalAmt = caLines.reduce((s,l) => s+(l.qty_backordered||0)*(l.unit_price||0), 0);
+
+  // 기존 BO를 SC로 업데이트
+  await db.from('orders').update({
+    wh_code: 'SC', warehouse_id: scWhObj?.id,
+    total_pcs: scTotalPcs, total_amount: scTotalAmt
+  }).eq('id', currentBoOrderId);
+  for (const l of scLines) {
+    await db.from('order_lines').update({ wh: 'SC', warehouse_id: scWhObj?.id }).eq('id', l.id);
+  }
+
+  // CA 라인 삭제 후 새 CA BO 생성
+  for (const l of caLines) {
+    await db.from('order_lines').delete().eq('id', l.id);
+  }
+
+  // 새 CA BO 오더 생성
+  const caBoNum = order.order_number.replace(/-BO$/, '') + '-BO-CA';
+  const { data: newCaBo } = await db.from('orders').insert({
+    order_number: caBoNum,
+    customer_name: order.customer_name,
+    customer_po: order.customer_po,
+    customer_id: order.customer_id,
+    warehouse_id: caWhObj?.id,
+    wh_code: 'CA',
+    status: 'backordered',
+    total_pcs: caTotalPcs,
+    total_amount: caTotalAmt,
+    bill_addr: order.bill_addr,
+    ship_addr: order.ship_addr,
+    terms: order.terms,
+    priority: order.priority,
+    parent_order_id: order.parent_order_id || currentBoOrderId,
+    created_by: order.created_by
+  }).select().single();
+
+  if (newCaBo?.id) {
+    for (const l of caLines) {
+      await db.from('order_lines').insert({
+        order_id: newCaBo.id,
+        style_id: l.style_id,
+        warehouse_id: caWhObj?.id,
+        wh: 'CA',
+        color: l.color, size: l.size,
+        qty_pieces: l.qty_backordered,
+        qty_backordered: l.qty_backordered,
+        is_backordered: true,
+        unit_price: l.unit_price || 0
+      });
+    }
+  }
+
+  showToast(`✅ Back Order 분리 완료 — SC ${scTotalPcs}pcs / CA ${caTotalPcs}pcs`);
+  closeModal('modal-backorder');
+  loadBackOrders();
+}
+
 async function cancelBackOrderModal() {
   if (!currentBoOrderId) return;
   const order = allOrders.find(o => o.id === currentBoOrderId);
