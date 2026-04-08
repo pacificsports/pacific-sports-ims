@@ -11756,7 +11756,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
 
   // order_lines 가져오기 — style → color → size 정렬
   const { data: lines } = await db.from('order_lines')
-    .select('*, styles(style_number), alloc_detail, alloc_ca_detail')
+    .select('*, styles(style_number), alloc_detail, alloc_ca_detail, is_side_seam')
     .eq('order_id', order.id)
     .order('color', { ascending: true })
     .order('size', { ascending: true });
@@ -11791,16 +11791,12 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     const allocSC = l.alloc_detail || {};
     const allocCA = l.alloc_ca_detail || {};
 
-    // alloc_detail value는 {pcs: N} 또는 숫자 N (boxes 필드 없음)
-    const allocPcs = (alloc, excludeKeys=[]) => {
-      const entries = Object.entries(alloc);
-      const transferredBins = new Set(
-        entries.filter(([k]) => k.includes('TRANSFER|')).map(([k]) => k.split('|')[1])
-      );
-      return entries
-        .filter(([k]) => !excludeKeys.some(ex => k.includes(ex)) && !transferredBins.has(k))
+    // alloc_detail value는 {pcs: N} 또는 숫자 N
+    // TRANSFER 키만 제외 — 원본 bin은 그대로 합산
+    const allocPcs = (alloc, excludeKeys=[]) =>
+      Object.entries(alloc)
+        .filter(([k]) => !excludeKeys.some(ex => k.includes(ex)))
         .reduce((s,[,v]) => s + ((typeof v==='object' ? v.pcs||0 : v)||0), 0);
-    };
 
     // 실제 출고 수량 — alloc_detail 기준, PCR 키 있을 때만 prepared_lines 오버라이드
     const getActualQty = (allocObj, prepJsonKey) => {
