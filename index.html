@@ -13589,8 +13589,13 @@ async function _doShippedCoreInner(emp) {
     }
   }
 
-  // Invoice 이메일용으로 BOL 파일 보존 (초기화 전에 저장)
-  window._savedBolFilesForInvoice = [...(_bolFilesDataSingle||[])];
+  // Invoice 이메일용으로 BOL 파일 WH별 보존 (초기화 전에 저장)
+  const _savedWh = (wh || 'SC').toUpperCase();
+  if (_savedWh === 'CA') {
+    window._savedBolFilesForInvoice_CA = [...(_bolFilesDataSingle||[])];
+  } else {
+    window._savedBolFilesForInvoice_SC = [...(_bolFilesDataSingle||[])];
+  }
 
   _bolFileData = null;
   _bolFilesDataSingle = [];
@@ -13765,15 +13770,16 @@ async function reviewAndSendInvoice(orderId, wh) {
       _attEl.appendChild(_noBolNote);
     }
   }
-  // 수동 업로드된 BOL 파일들 (Shipped 처리 시 보존된 파일)
-  if (window._savedBolFilesForInvoice && window._savedBolFilesForInvoice.length > 0) {
-    window._savedBolFilesForInvoice.forEach(f => {
-      // DB 저장된 Signed BOL과 중복 방지 (fileName으로 구분)
-      if (f.base64 && f.fileName && !f.fileName.includes('BOL_PO')) {
-        _attEl.appendChild(_makeAttBtn('📎 ' + f.fileName, async () => f.base64));
-      }
-    });
-  }
+  // WH별 보존된 BOL 파일들 표시 (수동 업로드 파일만)
+  const _modalWhBolFiles = _bolWh === 'CA'
+    ? (window._savedBolFilesForInvoice_CA || [])
+    : (window._savedBolFilesForInvoice_SC || []);
+  _modalWhBolFiles.forEach(f => {
+    const isSignedBol = f.fileName && f.fileName.startsWith('BOL_PO');
+    if (f.base64 && !isSignedBol) {
+      _attEl.appendChild(_makeAttBtn('📎 ' + (f.fileName || 'BOL Upload'), async () => f.base64));
+    }
+  });
 
   // Send 모드 복원
   document.querySelector('#modal-invoice-review .modal-head span').textContent = '📧 Review & Send Invoice';
@@ -13927,17 +13933,18 @@ async function sendInvoiceEmail() {
       const bolFilesForInv = [];
       // DB 저장된 Signed BOL
       if (bolB64) bolFilesForInv.push({ base64: bolB64, filename: `SignedBOL_PO${order?.customer_po||''}_${invWh}.pdf`, mime: 'application/pdf' });
-      // 보존된 BOL 파일들 중 수동 업로드 파일만 추가 (Signed BOL은 DB에서 이미 추가됨)
-      if (window._savedBolFilesForInvoice && Array.isArray(window._savedBolFilesForInvoice)) {
-        window._savedBolFilesForInvoice.forEach(f => {
-          // Signed BOL(BOL_PO...)은 DB bolB64로 이미 추가했으니 제외, 수동 업로드만 추가
-          const isSignedBol = f.fileName && f.fileName.startsWith('BOL_PO');
-          if (f.base64 && !isSignedBol) {
-            bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
-          }
-        });
-      }
-      console.log('[Invoice BOL] bolB64:', !!bolB64, '| savedBolFiles:', (window._savedBolFilesForInvoice||[]).length, '| total:', bolFilesForInv.length);
+      // WH별 보존된 BOL 파일 추가 (Signed BOL은 DB에서 이미 추가됨)
+      const _whBolFiles = invWh === 'CA'
+        ? (window._savedBolFilesForInvoice_CA || [])
+        : (window._savedBolFilesForInvoice_SC || []);
+      _whBolFiles.forEach(f => {
+        // Signed BOL(BOL_PO...)은 DB bolB64로 이미 추가했으니 제외, 수동 업로드만 추가
+        const isSignedBol = f.fileName && f.fileName.startsWith('BOL_PO');
+        if (f.base64 && !isSignedBol) {
+          bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
+        }
+      });
+      console.log('[Invoice BOL] bolB64:', !!bolB64, '| savedBolFiles:', (window._savedBolFilesForInvoice||[]).length, '| files:', (window._savedBolFilesForInvoice||[]).map(f=>f.fileName), '| total:', bolFilesForInv.map(f=>f.filename));
 
       try {
         await fetch('https://po-confirm-email.hjbae.workers.dev/send-invoice', {
@@ -15017,7 +15024,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     return `<tr>
       <td style="padding:6px 10px;font-size:13px;font-weight:600;border-bottom:1px solid #f3f4f6;">${l.styles?.style_number||''}</td>
       <td style="padding:6px 10px;font-size:13px;border-bottom:1px solid #f3f4f6;">${l.styles?.description||''}</td>
-      <td style="padding:6px 10px;font-size:13px;border-bottom:1px solid #f3f4f6;">${(l.color||'').toUpperCase()}</td>
+      <td style="padding:6px 10px;font-size:13px;border-bottom:1px solid #f3f4f6;">${(l.color||'').toUpperCase()}${l.is_side_seam?' <span style="font-size:11px;color:#7c3aed;">(Side Seam)</span>':''}</td>
       <td style="padding:6px 10px;font-size:13px;text-align:center;border-bottom:1px solid #f3f4f6;">${l.size||''}</td>
       <td style="padding:6px 10px;font-size:13px;text-align:center;font-weight:700;color:#1e40af;border-bottom:1px solid #f3f4f6;">${shipped} pcs</td>
       <td style="padding:6px 10px;font-size:13px;text-align:right;border-bottom:1px solid #f3f4f6;">$${price.toFixed(2)}</td>
