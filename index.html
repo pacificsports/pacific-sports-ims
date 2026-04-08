@@ -7317,16 +7317,19 @@ async function loadBackOrders() {
     const whBg = isCA ? '#fff7ed' : '#eff6ff';
     const borderColor = isCA ? '#fed7aa' : '#bfdbfe';
 
-    const lineRows = sortedLines.map(l =>
-      `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #f3f4f6;">
-        <span style="font-size:11px;color:#374151;font-family:'IBM Plex Mono',monospace;">${l.styles?.style_number||''}</span>
-        <span style="font-size:11px;color:#374151;">${l.color||''} ${l.size||''}</span>
+    const cardId = 'bo-card-' + o.id;
+    const lineRows = sortedLines.map((l,li) =>
+      `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;cursor:pointer;">
+        <input type="checkbox" id="bocard-chk-${o.id}-${li}" data-order-id="${o.id}" data-line-id="${l.id}" data-bo-qty="${l.qty_backordered||0}"
+          style="width:15px;height:15px;cursor:pointer;" checked onchange="boCardUpdateTotal('${o.id}')">
+        <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#6b7280;min-width:36px;">${l.size||''}</span>
+        <span style="font-size:11px;color:#374151;flex:1;">${l.color||''}${l.is_side_seam?' <span style="color:#7c3aed;font-size:10px;">(SS)</span>':''}</span>
         <span style="font-size:12px;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</span>
-      </div>`
+      </label>`
     ).join('');
 
     return `
-    <div style="background:#fff;border:1px solid ${borderColor};border-top:3px solid ${whColor};border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+    <div id="${cardId}" style="background:#fff;border:1px solid ${borderColor};border-top:3px solid ${whColor};border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
       <!-- 카드 헤더 -->
       <div style="background:${whBg};padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
         <div>
@@ -7334,22 +7337,107 @@ async function loadBackOrders() {
           <div style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#6b7280;margin-top:1px;">PO# ${o.customer_po||'—'}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${whColor};color:#fff;display:inline-block;">${wh}</div>
-          <div style="font-size:20px;font-weight:900;color:#dc2626;margin-top:2px;">${totalBack.toLocaleString()} pcs</div>
+          <div style="font-size:20px;font-weight:900;color:#dc2626;" id="bocard-total-${o.id}">${totalBack.toLocaleString()} pcs</div>
           <div style="font-size:10px;color:${urgentColor};font-weight:600;">${elapsed}</div>
         </div>
       </div>
-      <!-- 라인 목록 -->
-      <div style="padding:8px 14px;max-height:160px;overflow-y:auto;">
+      <!-- 사이즈별 체크박스 -->
+      <div style="padding:4px 14px 0;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;">
+          <label style="font-size:10px;color:#6b7280;cursor:pointer;display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" checked onchange="boCardToggleAll('${o.id}',this.checked)" style="width:13px;height:13px;"> 전체선택
+          </label>
+        </div>
         ${lineRows}
       </div>
       <!-- 버튼 -->
-      <div style="padding:8px 14px;border-top:1px solid #f3f4f6;display:flex;gap:6px;">
-        <button onclick="showBoDetail('${o.id}')" style="flex:1;padding:8px;background:${whColor};color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">📋 Detail & Start Order</button>
+      <div style="padding:8px 14px;border-top:1px solid #f3f4f6;display:flex;gap:6px;margin-top:4px;">
+        <button onclick="boCardStartOrder('${o.id}')" style="flex:1;padding:8px;background:${whColor};color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">▶ Start Order</button>
         <button onclick="cancelBackOrder('${o.id}','${o.customer_po||o.order_number}')" style="padding:8px 10px;background:#fff;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:12px;cursor:pointer;">✕</button>
       </div>
     </div>`;
   }).join('') + `</div>`;
+}
+
+// ── Back Order 카드 내 체크박스 헬퍼
+function boCardToggleAll(orderId, checked) {
+  document.querySelectorAll(`[id^="bocard-chk-${orderId}-"]`).forEach(chk => { chk.checked = checked; });
+  boCardUpdateTotal(orderId);
+}
+
+function boCardUpdateTotal(orderId) {
+  const chks = [...document.querySelectorAll(`[id^="bocard-chk-${orderId}-"]`)];
+  const total = chks.filter(c => c.checked).reduce((s,c) => s + parseInt(c.dataset.boQty||0), 0);
+  const el = document.getElementById('bocard-total-' + orderId);
+  if (el) el.textContent = total.toLocaleString() + ' pcs';
+}
+
+async function boCardStartOrder(orderId) {
+  // 선택된 라인 수집
+  const chks = [...document.querySelectorAll(`[id^="bocard-chk-${orderId}-"]`)].filter(c => c.checked);
+  if (!chks.length) { showToast('⚠️ 처리할 사이즈를 선택하세요.'); return; }
+
+  const selectedLineIds = chks.map(c => c.dataset.lineId);
+  const boLines = window._boLinesCache?.[orderId] || [];
+  const selectedLines = boLines.filter(l => selectedLineIds.includes(l.id));
+  if (!selectedLines.length) { showToast('⚠️ 라인 정보를 찾을 수 없습니다.'); return; }
+
+  // _boStartData에 저장 (PO save 시 BO 수량 차감용)
+  const mappedLines = selectedLines.map(l => ({ ...l, _shipQty: l.qty_backordered||0, _boQty: l.qty_backordered||0 }));
+  window._boStartData = { boOrderId: orderId, selectedLines: mappedLines, whGroups: {} };
+
+  // draft 클리어
+  localStorage.removeItem('po_draft');
+  window._boSkipDraft = true;
+
+  // PO Entry로 이동
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+  await new Promise(r => setTimeout(r, 100));
+  openNewInvoice();
+  await new Promise(r => setTimeout(r, 200));
+
+  // 오더 정보 로드
+  const { data: boOrder } = await db.from('orders').select('*').eq('id', orderId).single();
+  if (!boOrder) return;
+
+  // 고객 선택
+  const custMatch = (customers||[]).find(c => c.id === boOrder.customer_id);
+  if (custMatch) {
+    const custEl = document.getElementById('inv-cust');
+    if (custEl) { custEl.value = custMatch.name || custMatch.customer_name || ''; custEl.dispatchEvent(new Event('input')); }
+    await new Promise(r => setTimeout(r, 100));
+    currentInvoiceData = { ...(currentInvoiceData||{}), customer: custMatch };
+    const poEl = document.getElementById('inv-cust-po');
+    if (poEl) poEl.value = boOrder.customer_po || '';
+    const termsEl = document.getElementById('inv-cust-terms');
+    if (termsEl) termsEl.value = boOrder.terms || 'N30';
+    const billEl = document.getElementById('inv-bill-addr');
+    if (billEl) billEl.value = boOrder.bill_addr || '';
+    const shipEl = document.getElementById('inv-ship-addr');
+    if (shipEl) shipEl.value = boOrder.ship_addr || '';
+  }
+
+  // 라인 채우기
+  poLines = [];
+  for (const l of mappedLines) {
+    poLines.push({
+      styleNum: l.styles?.style_number || '',
+      color: l.color || '',
+      size: l.size || '',
+      qty: l._shipQty,
+      price: l.unit_price || 0,
+      wh: boOrder.wh_code || 'SC',
+      isSideSeam: l.is_side_seam || false,
+      isSideSeamChecked: l.is_side_seam || false,
+      ppb: l.pcs_per_box || 72,
+      cases: Math.floor(l._shipQty / (l.pcs_per_box || 72)),
+      loose: l._shipQty % (l.pcs_per_box || 72),
+    });
+  }
+  renderPoLines();
+  await new Promise(r => setTimeout(r, 300));
+  await liveRenderDocs();
+  showToast(`📋 ${selectedLines.length}개 사이즈 — Bin 배분 후 Save PO 하세요`);
 }
 
 // ── Back Order Detail 체크박스 헬퍼
