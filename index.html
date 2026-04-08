@@ -8049,6 +8049,15 @@ async function openWhComplete(orderId, wh) {
     );
   });
 
+  const SIZE_ORDER_WH = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
+  whLines.sort((a,b) => {
+    const ca = (a.color||'').localeCompare(b.color||'');
+    if (ca !== 0) return ca;
+    const sa = SIZE_ORDER_WH.indexOf((a.size||'').toUpperCase());
+    const sb = SIZE_ORDER_WH.indexOf((b.size||'').toUpperCase());
+    return (sa===-1?99:sa)-(sb===-1?99:sb);
+  });
+
   _whCompleteLines = whLines.map((l,i) => {
     const ppb = l.pcs_per_box || 72;
     // SC&CA 라인은 해당 WH의 alloc만 사용
@@ -13916,10 +13925,14 @@ async function sendInvoiceEmail() {
       const bolFilesForInv = [];
       // DB 저장된 Signed BOL
       if (bolB64) bolFilesForInv.push({ base64: bolB64, filename: `SignedBOL_PO${order?.customer_po||''}_${invWh}.pdf`, mime: 'application/pdf' });
-      // 보존된 BOL 파일들 (Shipped 처리 시 저장)
+      // 보존된 BOL 파일들 중 수동 업로드 파일만 추가 (Signed BOL은 DB에서 이미 추가됨)
       if (window._savedBolFilesForInvoice && Array.isArray(window._savedBolFilesForInvoice)) {
         window._savedBolFilesForInvoice.forEach(f => {
-          if (f.base64) bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
+          // Signed BOL(BOL_PO...)은 DB bolB64로 이미 추가했으니 제외, 수동 업로드만 추가
+          const isSignedBol = f.fileName && f.fileName.startsWith('BOL_PO');
+          if (f.base64 && !isSignedBol) {
+            bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
+          }
         });
       }
       console.log('[Invoice BOL] bolB64:', !!bolB64, '| savedBolFiles:', (window._savedBolFilesForInvoice||[]).length, '| total:', bolFilesForInv.length);
