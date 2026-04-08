@@ -7437,6 +7437,8 @@ async function boStartPartial(boOrderId, boOrderNum) {
         is_side_seam: l.is_side_seam || false
       });
     }
+    // 재고 자동 배분
+    await allocateBoOrderLines(newOrder.id, lineWh);
     lastNewOrder = newOrder;
     lastNewWh = lineWh;
   }
@@ -14077,6 +14079,67 @@ async function cancelBackOrder(orderId, orderNum) {
 }
 
 // ── Back Order: Start Order (SC 또는 CA)
+// ── BO 오더 재고 자동 배분 헬퍼
+async function allocateBoOrderLines(orderId, wh) {
+  const { data: lines } = await db.from('order_lines')
+    .select('*, styles(style_number,description,box_qty)')
+    .eq('order_id', orderId);
+  if (!lines?.length) return;
+
+  const whObj = warehouses.find(w => w.code === wh);
+  const whId = whObj?.id;
+
+  for (const l of lines) {
+    const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+    const qty = l.qty_pieces || 0;
+    if (!qty) continue;
+
+    // 재고 조회 — 해당 WH bins
+    const { data: invRows } = await db.from('inventory')
+      .select('id, qty_on_hand, qty_committed, location, warehouses(code)')
+      .eq('style_number', l.styles?.style_number || '')
+      .eq('color', (l.color||'').toUpperCase())
+      .eq('size', (l.size||'').toUpperCase())
+      .eq('warehouse_id', whId)
+      .order('qty_on_hand', { ascending: false });
+
+    const allocObj = {};
+    let remaining = qty;
+    for (const row of (invRows||[])) {
+      if (remaining <= 0) break;
+      const avail = Math.max(0, (row.qty_on_hand||0) - (row.qty_committed||0));
+      if (avail <= 0) continue;
+      const take = Math.min(remaining, avail);
+      const loc = row.location || 'WH';
+      allocObj[loc] = (allocObj[loc] || 0) + take;
+      remaining -= take;
+      // qty_committed 예약
+      await db.from('inventory').update({
+        qty_committed: (row.qty_committed||0) + take
+      }).eq('id', row.id);
+    }
+
+    // alloc_detail 구성
+    const allocDetail = {};
+    for (const [bin, pcs] of Object.entries(allocObj)) {
+      allocDetail[bin] = { boxes: Math.floor(pcs/ppb), partial: pcs%ppb, pcs };
+    }
+    const mainBins = Object.keys(allocDetail);
+    const update = {
+      pcs_per_box: ppb,
+      qty_boxes: Math.floor(qty/ppb),
+      qty_loose: qty%ppb,
+      location: mainBins.length > 0 ? mainBins.join(', ') : null,
+    };
+    if (wh === 'CA') {
+      update.alloc_ca_detail = Object.keys(allocDetail).length > 0 ? allocDetail : null;
+    } else {
+      update.alloc_detail = Object.keys(allocDetail).length > 0 ? allocDetail : null;
+    }
+    await db.from('order_lines').update(update).eq('id', l.id);
+  }
+}
+
 async function startBackOrder(orderId, wh) {
   // WH 설정 + status를 po_entered로 변경 → Order Status 칸반에 나타남
   const whObj = warehouses.find(w => w.code === wh);
