@@ -17189,7 +17189,12 @@ lines.sort((a, b) => {
         <tr style="background:var(--header);color:#fff;">
           <th style="padding:6px 8px;width:32px;">#</th>
           <th style="padding:6px 8px;text-align:left;min-width:80px;">PO Style</th>
-          <th style="padding:6px 8px;text-align:center;min-width:80px;color:#fbbf24;">Side Seam</th>
+          <th style="padding:6px 8px;text-align:center;min-width:80px;color:#fbbf24;">
+            Side Seam<br>
+            <input type="checkbox" title="전체 선택/해제" style="width:13px;height:13px;cursor:pointer;accent-color:#7c3aed;margin-top:3px;"
+              onchange="toggleAllSideSeam(this.checked)"/>
+            <span style="font-size:9px;color:#9ca3af;">전체</span>
+          </th>
           <th style="padding:6px 8px;text-align:left;min-width:120px;">Color</th>
           <th style="padding:6px 8px;min-width:70px;">Size</th>
           <th style="padding:6px 8px;min-width:70px;">Qty</th>
@@ -17251,33 +17256,49 @@ function updateOurStyle(idx, val) {
 
 function toggleSideSeam(idx, checked) {
   if (!parsedPoData?.lines[idx]) return;
-  const poStyle = parsedPoData.lines[idx].style_number;
-  const allStyles = window._allStylesList || [];
-  const ssStyleNum = poStyle + 'SS';
-  const ssStyleObj = allStyles.find(s => s.style_number === ssStyleNum);
+  // 개별 라인만 업데이트
+  parsedPoData.lines[idx].is_side_seam = checked;
 
-  // 같은 PO Style 번호 라인 전체 업데이트
-  parsedPoData.lines.forEach((l, i) => {
-    if (l.style_number === poStyle) {
-      l.is_side_seam = checked;
-      const rows = document.querySelectorAll('#po-lines-tbody tr');
-      const cb = rows[i]?.querySelector('input[type="checkbox"]');
-      if (cb) cb.checked = checked;
-    }
-  });
-
-  // poLines도 즉시 업데이트 (이미 entry 테이블에 반영된 경우)
+  // poLines도 즉시 업데이트
   if (typeof poLines !== 'undefined') {
-    poLines.forEach((l, i) => {
-      if ((l.poStyleNum || l.styleNum) === poStyle) {
-        l.isSideSeam = checked;
-        l.styleNum = checked ? ssStyleNum : poStyle;
-        if (ssStyleObj) l.description = ssStyleObj.description || l.description;
-        // 재고 키 재계산
-        const invKey = `${l.styleNum}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
-        const scQty = scInventory[invKey]?.qty || 0;
-        const caQty = caInventory[invKey]?.qty || 0;
-      }
+    const l = parsedPoData.lines[idx];
+    const allStyles = window._allStylesList || [];
+    const poStyle = l.style_number;
+    const ssStyleNum = poStyle + 'SS';
+    const ssStyleObj = allStyles.find(s => s.style_number === ssStyleNum);
+    // poLines에서 같은 color+size 라인 찾아서 업데이트
+    const match = poLines.find(pl =>
+      (pl.poStyleNum || pl.styleNum) === poStyle &&
+      pl.color === l.color && pl.size === l.size
+    );
+    if (match) {
+      match.isSideSeam = checked;
+      match.styleNum = checked ? ssStyleNum : poStyle;
+      if (ssStyleObj && checked) match.description = ssStyleObj.description || match.description;
+    }
+    renderEntryTable();
+    liveRenderDocs();
+  }
+}
+
+function toggleAllSideSeam(checked) {
+  if (!parsedPoData?.lines) return;
+  const allStyles = window._allStylesList || [];
+  parsedPoData.lines.forEach((l, i) => {
+    l.is_side_seam = checked;
+    const rows = document.querySelectorAll('#po-lines-tbody tr');
+    const cb = rows[i]?.querySelector('input[type="checkbox"]:not([title="전체 선택/해제"])');
+    if (cb) cb.checked = checked;
+  });
+  // poLines 전체 업데이트
+  if (typeof poLines !== 'undefined') {
+    poLines.forEach(pl => {
+      const poStyle = pl.poStyleNum || pl.styleNum.replace(/SS$/, '');
+      const ssStyleNum = poStyle + 'SS';
+      const ssStyleObj = allStyles.find(s => s.style_number === ssStyleNum);
+      pl.isSideSeam = checked;
+      pl.styleNum = checked ? ssStyleNum : poStyle;
+      if (ssStyleObj && checked) pl.description = ssStyleObj.description || pl.description;
     });
     renderEntryTable();
     liveRenderDocs();
