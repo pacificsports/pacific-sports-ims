@@ -4504,15 +4504,21 @@ async function _doSaveInvoice() {
           is_side_seam: !!l.isSideSeam
         };
       });
-      // color + size 순서로 정렬 (Side Seam 여부 무관하게 사이즈 순)
+      // style + color + size 순서로 정렬 (Side Seam 여부 무관)
       const SIZE_ORDER_EMAIL = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
       emailLines.sort((a, b) => {
-        const ca = (a.color||'').replace(' (Side Seam)','').localeCompare((b.color||'').replace(' (Side Seam)',''));
-        if (ca !== 0) return ca;
+        // 스타일 번호 먼저
+        const stA = String(a.style||''), stB = String(b.style||'');
+        if (stA !== stB) return stA.localeCompare(stB, undefined, {numeric:true});
+        // 색상 (Side Seam 텍스트 제거 후 비교)
+        const colorA = (a.color||'').replace(' (Side Seam)','').trim();
+        const colorB = (b.color||'').replace(' (Side Seam)','').trim();
+        if (colorA !== colorB) return colorA.localeCompare(colorB);
+        // 사이즈
         const sa = SIZE_ORDER_EMAIL.indexOf((a.size||'').toUpperCase());
         const sb = SIZE_ORDER_EMAIL.indexOf((b.size||'').toUpperCase());
         if (sa !== sb) return (sa === -1 ? 99 : sa) - (sb === -1 ? 99 : sb);
-        // 같은 color+size면 Side Seam을 뒤로
+        // 같은 color+size면 일반 → Side Seam 순
         return (a.is_side_seam ? 1 : 0) - (b.is_side_seam ? 1 : 0);
       });
 
