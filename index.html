@@ -7419,8 +7419,7 @@ async function boStartPartial(boOrderId, boOrderNum) {
     if (!whGroups[l._wh]) whGroups[l._wh] = [];
     whGroups[l._wh].push(l);
   });
-  const whSummary = Object.entries(whGroups).map(([w,ls]) => `${w}: ${ls.reduce((s,l)=>s+l._shipQty,0)}pcs`).join(', ');
-  if (!confirm(`${selectedLines.length}개 라인 (${whSummary}) Start Order 하시겠습니까?`)) return;
+  // confirm 팝업 없이 바로 진행
 
   document.getElementById('bo-detail-modal-wrap')?.remove();
   showToast('⏳ Order Status에 카드 생성 중...');
@@ -7466,26 +7465,46 @@ async function boStartPartial(boOrderId, boOrderNum) {
     if (shipEl) shipEl.value = boOrder.ship_addr || '';
   }
 
-  // WH 설정 (첫번째 WH 기준)
+  // WH 설정 — 라인별로 다른 WH면 SC&CA, 단일이면 해당 WH
   const firstWh = Object.keys(whGroups)[0] || 'SC';
+  const hasBothWh = Object.keys(whGroups).length > 1;
   const whSel = document.getElementById('inv-wh-sel');
-  if (whSel) { whSel.value = firstWh; whSel.dispatchEvent(new Event('change')); }
+  if (whSel) {
+    if (hasBothWh) {
+      // SC&CA 옵션 선택
+      const scCaOption = [...whSel.options].find(o => o.value.includes('SC') && o.value.includes('CA'));
+      if (scCaOption) whSel.value = scCaOption.value;
+    } else {
+      const targetOpt = [...whSel.options].find(o => {
+        const wCode = o.dataset?.code || o.value;
+        return wCode === firstWh || (firstWh === 'SC' && !wCode.includes('CA')) || (firstWh === 'CA' && wCode.includes('CA'));
+      });
+      if (targetOpt) whSel.value = targetOpt.value;
+    }
+    whSel.dispatchEvent(new Event('change'));
+  }
+  await new Promise(r => setTimeout(r, 200));
 
   // 라인 채우기
   poLines = [];
   for (const l of selectedLines) {
+    const lineWh = hasBothWh ? 'SC&CA' : (l._wh || firstWh);
     poLines.push({
       styleNum: l.styles?.style_number || '',
       color: l.color || '',
       size: l.size || '',
       qty: l._shipQty,
       price: l.unit_price || 0,
-      wh: l._wh || firstWh,
+      wh: lineWh,
       isSideSeam: l.is_side_seam || false,
       isSideSeamChecked: l.is_side_seam || false,
+      ppb: l.pcs_per_box || 72,
+      cases: Math.floor(l._shipQty / (l.pcs_per_box || 72)),
+      loose: l._shipQty % (l.pcs_per_box || 72),
     });
   }
   renderPoLines();
+  await new Promise(r => setTimeout(r, 300));
   await liveRenderDocs();
 
   // BO 정보 안내 토스트
