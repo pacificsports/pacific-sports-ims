@@ -7330,87 +7330,142 @@ async function loadBackOrders() {
 
     const cardId = 'bo-card-' + o.id;
 
-    // PO Entry 스타일 라인 테이블
-    const lineRows = sortedLines.map((l,li) => {
-      const styleNum = l.styles?.style_number || '';
-      const normColor = (l.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
-      const invKey = l.is_side_seam
-        ? `${styleNum}|${normColor.toUpperCase()}|${(l.size||'').toUpperCase()}|SS`
-        : `${styleNum}|${normColor.toUpperCase()}|${(l.size||'').toUpperCase()}`;
-      const scAvail = scInventory[invKey]?.qty || 0;
-      const caAvail = caInventory[invKey]?.qty || 0;
-      const pcrSC = pcrInventory[invKey]?.qty || 0;
-      const pcrCA = caPcrInventory[invKey]?.qty || 0;
-      const boQty = l.qty_backordered || 0;
-      const hasStock = scAvail + caAvail + pcrSC + pcrCA > 0;
-      const sku = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + (l.size||'')).toLowerCase() + (l.is_side_seam?'+ss':'');
-      return `<tr style="border-bottom:1px solid #f3f4f6;">
-        <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7280;">${sku}</td>
-        <td style="padding:6px 8px;font-size:12px;font-weight:700;color:#111;">#${styleNum}</td>
-        <td style="padding:6px 8px;font-size:12px;">${l.color||''}${l.is_side_seam?' <span style="font-size:10px;color:#7c3aed;">(SS)</span>':''}</td>
-        <td style="padding:6px 8px;text-align:center;font-size:12px;">${l.size||''}</td>
-        <td style="padding:6px 8px;text-align:center;font-size:14px;font-weight:900;color:#dc2626;">${boQty.toLocaleString()}</td>
-        <td style="padding:6px 8px;font-size:11px;" class="${scAvail+pcrSC > 0 ? 'stock-available' : ''}">
-          <div style="color:${scAvail+pcrSC>0?'#1e40af':'#9ca3af'};font-weight:600;">${(scAvail+pcrSC).toLocaleString()} +${pcrSC} PCR</div>
-          <div style="font-size:10px;color:#6b7280;">${scAvail > 0 ? '<span style="color:#1e40af;">●</span> SC 재고 있음' : '<span style="color:#d1d5db;">●</span> 없음'}</div>
-        </td>
-        <td style="padding:6px 8px;font-size:11px;" class="${caAvail+pcrCA > 0 ? 'stock-available' : ''}">
-          <div style="color:${caAvail+pcrCA>0?'#ea580c':'#9ca3af'};font-weight:600;">${(caAvail+pcrCA).toLocaleString()} +${pcrCA} PCR</div>
-          <div style="font-size:10px;color:#6b7280;">${caAvail > 0 ? '<span style="color:#ea580c;">●</span> CA 재고 있음' : '<span style="color:#d1d5db;">●</span> 없음'}</div>
-        </td>
-      </tr>`;
-    }).join('');
-
-    const hasAnyStock = sortedLines.some(l => {
-      const styleNum = l.styles?.style_number || '';
-      const normColor = (l.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
-      const invKey = `${styleNum}|${normColor.toUpperCase()}|${(l.size||'').toUpperCase()}`;
-      return (scInventory[invKey]?.qty||0) + (caInventory[invKey]?.qty||0) + (pcrInventory[invKey]?.qty||0) > 0;
-    });
+    // poLines 임시 세팅 (renderEntryTable용)
+    const boPoLines = sortedLines.map(l => ({
+      styleNum: l.styles?.style_number || '',
+      color: l.color || '',
+      size: l.size || '',
+      qty: l.qty_backordered || 0,
+      price: l.unit_price || 0,
+      wh: wh,
+      isSideSeam: l.is_side_seam || false,
+      isSideSeamChecked: l.is_side_seam || false,
+      ppb: l.pcs_per_box || 72,
+      cases: Math.floor((l.qty_backordered||0) / (l.pcs_per_box||72)),
+      loose: (l.qty_backordered||0) % (l.pcs_per_box||72),
+      allocSC: l._allocSC || {},
+      allocCA: l._allocCA || {},
+      pcrTransfersPending: [],
+      caPcrTransfersPending: [],
+      location: '', locationCA: '',
+      _boLineId: l.id,
+    }));
 
     return `
     <div id="${cardId}" style="background:#fff;border:1px solid #e5e7eb;border-left:4px solid ${whColor};border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
       <!-- 헤더 -->
       <div style="padding:10px 16px;background:${whBg};display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e5e7eb;">
-        <div style="display:flex;align-items:center;gap:12px;">
+        <div style="display:flex;align-items:center;gap:10px;">
           <span style="font-size:13px;font-weight:700;color:#111827;">${o.customer_name}</span>
           <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;background:#fff;padding:2px 8px;border-radius:4px;border:1px solid #e5e7eb;">PO# ${o.customer_po||'—'}</span>
-          <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${whColor};color:#fff;">${wh}</span>
+          <span style="font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;background:${whColor};color:#fff;">${wh}</span>
         </div>
-        <div style="display:flex;align-items:center;gap:12px;">
-          <span style="font-size:16px;font-weight:900;color:#dc2626;">${totalBack.toLocaleString()} pcs B/O</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:15px;font-weight:900;color:#dc2626;">${totalBack.toLocaleString()} pcs B/O</span>
           <span style="font-size:11px;color:${urgentColor};font-weight:600;">${elapsed}</span>
           <button onclick="cancelBackOrder('${o.id}','${o.customer_po||o.order_number}')" style="padding:4px 10px;background:#fff;color:#dc2626;border:1px solid #fca5a5;border-radius:5px;font-size:11px;cursor:pointer;">✕ Cancel</button>
         </div>
       </div>
-      <!-- 라인 테이블 (PO Entry 스타일) -->
-      <div style="overflow-x:auto;">
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <thead>
-            <tr style="background:#f8fafc;border-bottom:2px solid #e5e7eb;">
-              <th style="padding:7px 8px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Item Code</th>
-              <th style="padding:7px 8px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Style</th>
-              <th style="padding:7px 8px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Color</th>
-              <th style="padding:7px 8px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;">Size</th>
-              <th style="padding:7px 8px;text-align:center;font-size:10px;color:#dc2626;text-transform:uppercase;">B/O Qty</th>
-              <th style="padding:7px 8px;text-align:left;font-size:10px;color:#1e40af;text-transform:uppercase;">SC / SC-PCR</th>
-              <th style="padding:7px 8px;text-align:left;font-size:10px;color:#ea580c;text-transform:uppercase;">CA / CA-PCR</th>
-            </tr>
-          </thead>
-          <tbody>${lineRows}</tbody>
-        </table>
+      <!-- PO Entry 테이블 — boOpenForEntry로 진입 -->
+      <div id="bo-entry-wrap-${o.id}" style="padding:8px 0;">
+        <div style="padding:8px 16px;font-size:12px;color:#6b7280;">📦 Distribute 버튼을 눌러 재고 배분을 시작하세요.</div>
       </div>
       <!-- 액션 버튼 -->
       <div style="padding:10px 16px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;background:#fafafa;">
-        <button onclick="boCardDistribute('${o.id}')" style="padding:8px 20px;background:${whColor};color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">
-          📦 Distribute & Start Order
-        </button>
+        <button id="bo-distribute-btn-${o.id}" onclick="boOpenForDistribute('${o.id}')" style="padding:8px 18px;background:${whColor};color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">📦 Distribute</button>
+        <button id="bo-startorder-btn-${o.id}" onclick="boFinishDistribute('${o.id}')" disabled style="padding:8px 18px;background:#e5e7eb;color:#9ca3af;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:not-allowed;">▶ Start Order</button>
       </div>
     </div>`;
   }).join('') + `</div>`;
 }
 
-// ── Back Order Distribute & Start
+// ── BO 카드에서 Distribute 버튼 클릭 — PO Entry로 이동 + Bin 배분 모달 오픈
+async function boOpenForDistribute(boOrderId) {
+  const boLines = window._boLinesCache?.[boOrderId] || [];
+  if (!boLines.length) { showToast('⚠️ 라인 정보 없음'); return; }
+  const { data: boOrder } = await db.from('orders').select('*').eq('id', boOrderId).single();
+  if (!boOrder) return;
+
+  // 전역에 현재 BO 오더 ID 저장
+  window._currentBoOrderId = boOrderId;
+  window._currentBoOrder = boOrder;
+  window._currentBoLines = boLines;
+
+  // poLines 세팅
+  poLines = boLines.map(l => ({
+    styleNum: l.styles?.style_number || '',
+    color: l.color || '',
+    size: l.size || '',
+    qty: l.qty_backordered || 0,
+    price: l.unit_price || 0,
+    wh: boOrder.wh_code || 'SC',
+    isSideSeam: l.is_side_seam || false,
+    isSideSeamChecked: l.is_side_seam || false,
+    ppb: l.pcs_per_box || 72,
+    cases: Math.floor((l.qty_backordered||0) / (l.pcs_per_box||72)),
+    loose: (l.qty_backordered||0) % (l.pcs_per_box||72),
+    allocSC: {}, allocCA: {},
+    pcrTransfersPending: [], caPcrTransfersPending: [],
+    location: '', locationCA: '',
+    _boLineId: l.id,
+  }));
+
+  // _boStartData 저장 (Save PO 시 BO 차감용)
+  window._boStartData = {
+    boOrderId,
+    selectedLines: boLines.map(l => ({...l, _shipQty: l.qty_backordered||0, _boQty: l.qty_backordered||0})),
+    whGroups: {}
+  };
+
+  // PO Entry로 이동
+  localStorage.removeItem('po_draft');
+  window._boSkipDraft = true;
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+  await new Promise(r => setTimeout(r, 100));
+  openNewInvoice();
+  await new Promise(r => setTimeout(r, 300));
+
+  // 고객 정보 채우기
+  updateCustomerSelects();
+  await new Promise(r => setTimeout(r, 100));
+  const custSel = document.getElementById('inv-cust-sel');
+  if (custSel && boOrder.customer_id) {
+    custSel.value = boOrder.customer_id;
+    onCustSelChange(custSel);
+    await new Promise(r => setTimeout(r, 100));
+  }
+  const poEl = document.getElementById('inv-cust-po');
+  if (poEl) poEl.value = boOrder.customer_po || '';
+  if (boOrder.bill_addr) { const el=document.getElementById('inv-bill-addr'); if(el){el.value=boOrder.bill_addr;autoResizeTextarea(el);} }
+  if (boOrder.ship_addr) { const el=document.getElementById('inv-ship-addr'); if(el){el.value=boOrder.ship_addr;autoResizeTextarea(el);} }
+
+  // WH 설정
+  const whSel = document.getElementById('inv-wh-sel');
+  if (whSel) {
+    const whObj = warehouses.find(w => w.code === (boOrder.wh_code||'SC'));
+    if (whObj) { whSel.value = whObj.id; whSel.dispatchEvent(new Event('change')); }
+  }
+
+  renderEntryTable();
+  await new Promise(r => setTimeout(r, 300));
+  await liveRenderDocs();
+
+  // Bin 배분 모달 자동 오픈
+  await new Promise(r => setTimeout(r, 200));
+  openBinAllocModal();
+  showToast('📦 Bin 배분 후 Save PO 하세요');
+}
+
+// ── BO Start Order — Distribute 완료 후 Order Status로 이동
+async function boFinishDistribute(boOrderId) {
+  // 이 함수는 현재 미사용 (Save PO가 Order Status 이동을 처리)
+  showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
+  await loadOrderStatus();
+  showToast('✅ Order Status로 이동됨');
+  loadBackOrders();
+}
+
+// ── Back Order Distribute & Start (레거시)
 async function boCardDistribute(boOrderId) {
   const boLines = window._boLinesCache?.[boOrderId] || [];
   if (!boLines.length) { showToast('⚠️ 라인 정보를 찾을 수 없습니다.'); return; }
