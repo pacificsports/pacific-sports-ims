@@ -2278,12 +2278,16 @@ async function loadScInventory() {
   window.binInventory = { 'SC':{}, 'SC-PCR':{}, 'CA':{}, 'CA-PCR':{} };
 
   const { data: allInv } = await db.from('inventory')
-    .select('id, qty_on_hand, qty_committed, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)');
+    .select('id, qty_on_hand, qty_committed, sku, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)');
   allInv.forEach(row => {
     if (!row.warehouses) return;
     const normColor = (row.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
     const styleNum = row.styles?.style_number || row.style_number || '';
-    const key = `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+    const isSS = (row.sku||'').toLowerCase().endsWith('+ss');
+    // +ss 재고는 별도 키로 관리: styleNum|COLOR|SIZE|SS
+    const key = isSS
+      ? `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}|SS`
+      : `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
     const qty = Math.max(0, (row.qty_on_hand || 0) - (row.qty_committed || 0)); // available qty
     const loc = row.location || '';
     const rcvDate = row.received_date || (row.created_at ? row.created_at.slice(0,10) : null);
@@ -3221,6 +3225,10 @@ function renderEntryTable() {
     totalAmt += l.qty * l.price;
     totalCases += l.cases;
     totalLoose += l.loose;
+    // Side Seam이면 +ss sku로 재고 조회
+    const ssInvKey = l.isSideSeam
+      ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
+      : null;
     const pcrOk = l.pcrQty !== null && l.pcrQty >= l.loose;
     const pcrBadge = l.loose === 0 ? '<span style="color:#888">—</span>'
       : l.pcrQty === null ? '<span style="color:#999">미확인</span>'
@@ -3238,7 +3246,9 @@ function renderEntryTable() {
       <td><input type="number" class="fi" value="${l.price}" step="0.01" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].price=parseFloat(this.value)||0;renderEntryTable();liveRenderDocs()"/></td>
       <td style="padding:4px 8px;">
         ${(function(){
-          const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+          const k = l.isSideSeam
+            ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
+            : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
           const sq=scInventory[k]?.qty||0;
           const pcrCsKey=`|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
           const scPcrBinsA = window.binInventory?.['SC-PCR']?.[k] || [];
@@ -3276,7 +3286,9 @@ function renderEntryTable() {
       </td>
       <td style="padding:4px 8px;">
         ${(function(){
-          const k=`${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+          const k = l.isSideSeam
+            ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
+            : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
           const cq=caInventory[k]?.qty||0;
           const caPcrCsKey=`|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
           const caPcrBins = (window.binInventory?.['CA-PCR']?.[k] || window.binInventory?.['CA-PCR']?.[caPcrCsKey] || []);
@@ -3841,8 +3853,7 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
 
   // Order Lines 저장 + qty_committed 증가
   for (const l of poLines) {
-    const s = styles.find(x => x.style_number === l.styleNum)
-      || (l.isSideSeam ? styles.find(x => x.style_number === (l.poStyleNum||l.styleNum) + '+SS') : null);
+    const s = styles.find(x => x.style_number === l.styleNum);
 
     // 현재 재고에서 committed 가능한 수량 확인
     const { data: invRows } = await db.from('inventory')
@@ -17459,14 +17470,12 @@ function applyPoPreview() {
   // 라인 채우기 — 새 PO 업로드 시 기존 라인 자동 교체 (Save 전이므로 그냥 덮어씌움)
   poLines = [];
   const newLines = (d.lines||[]).map(l => {
-    // Side Seam 체크 시 스타일 번호에 SS 붙여서 처리
-    const effectiveStyleNum = l.is_side_seam ? (l.style_number + '+SS') : l.style_number;
-    const styleObj = styles.find(s => String(s.style_number) === String(effectiveStyleNum))
-      || styles.find(s => String(s.style_number) === String(l.style_number));
+    const styleObj = styles.find(s => String(s.style_number) === String(l.style_number));
     const ppb = styleObj ? calcPpb(styleObj.description || '', l.size) : 72;
-const qty = l.qty || 0;
-    // 재고 조회도 SS 버전으로
-    const invKey = `${effectiveStyleNum}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+    const qty = l.qty || 0;
+    // Side Seam이면 sku 뒤에 +ss 붙여서 재고 조회
+    const invKey = `${l.style_number}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+    const invKeySS = `${l.style_number}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}|SS`;
     const scQty = scInventory[invKey]?.qty || 0;
     const caQty = caInventory[invKey]?.qty || 0;
     const pref = window._custPrefWh || 'SC';
@@ -17490,9 +17499,8 @@ const qty = l.qty || 0;
     let bins = {};
     try { bins = getDefaultBins(String(l.style_number), l.color, l.size); } catch(e) {}
     return {
-      code: (effectiveStyleNum + (l.color||'').replace(/\s+/g,'').substring(0,6) + l.size).toLowerCase(),
-      styleNum: String(effectiveStyleNum),
-      poStyleNum: String(l.style_number),  // 원본 PO 스타일 번호
+      code: (l.style_number + (l.color||'').replace(/\s+/g,'').substring(0,6) + l.size).toLowerCase() + (l.is_side_seam ? '+ss' : ''),
+      styleNum: String(l.style_number),
       isSideSeam: !!l.is_side_seam,
       color: l.color,
       size: l.size,
