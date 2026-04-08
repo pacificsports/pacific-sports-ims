@@ -13657,6 +13657,9 @@ async function _doShippedCoreInner(emp) {
     }
   }
 
+  // Invoice 이메일용으로 BOL 파일 보존 (초기화 전에 저장)
+  window._savedBolFilesForInvoice = [...(_bolFilesDataSingle||[])];
+
   _bolFileData = null;
   _bolFilesDataSingle = [];
   loadOrderStatus();
@@ -13830,11 +13833,12 @@ async function reviewAndSendInvoice(orderId, wh) {
       _attEl.appendChild(_noBolNote);
     }
   }
-  // 수동 업로드된 BOL 파일들 표시 (_bolFilesDataSingle)
-  if (window._bolFilesDataSingle && window._bolFilesDataSingle.length > 0) {
-    window._bolFilesDataSingle.forEach(f => {
-      if (f.base64) {
-        _attEl.appendChild(_makeAttBtn('📎 ' + (f.fileName || 'BOL Upload'), async () => f.base64));
+  // 수동 업로드된 BOL 파일들 (Shipped 처리 시 보존된 파일)
+  if (window._savedBolFilesForInvoice && window._savedBolFilesForInvoice.length > 0) {
+    window._savedBolFilesForInvoice.forEach(f => {
+      // DB 저장된 Signed BOL과 중복 방지 (fileName으로 구분)
+      if (f.base64 && f.fileName && !f.fileName.includes('BOL_PO')) {
+        _attEl.appendChild(_makeAttBtn('📎 ' + f.fileName, async () => f.base64));
       }
     });
   }
@@ -13991,22 +13995,10 @@ async function sendInvoiceEmail() {
       const bolFilesForInv = [];
       // DB 저장된 Signed BOL
       if (bolB64) bolFilesForInv.push({ base64: bolB64, filename: `SignedBOL_PO${order?.customer_po||''}_${invWh}.pdf`, mime: 'application/pdf' });
-      // 메모리에 있는 수동 첨부 BOL 파일들 (_bolFilesData)
-      if (window._bolFilesData && Array.isArray(window._bolFilesData)) {
-        window._bolFilesData.forEach(f => {
+      // 보존된 BOL 파일들 (Shipped 처리 시 저장)
+      if (window._savedBolFilesForInvoice && Array.isArray(window._savedBolFilesForInvoice)) {
+        window._savedBolFilesForInvoice.forEach(f => {
           if (f.base64) bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
-        });
-      }
-      // _bolFilesDataSingle은 배열
-      if (window._bolFilesDataSingle && Array.isArray(window._bolFilesDataSingle)) {
-        window._bolFilesDataSingle.forEach(f => {
-          if (f.base64) bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
-        });
-      }
-      // 수동 업로드된 BOL 파일 (_uploadedBolFiles)
-      if (window._uploadedBolFiles && Array.isArray(window._uploadedBolFiles)) {
-        window._uploadedBolFiles.forEach(f => {
-          if (f.base64) bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_upload_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
         });
       }
 
@@ -15275,11 +15267,9 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
         : (l.wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{}));
 
       const _allocEntries = Object.entries(alloc);
-      const _transferredBins = new Set(
-        _allocEntries.filter(([k]) => k.includes('TRANSFER|')).map(([k]) => k.split('|')[1])
-      );
+      // TRANSFER 키만 제외 — 원본 bin은 그대로 합산
       let allocTotal = _allocEntries
-        .filter(([k]) => !k.includes('TRANSFER|') && !_transferredBins.has(k))
+        .filter(([k]) => !k.includes('TRANSFER|'))
         .reduce((s,[,v]) => { if (typeof v==='object') { if (v.pcs>0) return s+v.pcs; if (v.boxes>0) return s+(v.boxes*ppb); return s; } return s+(v||0); }, 0);
 
       // pcr_prepared_lines 오버라이드 — PCR 키 있을 때만 적용
