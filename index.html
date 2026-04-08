@@ -7266,52 +7266,64 @@ async function loadBackOrders() {
     return;
   }
 
-  wrap.innerHTML = filtered.map(o => {
+  const SIZE_ORDER_BO = ['2T','3T','4T','5T','XS','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
+  wrap.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;padding:4px 0;">` +
+  filtered.map(o => {
     const wh = o.wh_code || o.warehouses?.code || 'SC';
     const isCA = wh === 'CA';
     const lines = boLinesMap[o.id] || [];
     const totalBack = lines.reduce((s,l) => s+(l.qty_backordered||0), 0);
-    const SIZE_ORDER = ['2T','3T','4T','5T','XS','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
     const sortedLines = [...lines].sort((a,b) => {
       const ca = (a.color||'').localeCompare(b.color||'');
       if (ca !== 0) return ca;
-      return (SIZE_ORDER.indexOf((a.size||'').toUpperCase())||99) - (SIZE_ORDER.indexOf((b.size||'').toUpperCase())||99);
+      const si = SIZE_ORDER_BO.indexOf((a.size||'').toUpperCase());
+      const sj = SIZE_ORDER_BO.indexOf((b.size||'').toUpperCase());
+      return (si===-1?99:si)-(sj===-1?99:sj);
     });
 
     const d = new Date(o.created_at);
     const days = Math.floor((Date.now()-d.getTime())/86400000);
     const hrs = Math.floor((Date.now()-d.getTime())/3600000);
     const elapsed = days > 0 ? `${days}d ago` : `${hrs}h ago`;
-    const elapsedColor = days >= 7 ? '#dc2626' : days >= 3 ? '#d97706' : '#6b7280';
+    const urgentColor = days >= 14 ? '#dc2626' : days >= 7 ? '#d97706' : '#6b7280';
 
-    const borderColor = isCA ? '#fdba74' : '#fca5a5';
-    const badgeBg = isCA ? '#ea580c' : '#1e40af';
+    const whColor = isCA ? '#ea580c' : '#1e40af';
+    const whBg = isCA ? '#fff7ed' : '#eff6ff';
+    const borderColor = isCA ? '#fed7aa' : '#bfdbfe';
 
-    const lineChips = sortedLines.map(l =>
-      `<span style="font-size:11px;padding:2px 8px;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;color:#991b1b;white-space:nowrap;">
-        ${l.styles?.style_number||''} ${l.color||''} ${l.size||''} — <b>${(l.qty_backordered||0).toLocaleString()} pcs</b>
-      </span>`
+    const lineRows = sortedLines.map(l =>
+      `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #f3f4f6;">
+        <span style="font-size:11px;color:#374151;font-family:'IBM Plex Mono',monospace;">${l.styles?.style_number||''}</span>
+        <span style="font-size:11px;color:#374151;">${l.color||''} ${l.size||''}</span>
+        <span style="font-size:12px;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</span>
+      </div>`
     ).join('');
 
-    return `<div style="background:#fff;border:2px solid ${borderColor};border-radius:10px;padding:14px 16px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+    return `
+    <div style="background:#fff;border:1px solid ${borderColor};border-top:3px solid ${whColor};border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+      <!-- 카드 헤더 -->
+      <div style="background:${whBg};padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
         <div>
           <div style="font-size:13px;font-weight:700;color:#111827;">${o.customer_name}</div>
-          <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;background:#f1f5f9;padding:2px 7px;border-radius:4px;display:inline-block;margin-top:3px;color:#374151;">PO# ${o.customer_po||'—'}</div>
+          <div style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#6b7280;margin-top:1px;">PO# ${o.customer_po||'—'}</div>
         </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-          <span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;background:${badgeBg};color:#fff;">${wh}</span>
-          <span style="font-size:18px;font-weight:900;color:#dc2626;">${totalBack.toLocaleString()} pcs</span>
-          <span style="font-size:10px;color:${elapsedColor};font-weight:600;">${elapsed}</span>
+        <div style="text-align:right;">
+          <div style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${whColor};color:#fff;display:inline-block;">${wh}</div>
+          <div style="font-size:20px;font-weight:900;color:#dc2626;margin-top:2px;">${totalBack.toLocaleString()} pcs</div>
+          <div style="font-size:10px;color:${urgentColor};font-weight:600;">${elapsed}</div>
         </div>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;">${lineChips}</div>
-      <div style="display:flex;gap:6px;">
-        <button style="flex:1;padding:7px;background:#1e40af;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;" onclick="showBoDetail('${o.id}')">📋 Detail & Start Order</button>
-        <button style="padding:7px 12px;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:12px;cursor:pointer;" onclick="cancelBackOrder('${o.id}','${o.customer_po||o.order_number}')">✕ Cancel</button>
+      <!-- 라인 목록 -->
+      <div style="padding:8px 14px;max-height:160px;overflow-y:auto;">
+        ${lineRows}
+      </div>
+      <!-- 버튼 -->
+      <div style="padding:8px 14px;border-top:1px solid #f3f4f6;display:flex;gap:6px;">
+        <button onclick="showBoDetail('${o.id}')" style="flex:1;padding:8px;background:${whColor};color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">📋 Detail & Start Order</button>
+        <button onclick="cancelBackOrder('${o.id}','${o.customer_po||o.order_number}')" style="padding:8px 10px;background:#fff;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:12px;cursor:pointer;">✕</button>
       </div>
     </div>`;
-  }).join('');
+  }).join('') + `</div>`;
 }
 
 // ── Back Order Detail 체크박스 헬퍼
