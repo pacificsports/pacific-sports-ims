@@ -7321,7 +7321,7 @@ async function loadBackOrders() {
     const lineRows = sortedLines.map((l,li) =>
       `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;cursor:pointer;">
         <input type="checkbox" id="bocard-chk-${o.id}-${li}" data-order-id="${o.id}" data-line-id="${l.id}" data-bo-qty="${l.qty_backordered||0}"
-          style="width:15px;height:15px;cursor:pointer;" checked onchange="boCardUpdateTotal('${o.id}')">
+          style="width:15px;height:15px;cursor:pointer;" onchange="boCardUpdateTotal('${o.id}')">
         <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#6b7280;min-width:36px;">${l.size||''}</span>
         <span style="font-size:11px;color:#374151;flex:1;">${l.color||''}${l.is_side_seam?' <span style="color:#7c3aed;font-size:10px;">(SS)</span>':''}</span>
         <span style="font-size:12px;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</span>
@@ -7337,7 +7337,7 @@ async function loadBackOrders() {
           <div style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#6b7280;margin-top:1px;">PO# ${o.customer_po||'—'}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:20px;font-weight:900;color:#dc2626;" id="bocard-total-${o.id}">${totalBack.toLocaleString()} pcs</div>
+          <div style="font-size:20px;font-weight:900;color:#dc2626;" id="bocard-total-${o.id}">0 pcs</div>
           <div style="font-size:10px;color:${urgentColor};font-weight:600;">${elapsed}</div>
         </div>
       </div>
@@ -7345,7 +7345,7 @@ async function loadBackOrders() {
       <div style="padding:4px 14px 0;">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;">
           <label style="font-size:10px;color:#6b7280;cursor:pointer;display:flex;align-items:center;gap:4px;">
-            <input type="checkbox" checked onchange="boCardToggleAll('${o.id}',this.checked)" style="width:13px;height:13px;"> 전체선택
+            <input type="checkbox" onchange="boCardToggleAll('${o.id}',this.checked)" style="width:13px;height:13px;"> 전체선택
           </label>
         </div>
         ${lineRows}
@@ -7400,26 +7400,29 @@ async function boCardStartOrder(orderId) {
   const { data: boOrder } = await db.from('orders').select('*').eq('id', orderId).single();
   if (!boOrder) return;
 
-  // 고객 선택 — inv-cust-sel dropdown
+  // 고객 선택 — updateCustomerSelects 후 value 설정
+  updateCustomerSelects();
+  await new Promise(r => setTimeout(r, 100));
   const custMatch = (customers||[]).find(c => c.id === boOrder.customer_id);
   const custSel = document.getElementById('inv-cust-sel');
   if (custMatch && custSel) {
     custSel.value = boOrder.customer_id;
-    onCustSelChange(custSel);
-    await new Promise(r => setTimeout(r, 200));
+    onCustSelChange(custSel);  // Terms, 주소 자동 채우기
+    await new Promise(r => setTimeout(r, 100));
   }
-
-  // 나머지 필드 채우기
   currentInvoiceData = { ...(currentInvoiceData||{}), customer: custMatch };
+  // PO# 채우기
   const poEl = document.getElementById('inv-cust-po');
   if (poEl) poEl.value = boOrder.customer_po || '';
-  const termsEl = document.getElementById('inv-cust-terms');
-  if (termsEl) termsEl.value = boOrder.terms || 'N30';
-  // 주소는 onCustSelChange에서 이미 채워짐, BO 오더의 주소로 덮어쓰기
-  const billEl = document.getElementById('inv-bill-addr');
-  if (billEl && boOrder.bill_addr) { billEl.value = boOrder.bill_addr; autoResizeTextarea(billEl); }
-  const shipEl = document.getElementById('inv-ship-addr');
-  if (shipEl && boOrder.ship_addr) { shipEl.value = boOrder.ship_addr; autoResizeTextarea(shipEl); }
+  // BO 오더 주소로 덮어쓰기
+  if (boOrder.bill_addr) {
+    const billEl = document.getElementById('inv-bill-addr');
+    if (billEl) { billEl.value = boOrder.bill_addr; autoResizeTextarea(billEl); }
+  }
+  if (boOrder.ship_addr) {
+    const shipEl = document.getElementById('inv-ship-addr');
+    if (shipEl) { shipEl.value = boOrder.ship_addr; autoResizeTextarea(shipEl); }
+  }
 
   // 라인 채우기
   poLines = [];
@@ -7542,25 +7545,27 @@ async function boStartPartial(boOrderId, boOrderNum) {
   if (!boOrder) return;
 
   // 고객 정보 채우기
-  // 고객 선택 — inv-cust-sel dropdown으로 자동 fill
+  // 고객 선택 — updateCustomerSelects 후 value 설정
+  updateCustomerSelects();
+  await new Promise(r => setTimeout(r, 100));
   const custMatch = (customers||[]).find(c => c.id === boOrder.customer_id);
   const custSelEl = document.getElementById('inv-cust-sel');
   if (custMatch && custSelEl) {
     custSelEl.value = boOrder.customer_id;
     onCustSelChange(custSelEl);
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 100));
   }
   currentInvoiceData = { ...(currentInvoiceData||{}), customer: custMatch };
-  // PO# + Terms
   const poEl2 = document.getElementById('inv-cust-po');
   if (poEl2) poEl2.value = boOrder.customer_po || '';
-  const termsEl2 = document.getElementById('inv-cust-terms');
-  if (termsEl2) termsEl2.value = boOrder.terms || 'N30';
-  // 주소는 onCustSelChange에서 채워짐, BO 오더 주소로 덮어쓰기
-  const billEl2 = document.getElementById('inv-bill-addr');
-  if (billEl2 && boOrder.bill_addr) { billEl2.value = boOrder.bill_addr; autoResizeTextarea(billEl2); }
-  const shipEl2 = document.getElementById('inv-ship-addr');
-  if (shipEl2 && boOrder.ship_addr) { shipEl2.value = boOrder.ship_addr; autoResizeTextarea(shipEl2); }
+  if (boOrder.bill_addr) {
+    const billEl2 = document.getElementById('inv-bill-addr');
+    if (billEl2) { billEl2.value = boOrder.bill_addr; autoResizeTextarea(billEl2); }
+  }
+  if (boOrder.ship_addr) {
+    const shipEl2 = document.getElementById('inv-ship-addr');
+    if (shipEl2) { shipEl2.value = boOrder.ship_addr; autoResizeTextarea(shipEl2); }
+  }
 
   // WH 설정 — 라인별로 다른 WH면 SC&CA, 단일이면 해당 WH
   const firstWh = Object.keys(whGroups)[0] || 'SC';
