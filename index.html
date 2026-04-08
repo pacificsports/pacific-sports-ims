@@ -7377,12 +7377,30 @@ function boCardUpdateTotal(orderId) {
 async function boCardStartOrder(orderId) {
   // 선택된 라인 수집
   const chks = [...document.querySelectorAll(`[id^="bocard-chk-${orderId}-"]`)].filter(c => c.checked);
+  console.log('[boCardStartOrder] checked:', chks.length, '| orderId:', orderId);
   if (!chks.length) { showToast('⚠️ 처리할 사이즈를 선택하세요.'); return; }
 
   const selectedLineIds = chks.map(c => c.dataset.lineId);
   const boLines = window._boLinesCache?.[orderId] || [];
+  console.log('[boCardStartOrder] boLines:', boLines.length, '| selectedLineIds:', selectedLineIds);
   const selectedLines = boLines.filter(l => selectedLineIds.includes(l.id));
-  if (!selectedLines.length) { showToast('⚠️ 라인 정보를 찾을 수 없습니다.'); return; }
+  console.log('[boCardStartOrder] selectedLines:', selectedLines.length);
+  if (!selectedLines.length) {
+    // boLines가 비어있으면 DB에서 직접 조회
+    const { data: dbLines } = await db.from('order_lines')
+      .select('*, styles(style_number,description,box_qty)')
+      .eq('order_id', orderId)
+      .gt('qty_backordered', 0);
+    console.log('[boCardStartOrder] dbLines from DB:', dbLines?.length);
+    const dbSelected = (dbLines||[]).filter(l => selectedLineIds.includes(l.id));
+    if (!dbSelected.length) { showToast('⚠️ 라인 정보를 찾을 수 없습니다.'); return; }
+    // dbLines로 대체
+    chks.forEach((chk, i) => {
+      const found = dbLines.find(l => l.id === chk.dataset.lineId);
+      if (found) selectedLines.push(found);
+    });
+    if (!selectedLines.length) { showToast('⚠️ 라인 정보를 찾을 수 없습니다.'); return; }
+  }
 
   // _boStartData에 저장 (PO save 시 BO 수량 차감용)
   const mappedLines = selectedLines.map(l => ({ ...l, _shipQty: l.qty_backordered||0, _boQty: l.qty_backordered||0 }));
