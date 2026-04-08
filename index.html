@@ -13688,23 +13688,30 @@ async function sendInvoiceEmail() {
     shipped_at: currentOrder?.shipped_at || now,
   }).eq('id', _invoiceOrderId);
 
-  // WH별 completed 처리
+  // WH별 status 업데이트
   const isSplitInv = currentOrder?.wh_code === 'SC&CA' || currentOrder?.is_split_warehouse;
-  if (isSplitInv) {
-    const thisWh = _invoiceWh || 'SC';
-    const col = thisWh === 'CA' ? 'ca_status' : 'sc_status';
-    const otherStatus = thisWh === 'CA' ? currentOrder?.sc_status : currentOrder?.ca_status;
-    const bothDone = ['invoiced','completed','shipped'].includes(otherStatus);
-    // 메인 status도 항상 invoiced로 업데이트 → 칸반 invoiced 컬럼에서 사라짐
-    // 양쪽 다 완료됐으면 completed로
-    await db.from('orders').update({
-      [col]: 'invoiced',
-      status: bothDone ? 'completed' : 'invoiced'
-    }).eq('id', _invoiceOrderId);
-  } else {
-    // 싱글 WH: 바로 completed
-    const col = (_invoiceWh || 'SC') === 'CA' ? 'ca_status' : 'sc_status';
-    await db.from('orders').update({ status: 'completed', [col]: 'completed' }).eq('id', _invoiceOrderId);
+  try {
+    if (isSplitInv) {
+      const thisWh = _invoiceWh || 'SC';
+      const col = thisWh === 'CA' ? 'ca_status' : 'sc_status';
+      const otherStatus = thisWh === 'CA' ? currentOrder?.sc_status : currentOrder?.ca_status;
+      const bothDone = ['invoiced','completed','shipped'].includes(otherStatus);
+      const { error: stErr } = await db.from('orders').update({
+        [col]: 'invoiced',
+        status: bothDone ? 'invoiced' : 'invoiced'
+      }).eq('id', _invoiceOrderId);
+      if (stErr) console.error('[Invoice status update error]', stErr);
+    } else {
+      // 싱글 WH
+      const col = (_invoiceWh || 'SC') === 'CA' ? 'ca_status' : 'sc_status';
+      const { error: stErr } = await db.from('orders').update({
+        status: 'invoiced',
+        [col]: 'invoiced'
+      }).eq('id', _invoiceOrderId);
+      if (stErr) console.error('[Invoice status update error]', stErr);
+    }
+  } catch(stEx) {
+    console.error('[Invoice status update exception]', stEx);
   }
 
   try {
