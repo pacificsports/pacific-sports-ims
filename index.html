@@ -2733,7 +2733,7 @@ function onUrgentChange(chk) {
     if (hidden) hidden.value = 'urgent';
     // Ship Date 자동 설정 (비어있을 때만)
     const shipDateEl = document.getElementById('inv-ship-date-inp');
-    if (shipDateEl && !shipDateEl.value) shipDateEl.value = new Date().toISOString().slice(0,10);
+    if (shipDateEl && !shipDateEl.value) shipDateEl.value = (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
   } else {
     label.style.background   = '#fff';
     label.style.borderColor  = '#e5e7eb';
@@ -2802,7 +2802,7 @@ async function markPrepComplete() {
 
 async function markOrderShipped() {
   if (!currentInvoiceData?.order?.id) return;
-  const shipDate = prompt('출고 날짜를 입력하세요 (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+  const shipDate = prompt('출고 날짜를 입력하세요 (YYYY-MM-DD):', (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() );
   if (!shipDate) return;
   const orderId = currentInvoiceData.order.id;
   await db.from('orders').update({ status: 'shipped', ship_date: shipDate }).eq('id', orderId);
@@ -4124,7 +4124,7 @@ async function _doSaveInvoice() {
         warehouse_id: pcrWhObj.id, style_id: scRow.style_id || null,
         color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
         location: 'PCR', qty_on_hand: t.qty, qty_committed: 0,
-        received_date: new Date().toISOString().slice(0,10)
+        received_date: (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() 
       });
     }
   }
@@ -4156,7 +4156,7 @@ async function _doSaveInvoice() {
         warehouse_id: scWhObj.id, style_id: styleObj?.id || null,
         color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
         location: t.dest, qty_on_hand: t.qty, qty_committed: 0,
-        received_date: new Date().toISOString().slice(0,10)
+        received_date: (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() 
       });
     }
   }
@@ -4504,6 +4504,18 @@ async function _doSaveInvoice() {
           is_side_seam: !!l.isSideSeam
         };
       });
+      // color + size 순서로 정렬 (Side Seam 여부 무관하게 사이즈 순)
+      const SIZE_ORDER_EMAIL = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
+      emailLines.sort((a, b) => {
+        const ca = (a.color||'').replace(' (Side Seam)','').localeCompare((b.color||'').replace(' (Side Seam)',''));
+        if (ca !== 0) return ca;
+        const sa = SIZE_ORDER_EMAIL.indexOf((a.size||'').toUpperCase());
+        const sb = SIZE_ORDER_EMAIL.indexOf((b.size||'').toUpperCase());
+        if (sa !== sb) return (sa === -1 ? 99 : sa) - (sb === -1 ? 99 : sb);
+        // 같은 color+size면 Side Seam을 뒤로
+        return (a.is_side_seam ? 1 : 0) - (b.is_side_seam ? 1 : 0);
+      });
+
       const hasAnyBackorder = emailLines.some(l => l.back_qty > 0);
       // 백그라운드로 이메일 발송 (await 제거 - 느린 이메일 때문에 저장 지연 방지)
       const custCcArr = (custObj?.email_cc || '').split(',').map(e => e.trim()).filter(e => e && e.includes('@'));
@@ -4583,7 +4595,7 @@ async function exportAllData() {
     const styles = await fetchAllRows('styles');
     if (styles.length > 0) {
       const headers = Object.keys(styles[0]);
-      downloadCSV('backup_styles_' + new Date().toISOString().slice(0,10) + '.csv',
+      downloadCSV('backup_styles_' + (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})()  + '.csv',
         headers, styles.map(r => headers.map(h => r[h])));
     }
 
@@ -4591,7 +4603,7 @@ async function exportAllData() {
     const inv = await fetchAllRows('inventory', '*, warehouses(code,name), styles(style_number,description)');
     if (inv.length > 0) {
       const headers = ['id','sku','style_number','description','color','size','qty_on_hand','qty_committed','location','reorder_point','warehouse_code','warehouse_name','created_at','updated_at'];
-      downloadCSV('backup_inventory_' + new Date().toISOString().slice(0,10) + '.csv',
+      downloadCSV('backup_inventory_' + (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})()  + '.csv',
         headers, inv.map(r => [r.id, r.sku, r.styles?.style_number, r.styles?.description, r.color, r.size, r.qty_on_hand, r.qty_committed, r.location, r.reorder_point, r.warehouses?.code, r.warehouses?.name, r.created_at, r.updated_at]));
     }
 
@@ -4599,7 +4611,7 @@ async function exportAllData() {
     const customers = await fetchAllRows('customers');
     if (customers.length > 0) {
       const headers = Object.keys(customers[0]);
-      downloadCSV('backup_customers_' + new Date().toISOString().slice(0,10) + '.csv',
+      downloadCSV('backup_customers_' + (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})()  + '.csv',
         headers, customers.map(r => headers.map(h => r[h])));
     }
 
@@ -4607,7 +4619,7 @@ async function exportAllData() {
     const orders = await fetchAllRows('orders', '*, warehouses(code)');
     if (orders.length > 0) {
       const headers = Object.keys(orders[0]);
-      downloadCSV('backup_orders_' + new Date().toISOString().slice(0,10) + '.csv',
+      downloadCSV('backup_orders_' + (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})()  + '.csv',
         headers, orders.map(r => headers.map(h => typeof r[h] === 'object' ? JSON.stringify(r[h]) : r[h])));
     }
 
@@ -4623,7 +4635,7 @@ async function exportInventoryExcel() {
     const inv = await fetchAllRows('inventory', '*, warehouses(code,name), styles(style_number,description,category,pcs_per_box)');
     const headers = ['Warehouse','Style #','Description','Category','Color','Size','SKU','Qty On Hand','Qty Committed','Available','Location','Pcs/Box'];
     const rows = inv.map(r => [r.warehouses?.code, r.styles?.style_number, r.styles?.description, r.styles?.category, r.color, r.size, r.sku, r.qty_on_hand, r.qty_committed||0, (r.qty_on_hand||0)-(r.qty_committed||0), r.location, r.styles?.pcs_per_box]);
-    downloadCSV('inventory_export_' + new Date().toISOString().slice(0,10) + '.csv', headers, rows);
+    downloadCSV('inventory_export_' + (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})()  + '.csv', headers, rows);
     showToast('✓ Inventory exported!');
   } catch(e) { alert('Export error: ' + e.message); }
   btn.disabled = false; btn.textContent = '📊 Inventory Excel';
@@ -6589,7 +6601,7 @@ async function openRaModal(orderId) {
   document.getElementById('ra-order-info').innerHTML =
     '<strong>' + (order.customer_name||'') + '</strong> &nbsp;·&nbsp; PO# ' + (order.customer_po||'—') +
     ' &nbsp;·&nbsp; INV# ' + (order.invoice_number ? ('SC'+order.invoice_number) : '—');
-  document.getElementById('ra-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('ra-date').value = (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
   document.getElementById('ra-notes').value = '';
 
   // Return To WH 선택 초기화
@@ -6931,7 +6943,7 @@ async function openReturnModal(orderId) {
 
   document.getElementById('return-order-info').innerHTML =
     '<b>'+order.customer_name+'</b> &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
-  document.getElementById('return-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('return-date').value = (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
   document.getElementById('return-notes').value = '';
 
   const { data: bins } = await db.from('inventory').select('id, bin_code, quantity').order('bin_code');
@@ -7515,7 +7527,7 @@ async function openPartialShip(orderId) {
   document.getElementById('partial-ship-order-info').textContent =
     `${order.customer_name}  |  PO# ${order.customer_po || '—'}`;
 
-  document.getElementById('partial-ship-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('partial-ship-date').value = (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
 
   document.getElementById('partial-ship-lines').innerHTML = `
     <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -11162,6 +11174,20 @@ function toggleShipTrackingLabel() {
     trackingWrap.innerHTML =
       '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>' +
       '<input type="text" id="ship-tracking" class="fi" placeholder="PRO Number" style="width:100%;font-family:IBM Plex Mono,monospace;"/>';
+    // LTL은 weight 수동 입력
+    const ltlWeightField = document.getElementById('ship-weight');
+    if (ltlWeightField) {
+      ltlWeightField.readOnly = false;
+      ltlWeightField.style.background = '';
+      ltlWeightField.style.color = '';
+      ltlWeightField.placeholder = '예: 250';
+      ltlWeightField.value = '';
+    }
+    const ltlWeightLabel = ltlWeightField?.previousElementSibling;
+    if (ltlWeightLabel) ltlWeightLabel.textContent = 'Total Weight (lbs)';
+    // Total Boxes도 수동 입력
+    const ltlBoxField = document.getElementById('ship-total-boxes');
+    if (ltlBoxField) { ltlBoxField.readOnly = false; ltlBoxField.style.background = ''; }
   } else if (carrier === 'Other') {
     trackingWrap.innerHTML =
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">' +
@@ -11407,7 +11433,7 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
   const _actualShipRaw = shippingInfo.shipDate || shippingInfo.ship_date
     || (currentWh === 'CA' ? order.ca_shipped_at : order.sc_shipped_at)
     || order.ship_date
-    || new Date().toISOString().slice(0,10);
+    || (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
   const shipDateStr = fmtDate(_actualShipRaw);
 
   // SC/CA status 표시 — 이번에 ship되는 WH는 무조건 최우선 Shipped 처리
@@ -11694,6 +11720,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
 
   const isSplitOrder = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
+  const SIZE_ORDER_SHIP = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
   const lineItems = sortedLines.map(l => {
     // SC 수량: alloc_detail에서 non-PCR bins 합산
     const allocSC = l.alloc_detail || {};
@@ -11746,7 +11773,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     const caPrevShipped = !!order.ca_shipped_at && currentWh !== 'CA';
 
     // 날짜: 이번 ship이면 ship_date(실제 출고일), 이전 ship이면 DB 날짜
-    const shipDateForLine = shippingInfo.shipDate || shippingInfo.ship_date || new Date().toISOString().slice(0,10);
+    const shipDateForLine = shippingInfo.shipDate || shippingInfo.ship_date || (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
     const scShippedDate = scShippedNow ? fmtDate(shipDateForLine) : (scPrevShipped ? fmtDate(order.sc_shipped_at) : '');
     const caShippedDate = caShippedNow ? fmtDate(shipDateForLine) : (caPrevShipped ? fmtDate(order.ca_shipped_at) : '');
 
@@ -11764,8 +11791,19 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
       ca_prev_shipped: caPrevShipped,
       sc_shipped_date: scShippedDate,
       ca_shipped_date: caShippedDate,
-      is_split: isSplitOrder
+      is_split: isSplitOrder,
+      is_side_seam: !!l.is_side_seam
     };
+  });
+
+  // lineItems 정렬 — color + size 순 (Side Seam 여부 무관)
+  lineItems.sort((a, b) => {
+    const ca = (a.color||'').localeCompare(b.color||'');
+    if (ca !== 0) return ca;
+    const sa = SIZE_ORDER_SHIP.indexOf((a.size||'').toUpperCase());
+    const sb = SIZE_ORDER_SHIP.indexOf((b.size||'').toUpperCase());
+    if (sa !== sb) return (sa===-1?99:sa)-(sb===-1?99:sb);
+    return (a.is_side_seam?1:0)-(b.is_side_seam?1:0);
   });
 
   // BOL 멀티 파일 배열 구성 (_bolFilesData 우선, 없으면 단일 bolData)
@@ -12565,7 +12603,7 @@ async function doShipped(orderId, wh) {
 
   // 기본값 세팅 (null-safe)
   const _sg = id => document.getElementById(id);
-  if (_sg('ship-date-inp')) _sg('ship-date-inp').value = new Date().toISOString().slice(0,10);
+  if (_sg('ship-date-inp')) { const _ld = new Date(); _sg('ship-date-inp').value = `${_ld.getFullYear()}-${String(_ld.getMonth()+1).padStart(2,'0')}-${String(_ld.getDate()).padStart(2,'0')}`; }
   if (_sg('ship-carrier')) _sg('ship-carrier').value = '';
   if (_sg('ship-freight-carrier')) _sg('ship-freight-carrier').value = '';
   if (_sg('ship-freight-carrier-wrap')) _sg('ship-freight-carrier-wrap').style.display = 'none';
@@ -12728,7 +12766,7 @@ async function openBatchShipModal(whFilter) {
   }).join('');
 
   document.getElementById('batch-po-rows').innerHTML = rowsHtml;
-  document.getElementById('batch-ship-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('batch-ship-date').value = (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
   const ltlFreight = document.getElementById('batch-ltl-freight');
   const ltlPro = document.getElementById('batch-ltl-pro');
   if (ltlFreight) ltlFreight.value = '';
@@ -13447,7 +13485,7 @@ async function reviewAndSendInvoice(orderId, wh) {
 
   // customer # / salesperson + 주소 fallback 로드
   if (order.customer_id) {
-    const { data: custData } = await db.from('customers').select('customer_no,salesperson,address,city,state,zip,ship_address,bill_address').eq('id', order.customer_id).single();
+    const { data: custData } = await db.from('customers').select('customer_no,salesperson,address,city,state,zip').eq('id', order.customer_id).single();
     if (custData) {
       order.customer_no = custData.customer_no;
       order.salesperson = custData.salesperson;
@@ -13500,6 +13538,7 @@ async function reviewAndSendInvoice(orderId, wh) {
 
   // WH별 carrier/tracking 우선 사용 (SC&CA 분할 오더)
   const invWh2 = wh || order.wh_code || 'SC';
+  const _isSplitInv = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const whCarrier   = invWh2 === 'CA' ? (order.ca_carrier         || (_isSplitInv ? '' : order.carrier))         : (order.sc_carrier         || (_isSplitInv ? '' : order.carrier));
   const whTracking  = invWh2 === 'CA' ? (order.ca_tracking_number || order.tracking_number) : (order.sc_tracking_number || order.tracking_number);
   const whFreight   = invWh2 === 'CA' ? (order.ca_pickup_company  || order.pickup_company)  : (order.sc_pickup_company  || order.pickup_company);
@@ -14295,7 +14334,10 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
     const totalBoxes = sorted.reduce((s,l) => {
       const ppb = l.pcs_per_box || 60;
       const _alloc2 = sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
-      return s + Object.entries(_alloc2).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'?v.boxes||0:Math.floor((v||0)/ppb)),0);
+      // boxes=0이어도 pcs>0이면 실제 박스에서 꺼내는 것 → 1박스로 카운트
+      return s + Object.entries(_alloc2).filter(([k])=>!k.toUpperCase().includes('PCR')&&!k.includes('TRANSFER|')).reduce((ss,[,v])=>ss+(typeof v==='object'
+        ? (v.boxes||0) > 0 ? v.boxes : (v.pcs||0) > 0 ? 1 : 0
+        : Math.floor((v||0)/ppb)),0);
     }, 0);
     // totalPcrBoxes = PC Room 박스 수
     const savedBoxAllocPl = sectionWh === 'CA' ? order?.ca_pcr_box_allocation : order?.sc_pcr_box_allocation;
@@ -14471,7 +14513,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
     || (whFilter==='CA'
       ? (order.ca_shipped_at || order.sc_shipped_at)
       : (order.sc_shipped_at || order.ca_shipped_at))
-    || new Date().toISOString().slice(0,10);
+    || (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
   return new Date(raw.slice(0,10)+'T00:00:00').toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'});
 })()}</div></div>
     </div>
@@ -15016,7 +15058,7 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     || (_invWhForDate === 'CA'
       ? (order.ca_shipped_at || order.sc_shipped_at)
       : (order.sc_shipped_at || order.ca_shipped_at))
-    || new Date().toISOString().slice(0,10);
+    || (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
   const shipDate = _actualShipRaw
     ? new Date((_actualShipRaw.slice?.(0,10)||_actualShipRaw)+'T00:00:00').toLocaleDateString('en-US', { year:'numeric', month:'numeric', day:'numeric' })
     : invoiceDate;
@@ -18587,7 +18629,7 @@ function execPcrTransfer(whGroup, ppb) {
   if (!window.binInventory[pcrWh][k]) window.binInventory[pcrWh][k] = [];
   const pcrB = window.binInventory[pcrWh][k].find(b=>b.bin==='PCR');
   if (pcrB) pcrB.qty += qty;
-  else window.binInventory[pcrWh][k].push({bin:'PCR',qty,committed:0,received_date:new Date().toISOString().slice(0,10)});
+  else window.binInventory[pcrWh][k].push({bin:'PCR',qty,committed:0,received_date:(()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() });
 
   showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty}pcs) 지정됨`);
 
@@ -19719,7 +19761,7 @@ async function postTransitReceiving() {
           qty_on_hand: pcs,
           qty_committed: 0,
           pcs_per_box: ppb,
-          received_date: new Date().toISOString().slice(0,10)
+          received_date: (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() 
         });
       } else {
         await db.from('inventory').update({ qty_on_hand: existing.qty_on_hand + pcs }).eq('id', existing.id);
@@ -19734,7 +19776,7 @@ async function postTransitReceiving() {
         qty_on_hand: pcs,
         qty_committed: 0,
         pcs_per_box: ppb,
-        received_date: new Date().toISOString().slice(0,10)
+        received_date: (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() 
       });
     }
     // ── Reserved 자동 재확보
