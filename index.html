@@ -7320,45 +7320,151 @@ async function loadBackOrders() {
     const borderColor = isCA ? '#fed7aa' : '#bfdbfe';
 
     const cardId = 'bo-card-' + o.id;
-    const lineRows = sortedLines.map((l,li) =>
-      `<label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;cursor:pointer;">
-        <input type="checkbox" id="bocard-chk-${o.id}-${li}" data-order-id="${o.id}" data-line-id="${l.id}" data-bo-qty="${l.qty_backordered||0}"
-          style="width:15px;height:15px;cursor:pointer;" onchange="boCardUpdateTotal('${o.id}')">
-        <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#6b7280;min-width:36px;">${l.size||''}</span>
+    // 재고 현황 가져오기 (scInventory, caInventory 전역 변수 사용)
+    const lineRows = sortedLines.map((l,li) => {
+      const styleNum = l.styles?.style_number || '';
+      const normColor = (l.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
+      const invKey = l.is_side_seam
+        ? `${styleNum}|${normColor.toUpperCase()}|${(l.size||'').toUpperCase()}|SS`
+        : `${styleNum}|${normColor.toUpperCase()}|${(l.size||'').toUpperCase()}`;
+      const scAvail = scInventory[invKey]?.qty || 0;
+      const caAvail = caInventory[invKey]?.qty || 0;
+      const hasStock = scAvail >= (l.qty_backordered||0) || caAvail >= (l.qty_backordered||0);
+      const partialStock = (scAvail > 0 || caAvail > 0) && !hasStock;
+      const boQty = l.qty_backordered || 0;
+      const stockColor = hasStock ? '#16a34a' : partialStock ? '#d97706' : '#dc2626';
+      const rowBg = hasStock ? '#f0fdf4' : partialStock ? '#fffbeb' : '#fff';
+      return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid #f3f4f6;background:${rowBg};border-radius:4px;margin:2px 0;padding-left:6px;">
+        <input type="checkbox" id="bocard-chk-${o.id}-${li}" data-order-id="${o.id}" data-line-id="${l.id}" data-bo-qty="${boQty}"
+          ${hasStock || partialStock ? '' : 'disabled'} style="width:15px;height:15px;cursor:${hasStock||partialStock?'pointer':'not-allowed'};" onchange="boCardUpdateTotal('${o.id}')">
+        <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;min-width:30px;color:#374151;">${l.size||''}</span>
         <span style="font-size:11px;color:#374151;flex:1;">${l.color||''}${l.is_side_seam?' <span style="color:#7c3aed;font-size:10px;">(SS)</span>':''}</span>
-        <span style="font-size:12px;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()} pcs</span>
-      </label>`
-    ).join('');
+        <span style="font-size:11px;font-weight:700;color:#dc2626;min-width:50px;text-align:right;">${boQty.toLocaleString()} B/O</span>
+        <span style="font-size:10px;color:${stockColor};font-weight:600;min-width:80px;text-align:right;">SC:${scAvail} CA:${caAvail}</span>
+      </div>`;
+    }).join('');
+
+    const allDisabled = sortedLines.every(l => {
+      const styleNum = l.styles?.style_number || '';
+      const normColor = (l.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
+      const invKey = `${styleNum}|${normColor.toUpperCase()}|${(l.size||'').toUpperCase()}`;
+      return (scInventory[invKey]?.qty||0) === 0 && (caInventory[invKey]?.qty||0) === 0;
+    });
 
     return `
     <div id="${cardId}" style="background:#fff;border:1px solid ${borderColor};border-top:3px solid ${whColor};border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
-      <!-- 카드 헤더 -->
       <div style="background:${whBg};padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
         <div>
           <div style="font-size:13px;font-weight:700;color:#111827;">${o.customer_name}</div>
           <div style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:#6b7280;margin-top:1px;">PO# ${o.customer_po||'—'}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:20px;font-weight:900;color:#dc2626;" id="bocard-total-${o.id}">0 pcs</div>
+          <div style="font-size:18px;font-weight:900;color:#dc2626;">${totalBack.toLocaleString()} pcs B/O</div>
           <div style="font-size:10px;color:${urgentColor};font-weight:600;">${elapsed}</div>
         </div>
       </div>
-      <!-- 사이즈별 체크박스 -->
-      <div style="padding:4px 14px 0;">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 2px;">
-          <label style="font-size:10px;color:#6b7280;cursor:pointer;display:flex;align-items:center;gap:4px;">
-            <input type="checkbox" onchange="boCardToggleAll('${o.id}',this.checked)" style="width:13px;height:13px;"> 전체선택
-          </label>
+      <div style="padding:6px 10px;">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#9ca3af;padding:2px 6px 4px;">
+          <span>사이즈</span><span>B/O Qty</span><span>재고 (SC/CA)</span>
         </div>
         ${lineRows}
       </div>
-      <!-- 버튼 -->
-      <div style="padding:8px 14px;border-top:1px solid #f3f4f6;display:flex;gap:6px;margin-top:4px;">
-        <button onclick="boCardStartOrder('${o.id}')" style="flex:1;padding:8px;background:${whColor};color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">▶ Start Order</button>
-        <button onclick="cancelBackOrder('${o.id}','${o.customer_po||o.order_number}')" style="padding:8px 10px;background:#fff;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:12px;cursor:pointer;">✕</button>
+      <div style="padding:8px 10px;border-top:1px solid #f3f4f6;display:flex;gap:6px;">
+        <button onclick="boCardDistribute('${o.id}')" ${allDisabled?'disabled':''} style="flex:1;padding:7px;background:${allDisabled?'#e5e7eb':whColor};color:${allDisabled?'#9ca3af':'#fff'};border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:${allDisabled?'not-allowed':'pointer'};">📦 Distribute & Start</button>
+        <button onclick="cancelBackOrder('${o.id}','${o.customer_po||o.order_number}')" style="padding:7px 10px;background:#fff;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;font-size:12px;cursor:pointer;">✕</button>
       </div>
     </div>`;
   }).join('') + `</div>`;
+}
+
+// ── Back Order Distribute & Start
+async function boCardDistribute(boOrderId) {
+  const boLines = window._boLinesCache?.[boOrderId] || [];
+  if (!boLines.length) { showToast('⚠️ 라인 정보를 찾을 수 없습니다.'); return; }
+
+  const { data: boOrder } = await db.from('orders').select('*').eq('id', boOrderId).single();
+  if (!boOrder) return;
+
+  // poLines에 BO 라인 세팅 (Bin 배분 모달용)
+  poLines = boLines.map(l => ({
+    styleNum: l.styles?.style_number || '',
+    color: l.color || '',
+    size: l.size || '',
+    qty: l.qty_backordered || 0,
+    price: l.unit_price || 0,
+    wh: boOrder.wh_code || 'SC',
+    isSideSeam: l.is_side_seam || false,
+    isSideSeamChecked: l.is_side_seam || false,
+    ppb: l.pcs_per_box || 72,
+    cases: Math.floor((l.qty_backordered||0) / (l.pcs_per_box || 72)),
+    loose: (l.qty_backordered||0) % (l.pcs_per_box || 72),
+    allocSC: {}, allocCA: {},
+    pcrTransfersPending: [], caPcrTransfersPending: [],
+    location: '', locationCA: '',
+  }));
+
+  // _boDistributeData 저장
+  window._boDistributeData = { boOrderId, boOrder, boLines };
+  window._boStartData = { boOrderId, selectedLines: boLines.map(l => ({...l, _shipQty: l.qty_backordered||0, _boQty: l.qty_backordered||0})), whGroups: {} };
+
+  // Customer POs Entry로 이동 + Bin 배분 모달 자동 오픈
+  localStorage.removeItem('po_draft');
+  window._boSkipDraft = true;
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+  await new Promise(r => setTimeout(r, 100));
+  openNewInvoice();
+  await new Promise(r => setTimeout(r, 300));
+
+  // 고객 정보 채우기
+  updateCustomerSelects();
+  await new Promise(r => setTimeout(r, 100));
+  const custSel = document.getElementById('inv-cust-sel');
+  if (custSel && boOrder.customer_id) {
+    custSel.value = boOrder.customer_id;
+    onCustSelChange(custSel);
+    await new Promise(r => setTimeout(r, 100));
+  }
+  const poEl = document.getElementById('inv-cust-po');
+  if (poEl) poEl.value = boOrder.customer_po || '';
+  if (boOrder.bill_addr) { const bEl = document.getElementById('inv-bill-addr'); if(bEl){bEl.value=boOrder.bill_addr;autoResizeTextarea(bEl);} }
+  if (boOrder.ship_addr) { const sEl = document.getElementById('inv-ship-addr'); if(sEl){sEl.value=boOrder.ship_addr;autoResizeTextarea(sEl);} }
+
+  // WH 설정
+  const whSel = document.getElementById('inv-wh-sel');
+  if (whSel) {
+    const whCode = boOrder.wh_code || 'SC';
+    const whObj = warehouses.find(w => w.code === whCode);
+    if (whObj) { whSel.value = whObj.id; whSel.dispatchEvent(new Event('change')); }
+    else if (whCode === 'SC&CA') { whSel.value = 'SC&CA'; }
+  }
+
+  renderEntryTable();
+  await new Promise(r => setTimeout(r, 300));
+  await liveRenderDocs();
+
+  // Bin 배분 모달 자동 오픈
+  await new Promise(r => setTimeout(r, 300));
+  openBinAllocModal();
+  showToast('📦 Bin 배분 후 Save PO 하세요');
+}
+
+async function boCreateOrderFromDistribute() {
+  if (!window._boDistributeCallback || !window._boDistributeData) return;
+  window._boDistributeCallback = false;
+
+  const { boOrderId, boOrder, boLines } = window._boDistributeData;
+  window._boDistributeData = null;
+
+  // 배분 결과 저장 후 Order Status로 이동
+  await db.from('orders').update({
+    status: 'po_entered',
+    wh_code: boOrder.wh_code || 'SC',
+  }).eq('id', boOrderId);
+
+  showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
+  await loadOrderStatus();
+  showToast(`✅ ${boOrder.order_number} Order Status로 이동됨`);
+  loadBackOrders();
 }
 
 // ── Back Order 카드 내 체크박스 헬퍼
