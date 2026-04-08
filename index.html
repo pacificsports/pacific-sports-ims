@@ -4426,7 +4426,8 @@ async function _doSaveInvoice() {
       location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
       alloc_detail: Object.keys(_allocDetail).length > 0 ? _allocDetail : null,
       alloc_ca_detail: Object.keys(_allocDetailCA).length > 0 ? _allocDetailCA : null,
-      unit_price: l.price || 0
+      unit_price: l.price || 0,
+      is_side_seam: !!l.isSideSeam
     };
     const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
     if (lineErr) console.error('[order_lines ERROR]', lineErr.message, lineErr.details, lineErr.hint);
@@ -4492,14 +4493,15 @@ async function _doSaveInvoice() {
         console.log(`[email line] ${l.color} ${l.size} qty=${l.qty} scQty=${scQty} caQty=${caQty} back=${backQty}`);
         return {
           style: l.styleNum,
-          color: l.color,
+          color: l.isSideSeam ? l.color + ' (Side Seam)' : l.color,
           size: l.size,
           qty: l.qty,
           fill_qty: totalAlloc,
           back_qty: backQty,
           sc_qty: scQty,
           ca_qty: caQty,
-          unit_price: l.price || 0
+          unit_price: l.price || 0,
+          is_side_seam: !!l.isSideSeam
         };
       });
       const hasAnyBackorder = emailLines.some(l => l.back_qty > 0);
@@ -5719,7 +5721,7 @@ async function loadOrderStatus() {
     if (card._status === 'preparing') return 'preparing';
     if (card._status === 'ready_to_ship') return 'ready';
     if (card._status === 'shipped') return 'shipped';
-    if (card._status === 'invoiced') return 'shipped'; // invoiced도 shipped 컬럼에 표시
+    if (card._status === 'invoiced') return null; // invoiced는 칸반에서 제외
     if (['backordered','partial'].includes(card._status)) return 'backorder';
     return 'entered';
   }
@@ -5730,7 +5732,7 @@ async function loadOrderStatus() {
 
   if (grid) {
     const mainCards = allCards
-      .filter(c => !['backordered','partial'].includes(c._status))
+      .filter(c => !['backordered','partial','invoiced'].includes(c._status))
       .sort((a, b) => {
         const aUrgent = a.priority === 'urgent' ? 0 : 1;
         const bUrgent = b.priority === 'urgent' ? 0 : 1;
@@ -5741,6 +5743,7 @@ async function loadOrderStatus() {
     const allCols = ['entered','preparing','ready','shipped'];
     mainCards.forEach(card => {
       const cardCol = getColForCard(card);
+      if (!cardCol) return; // invoiced 카드 제외
       allCols.forEach(col => {
         const cell = document.createElement('div');
         if (col === cardCol) {
@@ -11490,7 +11493,7 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
           <tbody>${allBackLines.map(l=>`
             <tr style="border-top:1px solid #fef2f2;">
               <td style="padding:5px 10px;font-weight:600;">${l.style}</td>
-              <td style="padding:5px 10px;">${l.color}</td>
+              <td style="padding:5px 10px;">${l.color}${l.is_side_seam?' <span style="font-size:10px;color:#7c3aed;font-weight:600;">(Side Seam)</span>':''}</td>
               <td style="padding:5px 10px;text-align:center;">${l.size}</td>
               <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${l.back_qty} pcs</td>
             </tr>`).join('')}
@@ -11568,7 +11571,7 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
     if (isSplit) {
       return `<tr style="border-bottom:1px solid #f3f4f6;">
         <td style="padding:7px 10px;font-weight:600;">${l.style}</td>
-        <td style="padding:7px 10px;">${l.color}</td>
+        <td style="padding:7px 10px;">${l.color}${l.is_side_seam?' <span style="font-size:10px;color:#7c3aed;font-weight:600;">(Side Seam)</span>':''}</td>
         <td style="padding:7px 10px;text-align:center;">${l.size}</td>
         <td style="padding:7px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
         ${scCell}${caStatusCell}${backCell}
@@ -11582,7 +11585,7 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
         : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
       return `<tr style="border-bottom:1px solid #f3f4f6;">
         <td style="padding:7px 10px;font-weight:600;">${l.style}</td>
-        <td style="padding:7px 10px;">${l.color}</td>
+        <td style="padding:7px 10px;">${l.color}${l.is_side_seam?' <span style="font-size:10px;color:#7c3aed;font-weight:600;">(Side Seam)</span>':''}</td>
         <td style="padding:7px 10px;text-align:center;">${l.size}</td>
         <td style="padding:7px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
         ${shipCell}${backCell}
@@ -13834,6 +13837,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
   const fromAddr = whOverride === 'CA'
     ? '5601 Milliken Ave Suite A<br>Eastvale CA 91752'
     : '1605 South Guignard Parkway<br>Sumter SC 29150';
+  const colorLabel = (l) => l.is_side_seam ? (l.color||'') + ' <span style="font-size:9px;color:#7c3aed;font-weight:700;">(Side Seam)</span>' : (l.color||'');
   const dateStr = new Date().toLocaleDateString();
   const sizeOrd = s => (['2T','3T','4T','5T','XS','YS','YM','YL','XS','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'].indexOf(s)+1)||99;
 
@@ -13844,14 +13848,14 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
     // 전체 아이템 flat 리스트: 색상별 총량 내림차순 → 사이즈 오름차순
     const colorTotals = {};
     pcrLines.forEach(l => {
-      const ck = `${l.styles?.style_number||''}|||${l.color||''}`;
+      const ck = `${l.styles?.style_number||''}|||${colorLabel(l)}`;
       colorTotals[ck] = (colorTotals[ck]||0) + (l._pcrQty||0);
     });
 
     const allItems = [];
     const grouped = {};
     pcrLines.forEach(l => {
-      const key = `${l.styles?.style_number||''}|||${l.color||''}`;
+      const key = `${l.styles?.style_number||''}|||${colorLabel(l)}`;
       if (!grouped[key]) grouped[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', items: [] };
       if ((l._pcrQty||0) > 0) grouped[key].items.push({ size: l.size||'', qty: l._pcrQty, styleNum: l.styles?.style_number||'', color: l.color||'' });
     });
@@ -13966,7 +13970,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
                 rows.push(`<tr style="border-bottom:1px solid #fee2e2;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#b91c1c;">${fromBin}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
-                <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
+                <td style="padding:6px 8px;font-size:11px;">${colorLabel(l)}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${boxes > 0 ? boxes : '—'}</td>
               </tr>`);
@@ -14010,7 +14014,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
                 return [`<tr style="border-bottom:1px solid #dcfce7;">
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${bin}</td>
                 <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
-                <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
+                <td style="padding:6px 8px;font-size:11px;">${colorLabel(l)}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
                 <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${qtyDisplay}</td>
               </tr>`];
@@ -14102,6 +14106,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
 // ═══════════════════════════════════════════════════════
 function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, note) {
   const dateStr = new Date().toLocaleDateString();
+  const colorLabel = (l) => l.is_side_seam ? (l.color||'') + ' <span style="font-size:9px;color:#7c3aed;font-weight:700;">(Side Seam)</span>' : (l.color||'');
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
 
   // 수량 0인 라인 제외
@@ -14113,7 +14118,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
     const groups = {};
     sectionLines.forEach(l => {
       const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
-      const key = `${l.styles?.style_number||''}|||${l.color||''}`;
+      const key = `${l.styles?.style_number||''}|||${colorLabel(l)}`;
       if (!groups[key]) groups[key] = { styleNum: l.styles?.style_number||'', color: l.color||'', sizes: [], ppb };
       const alloc = l.alloc_detail || {};
       const allocCA = l.alloc_ca_detail || {};
@@ -14241,7 +14246,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       const pcrDisplay = pcrPcs > 0 ? pcrPcs + ' pcs' : '—';
       return `<tr style="border-bottom:1px solid #f3f4f6;">
         <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.styles?.style_number||''}</td>
-        <td style="padding:6px 8px;font-size:11px;">${l.color||''}</td>
+        <td style="padding:6px 8px;font-size:11px;">${colorLabel(l)}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${whTotalPcs.toLocaleString()}</td>
         <td style="padding:6px 8px;font-size:11px;text-align:center;">${fullBoxes > 0 ? fullBoxes : '—'}</td>
@@ -14998,6 +15003,7 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
   const paymentInfo = (companySettings && companySettings.payment_info) || 'Hana Commercial Finance\nDept. LA 24406\nPasadena, CA 91185-4406';
   const returnPolicy = (companySettings && companySettings.return_policy) || 'Returns are accepted within 30 days from date of shipment. All returns must be accompanied by a Return Authorization (RA) number. Returns are subject to a 15% restocking fee.';
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf((s||'').toUpperCase()) + 1) || 99;
+  const colorLabel = (l) => l.is_side_seam ? (l.color||'') + ' (Side Seam)' : (l.color||'');
   const renderSection = (sectionLines, suffix) => {
     if (!sectionLines.length) return '';
     const freight = freightAmt || 0;
@@ -15646,7 +15652,7 @@ async function openBackOrderDetail(orderId) {
 
     return `<tr style="${filled > 0 ? 'background:#f1f8f1' : 'background:#fff8f8'}">
       <td style="padding:7px 10px;font-weight:700;font-family:'IBM Plex Mono',monospace">#${l.styles?.style_number||'?'}</td>
-      <td style="padding:7px 10px">${l.color}</td>
+      <td style="padding:7px 10px">${colorLabel(l)}</td>
       <td style="padding:7px 10px;text-align:center">${l.size}</td>
       <td style="padding:7px 10px;text-align:center;font-family:'IBM Plex Mono',monospace">${(l.qty_pieces||0).toLocaleString()}</td>
       <td style="padding:7px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;color:var(--red)">${(l.qty_backordered||0).toLocaleString()}</td>
@@ -17133,7 +17139,7 @@ function parsePoText(text) {
   // 중복 제거 (같은 style+size+qty)
   const seen = new Set();
   result.lines = parsedLines.filter(l => {
-    const key = `${l.style_number}-${l.color}-${l.size}-${l.qty}`;
+    const key = `${l.style_number}-${colorLabel(l)}-${l.size}-${l.qty}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -17474,8 +17480,8 @@ function applyPoPreview() {
     const ppb = styleObj ? calcPpb(styleObj.description || '', l.size) : 72;
     const qty = l.qty || 0;
     // Side Seam이면 sku 뒤에 +ss 붙여서 재고 조회
-    const invKey = `${l.style_number}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
-    const invKeySS = `${l.style_number}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}|SS`;
+    const invKey = `${l.style_number}|${(colorLabel(l)||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+    const invKeySS = `${l.style_number}|${(colorLabel(l)||'').toUpperCase()}|${(l.size||'').toUpperCase()}|SS`;
     const scQty = scInventory[invKey]?.qty || 0;
     const caQty = caInventory[invKey]?.qty || 0;
     const pref = window._custPrefWh || 'SC';
@@ -17875,7 +17881,7 @@ function openLpDropdown(event, lineIdx, binField, whCode) {
 
   _lpState = { lineIdx, binField, whCode };
 
-  const key = `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+  const key = `${l.styleNum}|${colorLabel(l).toUpperCase()}|${l.size.toUpperCase()}`;
   const bins = (window.binInventory?.[whCode]?.[key]) || [];
   const currentBin = l.bins?.[binField] || '';
   const totalStock = bins.reduce((s,b) => s+b.qty, 0);
@@ -17884,7 +17890,7 @@ function openLpDropdown(event, lineIdx, binField, whCode) {
   const dhead = document.getElementById('lp-dhead');
   dhead.className = 'lp-dhead ' + (whCls[whCode]||'sc');
   document.getElementById('lp-dwh').textContent = whLabels[whCode] || whCode;
-  document.getElementById('lp-dsku').textContent = `#${l.styleNum} · ${l.color} · ${l.size}  |  총 재고 ${totalStock.toLocaleString()} pcs`;
+  document.getElementById('lp-dsku').textContent = `#${l.styleNum} · ${colorLabel(l)} · ${l.size}  |  총 재고 ${totalStock.toLocaleString()} pcs`;
 
   // Options
   let optHtml = '';
