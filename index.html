@@ -3229,7 +3229,10 @@ function renderEntryTable() {
     return `<tr>
       <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;">${l.code}</td>
       <td style="font-weight:700">#${l.styleNum}</td>
-      <td><input class="fi" value="${l.color}" style="width:100%;height:24px;font-size:11px;padding:2px 4px;" onchange="poLines[${idx}].color=this.value;renderEntryTable();liveRenderDocs()"/></td>
+      <td>
+        <input class="fi" value="${l.color}" style="width:100%;height:24px;font-size:11px;padding:2px 4px;" onchange="poLines[${idx}].color=this.value;renderEntryTable();liveRenderDocs()"/>
+        ${l.isSideSeam ? '<div style="font-size:9px;color:#7c3aed;font-weight:700;margin-top:1px;">▶ Side Seam</div>' : ''}
+      </td>
       <td><input class="fi" value="${l.size}" style="width:50px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].size=this.value;const ppb=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb);poLines[${idx}].loose=poLines[${idx}].qty%ppb;renderEntryTable();liveRenderDocs()"/></td>
       <td style="text-align:center;"><input type="number" class="fi" value="${l.qty}" style="width:72px;height:28px;font-size:16px;padding:2px 6px;text-align:center;font-weight:700;color:#dc2626;border:2px solid #dc2626 !important;border-radius:4px;background:#fff5f5;" onchange="poLines[${idx}].qty=parseInt(this.value)||0;const ppb2=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb2);poLines[${idx}].loose=poLines[${idx}].qty%ppb2;saveDraft();renderEntryTable();liveRenderDocs()"/></td>
       <td><input type="number" class="fi" value="${l.price}" step="0.01" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].price=parseFloat(this.value)||0;renderEntryTable();liveRenderDocs()"/></td>
@@ -3838,7 +3841,8 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
 
   // Order Lines 저장 + qty_committed 증가
   for (const l of poLines) {
-    const s = styles.find(x => x.style_number === l.styleNum);
+    const s = styles.find(x => x.style_number === l.styleNum)
+      || (l.isSideSeam ? styles.find(x => x.style_number === (l.poStyleNum||l.styleNum) + 'SS') : null);
 
     // 현재 재고에서 committed 가능한 수량 확인
     const { data: invRows } = await db.from('inventory')
@@ -17185,7 +17189,7 @@ lines.sort((a, b) => {
         <tr style="background:var(--header);color:#fff;">
           <th style="padding:6px 8px;width:32px;">#</th>
           <th style="padding:6px 8px;text-align:left;min-width:80px;">PO Style</th>
-          <th style="padding:6px 8px;text-align:left;min-width:140px;color:#fbbf24;">Our Item # ▾</th>
+          <th style="padding:6px 8px;text-align:center;min-width:80px;color:#fbbf24;">Side Seam</th>
           <th style="padding:6px 8px;text-align:left;min-width:120px;">Color</th>
           <th style="padding:6px 8px;min-width:70px;">Size</th>
           <th style="padding:6px 8px;min-width:70px;">Qty</th>
@@ -17195,23 +17199,17 @@ lines.sort((a, b) => {
       </thead>
       <tbody id="po-lines-tbody">
         ${lines.map((l,i) => {
-          const selVal = l.our_style_id || '';
-          const selLabel = l.our_style_id
-            ? (allStyles.find(s => s.id === l.our_style_id)
-                ? allStyles.find(s => s.id === l.our_style_id).style_number + ' — ' + (allStyles.find(s => s.id === l.our_style_id).description||'')
-                : (l.our_style_number||''))
-            : '';
-          const selectHtml = `<select
-            style="width:100%;height:26px;font-size:11px;border:1px solid var(--border);border-radius:3px;padding:0 4px;color:${selVal?'#16a34a':'#9ca3af'};font-weight:${selVal?'700':'400'};"
-            onchange="updateOurStyleById(${i}, this.value)">
-            <option value="">— 선택 —</option>
-            ${allStyles.map(s => `<option value="${s.id}" ${s.id===selVal?'selected':''}>${s.style_number}${s.description?' — '+s.description:''}</option>`).join('')}
-          </select>`;
+          const isSS = !!l.is_side_seam;
           return `
           <tr style="background:${i%2===0?'#fff':'#f9f9f9'}">
             <td style="padding:4px 8px;color:var(--text3);text-align:center;font-size:11px;">${i+1}</td>
             <td style="padding:4px 6px;">${inp(l.style_number,'style_number',i,'text','font-weight:700;')}</td>
-            <td style="padding:4px 6px;">${selectHtml}</td>
+            <td style="padding:4px 6px;text-align:center;">
+              <input type="checkbox" ${isSS?'checked':''} 
+                style="width:16px;height:16px;cursor:pointer;accent-color:#7c3aed;"
+                onchange="toggleSideSeam(${i}, this.checked)"
+                title="Side Seam (+SS)"/>
+            </td>
             <td style="padding:4px 6px;">${inp(l.color,'color',i,'text','text-align:left;')}</td>
             <td style="padding:4px 6px;">${inp(l.size,'size',i)}</td>
             <td style="padding:4px 6px;">${inp(l.qty,'qty',i,'number','font-weight:700;')}</td>
@@ -17251,16 +17249,65 @@ function updateOurStyle(idx, val) {
   parsedPoData.lines[idx].our_style_id = matched?.id || null;
 }
 
+function toggleSideSeam(idx, checked) {
+  if (!parsedPoData?.lines[idx]) return;
+  const poStyle = parsedPoData.lines[idx].style_number;
+  const allStyles = window._allStylesList || [];
+  const ssStyleNum = poStyle + 'SS';
+  const ssStyleObj = allStyles.find(s => s.style_number === ssStyleNum);
+
+  // 같은 PO Style 번호 라인 전체 업데이트
+  parsedPoData.lines.forEach((l, i) => {
+    if (l.style_number === poStyle) {
+      l.is_side_seam = checked;
+      const rows = document.querySelectorAll('#po-lines-tbody tr');
+      const cb = rows[i]?.querySelector('input[type="checkbox"]');
+      if (cb) cb.checked = checked;
+    }
+  });
+
+  // poLines도 즉시 업데이트 (이미 entry 테이블에 반영된 경우)
+  if (typeof poLines !== 'undefined') {
+    poLines.forEach((l, i) => {
+      if ((l.poStyleNum || l.styleNum) === poStyle) {
+        l.isSideSeam = checked;
+        l.styleNum = checked ? ssStyleNum : poStyle;
+        if (ssStyleObj) l.description = ssStyleObj.description || l.description;
+        // 재고 키 재계산
+        const invKey = `${l.styleNum}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+        const scQty = scInventory[invKey]?.qty || 0;
+        const caQty = caInventory[invKey]?.qty || 0;
+      }
+    });
+    renderEntryTable();
+    liveRenderDocs();
+  }
+}
+
 function updateOurStyleById(idx, styleId) {
   if (!parsedPoData?.lines[idx]) return;
-  parsedPoData.lines[idx].our_style_id = styleId || null;
   const allStyles = window._allStylesList || [];
   const matched = allStyles.find(s => s.id === styleId);
-  parsedPoData.lines[idx].our_style_number = matched?.style_number || '';
-  // 선택한 스타일의 색상을 업데이트 (선택된 경우 드롭다운 색상 변경)
-  const sel = document.querySelector(`#po-lines-tbody tr:nth-child(${idx+1}) select`);
-  if (sel) sel.style.color = styleId ? '#16a34a' : '#9ca3af';
-  if (sel) sel.style.fontWeight = styleId ? '700' : '400';
+
+  // 같은 PO Style 번호를 가진 빈 라인들도 자동으로 같은 item 설정
+  const poStyle = parsedPoData.lines[idx].style_number;
+  parsedPoData.lines.forEach((l, i) => {
+    if (l.style_number === poStyle && (!l.our_style_id || i === idx)) {
+      l.our_style_id = styleId || null;
+      l.our_style_number = matched?.style_number || '';
+    }
+  });
+
+  // 드롭다운 UI 업데이트
+  const rows = document.querySelectorAll('#po-lines-tbody tr');
+  parsedPoData.lines.forEach((l, i) => {
+    if (l.style_number !== poStyle) return;
+    const sel = rows[i]?.querySelector('select');
+    if (!sel) return;
+    sel.value = l.our_style_id || '';
+    sel.style.color = l.our_style_id ? '#16a34a' : '#9ca3af';
+    sel.style.fontWeight = l.our_style_id ? '700' : '400';
+  });
 }
 
 // styles 목록 로드 (PO 파싱 자동매칭용)
@@ -17391,12 +17438,14 @@ function applyPoPreview() {
   // 라인 채우기 — 새 PO 업로드 시 기존 라인 자동 교체 (Save 전이므로 그냥 덮어씌움)
   poLines = [];
   const newLines = (d.lines||[]).map(l => {
-    const styleObj = styles.find(s =>
-      String(s.style_number) === String(l.style_number)
-    );
+    // Side Seam 체크 시 스타일 번호에 SS 붙여서 처리
+    const effectiveStyleNum = l.is_side_seam ? (l.style_number + 'SS') : l.style_number;
+    const styleObj = styles.find(s => String(s.style_number) === String(effectiveStyleNum))
+      || styles.find(s => String(s.style_number) === String(l.style_number));
     const ppb = styleObj ? calcPpb(styleObj.description || '', l.size) : 72;
 const qty = l.qty || 0;
-    const invKey = `${l.style_number||l.styleNum}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+    // 재고 조회도 SS 버전으로
+    const invKey = `${effectiveStyleNum}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
     const scQty = scInventory[invKey]?.qty || 0;
     const caQty = caInventory[invKey]?.qty || 0;
     const pref = window._custPrefWh || 'SC';
@@ -17420,8 +17469,10 @@ const qty = l.qty || 0;
     let bins = {};
     try { bins = getDefaultBins(String(l.style_number), l.color, l.size); } catch(e) {}
     return {
-      code: (l.style_number + (l.color||'').replace(/\s+/g,'').substring(0,6) + l.size).toLowerCase(),
-      styleNum: String(l.style_number),
+      code: (effectiveStyleNum + (l.color||'').replace(/\s+/g,'').substring(0,6) + l.size).toLowerCase(),
+      styleNum: String(effectiveStyleNum),
+      poStyleNum: String(l.style_number),  // 원본 PO 스타일 번호
+      isSideSeam: !!l.is_side_seam,
       color: l.color,
       size: l.size,
       wh: autoWh,
