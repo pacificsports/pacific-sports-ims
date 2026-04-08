@@ -11563,7 +11563,7 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
     // - 이번에 SC ship이거나, 이전에 SC가 이미 shipped된 경우 (sc_shipped_at 있음)
     const scActuallyShipped = (currentWh === 'SC') || !!order.sc_shipped_at || ['shipped','invoiced','completed'].includes(order.sc_status);
     const scDisplayDate = (scQty > 0 && scActuallyShipped)
-      ? (currentWh === 'SC' ? shipDateStr : (order.sc_shipped_at ? fmtDate(order.sc_shipped_at) : scShippedDate))
+      ? (currentWh === 'SC' ? shipDateStr : (order.sc_shipped_at ? fmtDate(order.sc_shipped_at) : (scShippedDate || shipDateStr)))
       : null;
     const scCell = scQty > 0
       ? scActuallyShipped
@@ -13803,8 +13803,18 @@ async function sendInvoiceEmail() {
         window._bolFilesData.forEach(f => {
           if (f.base64) bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
         });
-      } else if (window._bolFilesDataSingle && window._bolFilesDataSingle.base64) {
-        bolFilesForInv.push({ base64: window._bolFilesDataSingle.base64, filename: window._bolFilesDataSingle.fileName || `BOL_${invWh}.pdf`, mime: window._bolFilesDataSingle.mimeType || 'application/pdf' });
+      }
+      // _bolFilesDataSingle은 배열
+      if (window._bolFilesDataSingle && Array.isArray(window._bolFilesDataSingle)) {
+        window._bolFilesDataSingle.forEach(f => {
+          if (f.base64) bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
+        });
+      }
+      // 수동 업로드된 BOL 파일 (_uploadedBolFiles)
+      if (window._uploadedBolFiles && Array.isArray(window._uploadedBolFiles)) {
+        window._uploadedBolFiles.forEach(f => {
+          if (f.base64) bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_upload_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
+        });
       }
 
       try {
@@ -14831,11 +14841,9 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   }
 
   // alloc pcs 계산
-  const allocPcs = (alloc) => {
-    const entries = Object.entries(alloc||{}).filter(([k]) => !k.includes('TRANSFER|'));
-    const hasPcr = entries.some(([k]) => k.includes('PCR|PCR'));
-    return entries.filter(([k]) => !hasPcr || k.includes('PCR') || k.includes('|')).reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
-  };
+  const allocPcs = (alloc) => Object.entries(alloc||{})
+    .filter(([k]) => !k.includes('TRANSFER|'))
+    .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
 
   // 라인 필터 (WH별 shipped qty > 0)
   // 실제 출고 수량 헬퍼
@@ -14900,36 +14908,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     // alloc이 없으면 qty_backordered fallback
     return l.qty_backordered || 0;
   };
-  const backLines = isLastInvoice
-    ? (lines||[]).map(l => ({...l, _bq: calcBackQty(l)})).filter(l => l._bq > 0)
-        .sort((a,b) => { const c=(a.color||'').localeCompare(b.color||''); return c!==0?c:sizeOrd(a.size)-sizeOrd(b.size); })
-    : [];
-  const totalBack = backLines.reduce((s,l) => s+(l._bq||0), 0);
-  const backSection = backLines.length ? `
-    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:16px;border:1px solid #fecaca;border-radius:6px;">
-      <tr><td style="background:#fee2e2;padding:8px 14px;border-radius:5px 5px 0 0;">
-        <span style="font-size:13px;font-weight:700;color:#991b1b;">&#9888;&#65039; Back Order &#8212; ${totalBack.toLocaleString()} pcs pending</span>
-      </td></tr>
-      <tr><td style="padding:0;">
-        <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;">
-          <tr style="background:#fef2f2;">
-            <th style="padding:5px 10px;text-align:left;color:#991b1b;">Style</th>
-            <th style="padding:5px 10px;text-align:left;color:#991b1b;">Color</th>
-            <th style="padding:5px 10px;text-align:center;color:#991b1b;">Size</th>
-            <th style="padding:5px 10px;text-align:center;color:#991b1b;">Back Qty</th>
-          </tr>
-          ${backLines.map(l=>`<tr>
-            <td style="padding:5px 10px;">${l.styles?.style_number||''}</td>
-            <td style="padding:5px 10px;">${l.color||''}</td>
-            <td style="padding:5px 10px;text-align:center;">${l.size||''}</td>
-            <td style="padding:5px 10px;text-align:center;font-weight:700;color:#dc2626;">${l._bq} pcs</td>
-          </tr>`).join('')}
-        </table>
-      </td></tr>
-      <tr><td style="padding:8px 14px;background:#fff5f5;font-size:11px;color:#991b1b;border-top:1px solid #fecaca;border-radius:0 0 5px 5px;">
-        We will ship your remaining items as soon as inventory is available.
-      </td></tr>
-    </table>` : '';
+  const backSection = ''; // Invoice 이메일에서 Back Order 섹션 제거
 
   return `<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;font-size:13px;">
 
