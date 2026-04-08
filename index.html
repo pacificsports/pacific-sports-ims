@@ -7400,22 +7400,26 @@ async function boCardStartOrder(orderId) {
   const { data: boOrder } = await db.from('orders').select('*').eq('id', orderId).single();
   if (!boOrder) return;
 
-  // 고객 선택
+  // 고객 선택 — inv-cust-sel dropdown
   const custMatch = (customers||[]).find(c => c.id === boOrder.customer_id);
-  if (custMatch) {
-    const custEl = document.getElementById('inv-cust');
-    if (custEl) { custEl.value = custMatch.name || custMatch.customer_name || ''; custEl.dispatchEvent(new Event('input')); }
-    await new Promise(r => setTimeout(r, 100));
-    currentInvoiceData = { ...(currentInvoiceData||{}), customer: custMatch };
-    const poEl = document.getElementById('inv-cust-po');
-    if (poEl) poEl.value = boOrder.customer_po || '';
-    const termsEl = document.getElementById('inv-cust-terms');
-    if (termsEl) termsEl.value = boOrder.terms || 'N30';
-    const billEl = document.getElementById('inv-bill-addr');
-    if (billEl) billEl.value = boOrder.bill_addr || '';
-    const shipEl = document.getElementById('inv-ship-addr');
-    if (shipEl) shipEl.value = boOrder.ship_addr || '';
+  const custSel = document.getElementById('inv-cust-sel');
+  if (custMatch && custSel) {
+    custSel.value = boOrder.customer_id;
+    onCustSelChange(custSel);
+    await new Promise(r => setTimeout(r, 200));
   }
+
+  // 나머지 필드 채우기
+  currentInvoiceData = { ...(currentInvoiceData||{}), customer: custMatch };
+  const poEl = document.getElementById('inv-cust-po');
+  if (poEl) poEl.value = boOrder.customer_po || '';
+  const termsEl = document.getElementById('inv-cust-terms');
+  if (termsEl) termsEl.value = boOrder.terms || 'N30';
+  // 주소는 onCustSelChange에서 이미 채워짐, BO 오더의 주소로 덮어쓰기
+  const billEl = document.getElementById('inv-bill-addr');
+  if (billEl && boOrder.bill_addr) { billEl.value = boOrder.bill_addr; autoResizeTextarea(billEl); }
+  const shipEl = document.getElementById('inv-ship-addr');
+  if (shipEl && boOrder.ship_addr) { shipEl.value = boOrder.ship_addr; autoResizeTextarea(shipEl); }
 
   // 라인 채우기
   poLines = [];
@@ -7435,7 +7439,7 @@ async function boCardStartOrder(orderId) {
     });
   }
   renderPoLines();
-  await new Promise(r => setTimeout(r, 300));
+  await new Promise(r => setTimeout(r, 200));
   await liveRenderDocs();
   showToast(`📋 ${selectedLines.length}개 사이즈 — Bin 배분 후 Save PO 하세요`);
 }
@@ -7538,25 +7542,25 @@ async function boStartPartial(boOrderId, boOrderNum) {
   if (!boOrder) return;
 
   // 고객 정보 채우기
-  const custEl = document.getElementById('inv-cust');
-  if (custEl) { custEl.value = boOrder.customer_name || ''; custEl.dispatchEvent(new Event('input')); }
-  await new Promise(r => setTimeout(r, 100));
-
-  // 고객 선택
+  // 고객 선택 — inv-cust-sel dropdown으로 자동 fill
   const custMatch = (customers||[]).find(c => c.id === boOrder.customer_id);
-  if (custMatch) {
-    currentInvoiceData = { ...currentInvoiceData, customer: custMatch };
-    const custDropdown = document.getElementById('inv-cust');
-    if (custDropdown) custDropdown.value = custMatch.name || custMatch.customer_name || '';
-    const poEl = document.getElementById('inv-cust-po');
-    if (poEl) poEl.value = boOrder.customer_po || '';
-    const termsEl = document.getElementById('inv-cust-terms');
-    if (termsEl) termsEl.value = boOrder.terms || 'N30';
-    const billEl = document.getElementById('inv-bill-addr');
-    if (billEl) billEl.value = boOrder.bill_addr || '';
-    const shipEl = document.getElementById('inv-ship-addr');
-    if (shipEl) shipEl.value = boOrder.ship_addr || '';
+  const custSelEl = document.getElementById('inv-cust-sel');
+  if (custMatch && custSelEl) {
+    custSelEl.value = boOrder.customer_id;
+    onCustSelChange(custSelEl);
+    await new Promise(r => setTimeout(r, 200));
   }
+  currentInvoiceData = { ...(currentInvoiceData||{}), customer: custMatch };
+  // PO# + Terms
+  const poEl2 = document.getElementById('inv-cust-po');
+  if (poEl2) poEl2.value = boOrder.customer_po || '';
+  const termsEl2 = document.getElementById('inv-cust-terms');
+  if (termsEl2) termsEl2.value = boOrder.terms || 'N30';
+  // 주소는 onCustSelChange에서 채워짐, BO 오더 주소로 덮어쓰기
+  const billEl2 = document.getElementById('inv-bill-addr');
+  if (billEl2 && boOrder.bill_addr) { billEl2.value = boOrder.bill_addr; autoResizeTextarea(billEl2); }
+  const shipEl2 = document.getElementById('inv-ship-addr');
+  if (shipEl2 && boOrder.ship_addr) { shipEl2.value = boOrder.ship_addr; autoResizeTextarea(shipEl2); }
 
   // WH 설정 — 라인별로 다른 WH면 SC&CA, 단일이면 해당 WH
   const firstWh = Object.keys(whGroups)[0] || 'SC';
