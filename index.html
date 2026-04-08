@@ -13751,8 +13751,8 @@ async function sendInvoiceEmail() {
     // _invoiceShipInfo (모달에서 직접 수정한 값) 우선, 없으면 DB 값
     // shipDate 포함 — 실제 출고일을 invoice 이메일에 전달
     const invActualShipDate = (_invoiceWh === 'CA' || order.wh_code === 'CA')
-      ? (order.ca_shipped_at || order.sc_shipped_at || order.ship_date)
-      : (order.sc_shipped_at || order.ca_shipped_at || order.ship_date);
+      ? (order.ca_shipped_at || order.sc_shipped_at || new Date().toISOString().slice(0,10))
+      : (order.sc_shipped_at || order.ca_shipped_at || new Date().toISOString().slice(0,10));
     const invShipInfo2 = window._invoiceShipInfo && (window._invoiceShipInfo.carrier || window._invoiceShipInfo.tracking)
       ? { ...window._invoiceShipInfo, shipDate: invActualShipDate || window._invoiceShipInfo.shipDate }
       : { carrier: order.carrier||'', tracking: order.tracking_number||'', freightCarrier: order.pickup_company||'', shipDate: invActualShipDate };
@@ -13792,14 +13792,20 @@ async function sendInvoiceEmail() {
         invEmailBodyHtml = buildInvoiceEmailBodyHtml(order, lines, displayInvNum, invShipInfo2, cs, freightAmt);
       } catch(e) { console.warn('Invoice email body error:', e); }
 
-      // Signed BOL — 메모리 파일 + DB 저장본 모두 합쳐서 첨부
+      // Signed BOL — DB 저장본 + 메모리 수동첨부 파일 모두
       const invWh = (_invoiceWh === 'CA' || order.wh_code === 'CA') ? 'CA' : 'SC';
       const bolB64 = invWh === 'CA' ? order.bol_file_ca : order.bol_file;
-
-      // DB에 저장된 Signed BOL만 사용 (항상 리뷰 후 발송하므로 메모리 파일 불필요)
-      const bolFilesForInv = bolB64
-        ? [{ base64: bolB64, filename: `SignedBOL_PO${order?.customer_po||''}_${invWh}.pdf`, mime: 'application/pdf' }]
-        : [];
+      const bolFilesForInv = [];
+      // DB 저장된 Signed BOL
+      if (bolB64) bolFilesForInv.push({ base64: bolB64, filename: `SignedBOL_PO${order?.customer_po||''}_${invWh}.pdf`, mime: 'application/pdf' });
+      // 메모리에 있는 수동 첨부 BOL 파일들 (_bolFilesData)
+      if (window._bolFilesData && Array.isArray(window._bolFilesData)) {
+        window._bolFilesData.forEach(f => {
+          if (f.base64) bolFilesForInv.push({ base64: f.base64, filename: f.fileName || `BOL_${invWh}.pdf`, mime: f.mimeType || 'application/pdf' });
+        });
+      } else if (window._bolFilesDataSingle && window._bolFilesDataSingle.base64) {
+        bolFilesForInv.push({ base64: window._bolFilesDataSingle.base64, filename: window._bolFilesDataSingle.fileName || `BOL_${invWh}.pdf`, mime: window._bolFilesDataSingle.mimeType || 'application/pdf' });
+      }
 
       try {
         await fetch('https://po-confirm-email.hjbae.workers.dev/send-invoice', {
