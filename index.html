@@ -13521,87 +13521,8 @@ async function _doShippedCoreInner(emp) {
     })() : new Date().toISOString()
   }).eq('id', orderId);
 
-  // Back Order가 있으면 별도 Back Order 레코드 생성
-  if (totalBackQty > 0) {
-    // Split 오더: WH별이 아닌 단일 BO로 통합 (SC&CA 라인 중복 방지)
-    const boNum = order.order_number + '-BO';
-    const { data: existingBoList } = await db.from('orders').select('id,order_number').eq('order_number', boNum);
-    const existingBo = existingBoList?.[0] || null;
-    // 이미 BO가 존재하면 (다른 WH가 먼저 ship된 경우) 해당 BO에 라인 추가
-    // 기존 BO가 있으면 (다른 WH가 먼저 ship된 경우) 라인만 추가, 없으면 새로 생성
-    let boOrderId = existingBo ? existingBo.id : null;
-
-    if (!existingBo) {
-      const { data: newBo } = await db.from('orders').insert({
-        order_number: boNum,
-        customer_name: order.customer_name,
-        customer_po: (order.customer_po || '') + '-BO',
-        customer_id: order.customer_id,
-        warehouse_id: order.warehouse_id,
-        wh_code: order.wh_code,
-        is_split_warehouse: order.is_split_warehouse,
-        ship_date: null,
-        status: 'backordered',
-        total_pcs: totalBackQty,
-        total_amount: backLines.reduce((s,l) => s + (l.qty_backordered||0) * (l.unit_price||0), 0),
-        bill_addr: order.bill_addr,
-        ship_addr: order.ship_addr,
-        terms: order.terms,
-        priority: order.priority,
-        parent_order_id: orderId,
-        created_by: order.created_by
-      }).select().single().then(r => r.data);
-      boOrderId = newBo?.id;
-    } else {
-      // 기존 BO total 업데이트
-      const { data: existingLines } = await db.from('order_lines').select('qty_backordered,unit_price').eq('order_id', existingBo.id);
-      const existingTotal = (existingLines||[]).reduce((s,l) => s + (l.qty_backordered||0)*(l.unit_price||0), 0);
-      const addTotal = backLines.reduce((s,l) => s + (l.qty_backordered||0)*(l.unit_price||0), 0);
-      const existingPcs = (existingLines||[]).reduce((s,l) => s + (l.qty_backordered||0), 0);
-      await db.from('orders').update({
-        total_pcs: existingPcs + totalBackQty,
-        total_amount: existingTotal + addTotal
-      }).eq('id', existingBo.id);
-    }
-
-    if (boOrderId) {
-      for (const l of backLines) {
-        // 기존 BO에 같은 color+size 라인이 이미 있으면 수량 합산
-        if (existingBo) {
-          const { data: dupLines } = await db.from('order_lines')
-            .select('id,qty_backordered,qty_pieces')
-            .eq('order_id', boOrderId)
-            .eq('color', l.color).eq('size', l.size);
-          const dupLine = dupLines?.[0] || null;
-          if (dupLine) {
-            await db.from('order_lines').update({
-              qty_pieces: (dupLine.qty_pieces||0) + l.qty_backordered,
-              qty_backordered: (dupLine.qty_backordered||0) + l.qty_backordered
-            }).eq('id', dupLine.id);
-            continue;
-          }
-        }
-        await db.from('order_lines').insert({
-          order_id: boOrderId,
-          style_id: l.style_id,
-          warehouse_id: l.warehouse_id,
-          wh: l.wh,
-          color: l.color, size: l.size,
-          qty_pieces: l.qty_backordered,
-          qty_filled: 0, qty_backordered: l.qty_backordered,
-          is_backordered: true,
-          pcs_per_box: l.pcs_per_box,
-          qty_boxes: 0, qty_loose: l.qty_backordered,
-          unit_price: l.unit_price
-        });
-      }
-      // 방금 생성/업데이트된 BO를 미리 등록해서 realtime/loadOrderStatus에서 새 오더 소리 방지
-      if (_knownOrderIds && boOrderId) _knownOrderIds.add(boOrderId);
-      showToast(`🚚 Shipped! Back Order ${boNum} ${existingBo ? '업데이트' : '생성'}됨 (${totalBackQty.toLocaleString()} pcs)`);
-    }
-  } else {
-    showToast(`🚚 PO# ${order.customer_po||order.order_number} Shipped 완료!`);
-  }
+  // BO는 PO 저장 시 이미 생성됨 — Shipping 시에는 토스트만 표시
+  showToast(`🚚 PO# ${order.customer_po||order.order_number} Shipped 완료!`);
   playShippedSound();
 
   // 이메일 발송
