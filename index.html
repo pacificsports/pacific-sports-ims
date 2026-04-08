@@ -8064,14 +8064,15 @@ async function printPickTicket(orderId, wh, ticketType) {
 
   document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, ticketType);
 
+  // enrichedLines에서 alloc_detail이 이미 WH별로 올바르게 설정됨
   // WH Labels Only 버튼 - full case 있을 때만
   const hasFullCases = enrichedLines.some(l => {
-    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    const alloc = l.alloc_detail || {};  // enrichedLines에서 이미 WH별로 교체됨
     return Object.entries(alloc).some(([k,v]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|') && (typeof v==='object'?v.boxes||0:Math.floor((v||0)/(l.pcs_per_box||l.styles?.box_qty||72)))>0);
   });
   // Partial Labels Only 버튼 - PCR partial 있을 때만
   const hasPartial = enrichedLines.some(l => {
-    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    const alloc = l.alloc_detail || {};  // enrichedLines에서 이미 WH별로 교체됨
     return Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0)>0);
   });
   const whLabelsBtn = document.getElementById('btn-wh-labels-only');
@@ -13895,7 +13896,8 @@ async function reviewAndSendInvoice(orderId, wh) {
 }
 
 async function sendInvoiceEmail() {
-  if (!_invoiceOrderId) return;
+  console.log('[sendInvoiceEmail] _invoiceOrderId:', _invoiceOrderId, '| _invoiceWh:', _invoiceWh);
+  if (!_invoiceOrderId) { console.error('[sendInvoiceEmail] No _invoiceOrderId!'); return; }
   const btn = document.querySelector('#modal-invoice-review .btn-primary');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 발송 중...'; }
 
@@ -14053,6 +14055,10 @@ async function sendInvoiceEmail() {
     console.warn('Invoice email error:', e);
     showToast('⚠️ Invoice 처리 중 오류: ' + e.message);
   } finally {
+    // 버튼 복원 (에러 발생해도 다시 클릭 가능하게)
+    const btn2 = document.querySelector('#modal-invoice-review .btn-primary');
+    if (btn2) { btn2.disabled = false; btn2.textContent = '📧 Send Invoice'; }
+    window._invoiceApprovedEmp = null;
     // 성공/실패 관계없이 항상 모달 닫고 완료 처리
     closeModal('modal-invoice-review');
     playCashRegister();
@@ -14182,6 +14188,23 @@ async function startBackOrder(orderId, wh) {
     : lines.filter(l => !l.wh || l.wh === 'SC' || l.wh === 'SC&CA');
 
   document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, filteredLines, false, wh);
+
+  // 라벨 버튼 visibility 설정
+  const hasFullCases = filteredLines.some(l => {
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    return Object.entries(alloc).some(([k,v]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|') && (typeof v==='object'?v.boxes||0:Math.floor((v||0)/(l.pcs_per_box||l.styles?.box_qty||72)))>0);
+  });
+  const hasPartial = filteredLines.some(l => {
+    const alloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
+    return Object.entries(alloc).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0)>0);
+  });
+  const whLabelsBtn = document.getElementById('btn-wh-labels-only');
+  const partialLabelsBtn = document.getElementById('btn-partial-labels-only');
+  if (whLabelsBtn) whLabelsBtn.style.display = hasFullCases ? 'inline-flex' : 'none';
+  if (partialLabelsBtn) partialLabelsBtn.style.display = hasPartial ? 'inline-flex' : 'none';
+  window._ptCurrentOrder = order;
+  window._ptCurrentLines = filteredLines;
+
   document.getElementById('modal-pt-preview').style.display = 'flex';
   showToast(`▶ ${order.order_number} Order Status에서 진행 중`);
 }
