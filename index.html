@@ -2471,9 +2471,11 @@ function _openNewInvoiceInner(skipPushState = false) {
   if (hasDraft) { renderEntryTable(); liveRenderDocs(); return; }
   poLines = [];
   fillWhDropdown();
-  ['inv-cust','inv-cust-po','inv-bill-addr','inv-ship-addr'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.value = '';
-  });
+  if (!window._boSkipDraft) {
+    ['inv-cust','inv-cust-po','inv-bill-addr','inv-ship-addr'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+  }
   document.getElementById('inv-cust-terms').value = 'N30';
   // 기본 ship date: 오늘 + 2일
   const _sdEl = document.getElementById('inv-ship-date-inp');
@@ -7400,29 +7402,50 @@ async function boCardStartOrder(orderId) {
   const { data: boOrder } = await db.from('orders').select('*').eq('id', orderId).single();
   if (!boOrder) return;
 
-  // 고객 선택 — updateCustomerSelects 후 value 설정
+  const custMatch = (customers||[]).find(c => c.id === boOrder.customer_id);
+
+  // draft 클리어 + skip 플래그 (openNewInvoice에서 필드 초기화 방지)
+  localStorage.removeItem('po_draft');
+  window._boSkipDraft = true;
+  window._boPrefillData = {
+    custId: boOrder.customer_id,
+    custMatch,
+    po: boOrder.customer_po || '',
+    terms: boOrder.terms || 'N30',
+    billAddr: boOrder.bill_addr || '',
+    shipAddr: boOrder.ship_addr || '',
+  };
+
+  // PO Entry로 이동
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+  await new Promise(r => setTimeout(r, 100));
+  openNewInvoice();
+  await new Promise(r => setTimeout(r, 300));
+
+  // openNewInvoice 완료 후 고객 정보 채우기
+  const pf = window._boPrefillData;
   updateCustomerSelects();
   await new Promise(r => setTimeout(r, 100));
-  const custMatch = (customers||[]).find(c => c.id === boOrder.customer_id);
   const custSel = document.getElementById('inv-cust-sel');
-  if (custMatch && custSel) {
-    custSel.value = boOrder.customer_id;
-    onCustSelChange(custSel);  // Terms, 주소 자동 채우기
+  if (pf.custId && custSel) {
+    custSel.value = pf.custId;
+    onCustSelChange(custSel);
     await new Promise(r => setTimeout(r, 100));
   }
-  currentInvoiceData = { ...(currentInvoiceData||{}), customer: custMatch };
-  // PO# 채우기
+  currentInvoiceData = { ...(currentInvoiceData||{}), customer: pf.custMatch };
   const poEl = document.getElementById('inv-cust-po');
-  if (poEl) poEl.value = boOrder.customer_po || '';
-  // BO 오더 주소로 덮어쓰기
-  if (boOrder.bill_addr) {
+  if (poEl) poEl.value = pf.po;
+  const termsEl = document.getElementById('inv-cust-terms');
+  if (termsEl) termsEl.value = pf.terms;
+  if (pf.billAddr) {
     const billEl = document.getElementById('inv-bill-addr');
-    if (billEl) { billEl.value = boOrder.bill_addr; autoResizeTextarea(billEl); }
+    if (billEl) { billEl.value = pf.billAddr; autoResizeTextarea(billEl); }
   }
-  if (boOrder.ship_addr) {
+  if (pf.shipAddr) {
     const shipEl = document.getElementById('inv-ship-addr');
-    if (shipEl) { shipEl.value = boOrder.ship_addr; autoResizeTextarea(shipEl); }
+    if (shipEl) { shipEl.value = pf.shipAddr; autoResizeTextarea(shipEl); }
   }
+  window._boPrefillData = null;
 
   // 라인 채우기
   poLines = [];
