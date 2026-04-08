@@ -7318,9 +7318,6 @@ async function loadBackOrders() {
 function boToggleAll(checked) {
   document.querySelectorAll('[id^="bo-chk-"]:not(#bo-chk-all)').forEach(chk => {
     chk.checked = checked;
-    const idx = chk.dataset.idx;
-    const qi = document.getElementById('bo-qty-' + idx);
-    if (qi) qi.disabled = !checked;
   });
   boUpdateSelected();
 }
@@ -7330,10 +7327,22 @@ function boUpdateSelected() {
   const checked = [...allChks].filter(c => c.checked);
   let totalPcs = 0;
   allChks.forEach(chk => {
-    const qi = document.getElementById('bo-qty-' + chk.dataset.idx);
-    if (qi) {
-      qi.disabled = !chk.checked;
-      if (chk.checked) totalPcs += parseInt(qi.value)||0;
+    const idx = chk.dataset.idx;
+    const qi = document.getElementById('bo-qty-' + idx);
+    const scLabel = document.getElementById('bo-sc-label-' + idx);
+    const caLabel = document.getElementById('bo-ca-label-' + idx);
+    const scRadio = document.getElementById('bo-wh-sc-' + idx);
+    const caRadio = document.getElementById('bo-wh-ca-' + idx);
+    const isChecked = chk.checked;
+    if (qi) { qi.disabled = !isChecked; if (isChecked) totalPcs += parseInt(qi.value)||0; }
+    // SC/CA 라디오 활성화/비활성화
+    if (scRadio) scRadio.disabled = !isChecked;
+    if (caRadio) caRadio.disabled = !isChecked;
+    if (scLabel) scLabel.style.opacity = isChecked ? '1' : '0.35';
+    if (caLabel) caLabel.style.opacity = isChecked ? '1' : '0.35';
+    // 체크 시 기본값 SC 선택
+    if (isChecked && !scRadio?.checked && !caRadio?.checked && scRadio) {
+      scRadio.checked = true;
     }
   });
   const infoEl = document.getElementById('bo-selected-info');
@@ -7362,38 +7371,48 @@ async function boStartPartial(boOrderId, boOrderNum) {
     const idx = parseInt(chk.dataset.idx);
     const line = boLines[idx];
     const qty = parseInt(document.getElementById('bo-qty-' + idx)?.value) || line._boQty;
-    return { ...line, _shipQty: Math.min(qty, line._boQty) };
+    // 라인별 WH 선택
+    const scRadio = document.getElementById('bo-wh-sc-' + idx);
+    const caRadio = document.getElementById('bo-wh-ca-' + idx);
+    const lineWh = caRadio?.checked ? 'CA' : 'SC';
+    return { ...line, _shipQty: Math.min(qty, line._boQty), _wh: lineWh };
   });
 
   const totalSelected = selectedLines.reduce((s,l) => s+l._shipQty, 0);
-  if (!confirm(`${wh} Warehouse에서 ${selectedLines.length}개 라인 (${totalSelected.toLocaleString()} pcs) Start Order 하시겠습니까?`)) return;
-
-  const whObj = warehouses.find(w => w.code === wh);
-  if (!whObj) { alert('창고를 찾을 수 없습니다.'); return; }
+  // WH별 그룹
+  const whGroups = {};
+  selectedLines.forEach(l => {
+    if (!whGroups[l._wh]) whGroups[l._wh] = [];
+    whGroups[l._wh].push(l);
+  });
+  const whSummary = Object.entries(whGroups).map(([w,ls]) => `${w}: ${ls.reduce((s,l)=>s+l._shipQty,0)}pcs`).join(', ');
+  if (!confirm(`${selectedLines.length}개 라인 (${whSummary}) Start Order 하시겠습니까?`)) return;
 
   document.getElementById('bo-detail-modal-wrap')?.remove();
   showToast('⏳ Order Status에 카드 생성 중...');
 
-  const allFullSelected = checked.length === boLines.length && selectedLines.every(l => l._shipQty >= l._boQty);
+  // WH별로 각각 오더 생성
+  const { data: boOrder } = await db.from('orders').select('*').eq('id', boOrderId).single();
+  const baseNum = (boOrderNum||boOrder.customer_po||'').replace(/-BO.*$/,'');
+  const suffix = new Date().getTime().toString().slice(-4);
+  let lastNewOrder = null;
+  let lastNewWh = null;
 
-  if (allFullSelected) {
-    // 전체 → 기존 BO 오더를 po_entered로
-    await db.from('orders').update({ status: 'po_entered', wh_code: wh, warehouse_id: whObj.id }).eq('id', boOrderId);
-    await startBackOrder(boOrderId, wh);
-  } else {
-    // 부분 → 새 오더 생성
-    const { data: boOrder } = await db.from('orders').select('*').eq('id', boOrderId).single();
-    const newOrderNum = (boOrderNum||'').replace(/-BO.*$/,'') + '-BO' + new Date().getTime().toString().slice(-4);
+  for (const [lineWh, whLines] of Object.entries(whGroups)) {
+    const whObj2 = warehouses.find(w => w.code === lineWh);
+    if (!whObj2) continue;
+    const whTotal = whLines.reduce((s,l) => s+l._shipQty, 0);
+    const newOrderNum = baseNum + '-BO' + suffix + (Object.keys(whGroups).length > 1 ? lineWh : '');
     const { data: newOrder } = await db.from('orders').insert({
       order_number: newOrderNum,
       customer_name: boOrder.customer_name,
       customer_po: boOrder.customer_po,
       customer_id: boOrder.customer_id,
-      warehouse_id: whObj.id,
-      wh_code: wh,
+      warehouse_id: whObj2.id,
+      wh_code: lineWh,
       status: 'po_entered',
-      total_pcs: totalSelected,
-      total_amount: selectedLines.reduce((s,l) => s+l._shipQty*(l.unit_price||0), 0),
+      total_pcs: whTotal,
+      total_amount: whLines.reduce((s,l) => s+l._shipQty*(l.unit_price||0), 0),
       bill_addr: boOrder.bill_addr,
       ship_addr: boOrder.ship_addr,
       terms: boOrder.terms,
@@ -7401,16 +7420,14 @@ async function boStartPartial(boOrderId, boOrderNum) {
       parent_order_id: boOrderId,
       created_by: _currentEmployee?.name || ''
     }).select().single();
+    if (!newOrder?.id) { showToast(`❌ ${lineWh} 오더 생성 실패`); continue; }
 
-    if (!newOrder?.id) { showToast('❌ 오더 생성 실패'); return; }
-
-    // 새 오더에 선택 라인 추가 + 기존 BO 수량 차감
-    for (const l of selectedLines) {
+    for (const l of whLines) {
       await db.from('order_lines').insert({
         order_id: newOrder.id,
         style_id: l.style_id,
-        warehouse_id: whObj.id,
-        wh: wh,
+        warehouse_id: whObj2.id,
+        wh: lineWh,
         color: l.color, size: l.size,
         qty_pieces: l._shipQty,
         qty_backordered: 0,
@@ -7419,32 +7436,40 @@ async function boStartPartial(boOrderId, boOrderNum) {
         unit_price: l.unit_price || 0,
         is_side_seam: l.is_side_seam || false
       });
-      const remaining = (l.qty_backordered||0) - l._shipQty;
-      if (remaining <= 0) {
-        await db.from('order_lines').delete().eq('id', l.id);
-      } else {
-        await db.from('order_lines').update({ qty_pieces: remaining, qty_backordered: remaining }).eq('id', l.id);
-      }
     }
-
-    // 기존 BO 수량 업데이트
-    const { data: remLines } = await db.from('order_lines').select('qty_backordered').eq('order_id', boOrderId).gt('qty_backordered', 0);
-    const remTotal = (remLines||[]).reduce((s,l) => s+(l.qty_backordered||0), 0);
-    if (remTotal <= 0) {
-      await db.from('orders').update({ status: 'completed' }).eq('id', boOrderId);
-    } else {
-      await db.from('orders').update({ total_pcs: remTotal }).eq('id', boOrderId);
-    }
-
-    // Order Status 탭으로 + Pick Ticket 오픈
-    const { data: newLines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', newOrder.id);
-    showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
-    await loadOrderStatus();
-    _ptOrderId = newOrder.id;
-    document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(newOrder, newLines||[], false, wh);
-    document.getElementById('modal-pt-preview').style.display = 'flex';
-    showToast(`✅ ${newOrderNum} Order Status에 생성됨!`);
+    lastNewOrder = newOrder;
+    lastNewWh = lineWh;
   }
+
+  // 기존 BO 라인 수량 차감
+  for (const l of selectedLines) {
+    const remaining = (l.qty_backordered||0) - l._shipQty;
+    if (remaining <= 0) {
+      await db.from('order_lines').delete().eq('id', l.id);
+    } else {
+      await db.from('order_lines').update({ qty_pieces: remaining, qty_backordered: remaining }).eq('id', l.id);
+    }
+  }
+
+  // 기존 BO 잔여 수량 업데이트
+  const { data: remLines } = await db.from('order_lines').select('qty_backordered').eq('order_id', boOrderId).gt('qty_backordered', 0);
+  const remTotal = (remLines||[]).reduce((s,l) => s+(l.qty_backordered||0), 0);
+  if (remTotal <= 0) {
+    await db.from('orders').update({ status: 'completed' }).eq('id', boOrderId);
+  } else {
+    await db.from('orders').update({ total_pcs: remTotal }).eq('id', boOrderId);
+  }
+
+  // Order Status 탭으로 + 마지막 생성 오더 Pick Ticket 오픈
+  showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
+  await loadOrderStatus();
+  if (lastNewOrder) {
+    const { data: newLines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', lastNewOrder.id);
+    _ptOrderId = lastNewOrder.id;
+    document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(lastNewOrder, newLines||[], false, lastNewWh);
+    document.getElementById('modal-pt-preview').style.display = 'flex';
+  }
+  showToast(`✅ Order Status에 생성됨! (${Object.keys(whGroups).join(', ')})`);
 
   loadBackOrders();
 }
@@ -7484,7 +7509,17 @@ async function showBoDetail(orderId) {
       <td style="padding:7px 8px;text-align:center;font-size:12px;">${l.size||'—'}</td>
       <td style="padding:7px 8px;text-align:center;font-weight:700;color:#dc2626;">${(l.qty_backordered||0).toLocaleString()}</td>
       <td style="padding:7px 8px;text-align:center;">
-        <input type="number" id="bo-qty-${i}" value="${l.qty_backordered||0}" min="1" max="${l.qty_backordered||0}" style="width:70px;padding:3px 6px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;text-align:center;" disabled onchange="boUpdateSelected()">
+        <input type="number" id="bo-qty-${i}" value="${l.qty_backordered||0}" min="1" max="${l.qty_backordered||0}" style="width:65px;padding:3px 5px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;text-align:center;" disabled onchange="boUpdateSelected()">
+      </td>
+      <td style="padding:7px 8px;text-align:center;">
+        <div style="display:flex;gap:4px;justify-content:center;">
+          <label style="display:flex;align-items:center;gap:3px;cursor:pointer;padding:3px 8px;border-radius:4px;border:1.5px solid #1e40af;font-size:11px;font-weight:700;color:#1e40af;background:#eff6ff;opacity:0.4;" id="bo-sc-label-${i}">
+            <input type="radio" name="bo-wh-${i}" id="bo-wh-sc-${i}" value="SC" style="width:13px;height:13px;" disabled onchange="boUpdateSelected()"> SC
+          </label>
+          <label style="display:flex;align-items:center;gap:3px;cursor:pointer;padding:3px 8px;border-radius:4px;border:1.5px solid #ea580c;font-size:11px;font-weight:700;color:#ea580c;background:#fff7ed;opacity:0.4;" id="bo-ca-label-${i}">
+            <input type="radio" name="bo-wh-${i}" id="bo-wh-ca-${i}" value="CA" style="width:13px;height:13px;" disabled onchange="boUpdateSelected()"> CA
+          </label>
+        </div>
       </td>
     </tr>`).join('');
 
@@ -7515,18 +7550,16 @@ async function showBoDetail(orderId) {
             <th style="padding:8px;text-align:center;font-size:11px;color:#6b7280;">Size</th>
             <th style="padding:8px;text-align:center;font-size:11px;color:#dc2626;">B/O Qty</th>
             <th style="padding:8px;text-align:center;font-size:11px;color:#1e40af;">Ship Qty</th>
+            <th style="padding:8px;text-align:center;font-size:11px;color:#374151;">Warehouse</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
 
         <!-- WH 선택 + Start -->
         <div id="bo-action-bar" style="display:none;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;">
-          <div style="font-size:11px;color:#6b7280;margin-bottom:8px;">선택: <strong id="bo-selected-info">0 lines / 0 pcs</strong></div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <span style="font-size:12px;font-weight:600;color:#374151;">Warehouse:</span>
-            <button id="bo-wh-sc" onclick="boSelectWh('SC')" style="padding:6px 16px;border-radius:6px;border:2px solid #1e40af;background:#eff6ff;color:#1e40af;font-weight:700;font-size:12px;cursor:pointer;">SC</button>
-            <button id="bo-wh-ca" onclick="boSelectWh('CA')" style="padding:6px 16px;border-radius:6px;border:2px solid #e5e7eb;background:#fff;color:#6b7280;font-weight:600;font-size:12px;cursor:pointer;">CA</button>
-            <button onclick="boStartPartial('${orderId}','${order.customer_po||order.order_number}')" style="margin-left:auto;padding:7px 20px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">▶ Start Order</button>
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div style="font-size:12px;color:#374151;">선택: <strong id="bo-selected-info" style="color:#1e40af;">0 lines / 0 pcs</strong></div>
+            <button onclick="boStartPartial('${orderId}','${order.customer_po||order.order_number}')" style="padding:8px 22px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:13px;cursor:pointer;">▶ Start Order</button>
           </div>
         </div>
       </div>
