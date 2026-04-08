@@ -7303,7 +7303,64 @@ async function loadBackOrders() {
     return;
   }
 
+  // 현재 poLines 백업
+  const _savedPoLines = [...(poLines||[])];
+
   const SIZE_ORDER_BO = ['2T','3T','4T','5T','XS','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
+  // BO 오더별 poLines 세팅 후 테이블 HTML 생성
+  const boEntryHtmlMap = {};
+  for (const o of filtered) {
+    const oLines = boLinesMap[o.id] || [];
+    const wh = o.wh_code || o.warehouses?.code || 'SC';
+    poLines = oLines.map(l => ({
+      styleNum: l.styles?.style_number || '',
+      color: l.color || '',
+      size: l.size || '',
+      qty: l.qty_backordered || 0,
+      price: l.unit_price || 0,
+      wh: wh,
+      isSideSeam: l.is_side_seam || false,
+      isSideSeamChecked: l.is_side_seam || false,
+      ppb: l.pcs_per_box || 72,
+      cases: Math.floor((l.qty_backordered||0)/(l.pcs_per_box||72)),
+      loose: (l.qty_backordered||0)%(l.pcs_per_box||72),
+      allocSC: l._allocSC||{}, allocCA: l._allocCA||{},
+      pcrTransfersPending: [], caPcrTransfersPending: [],
+      location:'', locationCA:'',
+      _boLineId: l.id,
+    }));
+    // renderEntryTable이 po-lines-body에 렌더링하므로 임시 div에 담기
+    const tmpTbody = document.createElement('tbody');
+    tmpTbody.id = 'po-lines-body';
+    // 원래 po-lines-body를 임시로 교체
+    const origTbody = document.getElementById('po-lines-body');
+    if (origTbody) {
+      origTbody.parentNode.replaceChild(tmpTbody, origTbody);
+      renderEntryTable();
+      boEntryHtmlMap[o.id] = `<table class="tbl" style="width:100%;">
+        <thead><tr>
+          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;">ITEM CODE</th>
+          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;">STYLE</th>
+          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;">COLOR</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">SIZE</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#dc2626;">QTY(PCS)</th>
+          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#1e40af;">SC/SC-PCR</th>
+          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#ea580c;">CA/CA-PCR</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">SHIP</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">FULL BOXES</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">PARTIAL(PCR)</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">BACK ORDER</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">TRANSFER</th>
+        </tr></thead>
+        <tbody>${tmpTbody.innerHTML}</tbody>
+      </table>`;
+      // 원래 tbody 복구
+      tmpTbody.parentNode.replaceChild(origTbody, tmpTbody);
+    }
+  }
+  // poLines 복구
+  poLines = _savedPoLines;
+
   wrap.innerHTML = `<div style="display:flex;flex-direction:column;gap:16px;padding:4px 0;">` +
   filtered.map(o => {
     const wh = o.wh_code || o.warehouses?.code || 'SC';
@@ -7366,9 +7423,9 @@ async function loadBackOrders() {
           <button onclick="cancelBackOrder('${o.id}','${o.customer_po||o.order_number}')" style="padding:4px 10px;background:#fff;color:#dc2626;border:1px solid #fca5a5;border-radius:5px;font-size:11px;cursor:pointer;">✕ Cancel</button>
         </div>
       </div>
-      <!-- PO Entry 테이블 — boOpenForEntry로 진입 -->
-      <div id="bo-entry-wrap-${o.id}" style="padding:8px 0;">
-        <div style="padding:8px 16px;font-size:12px;color:#6b7280;">📦 Distribute 버튼을 눌러 재고 배분을 시작하세요.</div>
+      <!-- PO Entry 스타일 테이블 -->
+      <div id="bo-entry-wrap-${o.id}" style="padding:0;overflow-x:auto;">
+        ${boEntryHtmlMap[o.id] || '<div style="padding:16px;color:#6b7280;">라인 데이터 로딩 중...</div>'}
       </div>
       <!-- 액션 버튼 -->
       <div style="padding:10px 16px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;background:#fafafa;">
