@@ -7334,12 +7334,14 @@ async function loadBackOrders() {
     window._boPoLinesMap[boId] = poLines;
     window._boOrderCache[boId] = o;
     const rows = poLines.map((l, idx) => {
-      const k = l.isSideSeam
-        ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
-        : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+      // normColor 변환 (inventory 로드 시와 동일하게)
+      const normC = (l.color||'').replace(/Heathered/gi,'Htr').replace(/Heather/gi,'Htr').replace(/Hthr/gi,'Htr').trim().toUpperCase();
+      const sNum = (l.styleNum||'').toString();
+      const sz = (l.size||'').toUpperCase();
+      const k = l.isSideSeam ? `${sNum}|${normC}|${sz}|SS` : `${sNum}|${normC}|${sz}`;
       const sq = scInventory[k]?.qty || 0;
       const cq = caInventory[k]?.qty || 0;
-      const pcrKey = `|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+      const pcrKey = `|${normC}|${sz}`;
       const scPcrBins = window.binInventory?.['SC-PCR']?.[k] || window.binInventory?.['SC-PCR']?.[pcrKey] || [];
       const caPcrBins = window.binInventory?.['CA-PCR']?.[k] || window.binInventory?.['CA-PCR']?.[pcrKey] || [];
       const pq = scPcrBins.reduce((s,b)=>s+(b.qty||0),0);
@@ -7367,6 +7369,9 @@ async function loadBackOrders() {
       const caBtnClass = caAllocLabel ? 'loc-pick-btn wh-ca filled' : 'loc-pick-btn wh-ca';
       const scHasStock = sqAvail > 0 || pqAvail > 0;
       const caHasStock = cqAvail > 0 || cpqAvail > 0;
+      const lineWh = l.wh || 'SC';
+      const scEnabled = lineWh === 'SC' || lineWh === 'SC&CA';
+      const caEnabled = lineWh === 'CA' || lineWh === 'SC&CA';
       return `<tr>
         <td style="padding:6px 8px;text-align:center;">
           <input type="checkbox" class="bo-line-chk" data-bo-id="${boId}" data-idx="${idx}" style="width:15px;height:15px;cursor:pointer;" onchange="boLineCheckChange('${boId}')">
@@ -7380,35 +7385,40 @@ async function loadBackOrders() {
             onchange="boUpdateLineQty('${boId}',${idx},this.value)">
         </td>
         <td style="padding:4px;">${l.price.toFixed(2)}</td>
-        <td style="padding:4px 6px;">
+        <td style="padding:4px 6px;${!scEnabled?'opacity:0.3;pointer-events:none;':''}">
           <div style="display:flex;flex-direction:column;gap:3px;">
-            <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${scHasStock?'var(--sc)':'#bbb'};">
-              ${sqAvail.toLocaleString()}${pqAvail>0?` <span style="color:#a84212;font-size:10px;">+${pqAvail} PCR</span>`:''}
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${scHasStock&&scEnabled?'var(--sc)':'#bbb'};">
+                ${sqAvail.toLocaleString()}${scEnabled&&pqAvail>0?` <span style="color:#a84212;font-size:10px;">+${pqAvail} PCR</span>`:''}
+              </span>
             </div>
-            <button class="${scBtnClass}" onclick="boOpenAllocModal('${boId}',${idx},'SC')" title="SC Bin 배분">
+            <button class="${scBtnClass}" ${!scEnabled?'disabled':''} onclick="boOpenAllocModal('${boId}',${idx},'SC')" title="SC Bin 배분">
               <span>📍</span><span class="loc-pick-text" style="max-width:110px;">${scAllocLabel||'Bin 배분...'}</span>
             </button>
           </div>
         </td>
-        <td style="padding:4px 6px;">
+        <td style="padding:4px 6px;${!caEnabled?'opacity:0.3;pointer-events:none;':''}">
           <div style="display:flex;flex-direction:column;gap:3px;">
-            <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${caHasStock?'var(--ca)':'#bbb'};">
-              ${cqAvail.toLocaleString()}${cpqAvail>0?` <span style="color:#5b21b6;font-size:10px;">+${cpqAvail} PCR</span>`:''}
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${caHasStock&&caEnabled?'var(--ca)':'#bbb'};">
+                ${cqAvail.toLocaleString()}${caEnabled&&cpqAvail>0?` <span style="color:#5b21b6;font-size:10px;">+${cpqAvail} PCR</span>`:''}
+              </span>
             </div>
-            <button class="${caBtnClass}" onclick="boOpenAllocModal('${boId}',${idx},'CA')" title="CA Bin 배분">
+            <button class="${caBtnClass}" ${!caEnabled?'disabled':''} onclick="boOpenAllocModal('${boId}',${idx},'CA')" title="CA Bin 배분">
               <span>📍</span><span class="loc-pick-text" style="max-width:110px;">${caAllocLabel||'Bin 배분...'}</span>
             </button>
           </div>
         </td>
         <td style="text-align:center;padding:4px;">
-          <select style="width:72px;height:22px;font-size:10px;border:1px solid #d1d5db;border-radius:4px;padding:0 2px;" onchange="boUpdateLineWh('${boId}',${idx},this.value)">
-            <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
-            <option value="CA" ${l.wh==='CA'?'selected':''}>CA</option>
-            <option value="SC&CA" ${l.wh==='SC&CA'?'selected':''}>SC&CA</option>
+          <select style="width:72px;height:22px;font-size:10px;border:1px solid #d1d5db;border-radius:4px;padding:0 2px;" 
+            onchange="boUpdateLineWh('${boId}',${idx},this.value);loadBackOrders()">
+            <option value="SC" ${lineWh==='SC'?'selected':''}>SC</option>
+            <option value="CA" ${lineWh==='CA'?'selected':''}>CA</option>
+            <option value="SC&CA" ${lineWh==='SC&CA'?'selected':''}>SC&CA</option>
           </select>
         </td>
         <td style="text-align:center;font-size:12px;font-weight:700;padding:4px;">${fullBoxes} <span style="font-size:10px;font-weight:400;color:#6b7280;">boxes</span></td>
-        <td style="text-align:center;font-size:12px;font-weight:700;color:#f59e0b;padding:4px;">${partial} <span style="font-size:10px;font-weight:400;color:#6b7280;">pcs</span></td>
+        <td style="text-align:center;font-size:12px;font-weight:700;color:#f59e0b;padding:4px;">${partial>0?partial+' pcs':'—'}</td>
         <td style="text-align:center;font-size:12px;font-weight:700;color:#dc2626;padding:4px;">${backQty > 0 ? backQty.toLocaleString()+' pcs' : '—'}</td>
         <td style="text-align:center;padding:4px;">—</td>
       </tr>`;
