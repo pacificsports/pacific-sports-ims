@@ -7238,9 +7238,9 @@ function renderCompletedTable(orders, returnsMap) {
 
 // ── Back Orders 탭 로드
 async function loadBackOrders() {
-  // inventory가 로드 안 됐으면 먼저 로드
+  // scInventory 없으면 로드 (이미 있으면 스킵 — 빠름)
   if (Object.keys(scInventory).length === 0) {
-    await loadInventory();
+    await loadScInventory();
   }
   const whFilter = document.getElementById('bo-filter-wh')?.value || '';
 
@@ -7298,146 +7298,39 @@ async function loadBackOrders() {
   const _savedPoLines = [...(poLines||[])];
 
   const SIZE_ORDER_BO = ['2T','3T','4T','5T','XS','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
-  // BO 오더별 poLines 세팅 후 테이블 HTML 생성
+  // BO 오더별 HTML 생성 (boRenderBoRows 헬퍼 사용)
   const boEntryHtmlMap = {};
   for (const o of filtered) {
     const oLines = boLinesMap[o.id] || [];
     const wh = o.wh_code || o.warehouses?.code || 'SC';
-    poLines = oLines.map(l => {
+    const boPL = oLines.map(l => {
       const styleNum = l.styles?.style_number || l.style_number || '';
       const color = l.color || '';
       const size = l.size || '';
       const normColor = color.replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
-      // item code = styleNum + color(6자) + size (소문자, 공백제거)
-      const itemCode = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + size.replace(/\s+/g,'')).toLowerCase()
-        + (l.is_side_seam ? '+ss' : '');
+      const itemCode = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + size.replace(/\s+/g,'')).toLowerCase() + (l.is_side_seam?'+ss':'');
       return {
-        styleNum,
-        color,
-        size,
+        styleNum, color, size,
         qty: l.qty_backordered || 0,
         price: l.unit_price || 0,
         wh,
         isSideSeam: l.is_side_seam || false,
         isSideSeamChecked: l.is_side_seam || false,
         ppb: l.pcs_per_box || l.styles?.box_qty || 72,
-        cases: Math.floor((l.qty_backordered||0)/(l.pcs_per_box||l.styles?.box_qty||72)),
-        loose: (l.qty_backordered||0)%(l.pcs_per_box||l.styles?.box_qty||72),
-        allocSC: l._allocSC||{}, allocCA: l._allocCA||{},
+        cases: Math.floor((l.qty_backordered||0)/(l.pcs_per_box||72)),
+        loose: (l.qty_backordered||0)%(l.pcs_per_box||72),
+        allocSC: {}, allocCA: {},
         pcrTransfersPending: [], caPcrTransfersPending: [],
-        location:'', locationCA:'',
+        location:'', locationCA:'', code: itemCode,
         _boLineId: l.id,
-        itemCode,
-        code: itemCode,  // renderEntryTable에서 l.code로 사용
       };
     });
-    // BO 전용 테이블 렌더링 (renderEntryTable 없이 직접)
-    const boId = o.id;
     if (!window._boPoLinesMap) window._boPoLinesMap = {};
     if (!window._boOrderCache) window._boOrderCache = {};
-    window._boPoLinesMap[boId] = poLines;
-    window._boOrderCache[boId] = o;
-    if (poLines.length > 0) {
-      const _l0 = poLines[0];
-      const _nc = (_l0.color||'').replace(/Heathered/gi,'Htr').replace(/Heather/gi,'Htr').trim().toUpperCase();
-      const _k = `${_l0.styleNum}|${_nc}|${(_l0.size||'').toUpperCase()}`;
-      console.log('[BO Inventory Debug] key:', _k, '| scInventory keys sample:', Object.keys(scInventory).slice(0,3));
-      console.log('[BO Inventory Debug] scInventory[key]:', scInventory[_k]);
-    }
-    const rows = poLines.map((l, idx) => {
-      // normColor 변환 (inventory 로드 시와 동일하게)
-      const normC = (l.color||'').replace(/Heathered/gi,'Htr').replace(/Heather/gi,'Htr').replace(/Hthr/gi,'Htr').trim().toUpperCase();
-      const sNum = (l.styleNum||'').toString();
-      const sz = (l.size||'').toUpperCase();
-      const k = l.isSideSeam ? `${sNum}|${normC}|${sz}|SS` : `${sNum}|${normC}|${sz}`;
-      const sq = scInventory[k]?.qty || 0;
-      const cq = caInventory[k]?.qty || 0;
-      const pcrKey = `|${normC}|${sz}`;
-      const scPcrBins = window.binInventory?.['SC-PCR']?.[k] || window.binInventory?.['SC-PCR']?.[pcrKey] || [];
-      const caPcrBins = window.binInventory?.['CA-PCR']?.[k] || window.binInventory?.['CA-PCR']?.[pcrKey] || [];
-      const pq = scPcrBins.reduce((s,b)=>s+(b.qty||0),0);
-      const cpq = caPcrBins.reduce((s,b)=>s+(b.qty||0),0);
-      const allocSC = l.allocSC || {};
-      const allocCA = l.allocCA || {};
-      const scAllocLabel = Object.keys(allocSC).length ? Object.entries(allocSC).map(([b,q])=>`${b}×${q}`).join(', ') : '';
-      const caAllocLabel = Object.keys(allocCA).length ? Object.entries(allocCA).map(([b,q])=>`${b}×${q}`).join(', ') : '';
-      const scMainAlloc = Object.entries(allocSC).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
-      const scPcrAlloc  = Object.entries(allocSC).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
-      const caMainAlloc = Object.entries(allocCA).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
-      const caPcrAlloc  = Object.entries(allocCA).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
-      const sqAvail = Math.max(0, sq - scMainAlloc);
-      const pqAvail = Math.max(0, pq - scPcrAlloc);
-      const cqAvail = Math.max(0, cq - caMainAlloc);
-      const cpqAvail = Math.max(0, cpq - caPcrAlloc);
-      const ppb = l.ppb || 72;
-      const totalAllocSC = scMainAlloc + scPcrAlloc;
-      const totalAllocCA = caMainAlloc + caPcrAlloc;
-      const totalAlloc = totalAllocSC + totalAllocCA;
-      const fullBoxes = Math.floor(totalAllocSC / ppb) + Math.floor(totalAllocCA / ppb);
-      const partial = (totalAllocSC % ppb) + (totalAllocCA % ppb);
-      const backQty = Math.max(0, l.qty - totalAlloc);
-      const scBtnClass = scAllocLabel ? 'loc-pick-btn wh-sc filled' : 'loc-pick-btn wh-sc';
-      const caBtnClass = caAllocLabel ? 'loc-pick-btn wh-ca filled' : 'loc-pick-btn wh-ca';
-      const scHasStock = sqAvail > 0 || pqAvail > 0;
-      const caHasStock = cqAvail > 0 || cpqAvail > 0;
-      const lineWh = l.wh || 'SC';
-      const scEnabled = lineWh === 'SC' || lineWh === 'SC&CA';
-      const caEnabled = lineWh === 'CA' || lineWh === 'SC&CA';
-      return `<tr>
-        <td style="padding:6px 8px;text-align:center;">
-          <input type="checkbox" class="bo-line-chk" data-bo-id="${boId}" data-idx="${idx}" style="width:15px;height:15px;cursor:pointer;" onchange="boLineCheckChange('${boId}')">
-        </td>
-        <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 4px;">${l.code||''}</td>
-        <td style="font-weight:700;padding:6px 4px;">#${l.styleNum}</td>
-        <td style="padding:6px 4px;">${l.color}${l.isSideSeam?'<div style="font-size:9px;color:#7c3aed;">▶ Side Seam</div>':''}</td>
-        <td style="text-align:center;padding:6px 4px;">${l.size}</td>
-        <td style="text-align:center;padding:4px;">
-          <input type="number" value="${l.qty}" style="width:72px;height:28px;font-size:15px;text-align:center;font-weight:700;color:#dc2626;border:2px solid #dc2626;border-radius:4px;background:#fff5f5;" 
-            onchange="boUpdateLineQty('${boId}',${idx},this.value)">
-        </td>
-        <td style="padding:4px;">${l.price.toFixed(2)}</td>
-        <td style="padding:4px 6px;${!scEnabled?'opacity:0.3;pointer-events:none;':''}">
-          <div style="display:flex;flex-direction:column;gap:3px;">
-            <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${scHasStock&&scEnabled?'var(--sc)':'#bbb'};">
-                ${sqAvail.toLocaleString()}${scEnabled&&pqAvail>0?` <span style="color:#a84212;font-size:10px;">+${pqAvail} PCR</span>`:''}
-              </span>
-            </div>
-            <button class="${scBtnClass}" ${!scEnabled?'disabled':''} onclick="boOpenAllocModal('${boId}',${idx},'SC')" title="SC Bin 배분">
-              <span>📍</span><span class="loc-pick-text" style="max-width:110px;">${scAllocLabel||'Bin 배분...'}</span>
-            </button>
-          </div>
-        </td>
-        <td style="padding:4px 6px;${!caEnabled?'opacity:0.3;pointer-events:none;':''}">
-          <div style="display:flex;flex-direction:column;gap:3px;">
-            <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${caHasStock&&caEnabled?'var(--ca)':'#bbb'};">
-                ${cqAvail.toLocaleString()}${caEnabled&&cpqAvail>0?` <span style="color:#5b21b6;font-size:10px;">+${cpqAvail} PCR</span>`:''}
-              </span>
-            </div>
-            <button class="${caBtnClass}" ${!caEnabled?'disabled':''} onclick="boOpenAllocModal('${boId}',${idx},'CA')" title="CA Bin 배분">
-              <span>📍</span><span class="loc-pick-text" style="max-width:110px;">${caAllocLabel||'Bin 배분...'}</span>
-            </button>
-          </div>
-        </td>
-        <td style="text-align:center;padding:4px;">
-          <select style="width:72px;height:22px;font-size:10px;border:1px solid #d1d5db;border-radius:4px;padding:0 2px;" 
-            onchange="boUpdateLineWh('${boId}',${idx},this.value);boRefreshCard('${boId}')">
-            <option value="SC" ${lineWh==='SC'?'selected':''}>SC</option>
-            <option value="CA" ${lineWh==='CA'?'selected':''}>CA</option>
-            <option value="SC&CA" ${lineWh==='SC&CA'?'selected':''}>SC&CA</option>
-          </select>
-        </td>
-        <td style="text-align:center;font-size:12px;font-weight:700;padding:4px;">${fullBoxes} <span style="font-size:10px;font-weight:400;color:#6b7280;">boxes</span></td>
-        <td style="text-align:center;font-size:12px;font-weight:700;color:#f59e0b;padding:4px;">${partial>0?partial+' pcs':'—'}</td>
-        <td style="text-align:center;font-size:12px;font-weight:700;color:#dc2626;padding:4px;">${backQty > 0 ? backQty.toLocaleString()+' pcs' : '—'}</td>
-        <td style="text-align:center;padding:4px;">—</td>
-      </tr>`;
-    }).join('');
-    boEntryHtmlMap[o.id] = rows;
+    window._boPoLinesMap[o.id] = boPL;
+    window._boOrderCache[o.id] = o;
+    boEntryHtmlMap[o.id] = boRenderBoRows(o.id, boPL);
   }
-  // poLines 복구
-  poLines = _savedPoLines;
 
   wrap.innerHTML = `<div style="display:flex;flex-direction:column;gap:16px;padding:4px 0;">` +
   filtered.map(o => {
@@ -8242,27 +8135,10 @@ function boOpenAllocModal(boOrderId, lineIdx, wh) {
   window._boAllocCallback = { boOrderId, lineIdx };
 }
 
-function boRefreshCard(boOrderId) {
-  // Ship WH 변경 시 해당 카드만 재렌더링
-  const boPL = window._boPoLinesMap?.[boOrderId];
-  const boOrder = window._boOrderCache?.[boOrderId];
-  if (!boPL || !boOrder) return;
-  const boLines = window._boLinesCache?.[boOrderId] || [];
-  const wh = boOrder.wh_code || boPL[0]?.wh || 'SC';
-
-  // tbody만 업데이트
-  const tbody = document.getElementById('bo-tbody-' + boOrderId);
-  if (!tbody) return;
-
+// ── BO 테이블 rows HTML 생성 헬퍼 (loadBackOrders + boRefreshCard 공유)
+function boRenderBoRows(boOrderId, boPL) {
   const SIZE_ORDER_R = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
-  const sortedPL = [...boPL].sort((a,b) => {
-    const ca = (a.color||'').localeCompare(b.color||'');
-    if (ca!==0) return ca;
-    const si = SIZE_ORDER_R.indexOf((a.size||'').toUpperCase()); const sj = SIZE_ORDER_R.indexOf((b.size||'').toUpperCase());
-    return (si===-1?99:si)-(sj===-1?99:sj);
-  });
-
-  const rows = sortedPL.map((l, idx) => {
+  return boPL.map((l, idx) => {
     const normC = (l.color||'').replace(/Heathered/gi,'Htr').replace(/Heather/gi,'Htr').replace(/Hthr/gi,'Htr').trim().toUpperCase();
     const sNum = (l.styleNum||'').toString();
     const sz = (l.size||'').toUpperCase();
@@ -8329,7 +8205,14 @@ function boRefreshCard(boOrderId) {
       <td style="text-align:center;padding:4px;">—</td>
     </tr>`;
   }).join('');
-  tbody.innerHTML = rows;
+}
+
+function boRefreshCard(boOrderId) {
+  const boPL = window._boPoLinesMap?.[boOrderId];
+  if (!boPL) return;
+  const tbody = document.getElementById('bo-tbody-' + boOrderId);
+  if (!tbody) return;
+  tbody.innerHTML = boRenderBoRows(boOrderId, boPL);
 }
 
 function boLineCheckChange(boOrderId) {
