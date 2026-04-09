@@ -935,22 +935,13 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           </select>
           <span style="font-size:12px;color:#6b7280;" id="os-backorder-subtitle"></span>
         </div>
-        <!-- SC/CA 카운트 배너 -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div style="background:linear-gradient(135deg,#1e3a8a,#1e40af);border-radius:10px;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;">
-            <div>
-              <div style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.7);text-transform:uppercase;">SC — Sumter</div>
-              <div style="font-size:12px;color:rgba(255,255,255,0.8);">Back Orders</div>
-            </div>
-            <div style="font-size:36px;font-weight:900;color:#fff;font-family:'IBM Plex Mono',monospace;" id="bo-sc-count">—</div>
+        <!-- 총 Back Order 배너 -->
+        <div style="background:linear-gradient(135deg,#7f1d1d,#dc2626);border-radius:10px;padding:12px 24px;display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:1px;">BACK ORDERS</div>
+            <div style="font-size:13px;color:rgba(255,255,255,0.8);margin-top:2px;">재고 부족 오더</div>
           </div>
-          <div style="background:linear-gradient(135deg,#7c2d00,#ea580c);border-radius:10px;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;">
-            <div>
-              <div style="font-size:10px;font-weight:700;color:rgba(255,255,255,0.7);text-transform:uppercase;">CA — Eastvale</div>
-              <div style="font-size:12px;color:rgba(255,255,255,0.8);">Back Orders</div>
-            </div>
-            <div style="font-size:36px;font-weight:900;color:#fff;font-family:'IBM Plex Mono',monospace;" id="bo-ca-count">—</div>
-          </div>
+          <div style="font-size:48px;font-weight:900;color:#fff;font-family:'IBM Plex Mono',monospace;line-height:1;" id="bo-total-count">—</div>
         </div>
       </div>
       <!-- BO 카드 리스트 -->
@@ -7276,13 +7267,9 @@ async function loadBackOrders() {
   }
   window._boLinesCache = boLinesMap;
 
-  // SC/CA 카운트
-  const scCount = filtered.filter(o => (o.wh_code||'SC') !== 'CA').length;
-  const caCount = filtered.filter(o => o.wh_code === 'CA').length;
-  const scEl = document.getElementById('bo-sc-count');
-  const caEl = document.getElementById('bo-ca-count');
-  if (scEl) scEl.textContent = scCount || 0;
-  if (caEl) caEl.textContent = caCount || 0;
+  // 총 Back Order 카운트
+  const totalEl = document.getElementById('bo-total-count');
+  if (totalEl) totalEl.textContent = filtered.length || 0;
 
   // 뱃지
   const boBadge = document.getElementById('backorders-badge');
@@ -7343,11 +7330,18 @@ async function loadBackOrders() {
     // renderEntryTable이 po-lines-body에 렌더링하므로 임시 div에 담기
     const tmpTbody = document.createElement('tbody');
     tmpTbody.id = 'po-lines-body';
-    // 원래 po-lines-body를 임시로 교체
+    // _currentBoOrderId 임시 세팅 (onclick에서 사용)
     const origTbody = document.getElementById('po-lines-body');
     if (origTbody) {
       origTbody.parentNode.replaceChild(tmpTbody, origTbody);
+      // poLines 세팅 후 렌더 (onclick의 openAllocModal(idx,wh) 대신 boAllocModal(orderId,idx,wh)로 패치)
+      window._boRenderingOrderId = o.id;
       renderEntryTable();
+      // onclick에서 openAllocModal → boAllocFromCard 로 교체
+      tmpTbody.innerHTML = tmpTbody.innerHTML
+        .replace(/openAllocModal\((\d+),'SC'\)/g, `boAllocFromCard('${o.id}',$1,'SC')`)
+        .replace(/openAllocModal\((\d+),'CA'\)/g, `boAllocFromCard('${o.id}',$1,'CA')`)
+        .replace(/openAllocModalBoth\((\d+)\)/g, `boAllocFromCard('${o.id}',$1,'SC&CA')`);
       boEntryHtmlMap[o.id] = `<table class="tbl" style="width:100%;">
         <thead><tr>
           <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;">ITEM CODE</th>
@@ -8013,6 +8007,71 @@ async function showBoDetail(orderId) {
   document.body.appendChild(modal);
   modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
   boSelectWh(initWh);
+}
+
+// ── BO 카드에서 Bin 배분 모달 열기 (PO Entry로 이동 후 해당 라인 모달)
+async function boAllocFromCard(boOrderId, lineIdx, wh) {
+  const boLines = window._boLinesCache?.[boOrderId] || [];
+  const { data: boOrder } = await db.from('orders').select('*').eq('id', boOrderId).single();
+  if (!boOrder || !boLines.length) return;
+
+  // poLines 세팅
+  poLines = boLines.map(l => {
+    const styleNum = l.styles?.style_number || '';
+    const color = l.color || '';
+    const size = l.size || '';
+    const normColor = color.replace(/Heathered/gi,'Htr').replace(/Heather/gi,'Htr').replace(/Hthr/gi,'Htr').trim();
+    const itemCode = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + size.replace(/\s+/g,'')).toLowerCase() + (l.is_side_seam?'+ss':'');
+    return {
+      styleNum, color, size,
+      qty: l.qty_backordered || 0,
+      price: l.unit_price || 0,
+      wh: boOrder.wh_code || wh || 'SC',
+      isSideSeam: l.is_side_seam || false,
+      isSideSeamChecked: l.is_side_seam || false,
+      ppb: l.pcs_per_box || l.styles?.box_qty || 72,
+      cases: Math.floor((l.qty_backordered||0)/(l.pcs_per_box||72)),
+      loose: (l.qty_backordered||0)%(l.pcs_per_box||72),
+      allocSC: l._allocSC||{}, allocCA: l._allocCA||{},
+      pcrTransfersPending: [], caPcrTransfersPending: [],
+      location:'', locationCA:'', code: itemCode,
+      _boLineId: l.id,
+    };
+  });
+
+  window._boStartData = {
+    boOrderId,
+    selectedLines: boLines.map(l => ({...l, _shipQty: l.qty_backordered||0, _boQty: l.qty_backordered||0})),
+    whGroups: {}
+  };
+
+  // PO Entry로 이동
+  localStorage.removeItem('po_draft');
+  window._boSkipDraft = true;
+  showPanel('customerpos', document.querySelector('.ntab[onclick*="customerpos"]'));
+  await new Promise(r => setTimeout(r, 100));
+  openNewInvoice();
+  await new Promise(r => setTimeout(r, 300));
+
+  // 고객 정보
+  updateCustomerSelects();
+  await new Promise(r => setTimeout(r, 100));
+  const custSel = document.getElementById('inv-cust-sel');
+  if (custSel && boOrder.customer_id) { custSel.value = boOrder.customer_id; onCustSelChange(custSel); await new Promise(r=>setTimeout(r,100)); }
+  const poEl = document.getElementById('inv-cust-po'); if (poEl) poEl.value = boOrder.customer_po||'';
+  if (boOrder.bill_addr) { const el=document.getElementById('inv-bill-addr'); if(el){el.value=boOrder.bill_addr;autoResizeTextarea(el);} }
+  if (boOrder.ship_addr) { const el=document.getElementById('inv-ship-addr'); if(el){el.value=boOrder.ship_addr;autoResizeTextarea(el);} }
+  const whSel = document.getElementById('inv-wh-sel');
+  if (whSel) { const whObj=warehouses.find(w=>w.code===(boOrder.wh_code||'SC')); if(whObj){whSel.value=whObj.id;whSel.dispatchEvent(new Event('change'));} }
+
+  renderEntryTable();
+  await new Promise(r => setTimeout(r, 300));
+  await liveRenderDocs();
+  await new Promise(r => setTimeout(r, 200));
+
+  // 해당 라인 모달 바로 오픈
+  if (wh === 'SC&CA') openAllocModalBoth(lineIdx);
+  else openAllocModal(lineIdx, wh);
 }
 
 async function switchBoWh(orderId, newWh) {
