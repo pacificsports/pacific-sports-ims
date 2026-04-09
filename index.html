@@ -8051,27 +8051,15 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
       const hasPcr = Object.keys(l.allocSC||{}).some(k=>k.includes('PCR')) || Object.keys(l.allocCA||{}).some(k=>k.includes('PCR'));
       if (hasPcr) hasPcrInAnyLine = true;
 
-      // alloc 데이터
+      // alloc 데이터 — bin명 그대로 저장 (PCR 포함)
       for (const [bin,qty] of Object.entries(l.allocSC||{})) {
         allocDetail[bin] = typeof qty === 'object' ? qty : { boxes: Math.floor(qty/ppb), partial: qty%ppb, pcs: qty };
       }
       for (const [bin,qty] of Object.entries(l.allocCA||{})) {
         allocCaDetail[bin] = typeof qty === 'object' ? qty : { boxes: Math.floor(qty/ppb), partial: qty%ppb, pcs: qty };
       }
-
-      // 박스 배정 데이터 반영 (scBoxAlloc/caBoxAlloc)
-      if (scBoxAlloc) {
-        const pcrKey = 'SC-PCR|PCR';
-        const pcrPcs = Object.entries(allocDetail).filter(([k])=>k.includes('PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-        if (pcrPcs > 0) allocDetail[pcrKey] = { pcs: pcrPcs, boxes: scBoxAlloc.length, boxData: scBoxAlloc };
-      }
-      if (caBoxAlloc) {
-        const pcrKey = 'CA-PCR|PCR';
-        const pcrPcs = Object.entries(allocCaDetail).filter(([k])=>k.includes('PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
-        if (pcrPcs > 0) allocCaDetail[pcrKey] = { pcs: pcrPcs, boxes: caBoxAlloc.length, boxData: caBoxAlloc };
-      }
-
       const mainBins = Object.keys(allocDetail).filter(k=>!k.includes('PCR')&&!k.includes('TRANSFER'));
+      const mainBinsCA = Object.keys(allocCaDetail).filter(k=>!k.includes('PCR')&&!k.includes('TRANSFER'));
       const boOrigLine = boLines.find(bl=>bl.color===l.color&&bl.size===l.size&&!!bl.is_side_seam===!!l.isSideSeam);
 
       await db.from('order_lines').insert({
@@ -8086,7 +8074,7 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
         pcs_per_box: ppb,
         qty_boxes: Math.floor(l.qty/ppb),
         qty_loose: l.qty%ppb,
-        location: mainBins.join(', ') || null,
+        location: mainBins.join(', ') || mainBinsCA.join(', ') || null,
         alloc_detail: Object.keys(allocDetail).length ? allocDetail : null,
         alloc_ca_detail: Object.keys(allocCaDetail).length ? allocCaDetail : null,
         unit_price: l.price,
@@ -8127,8 +8115,10 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
   showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
   await loadOrderStatus();
 
-  if (lastOrderId && hasPcrInAnyLine) {
-    await openPcrComplete(lastOrderId, lastWh);
+  if (lastOrderId) {
+    // 항상 openPcrComplete 오픈 (Full Box 확인 + PCR partial 배정)
+    const pcrStartWh = lastWh === 'CA' ? 'CA' : 'SC';
+    await openPcrComplete(lastOrderId, pcrStartWh);
   } else {
     showToast('✅ Order Status에 생성됨!');
   }
@@ -8137,24 +8127,19 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
 
 // ── BO 전용 Bin 배분 모달 (Back Orders 탭에서 바로 열기)
 function boOpenAllocModal(boOrderId, lineIdx, wh) {
-  // 해당 BO의 poLines를 전역에 세팅
-  const boLines = window._boLinesCache?.[boOrderId];
-  if (!boLines) return;
-  const o = (window._boOrderCache||{})[boOrderId];
-  if (!o) return;
-
-  // 이미 세팅된 poLines 사용 (loadBackOrders에서 세팅됨)
-  // _boPoLinesMap에서 가져오기
   const boPL = window._boPoLinesMap?.[boOrderId];
-  if (!boPL) return;
-  poLines = boPL;
+  if (!boPL) { showToast('⚠️ 라인 정보 없음'); return; }
 
-  // 모달 열기
+  // 전역 poLines를 _boPoLinesMap의 같은 배열 참조로 설정
+  // → saveAllocModal이 poLines[idx].allocSC를 수정하면 _boPoLinesMap도 자동 업데이트됨
+  poLines = boPL;
+  window._currentBoOrderId = boOrderId;
+
+  // 모달 열기 후 닫힐 때 카드 리렌더링
+  window._boAllocCallback = boOrderId;
+
   if (wh === 'SC&CA') openAllocModalBoth(lineIdx);
   else openAllocModal(lineIdx, wh);
-
-  // 모달 닫힐 때 카드 업데이트 콜백
-  window._boAllocCallback = { boOrderId, lineIdx };
 }
 
 // ── BO 테이블 rows HTML 생성 헬퍼 (loadBackOrders + boRefreshCard 공유)
@@ -19977,6 +19962,11 @@ function cancelAllocModal() {
   });
   _allocState = null;
   closeModal('modal-alloc');
+  // BO 탭에서 배분 시 카드 리렌더링
+  if (window._boAllocCallback) {
+    const boId = window._boAllocCallback;
+    boRefreshCard(boId);
+  }
 }
 
 function cancelAllocBothModal() {
@@ -20535,6 +20525,8 @@ function applyAllocBoth() {
   poLines[lineIdx].allocCA = Object.keys(caAlloc).length > 0 ? caAlloc : null;
   poLines[lineIdx].pcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC');
   poLines[lineIdx].caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'CA');
+  // BO 탭에서 배분 시 _boPoLinesMap도 동기화됨 (같은 참조)
+  if (window._boAllocCallback) boRefreshCard(window._boAllocCallback);
 
   _pcrTransfers = [];
 
