@@ -7238,6 +7238,10 @@ function renderCompletedTable(orders, returnsMap) {
 
 // ── Back Orders 탭 로드
 async function loadBackOrders() {
+  // inventory가 로드 안 됐으면 먼저 로드
+  if (Object.keys(scInventory).length === 0) {
+    await loadInventory();
+  }
   const whFilter = document.getElementById('bo-filter-wh')?.value || '';
 
   // backordered 상태 + -BO suffix 오더만 로드
@@ -7418,7 +7422,7 @@ async function loadBackOrders() {
         </td>
         <td style="text-align:center;padding:4px;">
           <select style="width:72px;height:22px;font-size:10px;border:1px solid #d1d5db;border-radius:4px;padding:0 2px;" 
-            onchange="boUpdateLineWh('${boId}',${idx},this.value);loadBackOrders()">
+            onchange="boUpdateLineWh('${boId}',${idx},this.value);boRefreshCard('${boId}')">
             <option value="SC" ${lineWh==='SC'?'selected':''}>SC</option>
             <option value="CA" ${lineWh==='CA'?'selected':''}>CA</option>
             <option value="SC&CA" ${lineWh==='SC&CA'?'selected':''}>SC&CA</option>
@@ -8236,6 +8240,96 @@ function boOpenAllocModal(boOrderId, lineIdx, wh) {
 
   // 모달 닫힐 때 카드 업데이트 콜백
   window._boAllocCallback = { boOrderId, lineIdx };
+}
+
+function boRefreshCard(boOrderId) {
+  // Ship WH 변경 시 해당 카드만 재렌더링
+  const boPL = window._boPoLinesMap?.[boOrderId];
+  const boOrder = window._boOrderCache?.[boOrderId];
+  if (!boPL || !boOrder) return;
+  const boLines = window._boLinesCache?.[boOrderId] || [];
+  const wh = boOrder.wh_code || boPL[0]?.wh || 'SC';
+
+  // tbody만 업데이트
+  const tbody = document.getElementById('bo-tbody-' + boOrderId);
+  if (!tbody) return;
+
+  const SIZE_ORDER_R = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
+  const sortedPL = [...boPL].sort((a,b) => {
+    const ca = (a.color||'').localeCompare(b.color||'');
+    if (ca!==0) return ca;
+    const si = SIZE_ORDER_R.indexOf((a.size||'').toUpperCase()); const sj = SIZE_ORDER_R.indexOf((b.size||'').toUpperCase());
+    return (si===-1?99:si)-(sj===-1?99:sj);
+  });
+
+  const rows = sortedPL.map((l, idx) => {
+    const normC = (l.color||'').replace(/Heathered/gi,'Htr').replace(/Heather/gi,'Htr').replace(/Hthr/gi,'Htr').trim().toUpperCase();
+    const sNum = (l.styleNum||'').toString();
+    const sz = (l.size||'').toUpperCase();
+    const k = l.isSideSeam ? `${sNum}|${normC}|${sz}|SS` : `${sNum}|${normC}|${sz}`;
+    const sq = scInventory[k]?.qty || 0;
+    const cq = caInventory[k]?.qty || 0;
+    const pcrKey = `|${normC}|${sz}`;
+    const scPcrBins = window.binInventory?.['SC-PCR']?.[k] || window.binInventory?.['SC-PCR']?.[pcrKey] || [];
+    const caPcrBins = window.binInventory?.['CA-PCR']?.[k] || window.binInventory?.['CA-PCR']?.[pcrKey] || [];
+    const pq = scPcrBins.reduce((s,b)=>s+(b.qty||0),0);
+    const cpq = caPcrBins.reduce((s,b)=>s+(b.qty||0),0);
+    const allocSC = l.allocSC||{}, allocCA = l.allocCA||{};
+    const scAllocLabel = Object.keys(allocSC).length ? Object.entries(allocSC).map(([b,q])=>`${b}×${q}`).join(', ') : '';
+    const caAllocLabel = Object.keys(allocCA).length ? Object.entries(allocCA).map(([b,q])=>`${b}×${q}`).join(', ') : '';
+    const scMainAlloc = Object.entries(allocSC).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+    const scPcrAlloc = Object.entries(allocSC).filter(([b])=>b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+    const caMainAlloc = Object.entries(allocCA).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+    const caPcrAlloc = Object.entries(allocCA).filter(([b])=>b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+    const sqAvail = Math.max(0, sq-scMainAlloc), pqAvail = Math.max(0, pq-scPcrAlloc);
+    const cqAvail = Math.max(0, cq-caMainAlloc), cpqAvail = Math.max(0, cpq-caPcrAlloc);
+    const ppb = l.ppb||72;
+    const totalAllocSC = scMainAlloc+scPcrAlloc, totalAllocCA = caMainAlloc+caPcrAlloc;
+    const fullBoxes = Math.floor(totalAllocSC/ppb)+Math.floor(totalAllocCA/ppb);
+    const partial = (totalAllocSC%ppb)+(totalAllocCA%ppb);
+    const backQty = Math.max(0, l.qty-(totalAllocSC+totalAllocCA));
+    const scBtnClass = scAllocLabel ? 'loc-pick-btn wh-sc filled' : 'loc-pick-btn wh-sc';
+    const caBtnClass = caAllocLabel ? 'loc-pick-btn wh-ca filled' : 'loc-pick-btn wh-ca';
+    const lineWh = l.wh||'SC';
+    const scEnabled = lineWh==='SC'||lineWh==='SC&CA';
+    const caEnabled = lineWh==='CA'||lineWh==='SC&CA';
+    const scHasStock = sqAvail>0||pqAvail>0, caHasStock = cqAvail>0||cpqAvail>0;
+    return `<tr>
+      <td style="padding:6px 8px;text-align:center;">
+        <input type="checkbox" class="bo-line-chk" data-bo-id="${boOrderId}" data-idx="${idx}" style="width:15px;height:15px;cursor:pointer;" onchange="boLineCheckChange('${boOrderId}')">
+      </td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 4px;">${l.code||''}</td>
+      <td style="font-weight:700;padding:6px 4px;">#${l.styleNum}</td>
+      <td style="padding:6px 4px;">${l.color}${l.isSideSeam?'<div style="font-size:9px;color:#7c3aed;">▶ Side Seam</div>':''}</td>
+      <td style="text-align:center;padding:6px 4px;">${l.size}</td>
+      <td style="text-align:center;padding:4px;"><input type="number" value="${l.qty}" style="width:72px;height:28px;font-size:15px;text-align:center;font-weight:700;color:#dc2626;border:2px solid #dc2626;border-radius:4px;background:#fff5f5;" onchange="boUpdateLineQty('${boOrderId}',${idx},this.value)"></td>
+      <td style="padding:4px;">${l.price.toFixed(2)}</td>
+      <td style="padding:4px 6px;${!scEnabled?'opacity:0.3;pointer-events:none;':''}">
+        <div style="display:flex;flex-direction:column;gap:3px;">
+          <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${scHasStock&&scEnabled?'var(--sc)':'#bbb'};">${sqAvail.toLocaleString()}${scEnabled&&pqAvail>0?` <span style="color:#a84212;font-size:10px;">+${pqAvail} PCR</span>`:''}</div>
+          <button class="${scBtnClass}" ${!scEnabled?'disabled':''} onclick="boOpenAllocModal('${boOrderId}',${idx},'SC')"><span>📍</span><span class="loc-pick-text" style="max-width:110px;">${scAllocLabel||'Bin 배분...'}</span></button>
+        </div>
+      </td>
+      <td style="padding:4px 6px;${!caEnabled?'opacity:0.3;pointer-events:none;':''}">
+        <div style="display:flex;flex-direction:column;gap:3px;">
+          <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${caHasStock&&caEnabled?'var(--ca)':'#bbb'};">${cqAvail.toLocaleString()}${caEnabled&&cpqAvail>0?` <span style="color:#5b21b6;font-size:10px;">+${cpqAvail} PCR</span>`:''}</div>
+          <button class="${caBtnClass}" ${!caEnabled?'disabled':''} onclick="boOpenAllocModal('${boOrderId}',${idx},'CA')"><span>📍</span><span class="loc-pick-text" style="max-width:110px;">${caAllocLabel||'Bin 배분...'}</span></button>
+        </div>
+      </td>
+      <td style="text-align:center;padding:4px;">
+        <select style="width:72px;height:22px;font-size:10px;border:1px solid #d1d5db;border-radius:4px;padding:0 2px;" onchange="boUpdateLineWh('${boOrderId}',${idx},this.value);boRefreshCard('${boOrderId}')">
+          <option value="SC" ${lineWh==='SC'?'selected':''}>SC</option>
+          <option value="CA" ${lineWh==='CA'?'selected':''}>CA</option>
+          <option value="SC&CA" ${lineWh==='SC&CA'?'selected':''}>SC&CA</option>
+        </select>
+      </td>
+      <td style="text-align:center;font-size:12px;font-weight:700;padding:4px;">${fullBoxes} <span style="font-size:10px;font-weight:400;color:#6b7280;">boxes</span></td>
+      <td style="text-align:center;font-size:12px;font-weight:700;color:#f59e0b;padding:4px;">${partial>0?partial+' pcs':'—'}</td>
+      <td style="text-align:center;font-size:12px;font-weight:700;color:#dc2626;padding:4px;">${backQty>0?backQty.toLocaleString()+' pcs':'—'}</td>
+      <td style="text-align:center;padding:4px;">—</td>
+    </tr>`;
+  }).join('');
+  tbody.innerHTML = rows;
 }
 
 function boLineCheckChange(boOrderId) {
