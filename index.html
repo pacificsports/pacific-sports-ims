@@ -8002,6 +8002,10 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
 
   showToast('⏳ Order Status에 오더 생성 중...');
 
+  let lastCreatedOrderId = null;
+  let lastCreatedWh = null;
+  let hasPcrInAnyLine = false;
+
   // WH별 그룹
   const whGroups = {};
   selectedPL.forEach(l => {
@@ -8021,7 +8025,7 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
       customer_id: boOrder.customer_id,
       warehouse_id: whObj?.id,
       wh_code: lineWh,
-      status: 'po_entered',
+      status: 'po_entered',  // openPcrComplete 후 preparing으로 변경됨
       total_pcs: whLines.reduce((s,l)=>s+l.qty,0),
       total_amount: whLines.reduce((s,l)=>s+l.qty*l.price,0),
       bill_addr: boOrder.bill_addr,
@@ -8033,12 +8037,18 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
     };
     const { data: newOrder } = await db.from('orders').insert(newPo).select().single();
     if (!newOrder?.id) { showToast('❌ 오더 생성 실패'); continue; }
+    lastCreatedOrderId = newOrder.id;
+    lastCreatedWh = lineWh;
 
     for (let i = 0; i < whLines.length; i++) {
       const l = whLines[i];
       const ppb = l.ppb || 72;
       const allocDetail = {};
       const allocCaDetail = {};
+
+      // PCR 있는지 확인
+      const hasPcr = Object.keys(l.allocSC||{}).some(k=>k.includes('PCR')) || Object.keys(l.allocCA||{}).some(k=>k.includes('PCR'));
+      if (hasPcr) hasPcrInAnyLine = true;
 
       // alloc 데이터
       for (const [bin,qty] of Object.entries(l.allocSC||{})) {
@@ -8107,9 +8117,20 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
   }
 
   playNewOrderChime();
+
+  // PCR partial 있으면 openPcrComplete 모달 오픈 (신버전)
+  // 마지막 생성된 오더 기준으로 오픈
+  const lastOrderId = lastCreatedOrderId;
+  const lastWh = lastCreatedWh;
+
   showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
   await loadOrderStatus();
-  showToast('✅ Order Status에 생성됨!');
+
+  if (lastOrderId && hasPcrInAnyLine) {
+    await openPcrComplete(lastOrderId, lastWh);
+  } else {
+    showToast('✅ Order Status에 생성됨!');
+  }
   loadBackOrders();
 }
 
@@ -8262,20 +8283,7 @@ async function boStartSelectedLines(boOrderId) {
   poLines = selectedPL;
   window._boSaveContext = { boOrderId, selectedIdxs, boPL, boLines, boOrder, whGroups: null };
 
-  const hasPcrPartial = selectedPL.some(l => {
-    const allocObj = l.wh === 'CA' ? (l.allocCA||{}) : (l.allocSC||{});
-    return Object.entries(allocObj).some(([k,v]) => k.includes('PCR') && (v||0) > 0);
-  });
-
-  if (hasPcrPartial) {
-    window._boxAssignCurrentWh = 'SC';
-    window._boBoxAssignMode = true;
-    openBoxAssignModal();
-    return;
-  }
-
-  // PCR partial 없으면 바로 저장
-  window._boBoxAssignMode = true;
+  // 바로 오더 저장 후 openPcrComplete 호출
   await _boDoSave(null, null);
 }
 
@@ -11675,18 +11683,10 @@ async function confirmBoxAndSave() {
 
   // _savingInProgress 리셋 후 저장
   _savingInProgress = false;
-  if (window._boBoxAssignMode) {
-    window._boBoxAssignMode = false;
-    await _boDoSave(
-      window._pcrBoxesSC?.length ? window._pcrBoxesSC : null,
-      window._pcrBoxesCA?.length ? window._pcrBoxesCA : null
-    );
-  } else {
-    _doSaveWithBoxAlloc(
-      window._pcrBoxesSC?.length ? window._pcrBoxesSC : null,
-      window._pcrBoxesCA?.length ? window._pcrBoxesCA : null
-    );
-  }
+  _doSaveWithBoxAlloc(
+    window._pcrBoxesSC?.length ? window._pcrBoxesSC : null,
+    window._pcrBoxesCA?.length ? window._pcrBoxesCA : null
+  );
 }
 
 // Customer POs 테이블에서 Signed BOL 열기 (orderId, wh 직접 전달)
