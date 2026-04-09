@@ -7327,42 +7327,93 @@ async function loadBackOrders() {
         code: itemCode,  // renderEntryTable에서 l.code로 사용
       };
     });
-    // renderEntryTable이 po-lines-body에 렌더링하므로 임시 div에 담기
-    const tmpTbody = document.createElement('tbody');
-    tmpTbody.id = 'po-lines-body';
-    // _currentBoOrderId 임시 세팅 (onclick에서 사용)
-    const origTbody = document.getElementById('po-lines-body');
-    if (origTbody) {
-      origTbody.parentNode.replaceChild(tmpTbody, origTbody);
-      // poLines 세팅 후 렌더 (onclick의 openAllocModal(idx,wh) 대신 boAllocModal(orderId,idx,wh)로 패치)
-      window._boRenderingOrderId = o.id;
-      renderEntryTable();
-      // onclick에서 openAllocModal → boAllocFromCard 로 교체
-      tmpTbody.innerHTML = tmpTbody.innerHTML
-        .replace(/openAllocModal\((\d+),'SC'\)/g, `boAllocFromCard('${o.id}',$1,'SC')`)
-        .replace(/openAllocModal\((\d+),'CA'\)/g, `boAllocFromCard('${o.id}',$1,'CA')`)
-        .replace(/openAllocModalBoth\((\d+)\)/g, `boAllocFromCard('${o.id}',$1,'SC&CA')`);
-      boEntryHtmlMap[o.id] = `<table class="tbl" style="width:100%;">
-        <thead><tr>
-          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;">ITEM CODE</th>
-          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;">STYLE</th>
-          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;">COLOR</th>
-          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">SIZE</th>
-          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#dc2626;">QTY(PCS)</th>
-          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">UNIT$</th>
-          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#1e40af;">SC/SC-PCR</th>
-          <th style="padding:6px 8px;text-align:left;font-size:10px;color:#ea580c;">CA/CA-PCR</th>
-          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">SHIP</th>
-          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">FULL BOXES</th>
-          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">PARTIAL(PCR)</th>
-          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">BACK ORDER</th>
-          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">TRANSFER</th>
-        </tr></thead>
-        <tbody>${tmpTbody.innerHTML}</tbody>
-      </table>`;
-      // 원래 tbody 복구
-      tmpTbody.parentNode.replaceChild(origTbody, tmpTbody);
-    }
+    // BO 전용 테이블 렌더링 (renderEntryTable 없이 직접)
+    const boId = o.id;
+    if (!window._boPoLinesMap) window._boPoLinesMap = {};
+    if (!window._boOrderCache) window._boOrderCache = {};
+    window._boPoLinesMap[boId] = poLines;
+    window._boOrderCache[boId] = o;
+    const rows = poLines.map((l, idx) => {
+      const k = l.isSideSeam
+        ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
+        : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+      const sq = scInventory[k]?.qty || 0;
+      const cq = caInventory[k]?.qty || 0;
+      const pcrKey = `|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+      const scPcrBins = window.binInventory?.['SC-PCR']?.[k] || window.binInventory?.['SC-PCR']?.[pcrKey] || [];
+      const caPcrBins = window.binInventory?.['CA-PCR']?.[k] || window.binInventory?.['CA-PCR']?.[pcrKey] || [];
+      const pq = scPcrBins.reduce((s,b)=>s+(b.qty||0),0);
+      const cpq = caPcrBins.reduce((s,b)=>s+(b.qty||0),0);
+      const allocSC = l.allocSC || {};
+      const allocCA = l.allocCA || {};
+      const scAllocLabel = Object.keys(allocSC).length ? Object.entries(allocSC).map(([b,q])=>`${b}×${q}`).join(', ') : '';
+      const caAllocLabel = Object.keys(allocCA).length ? Object.entries(allocCA).map(([b,q])=>`${b}×${q}`).join(', ') : '';
+      const scMainAlloc = Object.entries(allocSC).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+      const scPcrAlloc  = Object.entries(allocSC).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+      const caMainAlloc = Object.entries(allocCA).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+      const caPcrAlloc  = Object.entries(allocCA).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+      const sqAvail = Math.max(0, sq - scMainAlloc);
+      const pqAvail = Math.max(0, pq - scPcrAlloc);
+      const cqAvail = Math.max(0, cq - caMainAlloc);
+      const cpqAvail = Math.max(0, cpq - caPcrAlloc);
+      const ppb = l.ppb || 72;
+      const totalAllocSC = scMainAlloc + scPcrAlloc;
+      const totalAllocCA = caMainAlloc + caPcrAlloc;
+      const totalAlloc = totalAllocSC + totalAllocCA;
+      const fullBoxes = Math.floor(totalAllocSC / ppb) + Math.floor(totalAllocCA / ppb);
+      const partial = (totalAllocSC % ppb) + (totalAllocCA % ppb);
+      const backQty = Math.max(0, l.qty - totalAlloc);
+      const scBtnClass = scAllocLabel ? 'loc-pick-btn wh-sc filled' : 'loc-pick-btn wh-sc';
+      const caBtnClass = caAllocLabel ? 'loc-pick-btn wh-ca filled' : 'loc-pick-btn wh-ca';
+      const scHasStock = sqAvail > 0 || pqAvail > 0;
+      const caHasStock = cqAvail > 0 || cpqAvail > 0;
+      return `<tr>
+        <td style="padding:6px 8px;text-align:center;">
+          <input type="checkbox" class="bo-line-chk" data-bo-id="${boId}" data-idx="${idx}" style="width:15px;height:15px;cursor:pointer;" onchange="boLineCheckChange('${boId}')">
+        </td>
+        <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 4px;">${l.code||''}</td>
+        <td style="font-weight:700;padding:6px 4px;">#${l.styleNum}</td>
+        <td style="padding:6px 4px;">${l.color}${l.isSideSeam?'<div style="font-size:9px;color:#7c3aed;">▶ Side Seam</div>':''}</td>
+        <td style="text-align:center;padding:6px 4px;">${l.size}</td>
+        <td style="text-align:center;padding:4px;">
+          <input type="number" value="${l.qty}" style="width:72px;height:28px;font-size:15px;text-align:center;font-weight:700;color:#dc2626;border:2px solid #dc2626;border-radius:4px;background:#fff5f5;" 
+            onchange="boUpdateLineQty('${boId}',${idx},this.value)">
+        </td>
+        <td style="padding:4px;">${l.price.toFixed(2)}</td>
+        <td style="padding:4px 6px;">
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${scHasStock?'var(--sc)':'#bbb'};">
+              ${sqAvail.toLocaleString()}${pqAvail>0?` <span style="color:#a84212;font-size:10px;">+${pqAvail} PCR</span>`:''}
+            </div>
+            <button class="${scBtnClass}" onclick="boOpenAllocModal('${boId}',${idx},'SC')" title="SC Bin 배분">
+              <span>📍</span><span class="loc-pick-text" style="max-width:110px;">${scAllocLabel||'Bin 배분...'}</span>
+            </button>
+          </div>
+        </td>
+        <td style="padding:4px 6px;">
+          <div style="display:flex;flex-direction:column;gap:3px;">
+            <div style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${caHasStock?'var(--ca)':'#bbb'};">
+              ${cqAvail.toLocaleString()}${cpqAvail>0?` <span style="color:#5b21b6;font-size:10px;">+${cpqAvail} PCR</span>`:''}
+            </div>
+            <button class="${caBtnClass}" onclick="boOpenAllocModal('${boId}',${idx},'CA')" title="CA Bin 배분">
+              <span>📍</span><span class="loc-pick-text" style="max-width:110px;">${caAllocLabel||'Bin 배분...'}</span>
+            </button>
+          </div>
+        </td>
+        <td style="text-align:center;padding:4px;">
+          <select style="width:72px;height:22px;font-size:10px;border:1px solid #d1d5db;border-radius:4px;padding:0 2px;" onchange="boUpdateLineWh('${boId}',${idx},this.value)">
+            <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
+            <option value="CA" ${l.wh==='CA'?'selected':''}>CA</option>
+            <option value="SC&CA" ${l.wh==='SC&CA'?'selected':''}>SC&CA</option>
+          </select>
+        </td>
+        <td style="text-align:center;font-size:12px;font-weight:700;padding:4px;">${fullBoxes} <span style="font-size:10px;font-weight:400;color:#6b7280;">boxes</span></td>
+        <td style="text-align:center;font-size:12px;font-weight:700;color:#f59e0b;padding:4px;">${partial} <span style="font-size:10px;font-weight:400;color:#6b7280;">pcs</span></td>
+        <td style="text-align:center;font-size:12px;font-weight:700;color:#dc2626;padding:4px;">${backQty > 0 ? backQty.toLocaleString()+' pcs' : '—'}</td>
+        <td style="text-align:center;padding:4px;">—</td>
+      </tr>`;
+    }).join('');
+    boEntryHtmlMap[o.id] = rows;
   }
   // poLines 복구
   poLines = _savedPoLines;
@@ -7431,12 +7482,29 @@ async function loadBackOrders() {
       </div>
       <!-- PO Entry 스타일 테이블 -->
       <div id="bo-entry-wrap-${o.id}" style="padding:0;overflow-x:auto;">
-        ${boEntryHtmlMap[o.id] || '<div style="padding:16px;color:#6b7280;">라인 데이터 로딩 중...</div>'}
+        <table class="tbl" style="width:100%;" id="bo-tbl-${o.id}">
+          <thead><tr>
+            <th style="padding:6px 4px;width:32px;"></th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Item Code</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Style</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;">Color</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;">Size</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#dc2626;text-transform:uppercase;">QTY(PCS)</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;">Unit$</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#1e40af;text-transform:uppercase;">SC/SC-PCR</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#ea580c;text-transform:uppercase;">CA/CA-PCR</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;">Ship</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;">Full Boxes</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#f59e0b;text-transform:uppercase;">Partial(PCR)</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#dc2626;text-transform:uppercase;">Back Order</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;">Transfer</th>
+          </tr></thead>
+          <tbody id="bo-tbody-${o.id}">${boEntryHtmlMap[o.id] || ''}</tbody>
+        </table>
       </div>
       <!-- 액션 버튼 -->
       <div style="padding:10px 16px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;background:#fafafa;">
-        <button id="bo-distribute-btn-${o.id}" onclick="boOpenForDistribute('${o.id}')" style="padding:8px 18px;background:${whColor};color:#fff;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">📦 Distribute</button>
-        <button id="bo-startorder-btn-${o.id}" onclick="boFinishDistribute('${o.id}')" disabled style="padding:8px 18px;background:#e5e7eb;color:#9ca3af;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:not-allowed;">▶ Start Order</button>
+        <button id="bo-startorder-btn-${o.id}" onclick="boStartSelectedLines('${o.id}')" disabled style="padding:8px 18px;background:#e5e7eb;color:#9ca3af;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:not-allowed;">▶ Start Order</button>
       </div>
     </div>`;
   }).join('') + `</div>`;
@@ -8007,6 +8075,214 @@ async function showBoDetail(orderId) {
   document.body.appendChild(modal);
   modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
   boSelectWh(initWh);
+}
+
+// ── BO 박스 배정 완료 후 오더 생성 및 저장
+async function _boDoSave(scBoxAlloc, caBoxAlloc) {
+  const ctx = window._boSaveContext;
+  if (!ctx) return;
+  window._boSaveContext = null;
+
+  const { boOrderId, selectedIdxs, boPL, boLines, boOrder } = ctx;
+  const selectedPL = selectedIdxs.map(i => boPL[i]).filter(Boolean);
+
+  showToast('⏳ Order Status에 오더 생성 중...');
+
+  // WH별 그룹
+  const whGroups = {};
+  selectedPL.forEach(l => {
+    const lWh = l.wh || 'SC';
+    if (!whGroups[lWh]) whGroups[lWh] = [];
+    whGroups[lWh].push(l);
+  });
+
+  const suffix = Date.now().toString().slice(-4);
+
+  for (const [lineWh, whLines] of Object.entries(whGroups)) {
+    const whObj = warehouses.find(w => w.code === lineWh) || warehouses.find(w => w.code === 'SC');
+    const newPo = {
+      order_number: (boOrder.order_number||'').replace(/-BO.*/,'') + '-BO' + suffix + (Object.keys(whGroups).length>1?lineWh:''),
+      customer_name: boOrder.customer_name,
+      customer_po: boOrder.customer_po,
+      customer_id: boOrder.customer_id,
+      warehouse_id: whObj?.id,
+      wh_code: lineWh,
+      status: 'po_entered',
+      total_pcs: whLines.reduce((s,l)=>s+l.qty,0),
+      total_amount: whLines.reduce((s,l)=>s+l.qty*l.price,0),
+      bill_addr: boOrder.bill_addr,
+      ship_addr: boOrder.ship_addr,
+      terms: boOrder.terms,
+      ship_date: boOrder.ship_date,
+      parent_order_id: boOrderId,
+      created_by: _currentEmployee?.name||''
+    };
+    const { data: newOrder } = await db.from('orders').insert(newPo).select().single();
+    if (!newOrder?.id) { showToast('❌ 오더 생성 실패'); continue; }
+
+    for (let i = 0; i < whLines.length; i++) {
+      const l = whLines[i];
+      const ppb = l.ppb || 72;
+      const allocDetail = {};
+      const allocCaDetail = {};
+
+      // alloc 데이터
+      for (const [bin,qty] of Object.entries(l.allocSC||{})) {
+        allocDetail[bin] = typeof qty === 'object' ? qty : { boxes: Math.floor(qty/ppb), partial: qty%ppb, pcs: qty };
+      }
+      for (const [bin,qty] of Object.entries(l.allocCA||{})) {
+        allocCaDetail[bin] = typeof qty === 'object' ? qty : { boxes: Math.floor(qty/ppb), partial: qty%ppb, pcs: qty };
+      }
+
+      // 박스 배정 데이터 반영 (scBoxAlloc/caBoxAlloc)
+      if (scBoxAlloc) {
+        const pcrKey = 'SC-PCR|PCR';
+        const pcrPcs = Object.entries(allocDetail).filter(([k])=>k.includes('PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+        if (pcrPcs > 0) allocDetail[pcrKey] = { pcs: pcrPcs, boxes: scBoxAlloc.length, boxData: scBoxAlloc };
+      }
+      if (caBoxAlloc) {
+        const pcrKey = 'CA-PCR|PCR';
+        const pcrPcs = Object.entries(allocCaDetail).filter(([k])=>k.includes('PCR')).reduce((s,[,v])=>s+(typeof v==='object'?v.pcs||0:v||0),0);
+        if (pcrPcs > 0) allocCaDetail[pcrKey] = { pcs: pcrPcs, boxes: caBoxAlloc.length, boxData: caBoxAlloc };
+      }
+
+      const mainBins = Object.keys(allocDetail).filter(k=>!k.includes('PCR')&&!k.includes('TRANSFER'));
+      const boOrigLine = boLines.find(bl=>bl.color===l.color&&bl.size===l.size&&!!bl.is_side_seam===!!l.isSideSeam);
+
+      await db.from('order_lines').insert({
+        order_id: newOrder.id,
+        style_id: boOrigLine?.style_id || null,
+        warehouse_id: whObj?.id,
+        wh: lineWh,
+        color: l.color, size: l.size,
+        qty_pieces: l.qty,
+        qty_backordered: 0,
+        is_backordered: false,
+        pcs_per_box: ppb,
+        qty_boxes: Math.floor(l.qty/ppb),
+        qty_loose: l.qty%ppb,
+        location: mainBins.join(', ') || null,
+        alloc_detail: Object.keys(allocDetail).length ? allocDetail : null,
+        alloc_ca_detail: Object.keys(allocCaDetail).length ? allocCaDetail : null,
+        unit_price: l.price,
+        is_side_seam: l.isSideSeam||false
+      });
+    }
+  }
+
+  // 기존 BO 라인 차감
+  for (const idx of selectedIdxs) {
+    const boLine = boLines[idx];
+    if (!boLine) continue;
+    const pl = boPL[idx];
+    const remaining = (boLine.qty_backordered||0) - (pl?.qty||0);
+    if (remaining <= 0) {
+      await db.from('order_lines').delete().eq('id', boLine.id);
+    } else {
+      await db.from('order_lines').update({ qty_pieces: remaining, qty_backordered: remaining }).eq('id', boLine.id);
+    }
+  }
+
+  // BO 오더 잔여 수량
+  const { data: remLines } = await db.from('order_lines').select('qty_backordered').eq('order_id', boOrderId).gt('qty_backordered',0);
+  const remTotal = (remLines||[]).reduce((s,l)=>s+(l.qty_backordered||0),0);
+  if (remTotal <= 0) {
+    await db.from('orders').update({ status: 'completed' }).eq('id', boOrderId);
+  } else {
+    await db.from('orders').update({ total_pcs: remTotal }).eq('id', boOrderId);
+  }
+
+  playNewOrderChime();
+  showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
+  await loadOrderStatus();
+  showToast('✅ Order Status에 생성됨!');
+  loadBackOrders();
+}
+
+// ── BO 전용 Bin 배분 모달 (Back Orders 탭에서 바로 열기)
+function boOpenAllocModal(boOrderId, lineIdx, wh) {
+  // 해당 BO의 poLines를 전역에 세팅
+  const boLines = window._boLinesCache?.[boOrderId];
+  if (!boLines) return;
+  const o = (window._boOrderCache||{})[boOrderId];
+  if (!o) return;
+
+  // 이미 세팅된 poLines 사용 (loadBackOrders에서 세팅됨)
+  // _boPoLinesMap에서 가져오기
+  const boPL = window._boPoLinesMap?.[boOrderId];
+  if (!boPL) return;
+  poLines = boPL;
+
+  // 모달 열기
+  if (wh === 'SC&CA') openAllocModalBoth(lineIdx);
+  else openAllocModal(lineIdx, wh);
+
+  // 모달 닫힐 때 카드 업데이트 콜백
+  window._boAllocCallback = { boOrderId, lineIdx };
+}
+
+function boLineCheckChange(boOrderId) {
+  const chks = [...document.querySelectorAll(`.bo-line-chk[data-bo-id="${boOrderId}"]`)];
+  const anyChecked = chks.some(c => c.checked);
+  const startBtn = document.getElementById(`bo-startorder-btn-${boOrderId}`);
+  if (startBtn) {
+    startBtn.disabled = !anyChecked;
+    startBtn.style.background = anyChecked ? '#16a34a' : '#e5e7eb';
+    startBtn.style.color = anyChecked ? '#fff' : '#9ca3af';
+    startBtn.style.cursor = anyChecked ? 'pointer' : 'not-allowed';
+  }
+}
+
+function boUpdateLineQty(boOrderId, idx, val) {
+  const boPL = window._boPoLinesMap?.[boOrderId];
+  if (boPL?.[idx]) {
+    boPL[idx].qty = parseInt(val)||0;
+    const ppb = boPL[idx].ppb || 72;
+    boPL[idx].cases = Math.floor(boPL[idx].qty/ppb);
+    boPL[idx].loose = boPL[idx].qty%ppb;
+  }
+}
+
+function boUpdateLineWh(boOrderId, idx, wh) {
+  const boPL = window._boPoLinesMap?.[boOrderId];
+  if (boPL?.[idx]) boPL[idx].wh = wh;
+}
+
+async function boStartSelectedLines(boOrderId) {
+  const chks = [...document.querySelectorAll(`.bo-line-chk[data-bo-id="${boOrderId}"]`)].filter(c => c.checked);
+  if (!chks.length) { showToast('⚠️ 진행할 라인을 선택하세요'); return; }
+
+  const boPL = window._boPoLinesMap?.[boOrderId] || [];
+  const boLines = window._boLinesCache?.[boOrderId] || [];
+  const boOrder = window._boOrderCache?.[boOrderId];
+  if (!boOrder) return;
+
+  const selectedIdxs = chks.map(c => parseInt(c.dataset.idx));
+  const selectedPL = selectedIdxs.map(i => boPL[i]).filter(Boolean);
+
+  if (!selectedPL.some(l => Object.keys(l.allocSC||{}).length || Object.keys(l.allocCA||{}).length)) {
+    if (!confirm('Bin 배분이 완료되지 않은 라인이 있습니다. 그래도 진행하시겠습니까?')) return;
+  }
+
+  // poLines를 선택된 라인으로 세팅 → 박스 배정 모달 오픈
+  poLines = selectedPL;
+  window._boSaveContext = { boOrderId, selectedIdxs, boPL, boLines, boOrder, whGroups: null };
+
+  const hasPcrPartial = selectedPL.some(l => {
+    const allocObj = l.wh === 'CA' ? (l.allocCA||{}) : (l.allocSC||{});
+    return Object.entries(allocObj).some(([k,v]) => k.includes('PCR') && (v||0) > 0);
+  });
+
+  if (hasPcrPartial) {
+    window._boxAssignCurrentWh = 'SC';
+    window._boBoxAssignMode = true;
+    openBoxAssignModal();
+    return;
+  }
+
+  // PCR partial 없으면 바로 저장
+  window._boBoxAssignMode = true;
+  await _boDoSave(null, null);
 }
 
 // ── BO 카드에서 Bin 배분 모달 열기 (PO Entry로 이동 후 해당 라인 모달)
@@ -11405,10 +11681,18 @@ async function confirmBoxAndSave() {
 
   // _savingInProgress 리셋 후 저장
   _savingInProgress = false;
-  _doSaveWithBoxAlloc(
-    window._pcrBoxesSC?.length ? window._pcrBoxesSC : null,
-    window._pcrBoxesCA?.length ? window._pcrBoxesCA : null
-  );
+  if (window._boBoxAssignMode) {
+    window._boBoxAssignMode = false;
+    await _boDoSave(
+      window._pcrBoxesSC?.length ? window._pcrBoxesSC : null,
+      window._pcrBoxesCA?.length ? window._pcrBoxesCA : null
+    );
+  } else {
+    _doSaveWithBoxAlloc(
+      window._pcrBoxesSC?.length ? window._pcrBoxesSC : null,
+      window._pcrBoxesCA?.length ? window._pcrBoxesCA : null
+    );
+  }
 }
 
 // Customer POs 테이블에서 Signed BOL 열기 (orderId, wh 직접 전달)
