@@ -7312,23 +7312,34 @@ async function loadBackOrders() {
   for (const o of filtered) {
     const oLines = boLinesMap[o.id] || [];
     const wh = o.wh_code || o.warehouses?.code || 'SC';
-    poLines = oLines.map(l => ({
-      styleNum: l.styles?.style_number || '',
-      color: l.color || '',
-      size: l.size || '',
-      qty: l.qty_backordered || 0,
-      price: l.unit_price || 0,
-      wh: wh,
-      isSideSeam: l.is_side_seam || false,
-      isSideSeamChecked: l.is_side_seam || false,
-      ppb: l.pcs_per_box || 72,
-      cases: Math.floor((l.qty_backordered||0)/(l.pcs_per_box||72)),
-      loose: (l.qty_backordered||0)%(l.pcs_per_box||72),
-      allocSC: l._allocSC||{}, allocCA: l._allocCA||{},
-      pcrTransfersPending: [], caPcrTransfersPending: [],
-      location:'', locationCA:'',
-      _boLineId: l.id,
-    }));
+    poLines = oLines.map(l => {
+      const styleNum = l.styles?.style_number || l.style_number || '';
+      const color = l.color || '';
+      const size = l.size || '';
+      const normColor = color.replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
+      // item code = styleNum + color(6자) + size (소문자, 공백제거)
+      const itemCode = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + size.replace(/\s+/g,'')).toLowerCase()
+        + (l.is_side_seam ? '+ss' : '');
+      return {
+        styleNum,
+        color,
+        size,
+        qty: l.qty_backordered || 0,
+        price: l.unit_price || 0,
+        wh,
+        isSideSeam: l.is_side_seam || false,
+        isSideSeamChecked: l.is_side_seam || false,
+        ppb: l.pcs_per_box || l.styles?.box_qty || 72,
+        cases: Math.floor((l.qty_backordered||0)/(l.pcs_per_box||l.styles?.box_qty||72)),
+        loose: (l.qty_backordered||0)%(l.pcs_per_box||l.styles?.box_qty||72),
+        allocSC: l._allocSC||{}, allocCA: l._allocCA||{},
+        pcrTransfersPending: [], caPcrTransfersPending: [],
+        location:'', locationCA:'',
+        _boLineId: l.id,
+        itemCode,
+        code: itemCode,  // renderEntryTable에서 l.code로 사용
+      };
+    });
     // renderEntryTable이 po-lines-body에 렌더링하므로 임시 div에 담기
     const tmpTbody = document.createElement('tbody');
     tmpTbody.id = 'po-lines-body';
@@ -7344,6 +7355,7 @@ async function loadBackOrders() {
           <th style="padding:6px 8px;text-align:left;font-size:10px;color:#6b7280;">COLOR</th>
           <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">SIZE</th>
           <th style="padding:6px 8px;text-align:center;font-size:10px;color:#dc2626;">QTY(PCS)</th>
+          <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">UNIT$</th>
           <th style="padding:6px 8px;text-align:left;font-size:10px;color:#1e40af;">SC/SC-PCR</th>
           <th style="padding:6px 8px;text-align:left;font-size:10px;color:#ea580c;">CA/CA-PCR</th>
           <th style="padding:6px 8px;text-align:center;font-size:10px;color:#6b7280;">SHIP</th>
