@@ -12954,17 +12954,20 @@ async function resendShippedEmail(orderId, wh) {
 
     const shippingInfo = {
       wh: wh || order.wh_code || 'SC',
-      carrier: order.carrier || '',
-      tracking: order.tracking_number || '',
+      carrier: (wh === 'CA' ? order.ca_carrier : order.sc_carrier) || order.carrier || '',
+      tracking: (wh === 'CA' ? order.ca_tracking_number : order.sc_tracking_number) || order.tracking_number || '',
       freightCarrier: order.pickup_company || '',
+      shipDate: (wh === 'CA' ? order.ca_shipped_at : order.sc_shipped_at) || order.ship_date || '',
       note: order.ship_note || '',
     };
 
     const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
     const plHtml = buildPackingListHtml(order, lines, isSplit, wh || 'SC', shippingInfo, shippingInfo.note || '');
 
-    // BOL 파일은 DB에서 가져오기 (orders.bol_file 또는 orders.bol_files)
-    const bolData = order.bol_file ? { base64: order.bol_file, mimeType: 'application/pdf', fileName: 'BOL_PO' + (order.customer_po||'') + '.pdf' } : null;
+    // BOL 파일은 DB에서 가져오기 — CA/SC 구분
+    const bolField = (wh === 'CA') ? 'bol_file_ca' : 'bol_file';
+    const bolBase64 = order[bolField] || order.bol_file || null;
+    const bolData = bolBase64 ? { base64: bolBase64, mimeType: 'application/pdf', fileName: 'BOL_PO' + (order.customer_po||'') + '_' + (wh||'SC') + '.pdf' } : null;
 
     const result = await sendShippedEmail(order, shippingInfo, plHtml, bolData);
     if (result.ok) {
@@ -13198,6 +13201,8 @@ async function _openDocPdfById(type, orderId, wh) {
 async function _resendDocToCustomer(type, orderId, wh) {
   if (type === 'invoice') {
     await reviewAndSendInvoice(orderId, wh);
+  } else if (type === 'packing') {
+    await resendShippedEmail(orderId, wh);
   } else {
     showToast('🔧 준비 중입니다');
   }
