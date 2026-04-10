@@ -12940,6 +12940,20 @@ async function resendShippedEmail(orderId, wh) {
     const { data: allLines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
     if (!order || !allLines) { showToast('❌ 오더 정보를 찾을 수 없습니다'); return; }
 
+    // DB에 저장된 BOL 파일 배열 복원
+    const bolJsonField = (wh === 'CA') ? 'bol_files_ca_json' : 'bol_files_sc_json';
+    let savedBolFiles = [];
+    try {
+      const raw = order[bolJsonField];
+      if (raw) savedBolFiles = JSON.parse(raw);
+    } catch(e) {}
+    // 저장된 배열 없으면 단일 bol_file 폴백
+    if (savedBolFiles.length === 0) {
+      const bolField = (wh === 'CA') ? 'bol_file_ca' : 'bol_file';
+      const bolBase64 = order[bolField] || null;
+      if (bolBase64) savedBolFiles = [{ base64: bolBase64, mimeType: 'application/pdf', fileName: 'BOL_PO' + (order.customer_po||'') + '_' + (wh||'SC') + '.pdf' }];
+    }
+
     // 해당 WH 라인만 필터링
     const currentWh = wh || order.wh_code || 'SC';
     const isSplitOrder = order.wh_code === 'SC&CA' || order.is_split_warehouse;
@@ -12961,12 +12975,12 @@ async function resendShippedEmail(orderId, wh) {
     // 재발송은 해당 WH만 단독으로 보여줌 — isSplit=false, whFilter=wh
     const plHtml = buildPackingListHtml(order, lines, false, wh || 'SC', shippingInfo, shippingInfo.note || '');
 
-    // BOL 파일은 DB에서 가져오기 — CA/SC 구분
-    const bolField = (wh === 'CA') ? 'bol_file_ca' : 'bol_file';
-    const bolBase64 = order[bolField] || order.bol_file || null;
-    const bolData = bolBase64 ? { base64: bolBase64, mimeType: 'application/pdf', fileName: 'BOL_PO' + (order.customer_po||'') + '_' + (wh||'SC') + '.pdf' } : null;
+    // savedBolFiles 배열을 _multi 형식으로 전달
+    const bolForResend = savedBolFiles.length > 0
+      ? { _multi: savedBolFiles.map(f => ({ base64: f.base64, mimeType: f.mimeType, fileName: f.fileName })) }
+      : null;
 
-    const result = await sendShippedEmail(order, shippingInfo, plHtml, bolData);
+    const result = await sendShippedEmail(order, shippingInfo, plHtml, bolForResend);
     if (result.ok) {
       showToast('✅ Shipped 이메일 재발송 완료!');
     } else {
@@ -14415,8 +14429,15 @@ async function _doShippedCoreInner(emp) {
     const result = await sendShippedEmail(freshOrder || order, shippingInfo, plHtml, bolForEmail);
     if (result.ok) {
       showToast('✅ 이메일 발송 완료!');
-      // DB에 발송 기록
-      await db.from('orders').update({ shipped_email_sent_at: new Date().toISOString() }).eq('id', orderId);
+      // DB에 발송 기록 + BOL 파일 배열 저장 (resend용)
+      const bolJsonField = (wh === 'CA') ? 'bol_files_ca_json' : 'bol_files_sc_json';
+      const bolFilesToSave = _bolFilesDataSingle.length > 0
+        ? _bolFilesDataSingle.map(f => ({ base64: f.base64, mimeType: f.mimeType, fileName: f.fileName }))
+        : (_bolFileData ? [{ base64: _bolFileData.base64, mimeType: _bolFileData.mimeType, fileName: _bolFileData.fileName }] : []);
+      await db.from('orders').update({
+        shipped_email_sent_at: new Date().toISOString(),
+        [bolJsonField]: bolFilesToSave.length > 0 ? JSON.stringify(bolFilesToSave) : null,
+      }).eq('id', orderId);
     } else {
       const errDetail = result.error || 'Unknown error';
       console.error('[Shipped email failed]', errDetail);
@@ -14628,12 +14649,7 @@ async function reviewAndSendInvoice(orderId, wh) {
   document.getElementById('invoice-review-cancel-btn').textContent = '취소';
   document.getElementById('modal-invoice-review').style.display = 'flex';
   const freightInput = document.getElementById('invoice-freight-amt');
-  // freight_amount를 DB에 저장 (재발송 시 재사용)
-  const _freightToSave = parseFloat(freightInput?.value) || 0;
-  if (_freightToSave > 0) {
-    await db.from('orders').update({ freight_amount: _freightToSave }).eq('id', _invoiceOrderId);
-  }
-  // DB에 저장된 freight 값으로 세팅 (재발송 시 자동 복원)
+  // DB에 저장된 freight 값으로 input 세팅 (재발송 시 자동 복원)
   if (freightInput) freightInput.value = _savedFreight > 0 ? _savedFreight.toString() : '0';
   const pinInline = document.getElementById('invoice-pin-inline');
   if (pinInline) pinInline.value = '';
@@ -14715,7 +14731,15 @@ async function sendInvoiceEmail() {
       if (custData) { order.customer_no = custData.customer_no; order.salesperson = custData.salesperson; }
     }
 
-    const freightAmt = parseFloat(document.getElementById('invoice-freight-amt')?.value) || 0;
+    // freight: input에 직접 입력한 값 우선, 없으면 DB 저장값 사용
+    const freightInputVal = parseFloat(document.getElementById('invoice-freight-amt')?.value);
+    const freightAmt = (!isNaN(freightInputVal) && freightInputVal > 0)
+      ? freightInputVal
+      : (parseFloat(order.freight_amount) || 0);
+    // freight_amount DB에 저장 (재발송 시 재사용)
+    if (freightAmt > 0) {
+      await db.from('orders').update({ freight_amount: freightAmt }).eq('id', _invoiceOrderId);
+    }
     // 편집 패널에서 수정된 값 사용
     if (window._invoiceEditedOrder) Object.assign(order, window._invoiceEditedOrder);
     const custObj = customers.find(c => c.id === order?.customer_id);
