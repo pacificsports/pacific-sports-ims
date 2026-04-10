@@ -14450,7 +14450,7 @@ async function reviewAndSendInvoice(orderId, wh) {
 
   // customer # / salesperson + 주소 fallback 로드
   if (order.customer_id) {
-    const { data: custData } = await db.from('customers').select('customer_no,salesperson,address,city,state,zip').eq('id', order.customer_id).single();
+    const { data: custData } = await db.from('customers').select('*').eq('id', order.customer_id).single();
     if (custData) {
       order.customer_no = custData.customer_no;
       order.salesperson = custData.salesperson;
@@ -14476,6 +14476,9 @@ async function reviewAndSendInvoice(orderId, wh) {
   const filteredLines = isSplit && wh
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
     : lines;
+
+  // DB에 저장된 freight_amount 불러오기
+  const _savedFreight = order.freight_amount || 0;
 
   let invoiceNum = order.invoice_number;
   if (!invoiceNum) {
@@ -14623,7 +14626,13 @@ async function reviewAndSendInvoice(orderId, wh) {
   document.getElementById('invoice-review-cancel-btn').textContent = '취소';
   document.getElementById('modal-invoice-review').style.display = 'flex';
   const freightInput = document.getElementById('invoice-freight-amt');
-  if (freightInput) freightInput.value = '0';
+  // freight_amount를 DB에 저장 (재발송 시 재사용)
+  const _freightToSave = parseFloat(freightInput?.value) || 0;
+  if (_freightToSave > 0) {
+    await db.from('orders').update({ freight_amount: _freightToSave }).eq('id', _invoiceOrderId);
+  }
+  // DB에 저장된 freight 값으로 세팅 (재발송 시 자동 복원)
+  if (freightInput) freightInput.value = _savedFreight > 0 ? _savedFreight.toString() : '0';
   const pinInline = document.getElementById('invoice-pin-inline');
   if (pinInline) pinInline.value = '';
   const pinStatus = document.getElementById('invoice-pin-inline-status');
@@ -14653,7 +14662,7 @@ async function sendInvoiceEmail() {
   const now = new Date().toISOString();
 
   // invoiced_at + shipped_at 저장
-  const { data: currentOrder } = await db.from('orders').select('shipped_at, invoiced_at, wh_code, is_split_warehouse, sc_status, ca_status').eq('id', _invoiceOrderId).single();
+  const { data: currentOrder } = await db.from('orders').select('shipped_at, invoiced_at, wh_code, is_split_warehouse, sc_status, ca_status, sc_shipped_at, ca_shipped_at').eq('id', _invoiceOrderId).single();
   await db.from('orders').update({
     invoiced_at: now,
     shipped_at: currentOrder?.shipped_at || now,
@@ -14700,7 +14709,7 @@ async function sendInvoiceEmail() {
 
     // customer_no / salesperson
     if (order?.customer_id) {
-      const { data: custData } = await db.from('customers').select('customer_no,salesperson').eq('id', order.customer_id).single();
+      const { data: custData } = await db.from('customers').select('*').eq('id', order.customer_id).single();
       if (custData) { order.customer_no = custData.customer_no; order.salesperson = custData.salesperson; }
     }
 
@@ -14783,21 +14792,34 @@ async function sendInvoiceEmail() {
       console.log('[Invoice BOL] bolB64:', !!bolB64, '| savedBolFiles:', (window._savedBolFilesForInvoice||[]).length, '| files:', (window._savedBolFilesForInvoice||[]).map(f=>f.fileName), '| total:', bolFilesForInv.map(f=>f.filename));
 
       try {
-        await fetch('https://po-confirm-email.hjbae.workers.dev/send-invoice', {
+        const invPayload = {
+          customer_name: order.customer_name,
+          customer_po: order.customer_po,
+          customer_email: toEmail,
+          ...(ccEmail.length ? { cc: ccEmail } : {}),
+          subject: emailSubject,
+          invoice_number_display: displayInvNum,
+          email_html: invEmailBodyHtml || undefined,
+          inv_pdf: invPdfBase64,
+          pl_pdf: plPdfBase64,
+          po_pdf: poPdfBase64,
+          bol_files: bolFilesForInv,
+          freight: freightAmt,
+        };
+        const invPayloadStr = JSON.stringify(invPayload);
+        console.log('[sendInvoiceEmail] payload size:', Math.round(invPayloadStr.length/1024), 'KB');
+        const invRes = await fetch('https://po-confirm-email.hjbae.workers.dev/send-invoice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            order, lines, customer_email: toEmail, ...(ccEmail.length ? { cc: ccEmail } : {}),
-            companySettings, freightAmt,
-            inv_pdf: invPdfBase64,
-            pl_pdf: plPdfBase64,
-            po_pdf: poPdfBase64,
-            bol_files: bolFilesForInv,
-            subject: emailSubject,
-            invoice_number_display: displayInvNum,
-            email_html: invEmailBodyHtml || undefined
-          })
+          body: invPayloadStr
         });
+        if (!invRes.ok) {
+          const errData = await invRes.json().catch(()=>({}));
+          console.error('[sendInvoiceEmail] Worker error:', invRes.status, errData);
+          showToast(`⚠️ Invoice 이메일 발송 실패: ${invRes.status} ${errData.error||''}`);
+        } else {
+          console.log('[sendInvoiceEmail] sent OK');
+        }
       } catch(e) { console.warn('Invoice send-invoice fetch error:', e); }
     }
   } catch(e) {
