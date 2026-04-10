@@ -12949,8 +12949,17 @@ async function resendShippedEmail(orderId, wh) {
   showToast('⏳ Shipped 이메일 재발송 중...');
   try {
     const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
-    const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
-    if (!order || !lines) { showToast('❌ 오더 정보를 찾을 수 없습니다'); return; }
+    const { data: allLines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
+    if (!order || !allLines) { showToast('❌ 오더 정보를 찾을 수 없습니다'); return; }
+
+    // 해당 WH 라인만 필터링
+    const currentWh = wh || order.wh_code || 'SC';
+    const isSplitOrder = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+    const lines = isSplitOrder
+      ? allLines.filter(l => currentWh === 'CA'
+          ? (l.wh === 'CA' || l.wh === 'SC&CA')
+          : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+      : allLines;
 
     const shippingInfo = {
       wh: wh || order.wh_code || 'SC',
@@ -12961,8 +12970,8 @@ async function resendShippedEmail(orderId, wh) {
       note: order.ship_note || '',
     };
 
-    const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
-    const plHtml = buildPackingListHtml(order, lines, isSplit, wh || 'SC', shippingInfo, shippingInfo.note || '');
+    // 재발송은 해당 WH만 단독으로 보여줌 — isSplit=false, whFilter=wh
+    const plHtml = buildPackingListHtml(order, lines, false, wh || 'SC', shippingInfo, shippingInfo.note || '');
 
     // BOL 파일은 DB에서 가져오기 — CA/SC 구분
     const bolField = (wh === 'CA') ? 'bol_file_ca' : 'bol_file';
