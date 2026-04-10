@@ -14426,23 +14426,23 @@ async function _doShippedCoreInner(emp) {
     const bolForEmail = _bolFilesDataSingle.length > 0
       ? { _multi: _bolFilesDataSingle }
       : _bolFileData;
+    // BOL 파일 배열 항상 DB 저장 (이메일 성공 여부와 무관하게 resend용)
+    const bolJsonField = (wh === 'CA') ? 'bol_files_ca_json' : 'bol_files_sc_json';
+    const bolFilesToSave = _bolFilesDataSingle.length > 0
+      ? _bolFilesDataSingle.map(f => ({ base64: f.base64, mimeType: f.mimeType, fileName: f.fileName }))
+      : (_bolFileData ? [{ base64: _bolFileData.base64, mimeType: _bolFileData.mimeType, fileName: _bolFileData.fileName }] : []);
+    if (bolFilesToSave.length > 0) {
+      await db.from('orders').update({ [bolJsonField]: JSON.stringify(bolFilesToSave) }).eq('id', orderId);
+    }
+
     const result = await sendShippedEmail(freshOrder || order, shippingInfo, plHtml, bolForEmail);
     if (result.ok) {
       showToast('✅ 이메일 발송 완료!');
-      // DB에 발송 기록 + BOL 파일 배열 저장 (resend용)
-      const bolJsonField = (wh === 'CA') ? 'bol_files_ca_json' : 'bol_files_sc_json';
-      const bolFilesToSave = _bolFilesDataSingle.length > 0
-        ? _bolFilesDataSingle.map(f => ({ base64: f.base64, mimeType: f.mimeType, fileName: f.fileName }))
-        : (_bolFileData ? [{ base64: _bolFileData.base64, mimeType: _bolFileData.mimeType, fileName: _bolFileData.fileName }] : []);
-      await db.from('orders').update({
-        shipped_email_sent_at: new Date().toISOString(),
-        [bolJsonField]: bolFilesToSave.length > 0 ? JSON.stringify(bolFilesToSave) : null,
-      }).eq('id', orderId);
+      await db.from('orders').update({ shipped_email_sent_at: new Date().toISOString() }).eq('id', orderId);
     } else {
       const errDetail = result.error || 'Unknown error';
       console.error('[Shipped email failed]', errDetail);
       showToast('❌ 이메일 발송 실패: ' + errDetail);
-      // Settings Error Log에도 추가 상세 정보 기록
       _logError('Shipped email to ' + (order?.customer_name||'?') + ' PO#' + (order?.customer_po||'?') + ' — ' + errDetail);
     }
   }
@@ -14546,7 +14546,7 @@ async function reviewAndSendInvoice(orderId, wh) {
     freightCarrier: whFreight || _fb.freightCarrier || _domFreightCarrier || '',
     shipDate: invActualShipDate2 || ''   // PO 입력 날짜 제외, 실제 출고일만
   };
-  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, displayInvoiceNum, invShipInfo, companySettings, 0);
+  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, displayInvoiceNum, invShipInfo, companySettings, _savedFreight);
 
   // Ship Via / Tracking 편집 필드에 현재 값 채우기
   const _carrierEl = document.getElementById('inv-carrier-edit');
@@ -14650,7 +14650,11 @@ async function reviewAndSendInvoice(orderId, wh) {
   document.getElementById('modal-invoice-review').style.display = 'flex';
   const freightInput = document.getElementById('invoice-freight-amt');
   // DB에 저장된 freight 값으로 input 세팅 (재발송 시 자동 복원)
-  if (freightInput) freightInput.value = _savedFreight > 0 ? _savedFreight.toString() : '0';
+  if (freightInput) {
+    freightInput.value = _savedFreight > 0 ? _savedFreight.toString() : '0';
+    // 미리보기도 freight 반영해서 즉시 업데이트
+    if (_savedFreight > 0) updateInvoiceFreight();
+  }
   const pinInline = document.getElementById('invoice-pin-inline');
   if (pinInline) pinInline.value = '';
   const pinStatus = document.getElementById('invoice-pin-inline-status');
