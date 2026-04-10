@@ -7406,7 +7406,7 @@ async function loadBackOrders() {
       </div>
       <!-- 액션 버튼 -->
       <div style="padding:10px 16px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;background:#fafafa;">
-        <button id="bo-startorder-btn-${o.id}" onclick="boStartSelectedLines('${o.id}')" disabled style="padding:8px 18px;background:#e5e7eb;color:#9ca3af;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:not-allowed;">▶ Start Order</button>
+        <button id="bo-startorder-btn-${o.id}" onclick="boStartSelectedLines('${o.id}')" disabled style="padding:8px 18px;background:#e5e7eb;color:#9ca3af;border:none;border-radius:6px;font-weight:700;font-size:12px;cursor:not-allowed;">📦 Distribute</button>
       </div>
     </div>`;
   }).join('') + `</div>`;
@@ -8100,17 +8100,18 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
   const lastOrderId = lastCreatedOrderId;
   const lastWh = lastCreatedWh;
 
-  showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
-  await loadOrderStatus();
-
   if (lastOrderId) {
-    // 항상 openPcrComplete 오픈 (Full Box 확인 + PCR partial 배정)
+    // Back Orders 탭에서 바로 PCR 박스 배정 모달 오픈
     const pcrStartWh = lastWh === 'CA' ? 'CA' : 'SC';
     await openPcrComplete(lastOrderId, pcrStartWh);
+    showToast('✅ Order Status에 생성됨! PCR 박스 배정을 완료해주세요.');
   } else {
     showToast('✅ Order Status에 생성됨!');
   }
   loadBackOrders();
+  // 완료 후 Order Status 탭으로 이동
+  showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
+  await loadOrderStatus();
 }
 
 // ── BO 전용 Bin 배분 모달 (Back Orders 탭에서 바로 열기)
@@ -8254,11 +8255,41 @@ async function boStartSelectedLines(boOrderId) {
     if (!confirm('Bin 배분이 완료되지 않은 라인이 있습니다. 그래도 진행하시겠습니까?')) return;
   }
 
-  // poLines를 선택된 라인으로 세팅 → 박스 배정 모달 오픈
+  // poLines를 선택된 라인으로 세팅
   poLines = selectedPL;
   window._boSaveContext = { boOrderId, selectedIdxs, boPL, boLines, boOrder, whGroups: null };
 
-  // 바로 오더 저장 후 openPcrComplete 호출
+  // PCR/박스 배정 모달 오픈 — 배정 완료 후 Start Order 버튼으로 저장
+  const firstWh = selectedPL[0]?.wh || 'SC';
+  await _boOpenDistributeModal(firstWh);
+}
+
+async function _boOpenDistributeModal(wh) {
+  // 현재 선택된 라인으로 PCR 박스 배정 모달 오픈
+  // openPcrComplete와 동일한 UI를 사용하되, 저장은 _boDoSave로 연결
+  const ctx = window._boSaveContext;
+  if (!ctx) return;
+
+  // 임시 order 객체 생성 (openPcrComplete에 필요)
+  const { boOrder, selectedPL: _sp, boPL, selectedIdxs } = ctx;
+  const selLines = selectedIdxs.map(i => boPL[i]).filter(Boolean);
+
+  // PCR이 있는 라인이 있는지 확인
+  const hasPcr = selLines.some(l =>
+    Object.keys(l.allocSC||{}).some(k=>k.includes('PCR')) ||
+    Object.keys(l.allocCA||{}).some(k=>k.includes('PCR'))
+  );
+
+  if (!hasPcr) {
+    // PCR 없으면 바로 저장
+    if (!confirm('Bin 배분된 라인을 Order Status로 이동하시겠습니까?')) return;
+    await _boDoSave(null, null);
+    return;
+  }
+
+  // PCR 있으면 임시 오더 생성 없이 모달만 오픈
+  // _boDoSave가 실제 저장을 담당하도록 모달의 완료 버튼에 연결
+  if (!confirm('Bin 배분된 라인을 Order Status로 이동하시겠습니까? (PCR 박스 배정은 Order Status에서 진행됩니다)')) return;
   await _boDoSave(null, null);
 }
 
