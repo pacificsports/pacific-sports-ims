@@ -14501,7 +14501,8 @@ async function reviewAndSendInvoice(orderId, wh) {
     : lines;
 
   // DB에 저장된 freight_amount 불러오기
-  const _savedFreight = order.freight_amount || 0;
+  const _freightField = (_invoiceWh === 'CA') ? 'ca_freight_amount' : 'sc_freight_amount';
+  const _savedFreight = parseFloat(order[_freightField]) || 0;
 
   let invoiceNum = order.invoice_number;
   if (!invoiceNum) {
@@ -14738,10 +14739,11 @@ async function sendInvoiceEmail() {
     const freightInputVal = parseFloat(document.getElementById('invoice-freight-amt')?.value);
     const freightAmt = (!isNaN(freightInputVal) && freightInputVal > 0)
       ? freightInputVal
-      : (parseFloat(order.freight_amount) || 0);
-    // freight_amount DB에 저장 (재발송 시 재사용)
+      : (parseFloat(order[(_invoiceWh === 'CA') ? 'ca_freight_amount' : 'sc_freight_amount']) || 0);
+    // WH별 freight DB에 저장 (재발송 시 재사용)
     if (freightAmt > 0) {
-      await db.from('orders').update({ freight_amount: freightAmt }).eq('id', _invoiceOrderId);
+      const freightSaveField = (_invoiceWh === 'CA') ? 'ca_freight_amount' : 'sc_freight_amount';
+      await db.from('orders').update({ [freightSaveField]: freightAmt }).eq('id', _invoiceOrderId);
     }
     // 편집 패널에서 수정된 값 사용
     if (window._invoiceEditedOrder) Object.assign(order, window._invoiceEditedOrder);
