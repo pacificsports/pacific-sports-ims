@@ -8093,25 +8093,26 @@ async function _boDoSave(scBoxAlloc, caBoxAlloc) {
     await db.from('orders').update({ total_pcs: remTotal }).eq('id', boOrderId);
   }
 
-  playNewOrderChime();
-
-  // PCR partial 있으면 openPcrComplete 모달 오픈 (신버전)
-  // 마지막 생성된 오더 기준으로 오픈
   const lastOrderId = lastCreatedOrderId;
   const lastWh = lastCreatedWh;
 
   if (lastOrderId) {
-    // Back Orders 탭에서 바로 PCR 박스 배정 모달 오픈
+    // 소리/탭 이동 없이 Back Orders에서 바로 박스 배정 모달 오픈
+    // Complete 누르면 소리 + Order Status 이동 (submitPcrComplete에서 처리)
+    window._boDistributeMode = true;
+    loadBackOrders();
     const pcrStartWh = lastWh === 'CA' ? 'CA' : 'SC';
     await openPcrComplete(lastOrderId, pcrStartWh);
-    showToast('✅ Order Status에 생성됨! PCR 박스 배정을 완료해주세요.');
+    // 버튼 텍스트를 Start Order로 변경
+    const pcrBtn = document.getElementById('pcr-complete-btn');
+    if (pcrBtn) pcrBtn.textContent = '▶ Start Order';
   } else {
+    playNewOrderChime();
     showToast('✅ Order Status에 생성됨!');
+    loadBackOrders();
+    showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
+    await loadOrderStatus();
   }
-  loadBackOrders();
-  // 완료 후 Order Status 탭으로 이동
-  showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
-  await loadOrderStatus();
 }
 
 // ── BO 전용 Bin 배분 모달 (Back Orders 탭에서 바로 열기)
@@ -10326,7 +10327,16 @@ async function submitPcrComplete() {
 
   // 양쪽 다 완료됐으면 Ready to Ship으로
   await checkAndMoveToReady(_pcrCompleteOrderId, _pcrCompleteWh);
-  loadOrderStatus();
+
+  // BO Distribute 모드: 소리 + Order Status 탭 이동
+  if (window._boDistributeMode) {
+    window._boDistributeMode = false;
+    playNewOrderChime();
+    showPanel('orderstatus', document.querySelector('.ntab[onclick*="orderstatus"]'));
+    await loadOrderStatus();
+  } else {
+    loadOrderStatus();
+  }
 }
 
 // ── WH + Partial 완료 여부만 체크 — 자동 이동 없이 카드에 버튼 표시
