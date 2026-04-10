@@ -4164,28 +4164,16 @@ async function _doSaveInvoice() {
     const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
     const allocTotal = scQty + caQty;
 
-    // alloc이 있으면 alloc 기준, 없으면 DB 재고 조회
+    // alloc 기준으로만 canFill 계산 — bin 배분 안 하면 전량 backorder
     if (allocTotal > 0) {
       const canFill = Math.min(l.qty, allocTotal);
       const backQty = Math.max(0, l.qty - canFill);
       return { ...l, invRows: [], totalStock: allocTotal, canFill, backQty, sku, scQty, caQty };
     }
 
-    const lineWhId = lineWh === 'CA'
-      ? (warehouses.find(w => w.code === 'CA')?.id || caWhId || whId)
-      : (warehouses.find(w => w.code === 'SC')?.id || scWhId || effectiveWhId || whId);
-    const { data: invRows } = await db.from('inventory')
-      .select('id, qty_on_hand, location, warehouse_id, received_date')
-      .eq('color', (l.color||'').toUpperCase())
-      .eq('size', (l.size||'').toUpperCase())
-      .eq('warehouse_id', lineWhId)
-      .order('received_date', { ascending: true, nullsFirst: false })
-      .order('qty_on_hand', { ascending: false });
-    console.log(`[lineCheck] ${l.color} ${l.size} wh=${lineWh} lineWhId=${lineWhId} invRows=${invRows?.length} totalStock=${(invRows||[]).reduce((s,r)=>s+(r.qty_on_hand||0),0)}`);
-    const totalStock = (invRows || []).reduce((s, r) => s + (r.qty_on_hand || 0), 0);
-    const canFill    = Math.min(l.qty, totalStock);
-    const backQty    = l.qty - canFill;
-    return { ...l, invRows: invRows || [], totalStock, canFill, backQty, sku, scQty, caQty };
+    // alloc 없음 = bin 배분 안 함 = 전량 backorder
+    console.log(`[lineCheck] ${l.color} ${l.size} wh=${lineWh} — no alloc, treating as backorder`);
+    return { ...l, invRows: [], totalStock: 0, canFill: 0, backQty: l.qty, sku, scQty: 0, caQty: 0 };
   }));
 
   const hasBackorder = false; // 저장 시에는 재고 체크 안 함 — Shipped 단계에서 처리
