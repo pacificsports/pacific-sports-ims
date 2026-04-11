@@ -20000,7 +20000,20 @@ function execPcrTransfer(whGroup, ppb) {
   }
   const pcrWh = whGroup+'-PCR';
   if (!window.binInventory[pcrWh]) window.binInventory[pcrWh] = {};
+  // key 매칭: style 포함 키 또는 color|size fallback 키 둘 다 시도
+  const pcrFallbackKey = `|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
   if (!window.binInventory[pcrWh][k]) window.binInventory[pcrWh][k] = [];
+  // fallback key에 있는 PCR 데이터를 메인 key로 병합
+  if (window.binInventory[pcrWh][pcrFallbackKey]) {
+    const fbEntry = window.binInventory[pcrWh][pcrFallbackKey].find(b=>b.bin==='PCR');
+    const mainEntry = window.binInventory[pcrWh][k].find(b=>b.bin==='PCR');
+    if (fbEntry && !mainEntry) {
+      window.binInventory[pcrWh][k].push({...fbEntry});
+    } else if (fbEntry && mainEntry) {
+      mainEntry.qty += fbEntry.qty;
+      fbEntry.qty = 0; // 중복 방지
+    }
+  }
   const pcrB = window.binInventory[pcrWh][k].find(b=>b.bin==='PCR');
   if (pcrB) pcrB.qty += qty;
   else window.binInventory[pcrWh][k].push({bin:'PCR',qty,committed:0,received_date:(()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() });
