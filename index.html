@@ -12458,7 +12458,6 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
     : `<th style="padding:6px 10px;text-align:center;">Qty</th>
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`;
 
-  let prevStyle = null;
   const lineRows = emailLines.map(l => {
     const colCells = isSplit
       ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${(l.sc_qty||0)>0?(l.sc_qty||0).toLocaleString():'—'}</td>
@@ -12466,12 +12465,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`
       : `<td style="padding:6px 10px;text-align:center;font-weight:700;">${(l.fill_qty||0).toLocaleString()}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`;
-    // 스타일 번호가 바뀌면 구분선 추가
-    const colCount = isSplit ? 8 : 7;
-    const divider = (prevStyle !== null && prevStyle !== l.style)
-      ? `<tr><td colspan="${colCount}" style="padding:0;border-top:2px solid #e5e7eb;"></td></tr>` : '';
-    prevStyle = l.style;
-    return divider + `<tr style="border-bottom:1px solid #f3f4f6;">
+    return `<tr style="border-bottom:1px solid #f3f4f6;">
       <td style="padding:6px 10px;font-family:monospace;font-weight:600;">${l.style||''}</td>
       <td style="padding:6px 10px;">${l.color||''}</td>
       <td style="padding:6px 10px;text-align:center;">${l.size||''}</td>
@@ -12625,7 +12619,13 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
         <div style="font-size:12px;font-weight:700;color:#0369a1;margin-bottom:8px;">&#128666; Shipping Information</div>
         <table style="border-collapse:collapse;font-size:13px;">
           ${carrier ? `<tr><td style="padding:3px 0;color:#6b7280;width:120px;">Carrier</td><td style="font-weight:700;">${displayCarrier}</td></tr>` : ''}
-          ${tracking && !isWillCall ? `<tr><td style="padding:3px 0;color:#6b7280;">${trackingLabel}</td><td style="font-weight:600;font-family:monospace;">${tracking}</td></tr>` : ''}
+          ${tracking && !isWillCall ? `<tr><td style="padding:3px 0;color:#6b7280;">${trackingLabel}</td><td style="font-weight:600;font-family:monospace;">${(() => {
+            const t = tracking;
+            if (carrier === 'UPS') return `<a href="https://www.ups.com/track?tracknum=${t}" style="color:#1e40af;" target="_blank">${t}</a>`;
+            if (carrier === 'FedEx') return `<a href="https://www.fedex.com/fedextrack/?trknbr=${t}" style="color:#6d28d9;" target="_blank">${t}</a>`;
+            if (isLtl) { const q = encodeURIComponent((freightCarrier ? freightCarrier + ' ' : '') + 'PRO ' + t + ' tracking'); return `<a href="https://www.google.com/search?q=${q}" style="color:#0369a1;" target="_blank">${t}</a>`; }
+            return t;
+          })()}</td></tr>` : ''}
           ${totalBoxes ? `<tr><td style="padding:3px 0;color:#6b7280;">Total Boxes</td><td style="font-weight:700;">${totalBoxes} boxes</td></tr>` : ''}
         </table>
       </td></tr>
@@ -12873,7 +12873,6 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     const allocPcs = (alloc, excludeKeys=[]) =>
       Object.entries(alloc)
         .filter(([k]) => !excludeKeys.some(ex => k.includes(ex)))
-        .filter(([k]) => !['SC','CA','WH'].includes(k.toUpperCase()))  // WH 코드 자체는 bin으로 인정 안 함
         .reduce((s,[,v]) => s + ((typeof v==='object' ? v.pcs||0 : v)||0), 0);
 
     // 실제 출고 수량 — alloc_detail 기준, PCR 키 있을 때만 prepared_lines 오버라이드
@@ -15823,8 +15822,13 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       rows += '<div style="display:flex;gap:24px;flex-wrap:wrap;">';
       rows += '<span><span style="color:#6b7280;">Carrier:</span> <strong>' + shippingInfo.carrier + '</strong></span>';
       if (isLtl && shippingInfo.freightCarrier) rows += '<span><span style="color:#6b7280;">Freight Co.:</span> <strong>' + shippingInfo.freightCarrier + '</strong></span>';
-      if (isLtl && shippingInfo.tracking) rows += '<span><span style="color:#6b7280;">PRO #:</span> <strong>' + shippingInfo.tracking + '</strong></span>';
-      if (!isLtl && !isWillCall && shippingInfo.tracking) rows += '<span><span style="color:#6b7280;">Tracking #:</span> <strong>' + shippingInfo.tracking + '</strong></span>';
+      if (isLtl && shippingInfo.tracking) { const ltlQ = encodeURIComponent((shippingInfo.freightCarrier ? shippingInfo.freightCarrier + ' ' : '') + 'PRO ' + shippingInfo.tracking + ' tracking'); rows += '<span><span style="color:#6b7280;">PRO #:</span> <strong><a href="https://www.google.com/search?q=' + ltlQ + '" target="_blank" style="color:#0369a1;">' + shippingInfo.tracking + '</a></strong></span>'; }
+      if (!isLtl && !isWillCall && shippingInfo.tracking) {
+        const tUrl = shippingInfo.carrier === 'UPS' ? 'https://www.ups.com/track?tracknum=' + shippingInfo.tracking
+          : shippingInfo.carrier === 'FedEx' ? 'https://www.fedex.com/fedextrack/?trknbr=' + shippingInfo.tracking
+          : null;
+        rows += '<span><span style="color:#6b7280;">Tracking #:</span> <strong>' + (tUrl ? '<a href="' + tUrl + '" target="_blank" style="color:#1e40af;">' + shippingInfo.tracking + '</a>' : shippingInfo.tracking) + '</strong></span>';
+      }
       if (isWillCall && shippingInfo.pickupBy) rows += '<span><span style="color:#6b7280;">Picked Up By:</span> <strong>' + shippingInfo.pickupBy + '</strong></span>';
       if (isWillCall && shippingInfo.pickupDate) rows += '<span><span style="color:#6b7280;">Pick Up Date:</span> <strong>' + shippingInfo.pickupDate + '</strong></span>';
       rows += '</div>';
