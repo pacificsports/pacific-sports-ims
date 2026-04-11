@@ -1304,6 +1304,15 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Return Policy</label>
           <textarea id="settings-return-policy" class="fi" rows="3" style="font-size:12px;resize:vertical;width:100%;" placeholder="Returns are accepted within 30 days..."></textarea>
         </div>
+        <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb;">
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">📧 Internal CC Emails <span style="font-size:10px;color:#6b7280;">(모든 이메일에 CC — 쉼표로 구분)</span></label>
+          <input id="settings-internal-cc" class="fi" style="width:100%;font-size:12px;" placeholder="peter@peacepacificsports.com, yeon@peacepacificsports.com">
+          <div style="font-size:10px;color:#6b7280;margin-top:3px;">거래처가 Reply할 때 이 이메일들로도 전달됩니다</div>
+        </div>
+        <div style="margin-top:10px;">
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">↩ Reply-To Email <span style="font-size:10px;color:#6b7280;">(선택사항 — 비워두면 Internal CC 첫 번째 사용)</span></label>
+          <input id="settings-reply-to" class="fi" style="width:100%;font-size:12px;" placeholder="orders@peacepacificsports.com">
+        </div>
       </div>
     </div>
 
@@ -2019,6 +2028,21 @@ function showLoginError(msg) {
 
 async function startApp() { /* legacy - not used */ }
 
+async function loadInternalSettings() {
+  try {
+    const { data: settings } = await db.from('company_settings').select('key,value').in('key', ['internal_cc_emails','reply_to_email']);
+    if (settings) {
+      window._internalCcEmails = settings.find(s => s.key === 'internal_cc_emails')?.value || '';
+      window._replyToEmail = settings.find(s => s.key === 'reply_to_email')?.value || '';
+    }
+  } catch(e) { console.warn('loadInternalSettings error:', e); }
+}
+
+function getInternalCcArr() {
+  return (window._internalCcEmails || '')
+    .split(',').map(e => e.trim()).filter(e => e && e.includes('@'));
+}
+
 async function startAppWithEmployee(emp) {
   document.getElementById('login-page').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
@@ -2032,6 +2056,7 @@ async function startAppWithEmployee(emp) {
   applyRoleAccess(emp.role);
 
   await loadMasterData();
+  await loadInternalSettings();  // internal CC / reply-to 로드
 
   // 빌딩 알람 워치 시작
   updateBuildingUI();
@@ -4490,13 +4515,19 @@ async function _doSaveInvoice() {
 
       const hasAnyBackorder = emailLines.some(l => l.back_qty > 0);
       // 백그라운드로 이메일 발송 (await 제거 - 느린 이메일 때문에 저장 지연 방지)
-      const custCcArr = (custObj?.email_cc || '').split(',').map(e => e.trim()).filter(e => e && e.includes('@'));
+      const custCcArr = [...new Set([
+        ...(custObj?.email_cc || '').split(',').map(e => e.trim()).filter(e => e && e.includes('@')),
+        ...getInternalCcArr()
+      ])];
+      const replyToEmail = window._replyToEmail || getInternalCcArr()[0] || '';
       // Order Confirmation HTML 직접 빌드해서 전달 (Worker 정렬 방지)
       const confirmEmailHtml = buildOrderConfirmEmailHtml({
         orderNum, cust, po, shipDate, whName,
         totalPcs, totalAmt, hasAnyBackorder, emailLines,
         scTotalPcs, caTotalPcs
       });
+      // Customer PO PDF 첨부 (업로드된 경우)
+      const poPdfBase64 = order?.po_file || null;
       fetch('https://po-confirm-email.hjbae.workers.dev/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4506,13 +4537,15 @@ async function _doSaveInvoice() {
           customer_po: po,
           customer_email: custEmail,
           ...(custCcArr.length ? { cc: custCcArr } : {}),
+          ...(replyToEmail ? { reply_to: replyToEmail } : {}),
           total_pcs: totalPcs,
           total_amount: totalAmt,
           ship_date: shipDate || '',
           warehouse: whName,
           has_backorder: hasAnyBackorder,
           lines: emailLines,
-          email_html: confirmEmailHtml
+          email_html: confirmEmailHtml,
+          po_pdf: poPdfBase64,
         })
       }).catch(e => console.warn('PO confirm email error:', e));
     }
@@ -5944,6 +5977,12 @@ async function loadSettings() {
     const rp = document.getElementById('settings-return-policy');
     if (pi) pi.value = paymentInfo;
     if (rp) rp.value = returnPolicy;
+    const internalCc = settings.find(s => s.key === 'internal_cc_emails')?.value || '';
+    const replyTo = settings.find(s => s.key === 'reply_to_email')?.value || '';
+    const icEl = document.getElementById('settings-internal-cc');
+    const rtEl = document.getElementById('settings-reply-to');
+    if (icEl) icEl.value = internalCc;
+    if (rtEl) rtEl.value = replyTo;
   }
 }
 
@@ -6180,9 +6219,16 @@ async function openPcRoomEdit(invId, currentQty) {
 async function saveInvoiceSettings() {
   const paymentInfo = document.getElementById('settings-payment-info')?.value || '';
   const returnPolicy = document.getElementById('settings-return-policy')?.value || '';
+  const internalCc = document.getElementById('settings-internal-cc')?.value || '';
+  const replyTo = document.getElementById('settings-reply-to')?.value || '';
   await db.from('company_settings').upsert({ key: 'payment_info', value: paymentInfo, updated_at: new Date().toISOString() });
   await db.from('company_settings').upsert({ key: 'return_policy', value: returnPolicy, updated_at: new Date().toISOString() });
-  showToast('✅ Invoice 설정 저장됨');
+  await db.from('company_settings').upsert({ key: 'internal_cc_emails', value: internalCc, updated_at: new Date().toISOString() });
+  await db.from('company_settings').upsert({ key: 'reply_to_email', value: replyTo, updated_at: new Date().toISOString() });
+  // 전역 캐시 업데이트
+  window._internalCcEmails = internalCc;
+  window._replyToEmail = replyTo;
+  showToast('✅ 설정 저장됨');
 }
 
 function renderEmployeesTable(employees) {
@@ -12889,6 +12935,9 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
   // ── 이메일 HTML 직접 빌드 (Worker에 완성된 HTML로 전달)
   const emailHtml = buildShippedEmailHtml(order, shippingInfo, lineItems);
 
+  const internalCcForShipped = getInternalCcArr();
+  const mergedCcShipped = [...new Set([...ccEmail, ...internalCcForShipped])];
+  const replyToShipped = window._replyToEmail || internalCcForShipped[0] || '';
   const payload = {
     customer_name: order.customer_name,
     customer_po: order.customer_po || '',
@@ -12897,7 +12946,8 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     email_html: emailHtml,  // 완성된 HTML만 전달 — lines 불필요
     pl_pdf: plPdfBase64 || null,
     bol_files: bolFilesArr,
-    ...(ccEmail.length ? { cc: ccEmail } : {})
+    ...(mergedCcShipped.length ? { cc: mergedCcShipped } : {}),
+    ...(replyToShipped ? { reply_to: replyToShipped } : {})
   };
 
   // payload 크기 확인
@@ -14857,11 +14907,15 @@ async function sendInvoiceEmail() {
       console.log('[Invoice BOL] bolB64:', !!bolB64, '| savedBolFiles:', (window._savedBolFilesForInvoice||[]).length, '| files:', (window._savedBolFilesForInvoice||[]).map(f=>f.fileName), '| total:', bolFilesForInv.map(f=>f.filename));
 
       try {
+        const internalCcForInv = getInternalCcArr();
+        const mergedCcInv = [...new Set([...ccEmail, ...internalCcForInv])];
+        const replyToInv = window._replyToEmail || internalCcForInv[0] || '';
         const invPayload = {
           customer_name: order.customer_name,
           customer_po: order.customer_po,
           customer_email: toEmail,
-          ...(ccEmail.length ? { cc: ccEmail } : {}),
+          ...(mergedCcInv.length ? { cc: mergedCcInv } : {}),
+          ...(replyToInv ? { reply_to: replyToInv } : {}),
           subject: emailSubject,
           invoice_number_display: displayInvNum,
           email_html: invEmailBodyHtml || undefined,
