@@ -5389,7 +5389,7 @@ function renderCustomerPOTable() {
         + '<td style="text-align:center;">' + caPcs.toLocaleString() + '</td>'
         + '<td style="font-weight:700;color:var(--ca);">' + (caAmt > 0 ? '$' + caAmt.toLocaleString() : '—') + '</td>'
         + '<td>' + (o.ship_date||'—') + '</td>'
-        + '<td></td>'
+        + '<td style="white-space:nowrap;text-align:center;">' + (['shipped','invoiced','completed'].includes(caStatusKey) ? '<button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;font-weight:600;" onclick="event.stopPropagation();openRaModal(\'' + oid + '\')">↩ Return</button>' : '') + '</td>'
         + '<td>' + getWhStatusBadge(caSt.label, caSt.color, caSt.bg) + '</td>'
         + '<td></td>'
         + '<td style="white-space:nowrap;">' + caBtns + '</td>'
@@ -6891,14 +6891,21 @@ async function submitRa() {
         slipPdfBase64 = await htmlToPdfBase64(slipHtml);
       } catch(e) { console.warn('RA slip PDF error:', e); }
 
-      await fetch('https://po-confirm-email.hjbae.workers.dev/send', {
+      const raCcArr = [...new Set([
+        ...((custObj?.email_cc||'').split(',').map(e=>e.trim()).filter(e=>e&&e.includes('@'))),
+        ...getInternalCcArr()
+      ])];
+      const raReplyTo = window._replyToEmail || getInternalCcArr()[0] || '';
+      await fetch('https://po-confirm-email.hjbae.workers.dev/send-ra', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: toEmail,
           subject: 'Return Authorization #' + raNum + ' — ' + (order.customer_name||'') + ' (PO# ' + (order.customer_po||'—') + ')',
           html: emailHtml,
-          ...(slipPdfBase64 ? { attachments: [{ base64: slipPdfBase64, filename: raNum + '_ReturnSlip.pdf', mime: 'application/pdf' }] } : {})
+          ...(raCcArr.length ? { cc: raCcArr } : {}),
+          ...(raReplyTo ? { reply_to: raReplyTo } : {}),
+          attachments: slipPdfBase64 ? [{ base64: slipPdfBase64, filename: raNum + '_ReturnSlip.pdf', mime: 'application/pdf' }] : []
         })
       });
       showToast('✅ RA# ' + raNum + ' 발송 완료! (' + toEmail + ')');
