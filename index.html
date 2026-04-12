@@ -4231,12 +4231,12 @@ async function _doSaveInvoice() {
   const scTotalPcs = lineChecks.reduce((s, l) => {
     const allocSC = l.allocSC || {};
     const scQty = Object.values(allocSC).reduce((a,v)=>a+(v||0),0);
-    return s + (l.wh === 'CA' ? 0 : l.wh === 'SC&CA' ? scQty : l.qty);
+    return s + (l.wh === 'CA' ? 0 : scQty);  // 항상 실제 배분 수량 사용
   }, 0);
   const caTotalPcs = lineChecks.reduce((s, l) => {
     const allocCA = l.allocCA || {};
     const caQty = Object.values(allocCA).reduce((a,v)=>a+(v||0),0);
-    return s + (l.wh === 'SC' ? 0 : l.wh === 'SC&CA' ? caQty : l.qty);
+    return s + (l.wh === 'SC' ? 0 : caQty);  // 항상 실제 배분 수량 사용
   }, 0);
   const scTotalAmt = lineChecks.reduce((s, l) => {
     const allocSC = l.allocSC || {};
@@ -16280,7 +16280,23 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
               </tr>` : ''}
               ${tracking ? `<tr>
                 <td style="padding:3px 0;color:#6b7280;">${isLtl?'PRO #':'Tracking #'}</td>
-                <td style="font-weight:600;font-family:monospace;">${tracking}</td>
+                <td style="font-weight:600;font-family:monospace;">${(() => {
+                  const t = tracking;
+                  if (carrier === 'UPS') return '<a href="https://www.ups.com/track?tracknum=' + t + '" target="_blank" style="color:#1e40af;">' + t + ' ↗</a>';
+                  if (carrier === 'FedEx') return '<a href="https://www.fedex.com/fedextrack/?trknbr=' + t + '" target="_blank" style="color:#6d28d9;">' + t + ' ↗</a>';
+                  if (isLtl) {
+                    const n = (freightCo||'').toLowerCase();
+                    const url = n.includes('xpo') ? 'https://www.xpo.com/track/'
+                      : n.includes('old dominion')||n.includes('odfl') ? 'https://www.odfl.com/us/en/tools/track-shipment.html?pro=' + t
+                      : n.includes('estes') ? 'https://www.estes-express.com/tools/tracking?searchValue=' + t
+                      : n.includes('saia') ? 'https://www.saia.com/track/details;pro=' + t
+                      : n.includes('r+l')||n.includes('rl') ? 'https://www.rlcarriers.com/freight/shipping/shipment-tracing?pro=' + t
+                      : n.includes('abf')||n.includes('arcbest') ? 'https://arcb.com/tools/tracking.html?pro=' + t
+                      : 'https://www.google.com/search?q=' + encodeURIComponent((freightCo||'') + ' freight tracking PRO ' + t);
+                    return '<a href="' + url + '" target="_blank" style="color:#0369a1;">' + t + ' ↗</a>';
+                  }
+                  return t;
+                })()}</td>
               </tr>` : ''}
             </table>
           </td></tr>
@@ -16425,12 +16441,8 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
       const size = l.size || '';
       return `<tr><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;font-family:monospace;font-weight:600;">${styleNum}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;">${desc}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${color}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">${size}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;font-weight:700;">${shipped.toLocaleString()}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:center;">PCS</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;">$${price.toFixed(2)}</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:11px;text-align:right;font-weight:700;">$${amt.toFixed(2)}</td></tr>`;
     }).join('');
-    // 빈 행으로 페이지 꽉 채우기
-    const MIN_ROWS = 18;
-    const emptyRowsNeeded = Math.max(0, MIN_ROWS - sorted.length);
-    const emptyRows = Array(emptyRowsNeeded).fill('').map(() =>
-      `<tr><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;">&nbsp;</td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td><td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;"></td></tr>`
-    ).join('');
+    // 빈 행 없음 — 아이템 수에 맞게 자동으로 높이 결정
+    const emptyRows = '';
     const carrier = (shipInfo && shipInfo.carrier) || order.carrier || '';
     const tracking = (shipInfo && shipInfo.tracking) || order.tracking_number || '';
     const freightCo = (shipInfo && shipInfo.freightCarrier) || order.pickup_company || '';
