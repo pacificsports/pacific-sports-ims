@@ -5088,6 +5088,35 @@ async function loadCustomerPOs(subview = null) {
 function filterCustomerPOs() { renderCustomerPOTable(); }
 
 // Return 버튼 상태별 렌더링
+function raCalcRow(idx) {
+  const row = document.querySelector(`.ra-line-row[data-idx="${idx}"]`);
+  if (!row) return;
+  const unit = parseFloat(row.dataset.price || 0);
+  let rowQty = 0;
+  row.querySelectorAll('.ra-reason-col-input').forEach(inp => {
+    rowQty += parseInt(inp.value || 0);
+  });
+  const rowAmt = rowQty * unit;
+  const qtyEl = document.getElementById(`ra-row-qty-${idx}`);
+  const amtEl = document.getElementById(`ra-row-amt-${idx}`);
+  if (qtyEl) { qtyEl.textContent = rowQty; qtyEl.style.color = rowQty > 0 ? '#dc2626' : '#9ca3af'; }
+  if (amtEl) { amtEl.textContent = '$' + rowAmt.toFixed(2); amtEl.style.color = rowQty > 0 ? '#dc2626' : '#9ca3af'; }
+  // 전체 합계
+  let totalQty = 0, totalAmt = 0;
+  document.querySelectorAll('#ra-lines-body .ra-line-row').forEach(r => {
+    const i = parseInt(r.dataset.idx);
+    const u = parseFloat(r.dataset.price || 0);
+    let q = 0;
+    r.querySelectorAll('.ra-reason-col-input').forEach(inp => { q += parseInt(inp.value || 0); });
+    totalQty += q;
+    totalAmt += q * u;
+  });
+  const tq = document.getElementById('ra-total-qty');
+  const ta = document.getElementById('ra-total-amt');
+  if (tq) tq.textContent = totalQty;
+  if (ta) ta.textContent = '$' + totalAmt.toFixed(2);
+}
+
 function makeReturnBtn(orderId) {
   const rrs = window._returnRequestMap?.[orderId] || [];
   const rr = rrs[0]; // 가장 최근 요청
@@ -6759,15 +6788,13 @@ async function openRaModal(orderId) {
   document.getElementById('ra-date').value = (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() ;
   document.getElementById('ra-notes').value = '';
 
-  // Return To WH 선택 초기화
-  const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  // Return To WH — 항상 SC/CA 둘 다 선택 가능
   const returnWhEl = document.getElementById('ra-return-wh');
   if (returnWhEl) {
-    returnWhEl.innerHTML = isSplit
-      ? '<option value="SC">SC — Sumter, SC</option><option value="CA">CA — Eastvale, CA</option>'
-      : (order.wh_code === 'CA'
-          ? '<option value="CA">CA — Eastvale, CA</option>'
-          : '<option value="SC">SC — Sumter, SC</option>');
+    const defaultWh = order.wh_code === 'CA' ? 'CA' : 'SC';
+    returnWhEl.innerHTML =
+      '<option value="SC"' + (defaultWh==='SC'?' selected':'') + '>SC — Sumter, SC</option>' +
+      '<option value="CA"' + (defaultWh==='CA'?' selected':'') + '>CA — Eastvale, CA</option>';
   }
 
   // 사이즈 정렬 순서
@@ -6800,71 +6827,88 @@ async function openRaModal(orderId) {
       return colorCmp !== 0 ? colorCmp : sizeOrd(a.size) - sizeOrd(b.size);
     });
 
-  const reasonOptions = RA_REASONS.map(r => '<option value="' + r + '">' + r + '</option>').join('');
+  // 거래처와 동일한 이유 컬럼 포맷
+  const RA_REASON_COLS = ['Over Shipped', 'Wrong Size / Wrong Color', 'Hole / Defect', 'Damaged in Transit', 'Customer Refusal', 'Other'];
 
-  const linesHtml = shippedLines.map((l, i) => {
-    const styleNum = l.styles?.style_number || '';
-    const desc = l.styles?.description || '';
-    const shipped = l._totalShipped;
-    const scLabel = l._scQty > 0 ? `<span style="font-size:9px;color:#1e40af;">SC:${l._scQty}</span>` : '';
-    const caLabel = l._caQty > 0 ? `<span style="font-size:9px;color:#ea580c;margin-left:4px;">CA:${l._caQty}</span>` : '';
-    return `<div class="ra-line-row" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 2fr auto;gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;">
-      <div style="font-size:11px;">
-        <span style="font-weight:700;">${styleNum}</span>
-        <span style="color:#6b7280;margin-left:4px;">${(l.color||'').toUpperCase()} / ${l.size||''}</span>
-        <div style="color:#9ca3af;font-size:10px;">${desc}</div>
-      </div>
-      <div style="font-size:11px;color:#374151;text-align:center;font-weight:600;">${shipped} pcs<br>${scLabel}${caLabel}</div>
-      <input type="number" min="0" max="${shipped}" value="0" class="fi ra-qty-input" data-idx="${i}" placeholder="Qty"
-        style="font-size:13px;font-weight:700;text-align:center;color:#dc2626;">
-      <input type="text" class="fi ra-unit-input" data-idx="${i}" placeholder="$/pcs" value="${(l.unit_price||0).toFixed(2)}"
-        style="font-size:11px;text-align:center;">
-      <select class="fi ra-reason-input" data-idx="${i}" style="font-size:11px;">
-        <option value="">-- Select Reason --</option>${reasonOptions}
-      </select>
-      <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;padding:2px 8px;" onclick="this.closest('.ra-line-row').remove()">✕</button>
-    </div>`;
-  }).join('');
-
-  document.getElementById('ra-lines-body').innerHTML = linesHtml ||
-    '<div style="text-align:center;color:#9ca3af;padding:20px;font-size:12px;">Shipped 라인이 없습니다</div>';
-
-  // 거래처 요청 데이터 자동 채우기
+  // 이전 요청 데이터 맵 (color|size|reason → qty)
+  const rrItemMap = {};
   if (pendingRR?.request_data?.items) {
-    const reqItems = pendingRR.request_data.items;
-    document.querySelectorAll('.ra-line-row').forEach((row, i) => {
-      const idx = parseInt(row.querySelector('.ra-qty-input')?.dataset.idx ?? i);
-      const line = shippedLines[idx];
-      if (!line) return;
-      // 같은 style/color/size의 요청 합산
-      const matchedItems = reqItems.filter(it =>
-        it.color?.toLowerCase() === (line.color||'').toLowerCase() &&
-        it.size?.toLowerCase() === (line.size||'').toLowerCase()
-      );
-      if (matchedItems.length > 0) {
-        const totalQty = matchedItems.reduce((s,it) => s+it.qty, 0);
-        const firstReason = matchedItems[0].reason || '';
-        const qtyEl = row.querySelector('.ra-qty-input');
-        const reasonEl = row.querySelector('.ra-reason-input');
-        if (qtyEl) qtyEl.value = totalQty;
-        if (reasonEl) {
-          // reason 옵션 중 매칭되는 거 선택
-          const opt = [...reasonEl.options].find(o => o.value === firstReason);
-          if (opt) reasonEl.value = firstReason;
-        }
-      }
+    pendingRR.request_data.items.forEach(it => {
+      const key = (it.color||'').toUpperCase() + '|' + (it.size||'').toUpperCase() + '|' + (it.reason||'');
+      rrItemMap[key] = (rrItemMap[key]||0) + it.qty;
     });
-    // 거래처 Notes 채우기
-    if (pendingRR.request_data.notes) {
-      const notesEl = document.getElementById('ra-notes');
-      if (notesEl) notesEl.value = pendingRR.request_data.notes;
-    }
-    // 거래처 요청 배너 표시
-    const linesBody = document.getElementById('ra-lines-body');
-    const banner = document.createElement('div');
-    banner.style.cssText = 'background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#92400e;';
-    banner.innerHTML = '📋 <strong>Customer Return Request received</strong> — quantities pre-filled from customer\'s request. Please review, set WH, and click <strong>Authorize</strong>.';
-    linesBody.insertBefore(banner, linesBody.firstChild);
+  }
+
+  // 헤더
+  const raReasonHeaders = RA_REASON_COLS.map(r =>
+    `<th style="padding:6px 4px;text-align:center;font-size:10px;font-weight:700;color:#dc2626;min-width:70px;">${r}</th>`
+  ).join('');
+
+  const linesHtml = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+    <thead>
+      <tr style="background:#1f2937;color:#fff;">
+        <th style="padding:8px;text-align:left;">Style</th>
+        <th style="padding:8px;text-align:center;">Color</th>
+        <th style="padding:8px;text-align:center;">Size</th>
+        <th style="padding:8px;text-align:center;color:#93c5fd;">Shipped</th>
+        <th style="padding:8px;text-align:center;">Unit $</th>
+        ${raReasonHeaders}
+        <th style="padding:8px;text-align:center;color:#fca5a5;">Return QTY</th>
+        <th style="padding:8px;text-align:center;color:#fca5a5;">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+    ${shippedLines.map((l, i) => {
+      const styleNum = l.styles?.style_number || '';
+      const desc = l.styles?.description || '';
+      const shipped = l._totalShipped;
+      const scLabel = l._scQty > 0 ? `<span style="font-size:9px;color:#1e40af;">SC:${l._scQty}</span>` : '';
+      const caLabel = l._caQty > 0 ? `<span style="font-size:9px;color:#ea580c;margin-left:3px;">CA:${l._caQty}</span>` : '';
+      const reasonInputs = RA_REASON_COLS.map((r, ri) => {
+        const key = (l.color||'').toUpperCase() + '|' + (l.size||'').toUpperCase() + '|' + r;
+        const prevVal = rrItemMap[key] || 0;
+        return `<td style="padding:4px;text-align:center;">
+          <input type="number" min="0" max="${shipped}" value="${prevVal}"
+            class="ra-reason-col-input" data-line="${i}" data-reason="${r}"
+            onchange="raCalcRow(${i})"
+            style="width:58px;height:34px;text-align:center;border:1px solid #d1d5db;border-radius:4px;font-size:13px;font-weight:600;">
+        </td>`;
+      }).join('');
+      return `<tr class="ra-line-row" data-idx="${i}" data-shipped="${shipped}" data-price="${(l.unit_price||0).toFixed(2)}" style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:6px 8px;">
+          <div style="font-weight:700;font-size:11px;">${styleNum}</div>
+          <div style="color:#9ca3af;font-size:10px;">${desc}</div>
+        </td>
+        <td style="padding:6px 4px;text-align:center;font-size:11px;">${(l.color||'').toUpperCase()}</td>
+        <td style="padding:6px 4px;text-align:center;font-weight:700;">${l.size||''}</td>
+        <td style="padding:6px 4px;text-align:center;font-weight:600;color:#1e40af;">${shipped}<br>${scLabel}${caLabel}</td>
+        <td style="padding:6px 4px;text-align:center;font-size:11px;">$${(l.unit_price||0).toFixed(2)}</td>
+        ${reasonInputs}
+        <td style="padding:6px 4px;text-align:center;font-weight:700;color:#dc2626;" id="ra-row-qty-${i}">0</td>
+        <td style="padding:6px 4px;text-align:center;font-weight:700;color:#dc2626;" id="ra-row-amt-${i}">$0.00</td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+    <tfoot>
+      <tr style="background:#f8fafc;border-top:2px solid #e5e7eb;font-weight:700;">
+        <td colspan="5" style="padding:8px;text-align:right;font-size:12px;">Total Return:</td>
+        <td colspan="${RA_REASON_COLS.length}" style="padding:8px;"></td>
+        <td style="padding:8px;text-align:center;color:#dc2626;font-size:14px;" id="ra-total-qty">0</td>
+        <td style="padding:8px;text-align:center;color:#dc2626;font-size:14px;" id="ra-total-amt">$0.00</td>
+      </tr>
+    </tfoot>
+  </table>`;
+
+  const bannerHtml = pendingRR?.status === 'requested'
+    ? '<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#92400e;">📋 <strong>Customer Return Request received</strong> — quantities pre-filled. Please review, set WH, and click <strong>Authorize</strong>.</div>'
+    : '';
+  document.getElementById('ra-lines-body').innerHTML = bannerHtml + (linesHtml ||
+    '<div style="text-align:center;color:#9ca3af;padding:20px;font-size:12px;">Shipped 라인이 없습니다</div>');
+
+  // 거래처 Notes 채우기
+  if (pendingRR?.request_data?.notes) {
+    const notesEl = document.getElementById('ra-notes');
+    if (notesEl) notesEl.value = pendingRR.request_data.notes;
   }
 
   // 버튼 변경: requested면 Authorize, 아니면 Save & Send
@@ -6890,6 +6934,10 @@ async function openRaModal(orderId) {
   // 저장용 데이터
   window._raOrder = order;
   window._raNum = raNum;
+  window._raShippedLines = shippedLines;
+
+  // 초기 합계 계산
+  shippedLines.forEach((l, i) => raCalcRow(i));
   window._raShippedLines = shippedLines;
 
   // 드래그 초기화
@@ -6950,17 +6998,22 @@ async function submitRa() {
   let totalQty = 0, totalAmt = 0;
 
   rows.forEach((row, i) => {
-    const qty = parseInt(row.querySelector('.ra-qty-input')?.value || 0);
-    const unit = parseFloat(row.querySelector('.ra-unit-input')?.value || 0);
-    const reason = row.querySelector('.ra-reason-input')?.value || '';
-    const idx = parseInt(row.querySelector('.ra-qty-input')?.dataset.idx || i);
+    const idx = parseInt(row.dataset.idx ?? i);
+    const shipped = parseInt(row.dataset.shipped || 0);
+    const unit = parseFloat(row.dataset.price || 0);
     const line = window._raShippedLines?.[idx];
-    if (qty > 0 && reason && line) {
-      raItems.push({ style: line.styles?.style_number||'', color: line.color||'', size: line.size||'',
-        qty, unit, amt: qty*unit, reason });
-      totalQty += qty;
-      totalAmt += qty * unit;
-    }
+    if (!line) return;
+    // 이유별 컬럼 입력값 수집
+    row.querySelectorAll('.ra-reason-col-input').forEach(input => {
+      const qty = parseInt(input.value || 0);
+      const reason = input.dataset.reason || '';
+      if (qty > 0 && reason) {
+        raItems.push({ style: line.styles?.style_number||'', color: line.color||'', size: line.size||'',
+          qty, unit, amt: qty*unit, reason });
+        totalQty += qty;
+        totalAmt += qty * unit;
+      }
+    });
   });
 
   if (raItems.length === 0) { showToast('❌ 최소 1개 라인을 입력하세요.'); return; }
