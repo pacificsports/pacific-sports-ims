@@ -5260,22 +5260,46 @@ async function submitReceive() {
       }
     });
 
-    // PC Room 재고 업데이트 (bin: 'PCR|PCR', key: style|color|size)
-    for (const item of reusableItems) {
-      const styleNum = item.style || '';
-      const color = item.color || '';
-      const size = item.size || '';
-      // PCR bin에서 해당 스타일 찾기
-      const { data: pcrRows } = await db.from('pc_room_inventory')
-        .select('*').ilike('style_number', styleNum).limit(5);
-      if (pcrRows && pcrRows.length > 0) {
-        const pcrRow = pcrRows[0];
-        const binKey = styleNum + '|' + color + '|' + size;
-        const currentBin = pcrRow.bin_inventory || {};
-        const currentQty = typeof currentBin[binKey] === 'object'
-          ? (currentBin[binKey].pcs || 0) : (currentBin[binKey] || 0);
-        currentBin[binKey] = { pcs: currentQty + item.reusableQty };
-        await db.from('pc_room_inventory').update({ bin_inventory: currentBin }).eq('id', pcrRow.id);
+    // PC Room 재고 업데이트 (inventory 테이블, location='PCR')
+    const returnWh = _receiveRR?.authorized_data?.returnWh || 'SC';
+    const pcrWhCode = (returnWh === 'CA' ? 'CA' : 'SC') + '-PCR';
+    const { data: pcrWhRow } = await db.from('warehouses').select('id').eq('code', pcrWhCode).single();
+
+    if (pcrWhRow) {
+      for (const item of reusableItems) {
+        const colorUpper = (item.color||'').toUpperCase();
+        const sizeUpper = (item.size||'').toUpperCase();
+
+        // 기존 PCR 재고 row 찾기
+        const { data: invRows } = await db.from('inventory')
+          .select('id, qty_on_hand, style_id')
+          .eq('warehouse_id', pcrWhRow.id)
+          .eq('color', colorUpper)
+          .eq('size', sizeUpper)
+          .eq('location', 'PCR')
+          .limit(1);
+
+        if (invRows && invRows.length > 0) {
+          // 기존 row에 수량 추가
+          await db.from('inventory').update({
+            qty_on_hand: (invRows[0].qty_on_hand || 0) + item.reusableQty,
+            updated_at: new Date().toISOString()
+          }).eq('id', invRows[0].id);
+        } else {
+          // PCR row 없으면 새로 생성
+          const { data: styleRow } = await db.from('styles')
+            .select('id').eq('style_number', item.style||'').limit(1);
+          await db.from('inventory').insert({
+            warehouse_id: pcrWhRow.id,
+            style_id: styleRow?.[0]?.id || null,
+            style_number: item.style||'',
+            color: colorUpper,
+            size: sizeUpper,
+            location: 'PCR',
+            qty_on_hand: item.reusableQty,
+            qty_committed: 0
+          });
+        }
       }
     }
 
