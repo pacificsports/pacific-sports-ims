@@ -12530,6 +12530,30 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   </div>`;
 }
 
+
+// LTL Carrier 트래킹 URL 매핑
+function getLtlTrackingUrl(carrierName, proNumber) {
+  if (!carrierName || !proNumber) return null;
+  const name = carrierName.toLowerCase();
+  const pro = encodeURIComponent(proNumber);
+  if (name.includes('xpo'))           return `https://www.xpo.com/tools-resources/track-my-shipment/?proNumber=${pro}`;
+  if (name.includes('old dominion') || name.includes('odfl')) return `https://www.odfl.com/us/en/tools/track-shipment.html?pro=${pro}`;
+  if (name.includes('estes'))         return `https://www.estes-express.com/tools/tracking?searchValue=${pro}`;
+  if (name.includes('fedex freight')) return `https://www.fedex.com/fedextrack/?trknbr=${pro}`;
+  if (name.includes('ups freight') || name.includes('ups supply')) return `https://www.ups.com/track?tracknum=${pro}`;
+  if (name.includes('r+l') || name.includes('r&l') || name.includes('rl carriers')) return `https://www.rlcarriers.com/freight/shipping/shipment-tracing?pro=${pro}`;
+  if (name.includes('saia'))          return `https://www.saia.com/track/details;pro=${pro}`;
+  if (name.includes('abf') || name.includes('arcbest')) return `https://arcb.com/tools/tracking.html?pro=${pro}`;
+  if (name.includes('southeastern') || name.includes('sefl')) return `https://www.sefl.com/tracking/?pro=${pro}`;
+  if (name.includes('forward air'))   return `https://www.forwardair.com/shipment-tracking?trackingNumber=${pro}`;
+  if (name.includes('peninsula'))     return `https://www.peninsulatruck.com/tracking?pro=${pro}`;
+  if (name.includes('ward'))          return `https://www.wardtrucking.com/tracking?pro=${pro}`;
+  if (name.includes('holland'))       return `https://www.hollandregional.com/tools/tracking?pro=${pro}`;
+  if (name.includes('new penn'))      return `https://www.newpenn.com/tools/tracking?pro=${pro}`;
+  // 못 찾으면 Google 검색으로 fallback
+  return `https://www.google.com/search?q=${encodeURIComponent(carrierName + ' freight tracking PRO ' + proNumber)}`;
+}
+
 function buildShippedEmailHtml(order, shippingInfo, lineItems) {
   const currentWh = shippingInfo.wh || 'SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
@@ -12620,9 +12644,9 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
           ${carrier ? `<tr><td style="padding:3px 0;color:#6b7280;width:120px;">Carrier</td><td style="font-weight:700;">${displayCarrier}</td></tr>` : ''}
           ${tracking && !isWillCall ? `<tr><td style="padding:3px 0;color:#6b7280;">${trackingLabel}</td><td style="font-weight:600;font-family:monospace;">${(() => {
             const t = tracking;
-            if (carrier === 'UPS') return `<a href="https://www.ups.com/track?tracknum=${t}" style="color:#1e40af;" target="_blank">${t}</a>`;
-            if (carrier === 'FedEx') return `<a href="https://www.fedex.com/fedextrack/?trknbr=${t}" style="color:#6d28d9;" target="_blank">${t}</a>`;
-            if (isLtl) { const q = encodeURIComponent((freightCarrier ? freightCarrier + ' ' : '') + 'PRO ' + t + ' tracking'); return `<a href="https://www.google.com/search?q=${q}" style="color:#0369a1;" target="_blank">${t}</a>`; }
+            if (carrier === 'UPS') return `<a href="https://www.ups.com/track?tracknum=${t}" style="color:#1e40af;font-weight:600;" target="_blank">${t} ↗</a>`;
+            if (carrier === 'FedEx') return `<a href="https://www.fedex.com/fedextrack/?trknbr=${t}" style="color:#6d28d9;font-weight:600;" target="_blank">${t} ↗</a>`;
+            if (isLtl) { const ltlUrl = getLtlTrackingUrl(freightCarrier || '', t); return `<a href="${ltlUrl}" style="color:#0369a1;font-weight:600;" target="_blank">${t} ↗</a>`; }
             return t;
           })()}</td></tr>` : ''}
           ${totalBoxes ? `<tr><td style="padding:3px 0;color:#6b7280;">Total Boxes</td><td style="font-weight:700;">${totalBoxes} boxes</td></tr>` : ''}
@@ -15821,12 +15845,12 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       rows += '<div style="display:flex;gap:24px;flex-wrap:wrap;">';
       rows += '<span><span style="color:#6b7280;">Carrier:</span> <strong>' + shippingInfo.carrier + '</strong></span>';
       if (isLtl && shippingInfo.freightCarrier) rows += '<span><span style="color:#6b7280;">Freight Co.:</span> <strong>' + shippingInfo.freightCarrier + '</strong></span>';
-      if (isLtl && shippingInfo.tracking) { const ltlQ = encodeURIComponent((shippingInfo.freightCarrier ? shippingInfo.freightCarrier + ' ' : '') + 'PRO ' + shippingInfo.tracking + ' tracking'); rows += '<span><span style="color:#6b7280;">PRO #:</span> <strong><a href="https://www.google.com/search?q=' + ltlQ + '" target="_blank" style="color:#0369a1;">' + shippingInfo.tracking + '</a></strong></span>'; }
+      if (isLtl && shippingInfo.tracking) { const ltlUrl = getLtlTrackingUrl(shippingInfo.freightCarrier || '', shippingInfo.tracking); rows += '<span><span style="color:#6b7280;">PRO #:</span> <strong><a href="' + ltlUrl + '" target="_blank" style="color:#0369a1;">' + shippingInfo.tracking + ' ↗</a></strong></span>'; }
       if (!isLtl && !isWillCall && shippingInfo.tracking) {
         const tUrl = shippingInfo.carrier === 'UPS' ? 'https://www.ups.com/track?tracknum=' + shippingInfo.tracking
           : shippingInfo.carrier === 'FedEx' ? 'https://www.fedex.com/fedextrack/?trknbr=' + shippingInfo.tracking
           : null;
-        rows += '<span><span style="color:#6b7280;">Tracking #:</span> <strong>' + (tUrl ? '<a href="' + tUrl + '" target="_blank" style="color:#1e40af;">' + shippingInfo.tracking + '</a>' : shippingInfo.tracking) + '</strong></span>';
+        rows += '<span><span style="color:#6b7280;">Tracking #:</span> <strong>' + (tUrl ? '<a href="' + tUrl + '" target="_blank" style="color:#1e40af;">' + shippingInfo.tracking + ' ↗</a>' : shippingInfo.tracking) + '</strong></span>';
       }
       if (isWillCall && shippingInfo.pickupBy) rows += '<span><span style="color:#6b7280;">Picked Up By:</span> <strong>' + shippingInfo.pickupBy + '</strong></span>';
       if (isWillCall && shippingInfo.pickupDate) rows += '<span><span style="color:#6b7280;">Pick Up Date:</span> <strong>' + shippingInfo.pickupDate + '</strong></span>';
