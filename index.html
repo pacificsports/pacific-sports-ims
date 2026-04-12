@@ -5088,6 +5088,364 @@ async function loadCustomerPOs(subview = null) {
 function filterCustomerPOs() { renderCustomerPOTable(); }
 
 // Return 버튼 상태별 렌더링
+
+// ══════════════════════════════════════════════════════
+// RECEIVE MODAL + CREDIT MEMO
+// ══════════════════════════════════════════════════════
+let _receiveOrderId = null, _receiveRR = null, _receiveOrder = null;
+
+async function openReceiveModal(orderId) {
+  _receiveOrderId = orderId;
+
+  // 오더 + return_request 조회
+  const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
+  const { data: rrArr } = await db.from('return_requests')
+    .select('*').eq('order_id', orderId)
+    .eq('status', 'authorized')
+    .order('created_at', { ascending: false }).limit(1);
+  const rr = rrArr?.[0];
+  if (!rr) { showToast('❌ Authorized return request not found'); return; }
+  _receiveRR = rr;
+  _receiveOrder = order;
+
+  // CM# 생성
+  const cmYear = new Date().getFullYear();
+  const { data: lastCm } = await db.from('credit_memos')
+    .select('cm_number').like('cm_number', 'CM-' + cmYear + '-%')
+    .order('cm_number', { ascending: false }).limit(1);
+  const lastSeq = lastCm?.[0]?.cm_number ? parseInt(lastCm[0].cm_number.split('-')[2]) || 0 : 0;
+  const cmNum = 'CM-' + cmYear + '-' + String(lastSeq + 1).padStart(3, '0');
+  window._pendingCmNum = cmNum;
+
+  document.getElementById('receive-cm-number').textContent = cmNum;
+  document.getElementById('receive-order-info').innerHTML =
+    '<strong>' + (order.customer_name||'') + '</strong> &nbsp;·&nbsp; PO# ' + (order.customer_po||'—') +
+    ' &nbsp;·&nbsp; RA# ' + (rr.ra_number||'—');
+
+  // RA 아이템 목록 표시
+  const items = rr.authorized_data?.raItems || rr.request_data?.items || [];
+  const SIZE_ORDER = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+  items.sort((a,b) => {
+    const cc = (a.color||'').localeCompare(b.color||'');
+    if (cc !== 0) return cc;
+    return (SIZE_ORDER.indexOf((a.size||'').toUpperCase())+99||99) - (SIZE_ORDER.indexOf((b.size||'').toUpperCase())+99||99);
+  });
+
+  const rowsHtml = items.map((item, i) => `
+    <tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:8px;font-weight:700;font-size:12px;">${item.style||''}</td>
+      <td style="padding:8px;font-size:12px;">${item.color||''}</td>
+      <td style="padding:8px;text-align:center;font-weight:700;">${item.size||''}</td>
+      <td style="padding:8px;text-align:center;font-weight:700;color:#dc2626;">${item.qty||0}</td>
+      <td style="padding:8px;font-size:11px;color:#6b7280;">${item.reason||''}</td>
+      <td style="padding:8px;text-align:center;">
+        <input type="number" min="0" max="${item.qty||0}" value="0"
+          id="reusable-${i}" data-idx="${i}" data-style="${item.style||''}" data-color="${item.color||''}" data-size="${item.size||''}"
+          style="width:60px;height:32px;text-align:center;border:1px solid #d1d5db;border-radius:4px;font-size:13px;font-weight:600;color:#16a34a;">
+      </td>
+      <td style="padding:8px;text-align:right;font-size:12px;">$${(item.unit||item.unit_price||0).toFixed(2)}</td>
+      <td style="padding:8px;text-align:right;font-weight:700;">$${((item.qty||0)*(item.unit||item.unit_price||0)).toFixed(2)}</td>
+    </tr>`).join('');
+
+  const totalQty = items.reduce((s,i) => s+(i.qty||0), 0);
+  const totalAmt = items.reduce((s,i) => s+(i.qty||0)*(i.unit||i.unit_price||0), 0);
+
+  document.getElementById('receive-lines-body').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:#111827;color:#fff;">
+          <th style="padding:8px;text-align:left;">Style</th>
+          <th style="padding:8px;text-align:left;">Color</th>
+          <th style="padding:8px;text-align:center;">Size</th>
+          <th style="padding:8px;text-align:center;color:#fca5a5;">Return Qty</th>
+          <th style="padding:8px;text-align:left;">Reason</th>
+          <th style="padding:8px;text-align:center;color:#86efac;">Reusable</th>
+          <th style="padding:8px;text-align:right;">Unit $</th>
+          <th style="padding:8px;text-align:right;">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+      <tfoot>
+        <tr style="background:#f1f5f9;font-weight:700;">
+          <td colspan="3" style="padding:8px;text-align:right;">Total:</td>
+          <td style="padding:8px;text-align:center;color:#dc2626;">${totalQty}</td>
+          <td colspan="3"></td>
+          <td style="padding:8px;text-align:right;color:#dc2626;">$${totalAmt.toFixed(2)}</td>
+        </tr>
+      </tfoot>
+    </table>
+    <div style="margin-top:10px;padding:10px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:12px;color:#166534;">
+      💡 Enter <strong>Reusable</strong> quantities for items that can go back into PC Room inventory. Credit Memo will be issued for the full return quantity.
+    </div>`;
+
+  window._receiveItems = items;
+  document.getElementById('receive-modal').style.display = 'flex';
+}
+
+async function submitReceive() {
+  const btn = document.getElementById('receive-submit-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Processing...'; }
+
+  try {
+    const items = window._receiveItems || [];
+    const cmNum = window._pendingCmNum;
+    const rr = _receiveRR;
+    const order = _receiveOrder;
+
+    // 1. Reusable 수량 수집 + PC Room 재고 추가
+    const reusableItems = [];
+    items.forEach((item, i) => {
+      const reusableQty = parseInt(document.getElementById('reusable-' + i)?.value || 0);
+      if (reusableQty > 0) {
+        reusableItems.push({ ...item, reusableQty });
+      }
+    });
+
+    // PC Room 재고 업데이트 (bin: 'PCR|PCR', key: style|color|size)
+    for (const item of reusableItems) {
+      const styleNum = item.style || '';
+      const color = item.color || '';
+      const size = item.size || '';
+      // PCR bin에서 해당 스타일 찾기
+      const { data: pcrRows } = await db.from('pc_room_inventory')
+        .select('*').ilike('style_number', styleNum).limit(5);
+      if (pcrRows && pcrRows.length > 0) {
+        const pcrRow = pcrRows[0];
+        const binKey = styleNum + '|' + color + '|' + size;
+        const currentBin = pcrRow.bin_inventory || {};
+        const currentQty = typeof currentBin[binKey] === 'object'
+          ? (currentBin[binKey].pcs || 0) : (currentBin[binKey] || 0);
+        currentBin[binKey] = { pcs: currentQty + item.reusableQty };
+        await db.from('pc_room_inventory').update({ bin_inventory: currentBin }).eq('id', pcrRow.id);
+      }
+    }
+
+    // 2. Credit Memo 생성
+    const totalQty = items.reduce((s,i) => s+(i.qty||0), 0);
+    const totalAmt = items.reduce((s,i) => s+(i.qty||0)*(i.unit||i.unit_price||0), 0);
+    const cmLines = items.map(i => ({
+      style: i.style||'', color: i.color||'', size: i.size||'',
+      qty: i.qty||0, unit: i.unit||i.unit_price||0,
+      amt: (i.qty||0)*(i.unit||i.unit_price||0), reason: i.reason||''
+    }));
+
+    const { data: custArr } = await db.from('customers').select('*').eq('id', order.customer_id).limit(1);
+    const cust = custArr?.[0];
+
+    await db.from('credit_memos').insert({
+      cm_number: cmNum,
+      order_id: _receiveOrderId,
+      return_request_id: rr.id,
+      customer_id: order.customer_id,
+      lines: cmLines,
+      total_qty: totalQty,
+      total_amount: totalAmt,
+      status: 'draft',
+      notes: rr.authorized_data?.notes || ''
+    });
+
+    // 3. return_requests status → received
+    await db.from('return_requests').update({
+      status: 'received',
+      received_data: {
+        cmNum, receivedAt: new Date().toISOString(),
+        reusableItems: reusableItems.map(i => ({ style:i.style, color:i.color, size:i.size, qty:i.reusableQty }))
+      },
+      updated_at: new Date().toISOString()
+    }).eq('id', rr.id);
+
+    // 4. _returnRequestMap 캐시 업데이트
+    if (window._returnRequestMap?.[_receiveOrderId]) {
+      window._returnRequestMap[_receiveOrderId].forEach(r => {
+        if (r.id === rr.id) r.status = 'received';
+      });
+    }
+
+    document.getElementById('receive-modal').style.display = 'none';
+    showToast('✅ Receipt confirmed! Credit Memo ' + cmNum + ' created.');
+
+    // 5. Credit Memo 모달 열기
+    await openCmModal(cmNum, order, cmLines, totalQty, totalAmt, cust);
+
+    // 6. 테이블 새로고침
+    renderCustomerPOTable();
+
+  } catch(e) {
+    console.error('submitReceive error:', e);
+    showToast('❌ Error: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✅ Confirm Receipt & Create Credit Memo'; }
+  }
+}
+
+async function openCmModal(cmNum, order, lines, totalQty, totalAmt, cust) {
+  document.getElementById('cm-number-display').textContent = cmNum;
+
+  const toEmail = cust?.accounting_email || cust?.email || order?.email || '';
+  document.getElementById('cm-email-to').textContent = toEmail || '(이메일 없음)';
+
+  // Credit Memo 프리뷰
+  const cmDate = new Date().toLocaleDateString('en-US', {year:'numeric',month:'numeric',day:'numeric'});
+  const rowsHtml = lines.map(l => `
+    <tr>
+      <td style="padding:6px 8px;font-size:11px;font-family:monospace;font-weight:600;">${l.style}</td>
+      <td style="padding:6px 8px;font-size:11px;">${l.color}</td>
+      <td style="padding:6px 8px;text-align:center;font-size:11px;">${l.size}</td>
+      <td style="padding:6px 8px;text-align:center;font-weight:700;">${l.qty}</td>
+      <td style="padding:6px 8px;text-align:center;font-size:11px;">PCS</td>
+      <td style="padding:6px 8px;text-align:right;font-size:11px;">$${(l.unit||0).toFixed(2)}</td>
+      <td style="padding:6px 8px;text-align:right;font-weight:700;color:#dc2626;">($${l.amt.toFixed(2)})</td>
+    </tr>`).join('');
+
+  document.getElementById('cm-preview').innerHTML = `
+    <div style="font-family:Arial,sans-serif;font-size:12px;color:#111;padding:20px;">
+      <div style="background:#111827;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;margin:-20px -20px 16px -20px;">
+        <div style="color:#fff;font-size:18px;font-weight:900;">PACIFIC SPORTS</div>
+        <div style="text-align:right;">
+          <div style="color:#fff;font-size:22px;font-weight:900;letter-spacing:2px;">CREDIT MEMO</div>
+          <div style="color:#9ca3af;font-size:10px;">CM# ${cmNum}</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;font-size:11px;">
+        <div>
+          <div style="font-weight:700;">PEACE TEXTILE AMERICA, INC.</div>
+          <div>d.b.a Pacific Sports</div>
+          <div>1605 South Guignard Parkway, Sumter SC 29150</div>
+        </div>
+        <div style="text-align:right;">
+          <div><strong>CM DATE:</strong> ${cmDate}</div>
+          <div><strong>PO#:</strong> ${order?.customer_po||'—'}</div>
+          <div><strong>RA#:</strong> ${_receiveRR?.ra_number||'—'}</div>
+        </div>
+      </div>
+      <div style="margin-bottom:14px;padding:10px;background:#f1f5f9;border-radius:6px;font-size:11px;">
+        <strong>CREDIT TO:</strong> ${order?.customer_name||'—'}
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#111827;color:#fff;">
+            <th style="padding:7px 8px;text-align:left;font-size:11px;">STYLE</th>
+            <th style="padding:7px 8px;text-align:left;font-size:11px;">COLOR</th>
+            <th style="padding:7px 8px;text-align:center;font-size:11px;">SIZE</th>
+            <th style="padding:7px 8px;text-align:center;font-size:11px;">QTY</th>
+            <th style="padding:7px 8px;text-align:center;font-size:11px;">UNIT</th>
+            <th style="padding:7px 8px;text-align:right;font-size:11px;">PRICE</th>
+            <th style="padding:7px 8px;text-align:right;font-size:11px;">CREDIT</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot>
+          <tr style="background:#111827;color:#fff;">
+            <td colspan="5" style="padding:10px 8px;text-align:right;font-weight:700;font-size:13px;">TOTAL CREDIT:</td>
+            <td colspan="2" style="padding:10px 8px;text-align:right;font-weight:900;font-size:16px;color:#fca5a5;">($${totalAmt.toFixed(2)})</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="margin-top:12px;padding:10px;background:#fef3c7;border-radius:6px;font-size:10px;color:#92400e;">
+        This credit memo represents a credit to your account for returned merchandise. Credit will be applied to your next invoice or refunded per your account terms.
+      </div>
+    </div>`;
+
+  window._cmData = { cmNum, order, lines, totalQty, totalAmt, toEmail };
+  document.getElementById('cm-modal').style.display = 'flex';
+}
+
+async function submitCreditMemo() {
+  const btn = document.getElementById('cm-submit-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sending...'; }
+
+  try {
+    const { cmNum, order, lines, totalQty, totalAmt, toEmail } = window._cmData;
+    const rr = _receiveRR;
+
+    // Credit Memo HTML 이메일 빌드
+    const cmDate = new Date().toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'});
+    const rowsHtml = lines.map(l =>
+      `<tr><td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;">${l.style}</td>
+       <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;">${l.color}</td>
+       <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:center;">${l.size}</td>
+       <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:center;font-weight:700;">${l.qty}</td>
+       <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right;">$${(l.unit||0).toFixed(2)}</td>
+       <td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:700;color:#dc2626;">($${l.amt.toFixed(2)})</td></tr>`
+    ).join('');
+
+    const emailHtml = `<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;">
+      <div style="background:#111827;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
+        <div style="color:#fff;font-size:18px;font-weight:900;">PACIFIC SPORTS</div>
+        <div style="color:#fff;font-size:18px;font-weight:900;">CREDIT MEMO</div>
+      </div>
+      <div style="padding:20px;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;">
+        <p>Dear <strong>${order?.customer_name||''}</strong>,</p>
+        <p>Please find your credit memo <strong>${cmNum}</strong> for returned merchandise from PO# <strong>${order?.customer_po||''}</strong>.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <thead><tr style="background:#111827;color:#fff;">
+            <th style="padding:7px 8px;text-align:left;font-size:11px;">STYLE</th>
+            <th style="padding:7px 8px;text-align:left;font-size:11px;">COLOR</th>
+            <th style="padding:7px 8px;text-align:center;font-size:11px;">SIZE</th>
+            <th style="padding:7px 8px;text-align:center;font-size:11px;">QTY</th>
+            <th style="padding:7px 8px;text-align:right;font-size:11px;">PRICE</th>
+            <th style="padding:7px 8px;text-align:right;font-size:11px;">CREDIT</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+          <tfoot><tr style="background:#111827;color:#fff;">
+            <td colspan="4" style="padding:10px 8px;text-align:right;font-weight:700;">TOTAL CREDIT:</td>
+            <td colspan="2" style="padding:10px 8px;text-align:right;font-weight:900;font-size:15px;">($${totalAmt.toFixed(2)})</td>
+          </tr></tfoot>
+        </table>
+        <p style="font-size:12px;color:#6b7280;">This credit will be applied to your account. If you have questions, please contact us.</p>
+      </div>
+      <div style="padding:12px 24px;text-align:center;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb;">
+        Pacific Sports Inc · 1605 South Guignard Parkway, Sumter SC 29150 · (803) 840-2405
+      </div>
+    </div>`;
+
+    // Worker에 이메일 발송 요청
+    const internalCcArr = getInternalCcArr();
+    const replyTo = window._replyToEmail || internalCcArr[0] || '';
+    const res = await fetch('https://po-confirm-email.hjbae.workers.dev/send-credit-memo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customer_name: order?.customer_name,
+        customer_email: toEmail,
+        ...(internalCcArr.length ? { cc: internalCcArr } : {}),
+        ...(replyTo ? { reply_to: replyTo } : {}),
+        subject: 'Credit Memo ' + cmNum + ' — ' + (order?.customer_po||''),
+        email_html: emailHtml,
+        cm_number: cmNum
+      })
+    });
+
+    // DB 업데이트 - credited
+    await db.from('credit_memos').update({
+      status: 'issued', issued_at: new Date().toISOString()
+    }).eq('cm_number', cmNum);
+
+    await db.from('return_requests').update({
+      status: 'credited',
+      cm_number: cmNum,
+      updated_at: new Date().toISOString()
+    }).eq('id', rr.id);
+
+    // 캐시 업데이트
+    if (window._returnRequestMap?.[_receiveOrderId]) {
+      window._returnRequestMap[_receiveOrderId].forEach(r => {
+        if (r.id === rr.id) r.status = 'credited';
+      });
+    }
+
+    document.getElementById('cm-modal').style.display = 'none';
+    showToast('✅ Credit Memo ' + cmNum + ' sent to ' + toEmail);
+    renderCustomerPOTable();
+
+  } catch(e) {
+    console.error('submitCreditMemo error:', e);
+    showToast('❌ Error: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📧 Send Credit Memo'; }
+  }
+}
+
 function raCalcRow(idx) {
   const row = document.querySelector(`.ra-line-row[data-idx="${idx}"]`);
   if (!row) return;
@@ -5129,7 +5487,7 @@ function makeReturnBtn(orderId) {
     return `<button class="btn btn-sm" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700;animation:pulse 1.5s infinite;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return Requested!</button>`;
   }
   if (rr.status === 'authorized') {
-    return `<button class="btn btn-sm" style="background:#f0fdf4;color:#16a34a;border-color:#86efac;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return Authorized</button>`;
+    return `<button class="btn btn-sm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;animation:pulse 1.5s infinite;" onclick="event.stopPropagation();openReceiveModal('${orderId}')">📦 Return Authorized — Confirm Receipt</button>`;
   }
   if (rr.status === 'received') {
     return `<button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return Received</button>`;
@@ -22556,6 +22914,64 @@ function showCreditHoldFlash(overAmt) {
       </div>
     </div>
   </div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- RECEIVE MODAL                                   -->
+<!-- ══════════════════════════════════════════════ -->
+<div id="receive-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:90%;max-width:900px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="background:#0369a1;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="color:#fff;font-size:16px;">📦</span>
+        <span style="color:#fff;font-weight:800;font-size:15px;">Return Received</span>
+        <span id="receive-cm-number" style="color:#bae6fd;font-size:13px;font-weight:600;margin-left:8px;"></span>
+      </div>
+      <button onclick="document.getElementById('receive-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#bae6fd;line-height:1;">✕</button>
+    </div>
+    <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;flex-shrink:0;">
+      <div id="receive-order-info" style="font-size:13px;color:#374151;"></div>
+    </div>
+    <div style="padding:16px 20px;overflow-y:auto;flex:1;">
+      <div id="receive-lines-body"></div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:#f8fafc;border-radius:0 0 12px 12px;">
+      <div style="font-size:12px;color:#6b7280;">Reusable items will be added to PC Room inventory</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="document.getElementById('receive-modal').style.display='none'">취소</button>
+        <button id="receive-submit-btn" class="btn" style="background:#0369a1;color:#fff;border-color:#0369a1;font-weight:700;" onclick="submitReceive()">✅ Confirm Receipt & Create Credit Memo</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- CREDIT MEMO MODAL                              -->
+<!-- ══════════════════════════════════════════════ -->
+<div id="cm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:90%;max-width:900px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="background:#7c3aed;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span style="color:#fff;font-size:16px;">📄</span>
+        <span style="color:#fff;font-weight:800;font-size:15px;">Credit Memo</span>
+        <span id="cm-number-display" style="color:#ddd6fe;font-size:13px;font-weight:600;margin-left:8px;"></span>
+      </div>
+      <button onclick="document.getElementById('cm-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#ddd6fe;line-height:1;">✕</button>
+    </div>
+    <div style="padding:16px 20px;overflow-y:auto;flex:1;">
+      <div id="cm-preview" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;"></div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:#f8fafc;border-radius:0 0 12px 12px;">
+      <div>
+        Send to: <span id="cm-email-to" style="font-weight:600;color:#111;"></span>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="document.getElementById('cm-modal').style.display='none'">닫기</button>
+        <button id="cm-submit-btn" class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="submitCreditMemo()">📧 Send Credit Memo</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </div>
 
 </body>
