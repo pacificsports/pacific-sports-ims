@@ -6736,6 +6736,14 @@ async function openRaModal(orderId) {
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', orderId);
   if (!order || !lines) return;
 
+  // 거래처 Return Request 있는지 확인
+  const { data: rrData } = await db.from('return_requests')
+    .select('*').eq('order_id', orderId)
+    .in('status', ['requested','authorized'])
+    .order('created_at', { ascending: false }).limit(1);
+  const pendingRR = rrData?.[0];
+  window._currentRR = pendingRR || null;
+
   // RA# 생성
   const raYear = new Date().getFullYear();
   const { data: lastRa } = await db.from('orders').select('ra_number').not('ra_number', 'is', null)
@@ -6820,6 +6828,58 @@ async function openRaModal(orderId) {
 
   document.getElementById('ra-lines-body').innerHTML = linesHtml ||
     '<div style="text-align:center;color:#9ca3af;padding:20px;font-size:12px;">Shipped 라인이 없습니다</div>';
+
+  // 거래처 요청 데이터 자동 채우기
+  if (pendingRR?.request_data?.items) {
+    const reqItems = pendingRR.request_data.items;
+    document.querySelectorAll('.ra-line-row').forEach((row, i) => {
+      const idx = parseInt(row.querySelector('.ra-qty-input')?.dataset.idx ?? i);
+      const line = shippedLines[idx];
+      if (!line) return;
+      // 같은 style/color/size의 요청 합산
+      const matchedItems = reqItems.filter(it =>
+        it.color?.toLowerCase() === (line.color||'').toLowerCase() &&
+        it.size?.toLowerCase() === (line.size||'').toLowerCase()
+      );
+      if (matchedItems.length > 0) {
+        const totalQty = matchedItems.reduce((s,it) => s+it.qty, 0);
+        const firstReason = matchedItems[0].reason || '';
+        const qtyEl = row.querySelector('.ra-qty-input');
+        const reasonEl = row.querySelector('.ra-reason-input');
+        if (qtyEl) qtyEl.value = totalQty;
+        if (reasonEl) {
+          // reason 옵션 중 매칭되는 거 선택
+          const opt = [...reasonEl.options].find(o => o.value === firstReason);
+          if (opt) reasonEl.value = firstReason;
+        }
+      }
+    });
+    // 거래처 Notes 채우기
+    if (pendingRR.request_data.notes) {
+      const notesEl = document.getElementById('ra-notes');
+      if (notesEl) notesEl.value = pendingRR.request_data.notes;
+    }
+    // 거래처 요청 배너 표시
+    const linesBody = document.getElementById('ra-lines-body');
+    const banner = document.createElement('div');
+    banner.style.cssText = 'background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#92400e;';
+    banner.innerHTML = '📋 <strong>Customer Return Request received</strong> — quantities pre-filled from customer's request. Please review, set WH, and click <strong>Authorize</strong>.';
+    linesBody.insertBefore(banner, linesBody.firstChild);
+  }
+
+  // 버튼 변경: requested면 Authorize, 아니면 Save & Send
+  const submitBtn = document.getElementById('ra-submit-btn');
+  if (submitBtn) {
+    if (pendingRR?.status === 'requested') {
+      submitBtn.textContent = '✅ Authorize & Send RA';
+      submitBtn.style.background = '#16a34a';
+      submitBtn.style.borderColor = '#16a34a';
+    } else {
+      submitBtn.textContent = '📧 Save & Send';
+      submitBtn.style.background = '#7f1d1d';
+      submitBtn.style.borderColor = '#7f1d1d';
+    }
+  }
 
   // 이메일 수신자
   const custObj = (customers||[]).find(c => c.id === order.customer_id);
@@ -6911,6 +6971,20 @@ async function submitRa() {
   try {
     // DB에 RA 번호 저장
     await db.from('orders').update({ ra_number: raNum }).eq('id', _raOrderId);
+
+    // return_requests 상태 authorized로 업데이트
+    if (window._currentRR?.id) {
+      await db.from('return_requests').update({
+        status: 'authorized',
+        authorized_data: { raNum, returnWh, returnAddr, raDate, raItems, totalQty, totalAmt, notes, authorizedAt: new Date().toISOString() },
+        ra_number: raNum,
+        updated_at: new Date().toISOString()
+      }).eq('id', window._currentRR.id);
+      // _returnRequestMap 캐시 업데이트
+      if (window._returnRequestMap?.[_raOrderId]) {
+        window._returnRequestMap[_raOrderId].forEach(rr => { if (rr.id === window._currentRR.id) rr.status = 'authorized'; });
+      }
+    }
 
     // 이메일 발송
     const custObj = (customers||[]).find(c => c.id === order.customer_id);
