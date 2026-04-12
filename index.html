@@ -5328,6 +5328,7 @@ async function submitReceive() {
       lines: cmLines,
       total_qty: totalQty,
       total_amount: totalAmt,
+      freight_credit: freightCredit,
       status: 'draft',
       notes: rr.authorized_data?.notes || ''
     });
@@ -5444,6 +5445,60 @@ async function submitCreditMemo() {
   }
 }
 
+async function openCreditMemoModal(orderId) {
+  // DB에서 credit memo 조회
+  const { data: cm } = await db.from('credit_memos')
+    .select('*').eq('order_id', orderId)
+    .order('created_at', { ascending: false }).limit(1);
+  if (!cm?.[0]) { showToast('❌ Credit Memo not found'); return; }
+  const cmRow = cm[0];
+
+  const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
+  const { data: rrArr } = await db.from('return_requests')
+    .select('*').eq('order_id', orderId)
+    .order('created_at', { ascending: false }).limit(1);
+  const rr = rrArr?.[0];
+
+  const { data: custArr } = await db.from('customers').select('*').eq('id', order.customer_id).limit(1);
+  const cust = custArr?.[0];
+
+  const { data: settingsRows } = await db.from('company_settings').select('key,value');
+  const cmSettings = {};
+  (settingsRows||[]).forEach(s => { cmSettings[s.key] = s.value; });
+
+  // 모달 열기
+  document.getElementById('cm-number-display').textContent = cmRow.cm_number;
+  const toEmail = cust?.accounting_email || cust?.email || order?.email || '';
+  document.getElementById('cm-email-to').textContent = toEmail || '(이메일 없음)';
+
+  const freightCredit = cmRow.freight_credit || 0;
+  const cmHtml = buildCreditMemoHtml(order, cmRow.lines||[], cmRow.cm_number, rr?.ra_number||'', freightCredit, cmSettings);
+  document.getElementById('cm-preview').innerHTML = cmHtml;
+
+  // 버튼 상태 - 이미 발송됐으면 Resend
+  const submitBtn = document.getElementById('cm-submit-btn');
+  if (submitBtn) {
+    submitBtn.textContent = cmRow.status === 'issued' ? '📧 Resend Credit Memo' : '📧 Send Credit Memo';
+    submitBtn.style.background = '#7c3aed';
+    submitBtn.style.borderColor = '#7c3aed';
+  }
+
+  window._cmData = {
+    cmNum: cmRow.cm_number,
+    order,
+    lines: cmRow.lines||[],
+    totalQty: cmRow.total_qty,
+    totalAmt: cmRow.total_amount,
+    toEmail,
+    freightCredit,
+    raNum: rr?.ra_number||''
+  };
+  window._receiveRR = rr;
+  window._receiveOrderId = orderId;
+
+  document.getElementById('cm-modal').style.display = 'flex';
+}
+
 function raCalcRow(idx) {
   const row = document.querySelector(`.ra-line-row[data-idx="${idx}"]`);
   if (!row) return;
@@ -5488,10 +5543,10 @@ function makeReturnBtn(orderId) {
     return `<button class="btn btn-sm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;animation:pulse 1.5s infinite;" onclick="event.stopPropagation();openReceiveModal('${orderId}')">📦 Return Authorized — Confirm Receipt</button>`;
   }
   if (rr.status === 'received') {
-    return `<button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return Received</button>`;
+    return `<button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;font-weight:600;" onclick="event.stopPropagation();openCreditMemoModal('${orderId}')">↩ Return Received</button>`;
   }
   if (rr.status === 'credited') {
-    return `<button class="btn btn-sm" style="background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Credit Issued</button>`;
+    return `<button class="btn btn-sm" style="background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;font-weight:600;" onclick="event.stopPropagation();openCreditMemoModal('${orderId}')">↩ Credit Issued</button>`;
   }
   return `<button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return</button>`;
 }
@@ -5724,6 +5779,9 @@ function renderCustomerPOTable() {
           docBtns += ' ' + _mkB('📋 Packing List', '#f0f9ff', '#0369a1', '#bae6fd', 'packing');
           if (o.po_file) docBtns += ' ' + _mkB('📄 Customer PO', '#f0fdf4', '#15803d', '#86efac', 'po');
           docBtns += ' <button class="btn btn-sm" style="background:#f0f7ff;color:#1e40af;border-color:#93c5fd;" onclick="event.stopPropagation();openSignedBolModal(\'' + oid + '\',\'' + wh + '\')">✍️ Signed BOL</button>';
+          // Credit Memo 버튼 - received/credited 상태일 때
+          const _rrForCm = (window._returnRequestMap?.[oid]||[]).find(r => ['received','credited'].includes(r.status));
+          if (_rrForCm) docBtns += ' <button class="btn btn-sm" style="background:#fdf4ff;color:#7c3aed;border-color:#d8b4fe;" onclick="event.stopPropagation();openCreditMemoModal(\'' + oid + '\')">📄 Credit Memo</button>';
         }
         if (!['shipped','invoiced','cancelled','completed'].includes(o.status)) {
           docBtns += '<button class="btn btn-sm" style="background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="event.stopPropagation();cancelOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">✕ Cancel</button>'
@@ -5769,6 +5827,8 @@ function renderCustomerPOTable() {
         scBtns += ' ' + mkDocBtn('📋 Packing List', '#f0f9ff', '#0369a1', '#bae6fd', oid, 'SC', 'packing');
         if (o.po_file) scBtns += ' ' + mkDocBtn('📄 Customer PO', '#f0fdf4', '#15803d', '#86efac', oid, 'SC', 'po');
         scBtns += ' <button class="btn btn-sm" style="background:#f0f7ff;color:#1e40af;border-color:#93c5fd;" onclick="event.stopPropagation();openSignedBolModal(\'' + oid + '\',\'SC\')">✍️ Signed BOL</button>';
+        const _rrForCmSC = (window._returnRequestMap?.[oid]||[]).find(r => ['received','credited'].includes(r.status));
+        if (_rrForCmSC) scBtns += ' <button class="btn btn-sm" style="background:#fdf4ff;color:#7c3aed;border-color:#d8b4fe;" onclick="event.stopPropagation();openCreditMemoModal(\'' + oid + '\')">📄 Credit Memo</button>';
       }
       if (!['shipped','invoiced','cancelled','completed'].includes(scStatusKey)) {
         scBtns += ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteWhLinesConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\',\'SC\')">🗑 SC 삭제</button>';
@@ -5784,6 +5844,8 @@ function renderCustomerPOTable() {
         caBtns += ' ' + mkDocBtn('📋 Packing List', '#fff7ed', '#c2410c', '#fdba74', oid, 'CA', 'packing');
         if (o.po_file) caBtns += ' ' + mkDocBtn('📄 Customer PO', '#fff7ed', '#c2410c', '#fdba74', oid, 'CA', 'po');
         caBtns += ' <button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;" onclick="event.stopPropagation();openSignedBolModal(\'' + oid + '\',\'CA\')">✍️ Signed BOL</button>';
+        const _rrForCmCA = (window._returnRequestMap?.[oid]||[]).find(r => ['received','credited'].includes(r.status));
+        if (_rrForCmCA) caBtns += ' <button class="btn btn-sm" style="background:#fdf4ff;color:#7c3aed;border-color:#d8b4fe;" onclick="event.stopPropagation();openCreditMemoModal(\'' + oid + '\')">📄 Credit Memo</button>';
       }
       if (!['shipped','invoiced','cancelled','completed'].includes(caStatusKey)) {
         caBtns += ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;" onclick="event.stopPropagation();deleteWhLinesConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\',\'CA\')">🗑 CA 삭제</button>';
