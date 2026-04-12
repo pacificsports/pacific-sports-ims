@@ -36,6 +36,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
 /* ── APP SHELL ── */
 .app{display:none;flex-direction:column;height:100vh;overflow:hidden;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.6;}}
 
 /* CHROME */
 .chrome{background:var(--header);color:#c8d8ef;height:36px;display:flex;align-items:center;padding:0 16px;gap:16px;font-size:12px;flex-shrink:0;position:sticky;top:0;z-index:201;}
@@ -5069,10 +5070,46 @@ async function loadCustomerPOs(subview = null) {
   const active = allCustomerPOs.filter(o => !['shipped','invoiced','cancelled'].includes(o.status)).length;
   document.getElementById('open-orders-badge').textContent = active || '';
 
+  // return_requests 상태 조회 (Return 버튼 색상용)
+  try {
+    const { data: rrData } = await db.from('return_requests')
+      .select('order_id,status,wh')
+      .in('status', ['requested','authorized','received','credited']);
+    window._returnRequestMap = {};
+    (rrData||[]).forEach(rr => {
+      if (!window._returnRequestMap[rr.order_id]) window._returnRequestMap[rr.order_id] = [];
+      window._returnRequestMap[rr.order_id].push(rr);
+    });
+  } catch(e) { window._returnRequestMap = {}; }
+
   renderCustomerPOTable();
 }
 
 function filterCustomerPOs() { renderCustomerPOTable(); }
+
+// Return 버튼 상태별 렌더링
+function makeReturnBtn(orderId) {
+  const rrs = window._returnRequestMap?.[orderId] || [];
+  const rr = rrs[0]; // 가장 최근 요청
+  if (!rr) {
+    // 요청 없음 → 기본 Return 버튼
+    return `<button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return</button>`;
+  }
+  if (rr.status === 'requested') {
+    // 거래처가 요청함 → 강조 표시
+    return `<button class="btn btn-sm" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700;animation:pulse 1.5s infinite;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return Requested!</button>`;
+  }
+  if (rr.status === 'authorized') {
+    return `<button class="btn btn-sm" style="background:#f0fdf4;color:#16a34a;border-color:#86efac;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return Authorized</button>`;
+  }
+  if (rr.status === 'received') {
+    return `<button class="btn btn-sm" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return Received</button>`;
+  }
+  if (rr.status === 'credited') {
+    return `<button class="btn btn-sm" style="background:#f5f3ff;color:#7c3aed;border-color:#c4b5fd;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Credit Issued</button>`;
+  }
+  return `<button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;font-weight:600;" onclick="event.stopPropagation();openRaModal('${orderId}')">↩ Return</button>`;
+}
 
 function showPoBreakdown(period) {
   const now = new Date();
@@ -5309,7 +5346,7 @@ function renderCustomerPOTable() {
         }
         // Return 버튼 (별도 칸)
         const returnBtn = ['shipped','invoiced','completed'].includes(o.status)
-          ? '<button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;font-weight:600;" onclick="event.stopPropagation();openRaModal(\'' + oid + '\')">↩ Return</button>'
+          ? makeReturnBtn(oid)
           : '';
         return ['<tr style="cursor:pointer;' + rowBg + '" onclick="openPODetail(\'' + oid + '\'">'
           + '<td style="font-weight:700;color:#111827;">' + o.customer_name + '</td>'
@@ -5353,7 +5390,7 @@ function renderCustomerPOTable() {
       }
       // Return 버튼은 별도 칸에 표시
       const scReturnBtn = (['shipped','invoiced','completed'].includes(scStatusKey) || ['shipped','invoiced','completed'].includes(caStatusKey))
-        ? '<button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;font-weight:600;" onclick="event.stopPropagation();openRaModal(\'' + oid + '\')">↩ Return</button>'
+        ? makeReturnBtn(oid)
         : '';
       // CA 액션 버튼
       let caBtns = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
@@ -5392,7 +5429,7 @@ function renderCustomerPOTable() {
         + '<td>' + getWhStatusBadge(caSt.label, caSt.color, caSt.bg) + '</td>'
         + '<td></td>'
         + '<td style="white-space:nowrap;">' + caBtns + '</td>'
-        + '<td style="white-space:nowrap;text-align:center;">' + (['shipped','invoiced','completed'].includes(caStatusKey) ? '<button class="btn btn-sm" style="background:#fff7ed;color:#c2410c;border-color:#fdba74;font-weight:600;" onclick="event.stopPropagation();openRaModal(\'' + oid + '\')">↩ Return</button>' : '') + '</td>'
+        + '<td style="white-space:nowrap;text-align:center;">' + (['shipped','invoiced','completed'].includes(caStatusKey) ? makeReturnBtn(oid) : '') + '</td>'
         + '</tr>';
       return [scRow, caRow];
     }).join('');
