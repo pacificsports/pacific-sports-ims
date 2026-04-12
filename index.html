@@ -5073,7 +5073,7 @@ async function loadCustomerPOs(subview = null) {
   // return_requests 상태 조회 (Return 버튼 색상용)
   try {
     const { data: rrData } = await db.from('return_requests')
-      .select('order_id,status,wh')
+      .select('id,order_id,status,wh,ra_number')
       .in('status', ['requested','authorized','received','credited']);
     window._returnRequestMap = {};
     (rrData||[]).forEach(rr => {
@@ -5096,6 +5096,8 @@ let _receiveOrderId = null, _receiveRR = null, _receiveOrder = null;
 
 async function openReceiveModal(orderId) {
   _receiveOrderId = orderId;
+  // 혹시 RA 모달 열려있으면 닫기
+  document.getElementById('ra-modal').style.display = 'none';
 
   // 오더 + return_request 조회
   const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
@@ -5111,7 +5113,7 @@ async function openReceiveModal(orderId) {
   // CM# 생성
   const cmYear = new Date().getFullYear();
   const { data: lastCm } = await db.from('credit_memos')
-    .select('cm_number').like('cm_number', 'CM-' + cmYear + '-%')
+    .select('cm_number').ilike('cm_number', 'CM-' + cmYear + '-%')
     .order('cm_number', { ascending: false }).limit(1);
   const lastSeq = lastCm?.[0]?.cm_number ? parseInt(lastCm[0].cm_number.split('-')[2]) || 0 : 0;
   const cmNum = 'CM-' + cmYear + '-' + String(lastSeq + 1).padStart(3, '0');
@@ -22918,7 +22920,7 @@ function showCreditHoldFlash(overAmt) {
 <!-- ══════════════════════════════════════════════ -->
 <!-- RECEIVE MODAL                                   -->
 <!-- ══════════════════════════════════════════════ -->
-<div id="receive-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+<div id="receive-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:12px;width:90%;max-width:900px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
     <div style="background:#0369a1;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
       <div style="display:flex;align-items:center;gap:10px;">
@@ -22947,7 +22949,7 @@ function showCreditHoldFlash(overAmt) {
 <!-- ══════════════════════════════════════════════ -->
 <!-- CREDIT MEMO MODAL                              -->
 <!-- ══════════════════════════════════════════════ -->
-<div id="cm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+<div id="cm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:12px;width:90%;max-width:900px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
     <div style="background:#7c3aed;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
       <div style="display:flex;align-items:center;gap:10px;">
