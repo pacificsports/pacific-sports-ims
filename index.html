@@ -2317,16 +2317,15 @@ async function loadScInventory() {
       if (existing) { existing.qty += qty; }
       else { window.binInventory[wh][key].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
 
-      // PCR 계열은 color|size fallback key도 추가 저장 (style_id NULL인 row 대비)
+      // PCR은 color+size fallback key에도 저장 (style_number 불일치 대비 — DB 리셋 전 임시)
       if (wh === 'SC-PCR' || wh === 'CA-PCR') {
         const csKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-        if (csKey !== key) {
-          if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
-          const ex2 = window.binInventory[wh][csKey].find(b => b.bin === loc);
-          if (ex2) { ex2.qty += qty; }
-          else { window.binInventory[wh][csKey].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
-        }
+        if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
+        const exCs = window.binInventory[wh][csKey].find(b => b.bin === loc);
+        if (exCs) { exCs.qty += qty; }
+        else { window.binInventory[wh][csKey].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
       }
+
     }
   });
 
@@ -2395,7 +2394,7 @@ async function openInvoicePreview(orderId) {
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
   if (!order || !lines) { showToast('Invoice 데이터를 불러올 수 없습니다.', true); return; }
 
-  const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const isSplit = true; // 항상 SC/CA 분리 컬럼 표시 (싱글 WH도 동일 포맷)
   const wh = order.wh_code === 'CA' ? 'CA' : 'SC';
   const filteredLines = isSplit
     ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
@@ -2419,7 +2418,7 @@ async function openInvoicePreview(orderId) {
     tracking: order.tracking_number || _previewDomTracking || '',
     freightCarrier: order.pickup_company || _previewDomFreight || ''
   };
-  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, displayInvNumPreview, invShipInfoPreview, null, 0);
+  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, true, displayInvNumPreview, invShipInfoPreview, null, 0);
 
 
 
@@ -12419,7 +12418,7 @@ async function htmlToPdfBase64(htmlString) {
 // ══════════════════════════════════════════════════════
 function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, totalPcs, totalAmt, hasAnyBackorder, emailLines, scTotalPcs, caTotalPcs }) {
   const SIZE_ORDER = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
-  const isSplit = scTotalPcs > 0 && caTotalPcs > 0;
+  const isSplit = true; // 항상 SC/CA 분리 컬럼 표시 (싱글 WH도 동일 포맷)
   const backLines = emailLines.filter(l => l.back_qty > 0);
   const totalBack = backLines.reduce((s,l) => s+(l.back_qty||0), 0);
 
@@ -12860,7 +12859,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     return (sizeA === -1 ? 99 : sizeA) - (sizeB === -1 ? 99 : sizeB);
   });
 
-  const isSplitOrder = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const isSplitOrder = true; // 항상 SC/CA 분리 포맷
 
   const SIZE_ORDER_SHIP = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
   const lineItems = sortedLines.map(l => {
@@ -13321,7 +13320,7 @@ async function _openDocPdfById(type, orderId, wh) {
       b64 = order.po_file;
     } else {
       const html = type === 'invoice'
-        ? buildInvoiceHtml(order, lines, false, invNum, shipInfo, cs, 0)
+        ? buildInvoiceHtml(order, lines, true, invNum, shipInfo, cs, 0)
         : buildPackingListHtml(order, lines||[], false, wh||'SC', shipInfo, '');
       if (!html) { showToast('❌ PDF 생성 실패'); return; }
       b64 = await htmlToPdfBase64(html);
@@ -13361,7 +13360,7 @@ async function _openDocPdf(type, orderId, wh, order, invNum) {
       b64 = order.po_file;
     } else {
       const html = type === 'invoice'
-        ? buildInvoiceHtml(order, filteredLines, false, invNum, shipInfo, cs, 0)
+        ? buildInvoiceHtml(order, filteredLines, true, invNum, shipInfo, cs, 0)
         : buildPackingListHtml(order, lines||[], false, wh, shipInfo, '');
       if (!html) { showToast('❌ PDF 생성 실패'); return; }
       b64 = await htmlToPdfBase64(html);
@@ -14696,7 +14695,7 @@ async function reviewAndSendInvoice(orderId, wh) {
     freightCarrier: whFreight || _fb.freightCarrier || _domFreightCarrier || '',
     shipDate: invActualShipDate2 || ''   // PO 입력 날짜 제외, 실제 출고일만
   };
-  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, false, displayInvoiceNum, invShipInfo, companySettings, _savedFreight);
+  document.getElementById('invoice-review-content').innerHTML = buildInvoiceHtml(order, filteredLines, true, displayInvoiceNum, invShipInfo, companySettings, _savedFreight);
 
   // Ship Via / Tracking 편집 필드에 현재 값 채우기
   const _carrierEl = document.getElementById('inv-carrier-edit');
@@ -14739,7 +14738,7 @@ async function reviewAndSendInvoice(orderId, wh) {
   };
   // Invoice PDF
   _attEl.appendChild(_makeAttBtn('Invoice PDF', async () => {
-    const invHtml = buildInvoiceHtml(_invoiceOrder, _invoiceFilteredLines, false, _invoiceInvoiceNum, window._invoiceShipInfo, _invoiceCompanySettings, parseFloat(document.getElementById('invoice-freight-amt')?.value)||0);
+    const invHtml = buildInvoiceHtml(_invoiceOrder, _invoiceFilteredLines, true, _invoiceInvoiceNum, window._invoiceShipInfo, _invoiceCompanySettings, parseFloat(document.getElementById('invoice-freight-amt')?.value)||0);
     return await htmlToPdfBase64(invHtml);
   }));
   // Packing List PDF
@@ -14923,7 +14922,7 @@ async function sendInvoiceEmail() {
       // Invoice PDF 생성
       let invPdfBase64 = null;
       try {
-        const invHtml = buildInvoiceHtml(order, lines, false, displayInvNum, invShipInfo2, cs, freightAmt);
+        const invHtml = buildInvoiceHtml(order, lines, true, displayInvNum, invShipInfo2, cs, freightAmt);
         if (invHtml) invPdfBase64 = await htmlToPdfBase64(invHtml);
       } catch(e) { console.warn('Invoice PDF error:', e); }
 
@@ -16509,7 +16508,7 @@ function applyInvoiceEdit() {
   window._invoiceShipInfo = editedShipInfo;
 
   // Invoice 미리보기 갱신
-  const invHtml = buildInvoiceHtml(editedOrder, _invoiceFilteredLines, false, invNum, editedShipInfo, _invoiceCompanySettings, freight);
+  const invHtml = buildInvoiceHtml(editedOrder, _invoiceFilteredLines, true, invNum, editedShipInfo, _invoiceCompanySettings, freight);
   document.getElementById('invoice-review-content').innerHTML = invHtml;
 
   // 저장 (send 시 사용)
@@ -16522,7 +16521,7 @@ function resetInvoiceEdit() {
   window._invoiceEditedInvNum = null;
   window._invoiceShipInfo = _invoiceShipInfo;
   const freight = parseFloat(document.getElementById('invoice-freight-amt')?.value) || 0;
-  const invHtml = buildInvoiceHtml(_invoiceOrder, _invoiceFilteredLines, false, _invoiceInvoiceNum, _invoiceShipInfo, _invoiceCompanySettings, freight);
+  const invHtml = buildInvoiceHtml(_invoiceOrder, _invoiceFilteredLines, true, _invoiceInvoiceNum, _invoiceShipInfo, _invoiceCompanySettings, freight);
   document.getElementById('invoice-review-content').innerHTML = invHtml;
   // 필드 초기값으로 복원
   toggleInvEditPanel(); toggleInvEditPanel();
@@ -16571,7 +16570,7 @@ function applyInvoiceShipping() {
         const displayNum = (order.invoice_number ? invWhPfx + order.invoice_number : '—');
         const freightAmt = parseFloat(document.getElementById('invoice-freight-amt')?.value) || 0;
         const cs = {};
-        contentEl.innerHTML = buildInvoiceHtml(order, filteredLines, false, displayNum, window._invoiceShipInfo, cs, freightAmt);
+        contentEl.innerHTML = buildInvoiceHtml(order, filteredLines, true, displayNum, window._invoiceShipInfo, cs, freightAmt);
       });
     });
   }
@@ -19417,11 +19416,13 @@ function buildAllocHtml(lineIdx, whGroup) {
   const mainWh  = whGroup;
   const pcrWh   = whGroup + '-PCR';
   const mainBins = (window.binInventory?.[mainWh]?.[k]) || [];
-  // PCR bins: style key 먼저, 없으면 color|size fallback key
+  // PCR bins: style|color|size 먼저, 없으면 color|size로 fallback
+  // (PCR은 같은 color+size면 style 무관하게 같은 셔츠)
   const csKey = `|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
-  const pcrBins = (window.binInventory?.[pcrWh]?.[k])
-    || (window.binInventory?.[pcrWh]?.[csKey])
-    || [];
+  const pcrBins = window.binInventory?.[pcrWh]?.[k]?.length > 0
+    ? window.binInventory[pcrWh][k]
+    : (window.binInventory?.[pcrWh]?.[csKey] || []);
+  const _activePcrKey = window.binInventory?.[pcrWh]?.[k]?.length > 0 ? k : csKey;
   const prevAlloc = (isSC ? l.allocSC : l.allocCA) || {};
 
   // 총 재고
@@ -19945,7 +19946,7 @@ function updatePcrTransferLabel(wh, ppb) {
   if (el) el.textContent = `(${(boxes*ppb).toLocaleString()} pcs)`;
 }
 
-function execPcrTransfer(whGroup, ppb) {
+async function execPcrTransfer(whGroup, ppb) {
   if (!_allocState) return;
   const { lineIdx } = _allocState;
   const l = poLines[lineIdx];
@@ -20000,23 +20001,48 @@ function execPcrTransfer(whGroup, ppb) {
   }
   const pcrWh = whGroup+'-PCR';
   if (!window.binInventory[pcrWh]) window.binInventory[pcrWh] = {};
-  // key 매칭: style 포함 키 또는 color|size fallback 키 둘 다 시도
-  const pcrFallbackKey = `|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
-  if (!window.binInventory[pcrWh][k]) window.binInventory[pcrWh][k] = [];
-  // fallback key에 있는 PCR 데이터를 메인 key로 병합
-  if (window.binInventory[pcrWh][pcrFallbackKey]) {
-    const fbEntry = window.binInventory[pcrWh][pcrFallbackKey].find(b=>b.bin==='PCR');
-    const mainEntry = window.binInventory[pcrWh][k].find(b=>b.bin==='PCR');
-    if (fbEntry && !mainEntry) {
-      window.binInventory[pcrWh][k].push({...fbEntry});
-    } else if (fbEntry && mainEntry) {
-      mainEntry.qty += fbEntry.qty;
-      fbEntry.qty = 0; // 중복 방지
+  // 실제 데이터가 있는 key 사용 (style key 또는 color+size fallback key)
+  const csKeyT = `|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+  const activePcrKey = (window.binInventory[pcrWh][k]?.length > 0) ? k : csKeyT;
+  if (!window.binInventory[pcrWh][activePcrKey]) window.binInventory[pcrWh][activePcrKey] = [];
+  let pcrB = window.binInventory[pcrWh][activePcrKey].find(b => b.bin === 'PCR');
+  if (!pcrB) {
+    // PCR row가 없으면 확인 후 생성
+    const confirmCreate = confirm(
+      `PC Room에 "${l.styleNum} / ${l.color} / ${l.size}" 재고가 없습니다.\n\n` +
+      `Transfer 후 새로 생성하시겠습니까?\n` +
+      `(DB에 qty=0으로 생성 후 Transfer 수량이 추가됩니다)`
+    );
+    if (!confirmCreate) return;
+    // DB에 새 PCR row 생성
+    try {
+      const pcrWhObj = warehouses.find(w => w.code === pcrWh);
+      const styleObj = styles ? styles.find(s => s.style_number === l.styleNum) : null;
+      if (!pcrWhObj) { showToast('❌ PCR 창고를 찾을 수 없습니다.'); return; }
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+      const { data: newRow, error } = await db.from('inventory').insert({
+        warehouse_id: pcrWhObj.id,
+        style_id: styleObj?.id || null,
+        color: (l.color||'').toUpperCase(),
+        size: (l.size||'').toUpperCase(),
+        location: 'PCR',
+        qty_on_hand: 0,
+        qty_committed: 0,
+        received_date: todayStr
+      }).select().single();
+      if (error) throw error;
+      // UI binInventory에 추가 (activePcrKey에)
+      window.binInventory[pcrWh][activePcrKey].push({ bin: 'PCR', qty: 0, committed: 0, inv_id: newRow.id, received_date: todayStr });
+      pcrB = window.binInventory[pcrWh][activePcrKey].find(b => b.bin === 'PCR');
+      showToast('✅ PCR 재고 row 생성됨');
+    } catch(e) {
+      console.error('[PCR create error]', e);
+      showToast('❌ PCR 재고 생성 실패: ' + e.message);
+      return;
     }
   }
-  const pcrB = window.binInventory[pcrWh][k].find(b=>b.bin==='PCR');
-  if (pcrB) pcrB.qty += qty;
-  else window.binInventory[pcrWh][k].push({bin:'PCR',qty,committed:0,received_date:(()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() });
+  pcrB.qty += qty;
 
   showToast(`✅ ${bin} → ${pcrWh}: ${boxes}박스 (${qty}pcs) 지정됨`);
 
