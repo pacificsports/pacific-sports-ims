@@ -5519,11 +5519,21 @@ async function openCmModal(cmNum, order, lines, totalQty, totalAmt, cust) {
 }
 
 async function submitCreditMemo() {
+  // Manager PIN 확인
+  const pin = prompt('Manager PIN을 입력하세요:');
+  if (!pin) return;
+  const { data: managers } = await db.from('employees').select('pin').eq('role', 'manager');
+  const validPins = (managers||[]).map(m => String(m.pin||''));
+  if (!validPins.includes(String(pin))) {
+    showToast('❌ PIN이 올바르지 않습니다');
+    return;
+  }
+
   const btn = document.getElementById('cm-submit-btn');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Sending...'; }
 
   try {
-    const { cmNum, order, lines, totalQty, totalAmt, toEmail } = window._cmData;
+    const { cmNum, order, lines, totalQty, totalAmt, toEmail, freightCredit, raNum } = window._cmData;
     const rr = _receiveRR;
 
     // Credit Memo HTML 이메일 빌드 - buildCreditMemoHtml 사용
