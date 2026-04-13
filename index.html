@@ -23938,11 +23938,11 @@ function showCreditHoldFlash(overAmt) {
             </th>
             <th style="width:80px;">Style #</th>
             <th>Description</th>
-            <th style="width:120px;text-align:right;color:#1a56a0;">XS–XL Price</th>
-            <th style="width:85px;text-align:right;color:#374151;">2XL</th>
-            <th style="width:85px;text-align:right;color:#374151;">3XL</th>
-            <th style="width:85px;text-align:right;color:#374151;">4XL</th>
-            <th style="width:85px;text-align:right;color:#374151;">5XL</th>
+            <th style="width:115px;text-align:right;color:#1a56a0;">XS–XL</th>
+            <th style="width:95px;text-align:right;color:#374151;">2XL</th>
+            <th style="width:95px;text-align:right;color:#374151;">3XL</th>
+            <th style="width:95px;text-align:right;color:#374151;">4XL</th>
+            <th style="width:95px;text-align:right;color:#374151;">5XL</th>
             <th style="width:95px;">Effective</th>
             <th style="width:110px;">Notes</th>
           </tr>
@@ -23959,7 +23959,11 @@ function showCreditHoldFlash(overAmt) {
         <span style="font-size:11px;color:#6b7280;" id="ps-count"></span>
         <button onclick="openPsLog()" style="font-size:11px;color:#6b7280;background:none;border:none;cursor:pointer;text-decoration:underline;">📋 접근 로그</button>
       </div>
-      <button class="btn" onclick="closePriceSheet()">닫기</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span id="ps-unsaved-badge" style="display:none;font-size:11px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:3px 10px;border-radius:10px;">● 저장 안 됨</span>
+        <button class="btn" onclick="closePriceSheet()">닫기</button>
+        <button id="ps-save-btn" class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;min-width:90px;" onclick="savePriceSheet()">💾 Save</button>
+      </div>
     </div>
   </div>
 </div>
@@ -24197,6 +24201,14 @@ async function loadPriceSheet() {
 }
 
 // ── 렌더링 ──
+let _psDirty = new Set(); // 변경된 style_numbers
+
+function markPsDirty(styleNum) {
+  _psDirty.add(styleNum);
+  const badge = document.getElementById('ps-unsaved-badge');
+  if (badge) badge.style.display = 'inline-block';
+}
+
 function renderPriceSheet() {
   const search = (document.getElementById('ps-search')?.value || '').toLowerCase();
   const filterVal = document.getElementById('ps-filter-select')?.value || 'all';
@@ -24223,6 +24235,22 @@ function renderPriceSheet() {
   }
 
   const today = new Date().toISOString().slice(0,10);
+
+  const xlInput = (styleNum, sizeKey, defaultVal, hasPrce) => {
+    const val = hasPrce ? defaultVal.toFixed(2) : '';
+    const disabled = !_psUnlocked ? 'disabled' : '';
+    const blurStyle = !_psUnlocked ? 'filter:blur(4px);pointer-events:none;' : '';
+    return `<input type="number" value="${val}" placeholder="—" step="0.01" min="0"
+      id="ps-${sizeKey}-${styleNum}"
+      ${disabled}
+      style="${blurStyle}width:68px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:12px;
+             border:1px solid ${hasPrce?'#e5e7eb':'#f3f4f6'};border-radius:4px;padding:2px 5px;
+             background:${hasPrce?'#fff':'#fafafa'};color:${hasPrce?'#374151':'#9ca3af'};"
+      oninput="markPsDirty('${styleNum}');updateXlDisplay('${styleNum}')"
+      onfocus="this.style.borderColor='#3b82f6';this.style.background='#f0f7ff';"
+      onblur="this.style.borderColor='${hasPrce?'#e5e7eb':'#f3f4f6}'}';this.style.background='${hasPrce?'#fff':'#fafafa'}';">`;
+  };
+
   document.getElementById('ps-tbody').innerHTML = filtered.map(s => {
     const p = _psPrices[s.style_number];
     const base = p?.base_price || 0;
@@ -24230,7 +24258,14 @@ function renderPriceSheet() {
     const isSelected = _psSelected.has(s.style_number);
     const rowBg = isSelected ? '#f0f7ff' : (hasPrce ? '#fff' : '#fafafa');
 
-    const maskOrVal = (val) => _psUnlocked ? val : '●●●●';
+    // XL 가격: DB에 저장된 커스텀값 우선, 없으면 자동계산
+    const p2xl = p?.price_2xl != null ? p.price_2xl : (hasPrce ? getPriceForSize(base,'2XL') : 0);
+    const p3xl = p?.price_3xl != null ? p.price_3xl : (hasPrce ? getPriceForSize(base,'3XL') : 0);
+    const p4xl = p?.price_4xl != null ? p.price_4xl : (hasPrce ? getPriceForSize(base,'4XL') : 0);
+    const p5xl = p?.price_5xl != null ? p.price_5xl : (hasPrce ? getPriceForSize(base,'5XL') : 0);
+
+    const disabled = !_psUnlocked ? 'disabled' : '';
+    const blurStyle = !_psUnlocked ? 'filter:blur(4px);pointer-events:none;' : '';
 
     return `<tr style="background:${rowBg};border-bottom:1px solid #f0f0f0;" id="ps-row-${s.style_number}">
       <td style="text-align:center;padding:6px 4px;">
@@ -24240,33 +24275,71 @@ function renderPriceSheet() {
       </td>
       <td style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:${hasPrce?'#111':'#9ca3af'};">${s.style_number}</td>
       <td style="font-size:12px;color:${hasPrce?'#374151':'#9ca3af'};">${s.description || '—'}</td>
-      <td style="text-align:right;padding:6px 8px;">
-        <div style="display:flex;align-items:center;justify-content:flex-end;gap:3px;">
-          <span style="font-size:11px;color:#9ca3af;">$</span>
+      <td style="text-align:right;padding:5px 6px;">
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:2px;">
+          <span style="font-size:10px;color:#9ca3af;">$</span>
           <input type="number" value="${hasPrce ? base.toFixed(2) : ''}"
             placeholder="—" step="0.01" min="0"
             id="ps-input-${s.style_number}"
-            ${!_psUnlocked ? 'disabled style="filter:blur(4px);pointer-events:none;' : 'style="'}
-            width:72px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;
-            border:1px solid ${hasPrce?'#bfdbfe':'#e5e7eb'};border-radius:4px;padding:3px 6px;
-            background:${hasPrce?'#f0f7ff':'#fff'};color:${hasPrce?'#1a56a0':'#374151'};"
-            oninput="onPsInput('${s.style_number}', '${(s.description||'').replace(/'/g,"\\'")}', '${today}', this.value)"
+            ${disabled}
+            style="${blurStyle}width:68px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;
+                   border:1px solid ${hasPrce?'#bfdbfe':'#e5e7eb'};border-radius:4px;padding:3px 5px;
+                   background:${hasPrce?'#f0f7ff':'#fff'};color:${hasPrce?'#1a56a0':'#374151'};"
+            oninput="onPsBaseInput('${s.style_number}', '${(s.description||'').replace(/'/g,"\\'")}', this.value)"
             onfocus="this.style.borderColor='#3b82f6';"
             onblur="this.style.borderColor='${hasPrce?'#bfdbfe':'#e5e7eb'}';">
         </div>
       </td>
-      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${hasPrce?'#374151':'#d1d5db'};" id="ps-2xl-${s.style_number}">${hasPrce ? '$'+getPriceForSize(base,'2XL').toFixed(2) : '—'}</td>
-      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${hasPrce?'#374151':'#d1d5db'};" id="ps-3xl-${s.style_number}">${hasPrce ? '$'+getPriceForSize(base,'3XL').toFixed(2) : '—'}</td>
-      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${hasPrce?'#374151':'#d1d5db'};" id="ps-4xl-${s.style_number}">${hasPrce ? '$'+getPriceForSize(base,'4XL').toFixed(2) : '—'}</td>
-      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${hasPrce?'#374151':'#d1d5db'};" id="ps-5xl-${s.style_number}">${hasPrce ? '$'+getPriceForSize(base,'5XL').toFixed(2) : '—'}</td>
-      <td style="font-size:11px;color:#9ca3af;" id="ps-eff-${s.style_number}">${p?.effective_date || '—'}</td>
-      <td style="padding:4px 8px;">
+      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,'2xl',p2xl,hasPrce)}</td>
+      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,'3xl',p3xl,hasPrce)}</td>
+      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,'4xl',p4xl,hasPrce)}</td>
+      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,'5xl',p5xl,hasPrce)}</td>
+      <td style="font-size:11px;color:#9ca3af;padding:5px 6px;" id="ps-eff-${s.style_number}">${p?.effective_date || '—'}</td>
+      <td style="padding:4px 6px;">
         <input type="text" value="${p?.notes||''}" placeholder="notes..."
+          id="ps-notes-${s.style_number}"
           style="width:100%;border:none;background:transparent;font-size:11px;color:#6b7280;outline:none;"
-          onchange="savePsNotes('${s.style_number}', this.value)">
+          oninput="markPsDirty('${s.style_number}')">
       </td>
     </tr>`;
   }).join('');
+}
+
+// Base price 변경 시 XL 가격 자동계산 (단, 이미 커스텀 값 있으면 유지)
+function onPsBaseInput(styleNum, desc, val) {
+  if (!_psUnlocked) return;
+  markPsDirty(styleNum);
+  const base = parseFloat(val) || 0;
+
+  // XL 필드들: 현재 비어있거나 자동계산 값이면 업데이트
+  const p = _psPrices[styleNum];
+  ['2xl','3xl','4xl','5xl'].forEach(size => {
+    const inp = document.getElementById(`ps-${size}-${styleNum}`);
+    if (!inp) return;
+    const sizeKey = size.toUpperCase();
+    const currentCustom = p?.[`price_${size}`];
+    // 커스텀 값이 없으면 자동계산으로 채워줌
+    if (currentCustom == null && base > 0) {
+      inp.value = getPriceForSize(base, sizeKey).toFixed(2);
+      inp.style.background = '#fff';
+      inp.style.color = '#374151';
+      inp.style.borderColor = '#e5e7eb';
+    } else if (base === 0) {
+      inp.value = '';
+    }
+  });
+}
+
+function updateXlDisplay(styleNum) {
+  // XL 직접 수정 시 스타일 업데이트
+  ['2xl','3xl','4xl','5xl'].forEach(size => {
+    const inp = document.getElementById(`ps-${size}-${styleNum}`);
+    if (!inp) return;
+    const val = parseFloat(inp.value) || 0;
+    inp.style.color = val > 0 ? '#374151' : '#9ca3af';
+    inp.style.background = val > 0 ? '#fff' : '#fafafa';
+    inp.style.borderColor = val > 0 ? '#e5e7eb' : '#f3f4f6';
+  });
 }
 
 // ── 체크박스 ──
@@ -24310,34 +24383,101 @@ function updatePsSelectedCount() {
 }
 
 // ── 가격 입력 ──
-function onPsInput(styleNum, desc, today, val) {
+// ── Save 버튼 ──
+async function savePriceSheet() {
   if (!_psUnlocked) return;
-  const base = parseFloat(val) || 0;
-  const update = (id, v) => { const el = document.getElementById(id); if (el) { el.textContent = v; el.style.color = base > 0 ? '#374151' : '#d1d5db'; } };
-  update('ps-2xl-'+styleNum, base > 0 ? '$'+getPriceForSize(base,'2XL').toFixed(2) : '—');
-  update('ps-3xl-'+styleNum, base > 0 ? '$'+getPriceForSize(base,'3XL').toFixed(2) : '—');
-  update('ps-4xl-'+styleNum, base > 0 ? '$'+getPriceForSize(base,'4XL').toFixed(2) : '—');
-  update('ps-5xl-'+styleNum, base > 0 ? '$'+getPriceForSize(base,'5XL').toFixed(2) : '—');
-  const inp = document.getElementById('ps-input-'+styleNum);
-  if (inp) {
-    inp.style.background = base > 0 ? '#f0f7ff' : '#fff';
-    inp.style.borderColor = base > 0 ? '#bfdbfe' : '#e5e7eb';
-    inp.style.color = base > 0 ? '#1a56a0' : '#374151';
+  if (_psDirty.size === 0) { showToast('변경사항이 없습니다.'); return; }
+
+  const btn = document.getElementById('ps-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Saving...'; }
+
+  const today = new Date().toISOString().slice(0,10);
+  let savedCount = 0;
+  const errors = [];
+
+  for (const styleNum of _psDirty) {
+    const s = _psAllStyles.find(x => x.style_number === styleNum);
+    if (!s) continue;
+
+    const baseInp = document.getElementById('ps-input-' + styleNum);
+    const base = parseFloat(baseInp?.value) || 0;
+
+    const get = (sizeKey) => {
+      const inp = document.getElementById(`ps-${sizeKey}-${styleNum}`);
+      const v = parseFloat(inp?.value);
+      return isNaN(v) || inp?.value === '' ? null : v;
+    };
+
+    const p2xl = get('2xl');
+    const p3xl = get('3xl');
+    const p4xl = get('4xl');
+    const p5xl = get('5xl');
+    const notes = document.getElementById('ps-notes-' + styleNum)?.value || '';
+
+    if (base <= 0) {
+      // 가격 0 → 삭제
+      if (_psPrices[styleNum]) {
+        await db.from('customer_prices').delete().eq('id', _psPrices[styleNum].id);
+        delete _psPrices[styleNum];
+        _psSelected.delete(styleNum);
+      }
+      const effEl = document.getElementById('ps-eff-' + styleNum);
+      if (effEl) effEl.textContent = '—';
+      savedCount++;
+      continue;
+    }
+
+    const payload = {
+      customer_id: _psCustomerId,
+      style_number: styleNum,
+      description: s.description || '',
+      base_price: base,
+      price_2xl: p2xl,
+      price_3xl: p3xl,
+      price_4xl: p4xl,
+      price_5xl: p5xl,
+      notes,
+      effective_date: today,
+      included: _psSelected.has(styleNum),
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await db.from('customer_prices')
+      .upsert(payload, { onConflict: 'customer_id,style_number' })
+      .select().single();
+
+    if (error) {
+      errors.push(styleNum);
+    } else if (data) {
+      _psPrices[styleNum] = data;
+      const effEl = document.getElementById('ps-eff-' + styleNum);
+      if (effEl) effEl.textContent = today;
+      savedCount++;
+    }
   }
-  clearTimeout(_psSaveTimers[styleNum]);
-  _psSaveTimers[styleNum] = setTimeout(() => savePsPrice(styleNum, desc, base, today), 800);
+
+  if (btn) { btn.disabled = false; btn.textContent = '💾 Save'; }
+
+  if (errors.length > 0) {
+    showToast(`❌ 일부 저장 실패: ${errors.join(', ')}`);
+  } else {
+    _psDirty.clear();
+    const badge = document.getElementById('ps-unsaved-badge');
+    if (badge) badge.style.display = 'none';
+    showToast(`✅ ${savedCount}개 스타일 저장 완료!`);
+    await logPsAction('edit', `${savedCount}개 스타일 가격 저장`);
+    updatePsSelectedCount();
+  }
 }
 
+// ── 기존 자동저장 함수 (체크박스용으로만 유지) ──
 async function savePsPrice(styleNum, desc, base, today) {
+  // 체크박스 변경 시에만 호출 — 가격은 savePriceSheet()로만 저장
   if (base <= 0) {
     if (_psPrices[styleNum]) {
       await db.from('customer_prices').delete().eq('id', _psPrices[styleNum].id);
       delete _psPrices[styleNum];
-      _psSelected.delete(styleNum);
     }
-    const effEl = document.getElementById('ps-eff-'+styleNum);
-    if (effEl) effEl.textContent = '—';
-    updatePsSelectedCount();
     return;
   }
   const payload = {
@@ -24345,15 +24485,9 @@ async function savePsPrice(styleNum, desc, base, today) {
     base_price: base, effective_date: today, included: _psSelected.has(styleNum),
     updated_at: new Date().toISOString()
   };
-  const { data, error } = await db.from('customer_prices')
+  const { data } = await db.from('customer_prices')
     .upsert(payload, { onConflict: 'customer_id,style_number' }).select().single();
-  if (!error && data) {
-    _psPrices[styleNum] = data;
-    const effEl = document.getElementById('ps-eff-'+styleNum);
-    if (effEl) effEl.textContent = today;
-  }
-  // 수정 로그
-  await logPsAction('edit', `Style ${styleNum}: $${base.toFixed(2)}`);
+  if (data) _psPrices[styleNum] = data;
 }
 
 async function savePsNotes(styleNum, notes) {
@@ -24392,6 +24526,13 @@ async function downloadPriceSheetPdf() {
   const selectedStyles = _psAllStyles.filter(s => _psSelected.has(s.style_number) && (_psPrices[s.style_number]?.base_price||0) > 0);
   if (selectedStyles.length === 0) { showToast('⚠️ 선택된 스타일 중 가격이 입력된 것이 없습니다.'); return; }
 
+  const getPx = (styleNum, sizeKey) => {
+    const p = _psPrices[styleNum];
+    const base = p?.base_price || 0;
+    const custom = p?.[`price_${sizeKey}`];
+    return custom != null ? custom : getPriceForSize(base, sizeKey.toUpperCase().replace('XL','XL'));
+  };
+
   const adultStyles = selectedStyles.filter(s => { const c=(s.category||'').toLowerCase(); return !c.includes('kid')&&!c.includes('youth')&&!c.includes('toddler'); });
   const kidsStyles  = selectedStyles.filter(s => { const c=(s.category||'').toLowerCase(); return c.includes('kid')||c.includes('youth')||c.includes('toddler'); });
 
@@ -24399,14 +24540,19 @@ async function downloadPriceSheetPdf() {
     if (!styles.length) return '';
     const rows = styles.map(s => {
       const base = _psPrices[s.style_number].base_price;
+      const p = _psPrices[s.style_number];
+      const px2 = p?.price_2xl != null ? p.price_2xl : getPriceForSize(base,'2XL');
+      const px3 = p?.price_3xl != null ? p.price_3xl : getPriceForSize(base,'3XL');
+      const px4 = p?.price_4xl != null ? p.price_4xl : getPriceForSize(base,'4XL');
+      const px5 = p?.price_5xl != null ? p.price_5xl : getPriceForSize(base,'5XL');
       return `<tr style="border-bottom:1px solid #e5e7eb;">
         <td style="padding:7px 10px;font-family:monospace;font-weight:700;">${s.style_number}</td>
         <td style="padding:7px 10px;font-size:12px;">${s.description||''}</td>
         <td style="padding:7px 10px;text-align:right;font-weight:700;color:#1a56a0;">$${base.toFixed(2)}</td>
-        <td style="padding:7px 10px;text-align:right;">$${getPriceForSize(base,'2XL').toFixed(2)}</td>
-        <td style="padding:7px 10px;text-align:right;">$${getPriceForSize(base,'3XL').toFixed(2)}</td>
-        <td style="padding:7px 10px;text-align:right;">$${getPriceForSize(base,'4XL').toFixed(2)}</td>
-        <td style="padding:7px 10px;text-align:right;">$${getPriceForSize(base,'5XL').toFixed(2)}</td>
+        <td style="padding:7px 10px;text-align:right;">$${px2.toFixed(2)}</td>
+        <td style="padding:7px 10px;text-align:right;">$${px3.toFixed(2)}</td>
+        <td style="padding:7px 10px;text-align:right;">$${px4.toFixed(2)}</td>
+        <td style="padding:7px 10px;text-align:right;">$${px5.toFixed(2)}</td>
       </tr>`;
     }).join('');
     return `<div style="font-size:11px;font-weight:700;color:#1a56a0;text-transform:uppercase;letter-spacing:1px;margin:18px 0 6px;padding-bottom:4px;border-bottom:2px solid #1a56a0;">${title}</div>
