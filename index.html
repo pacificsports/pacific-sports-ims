@@ -5348,21 +5348,34 @@ async function openReceiveModal(orderId) {
     return (SIZE_ORDER.indexOf((a.size||'').toUpperCase())+99||99) - (SIZE_ORDER.indexOf((b.size||'').toUpperCase())+99||99);
   });
 
-  const rowsHtml = items.map((item, i) => `
-    <tr style="border-bottom:1px solid #f3f4f6;">
+  const SIZES_ALL = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+  const rowsHtml = items.map((item, i) => {
+    const isWrongSize = (item.reason||'').toLowerCase().includes('wrong size');
+    const correctSizeSelect = isWrongSize ? `
+      <div style="margin-top:4px;">
+        <select id="correct-size-${i}" data-idx="${i}"
+          style="width:68px;height:28px;font-size:11px;border:1px solid #f59e0b;border-radius:4px;background:#fffbeb;font-weight:600;color:#92400e;">
+          ${SIZES_ALL.map(s => `<option value="${s}" ${s===item.size?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <div style="font-size:9px;color:#92400e;text-align:center;margin-top:1px;">Correct Size</div>
+      </div>` : '';
+    return `
+    <tr style="border-bottom:1px solid #f3f4f6;${isWrongSize?'background:#fffdf0;':''}">
       <td style="padding:8px;font-weight:700;font-size:12px;">${item.style||''}</td>
       <td style="padding:8px;font-size:12px;">${item.color||''}</td>
-      <td style="padding:8px;text-align:center;font-weight:700;">${item.size||''}</td>
+      <td style="padding:8px;text-align:center;font-weight:700;">${item.size||''}${isWrongSize?'<div style="font-size:9px;color:#f59e0b;">sent wrong</div>':''}</td>
       <td style="padding:8px;text-align:center;font-weight:700;color:#dc2626;">${item.qty||0}</td>
       <td style="padding:8px;font-size:11px;color:#6b7280;">${item.reason||''}</td>
       <td style="padding:8px;text-align:center;">
         <input type="number" min="0" max="${item.qty||0}" value="0"
           id="reusable-${i}" data-idx="${i}" data-style="${item.style||''}" data-color="${item.color||''}" data-size="${item.size||''}"
           style="width:60px;height:32px;text-align:center;border:1px solid #d1d5db;border-radius:4px;font-size:13px;font-weight:600;color:#16a34a;">
+        ${correctSizeSelect}
       </td>
       <td style="padding:8px;text-align:right;font-size:12px;">$${(item.unit||item.unit_price||0).toFixed(2)}</td>
       <td style="padding:8px;text-align:right;font-weight:700;">$${((item.qty||0)*(item.unit||item.unit_price||0)).toFixed(2)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   const totalQty = items.reduce((s,i) => s+(i.qty||0), 0);
   const totalAmt = items.reduce((s,i) => s+(i.qty||0)*(i.unit||i.unit_price||0), 0);
@@ -5408,13 +5421,18 @@ async function submitReceive() {
     const cmNum = window._pendingCmNum;
     const rr = _receiveRR;
     const order = _receiveOrder;
+    const freightCredit = parseFloat(document.getElementById('receive-freight-credit')?.value || 0);
 
     // 1. Reusable 수량 수집 + PC Room 재고 추가
     const reusableItems = [];
     items.forEach((item, i) => {
       const reusableQty = parseInt(document.getElementById('reusable-' + i)?.value || 0);
       if (reusableQty > 0) {
-        reusableItems.push({ ...item, reusableQty });
+        const isWrongSize = (item.reason||'').toLowerCase().includes('wrong size');
+        const correctSize = isWrongSize
+          ? (document.getElementById('correct-size-' + i)?.value || item.size)
+          : item.size;
+        reusableItems.push({ ...item, reusableQty, size: correctSize, originalSize: item.size });
       }
     });
 
@@ -5508,7 +5526,6 @@ async function submitReceive() {
     showToast('✅ Receipt confirmed! Credit Memo ' + cmNum + ' created.');
 
     // 5. Credit Memo 모달 열기
-    const freightCredit = parseFloat(document.getElementById('receive-freight-credit')?.value || 0);
     const adjReason = document.getElementById('receive-adj-reason')?.value || '';
     await openCmModal(cmNum, order, cmLines, totalQty, totalAmt, cust, freightCredit, adjReason);
 
