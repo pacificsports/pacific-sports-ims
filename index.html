@@ -5643,17 +5643,26 @@ async function _doSendCreditMemo() {
       status: 'issued', issued_at: new Date().toISOString()
     }).eq('cm_number', cmNum);
 
-    await db.from('return_requests').update({
-      status: 'credited',
-      cm_number: cmNum,
-      updated_at: new Date().toISOString()
-    }).eq('id', rr.id);
-
-    // 캐시 업데이트
-    if (window._returnRequestMap?.[_receiveOrderId]) {
-      window._returnRequestMap[_receiveOrderId].forEach(r => {
-        if (r.id === rr.id) r.status = 'credited';
-      });
+    // return_requests 업데이트 - rr이 있으면 id로, 없으면 cm_number로
+    if (rr?.id) {
+      await db.from('return_requests').update({
+        status: 'credited',
+        cm_number: cmNum,
+        updated_at: new Date().toISOString()
+      }).eq('id', rr.id);
+      // 캐시 업데이트
+      if (window._returnRequestMap?.[_receiveOrderId]) {
+        window._returnRequestMap[_receiveOrderId].forEach(r => {
+          if (r.id === rr.id) r.status = 'credited';
+        });
+      }
+    } else {
+      // rr이 없으면 order_id로 찾아서 업데이트
+      await db.from('return_requests').update({
+        status: 'credited',
+        cm_number: cmNum,
+        updated_at: new Date().toISOString()
+      }).eq('order_id', window._receiveOrderId || order?.id).eq('status', 'received');
     }
 
     document.getElementById('cm-modal').style.display = 'none';
