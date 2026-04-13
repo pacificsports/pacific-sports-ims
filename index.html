@@ -19386,7 +19386,7 @@ async function parsePoPdf(input) {
         document.getElementById('po-parsing-msg').textContent = `재시도 중... (${attempt}/3)`;
         await new Promise(r => setTimeout(r, 2000 * attempt));
       }
-      response = await fetch('https://po-confirm-email.hjbae.workers.dev/parse-po', {
+      response = await fetch('https://parse-po.hjbae.workers.dev', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pdf_base64: base64 })
@@ -19398,18 +19398,12 @@ async function parsePoPdf(input) {
     }
     if (!response.ok) throw new Error(data.error || 'API 오류');
 
-    // Worker { ok, data } 형태로 리턴 → data.data가 파싱된 PO JSON
-    const text = JSON.stringify(data.data || {});
+    // Claude 응답에서 JSON 추출
+    const text = (data.content || []).map(c => c.text || '').join('');
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('JSON 파싱 실패');
     parsedPoData = JSON.parse(jsonMatch[0]);
-    // worker 필드명 통일 (customer_po → po_number)
-    if (!parsedPoData.po_number && parsedPoData.customer_po) parsedPoData.po_number = parsedPoData.customer_po;
-    parsedPoData.lines = (parsedPoData.lines || []).map(l => ({
-      ...l,
-      style_number: l.style_number || l.style || l.item_code || '',
-      unit_price: l.unit_price || l.unit || 0,
-    }));
+    parsedPoData.lines = parsedPoData.lines || [];
 
     // Worker가 lines를 못 파싱했으면 로컬 파싱 시도
     if (parsedPoData.lines.length === 0) {
