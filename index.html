@@ -338,6 +338,20 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 </head>
 <body>
 <!-- ══════════════════════════════════════════════ -->
+<!-- RETURNED BREAKDOWN MODAL                         -->
+<!-- ══════════════════════════════════════════════ -->
+<div id="returned-breakdown-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:90%;max-width:700px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="background:#7c3aed;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <div style="color:#fff;font-weight:800;font-size:15px;">↩ Return Analysis</div>
+      <button onclick="document.getElementById('returned-breakdown-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#ddd6fe;line-height:1;">✕</button>
+    </div>
+    <div style="padding:16px 20px;overflow-y:auto;flex:1;" id="returned-breakdown-body">
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
 <!-- RECEIVE MODAL                                   -->
 <!-- ══════════════════════════════════════════════ -->
 <div id="receive-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;align-items:center;justify-content:center;">
@@ -595,7 +609,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
 
       <!-- 통계 KPI -->
-      <div id="po-kpi-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+      <div id="po-kpi-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;">
         <div class="kpi" style="border-left:4px solid #1a56a0;cursor:pointer;" onclick="showPoBreakdown('week')" title="거래처별 상세 보기">
           <div class="kpi-label">📋 This Week</div>
           <div class="kpi-val" id="po-kpi-week" style="text-decoration:underline dotted;text-underline-offset:3px;">—</div>
@@ -610,6 +624,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div class="kpi-label">📆 This Year</div>
           <div class="kpi-val" id="po-kpi-year" style="text-decoration:underline dotted;text-underline-offset:3px;">—</div>
           <div class="kpi-sub" id="po-kpi-year-vs" style="color:#6b7280;">vs last year</div>
+        </div>
+        <div class="kpi" style="border-left:4px solid #7c3aed;cursor:pointer;" onclick="showReturnedBreakdown()" title="이유별 리턴 현황">
+          <div class="kpi-label">↩ Returned</div>
+          <div class="kpi-val" id="po-kpi-returned" style="color:#7c3aed;text-decoration:underline dotted;text-underline-offset:3px;">—</div>
+          <div class="kpi-sub" id="po-kpi-returned-amt" style="color:#6b7280;">$0.00</div>
         </div>
         <div class="kpi" style="border-left:4px solid #dc2626;">
           <div class="kpi-label">🔴 Back Orders</div>
@@ -5128,6 +5147,16 @@ async function loadCustomerPOs(subview = null) {
   document.getElementById('po-kpi-year-vs').style.color = sum(thisYear) >= sum(lastYear) ? '#16a34a' : '#dc2626';
   document.getElementById('po-kpi-backorder').textContent = backorders.length;
 
+  // Returned KPI - credit_memos에서 조회
+  try {
+    const { data: cmData } = await db.from('credit_memos').select('total_amount,freight_credit,status');
+    const issuedCms = (cmData||[]).filter(c => ['issued','draft'].includes(c.status));
+    const returnedCount = issuedCms.length;
+    const returnedAmt = issuedCms.reduce((s,c) => s + (c.total_amount||0) + (c.freight_credit||0), 0);
+    document.getElementById('po-kpi-returned').textContent = returnedCount;
+    document.getElementById('po-kpi-returned-amt').textContent = '$' + returnedAmt.toFixed(2);
+  } catch(e) { console.warn('Returned KPI error:', e); }
+
   // Badge
   const active = allCustomerPOs.filter(o => !['shipped','invoiced','cancelled'].includes(o.status)).length;
   document.getElementById('open-orders-badge').textContent = active || '';
@@ -5155,6 +5184,111 @@ function filterCustomerPOs() { renderCustomerPOTable(); }
 // RECEIVE MODAL + CREDIT MEMO
 // ══════════════════════════════════════════════════════
 let _receiveOrderId = null, _receiveRR = null, _receiveOrder = null;
+
+async function showReturnedBreakdown() {
+  const modal = document.getElementById('returned-breakdown-modal');
+  const body = document.getElementById('returned-breakdown-body');
+  body.innerHTML = '<div style="text-align:center;padding:20px;color:#6b7280;">Loading...</div>';
+  modal.style.display = 'flex';
+
+  try {
+    const { data: cmData } = await db.from('credit_memos')
+      .select('cm_number,total_amount,freight_credit,lines,created_at,status')
+      .order('created_at', { ascending: false });
+
+    // 이유별 집계
+    const reasonMap = {};
+    let totalQty = 0, totalAmt = 0;
+
+    (cmData||[]).forEach(cm => {
+      (cm.lines||[]).forEach(l => {
+        const reason = l.reason || 'Other';
+        if (!reasonMap[reason]) reasonMap[reason] = { qty: 0, amt: 0 };
+        reasonMap[reason].qty += l.qty || 0;
+        reasonMap[reason].amt += l.amt || 0;
+        totalQty += l.qty || 0;
+        totalAmt += l.amt || 0;
+      });
+      totalAmt += cm.freight_credit || 0;
+    });
+
+    // 수량 내림차순 정렬
+    const sorted = Object.entries(reasonMap).sort((a,b) => b[1].qty - a[1].qty);
+
+    const REASON_COLORS = {
+      'Over Shipped': '#f59e0b',
+      'Wrong Size / Wrong Color': '#3b82f6',
+      'Hole / Defect': '#ef4444',
+      'Damaged in Transit': '#f97316',
+      'Customer Refusal': '#8b5cf6',
+      'Other': '#6b7280'
+    };
+
+    const reasonRows = sorted.map(([reason, data]) => {
+      const pct = totalQty > 0 ? Math.round(data.qty / totalQty * 100) : 0;
+      const color = REASON_COLORS[reason] || '#6b7280';
+      return `<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:10px 8px;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0;"></div>
+            <span style="font-weight:600;font-size:13px;">${reason}</span>
+          </div>
+          <div style="margin-top:4px;background:#f3f4f6;border-radius:4px;height:6px;overflow:hidden;">
+            <div style="background:${color};height:100%;width:${pct}%;border-radius:4px;"></div>
+          </div>
+        </td>
+        <td style="padding:10px 8px;text-align:center;font-weight:700;color:${color};">${data.qty} pcs</td>
+        <td style="padding:10px 8px;text-align:center;font-size:12px;color:#6b7280;">${pct}%</td>
+        <td style="padding:10px 8px;text-align:right;font-weight:600;color:#dc2626;">($${data.amt.toFixed(2)})</td>
+      </tr>`;
+    }).join('');
+
+    // 최근 Credit Memo 목록
+    const recentRows = (cmData||[]).slice(0,10).map(cm => {
+      const cmTotalAmt = (cm.total_amount||0) + (cm.freight_credit||0);
+      return `<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:8px;font-family:monospace;font-weight:600;font-size:12px;">${cm.cm_number}</td>
+        <td style="padding:8px;font-size:12px;color:#6b7280;">${(cm.created_at||'').slice(0,10)}</td>
+        <td style="padding:8px;text-align:right;font-weight:600;color:#dc2626;">($${cmTotalAmt.toFixed(2)})</td>
+      </tr>`;
+    }).join('');
+
+    body.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;">
+        <div style="background:#fdf4ff;border:1px solid #e9d5ff;border-radius:8px;padding:12px;text-align:center;">
+          <div style="font-size:11px;color:#7c3aed;font-weight:700;text-transform:uppercase;">Total Returns</div>
+          <div style="font-size:24px;font-weight:900;color:#7c3aed;">${totalQty} pcs</div>
+        </div>
+        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;text-align:center;">
+          <div style="font-size:11px;color:#dc2626;font-weight:700;text-transform:uppercase;">Total Credit</div>
+          <div style="font-size:24px;font-weight:900;color:#dc2626;">($${totalAmt.toFixed(2)})</div>
+        </div>
+      </div>
+      <div style="font-weight:700;font-size:13px;color:#374151;margin-bottom:8px;">By Reason</div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+        <thead><tr style="background:#f9fafb;">
+          <th style="padding:8px;text-align:left;font-size:11px;color:#6b7280;">REASON</th>
+          <th style="padding:8px;text-align:center;font-size:11px;color:#6b7280;">QTY</th>
+          <th style="padding:8px;text-align:center;font-size:11px;color:#6b7280;">%</th>
+          <th style="padding:8px;text-align:right;font-size:11px;color:#6b7280;">CREDIT</th>
+        </tr></thead>
+        <tbody>${reasonRows || '<tr><td colspan="4" style="padding:20px;text-align:center;color:#9ca3af;">No returns yet</td></tr>'}</tbody>
+      </table>
+      <div style="font-weight:700;font-size:13px;color:#374151;margin-bottom:8px;">Recent Credit Memos</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="background:#f9fafb;">
+          <th style="padding:8px;text-align:left;font-size:11px;color:#6b7280;">CM#</th>
+          <th style="padding:8px;text-align:left;font-size:11px;color:#6b7280;">DATE</th>
+          <th style="padding:8px;text-align:right;font-size:11px;color:#6b7280;">CREDIT</th>
+        </tr></thead>
+        <tbody>${recentRows || '<tr><td colspan="3" style="padding:20px;text-align:center;color:#9ca3af;">No credit memos yet</td></tr>'}</tbody>
+      </table>`;
+
+  } catch(e) {
+    body.innerHTML = '<div style="text-align:center;padding:20px;color:#dc2626;">Error loading data</div>';
+    console.error(e);
+  }
+}
 
 async function openReceiveModal(orderId) {
   _receiveOrderId = orderId;
