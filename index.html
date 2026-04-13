@@ -19822,7 +19822,20 @@ async function parsePoPdf(input) {
     // Worker 응답: { ok: true, data: { customer_po, lines, ... } }
     const parsedRaw = data.data || data;
     parsedPoData = parsedRaw;
-    parsedPoData.lines = parsedPoData.lines || [];
+
+    // 필드명 정규화 (worker가 다른 키로 보낼 수 있음)
+    parsedPoData.po_number = parsedPoData.po_number || parsedPoData.customer_po || '';
+    parsedPoData.customer_name = parsedPoData.customer_name || '';
+    parsedPoData.terms = parsedPoData.terms || '';
+    parsedPoData.lines = (parsedPoData.lines || []).map(l => ({
+      ...l,
+      // style → style_number 매핑
+      style_number: l.style_number || l.style || l.item_code || '',
+      color: l.color || '',
+      size: l.size || '',
+      qty: l.qty || l.quantity || 0,
+      unit_price: l.unit_price || l.price || 0,
+    }));
 
     // Worker가 lines를 못 파싱했으면 로컬 파싱 시도
     if (parsedPoData.lines.length === 0) {
