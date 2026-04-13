@@ -5512,8 +5512,8 @@ async function submitReceive() {
     const adjReason = document.getElementById('receive-adj-reason')?.value || '';
     await openCmModal(cmNum, order, cmLines, totalQty, totalAmt, cust, freightCredit, adjReason);
 
-    // 6. 테이블 새로고침
-    renderCustomerPOTable();
+    // 6. 테이블 새로고침 (return map도 같이 업데이트)
+    await refreshReturnMap();
 
   } catch(e) {
     console.error('submitReceive error:', e);
@@ -5713,7 +5713,7 @@ async function _doSendCreditMemo() {
 
     document.getElementById('cm-modal').style.display = 'none';
     showToast('✅ Credit Memo ' + cmNum + ' sent to ' + toEmail);
-    renderCustomerPOTable();
+    await refreshReturnMap();
 
   } catch(e) {
     console.error('submitCreditMemo error:', e);
@@ -5817,6 +5817,20 @@ function raCalcRow(idx) {
   const ta = document.getElementById('ra-total-amt');
   if (tq) tq.textContent = totalQty;
   if (ta) ta.textContent = '$' + totalAmt.toFixed(2);
+}
+
+async function refreshReturnMap() {
+  try {
+    const { data: rrData } = await db.from('return_requests')
+      .select('id,order_id,status,wh,ra_number')
+      .in('status', ['requested','authorized','received','credited']);
+    window._returnRequestMap = {};
+    (rrData||[]).forEach(rr => {
+      if (!window._returnRequestMap[rr.order_id]) window._returnRequestMap[rr.order_id] = [];
+      window._returnRequestMap[rr.order_id].push(rr);
+    });
+  } catch(e) { console.warn('refreshReturnMap error:', e); }
+  renderCustomerPOTable();
 }
 
 function makeReturnBtn(orderId) {
@@ -7784,6 +7798,8 @@ async function submitRa() {
     }
 
     document.getElementById('ra-modal').style.display = 'none';
+    // return map 새로고침 → 버튼 즉시 업데이트
+    await refreshReturnMap();
   } catch(e) {
     showToast('❌ 오류: ' + e.message);
   } finally {
