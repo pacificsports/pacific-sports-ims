@@ -2465,7 +2465,8 @@ async function loadInvoices() {
   const { data } = await db.from('orders')
     .select('*, warehouses(code,name)')
     .eq('status', 'invoiced')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(5000);
   const orders = data || [];
   document.getElementById('invoice-count').textContent = `${orders.length} invoices`;
   if (orders.length === 0) {
@@ -5107,7 +5108,8 @@ async function loadCustomerPOs(subview = null) {
   document.getElementById('customerpo-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data } = await db.from('orders')
     .select('*, warehouses(code,name)')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(5000);
   // BO 오더는 Back Orders 탭에서만 관리 — Customer POs에서 제외
   allCustomerPOs = (data || []).filter(o => !((o.order_number||'').endsWith('-BO') || (o.customer_po||'').endsWith('-BO')));
   // 현재 뷰 버튼 상태 갱신
@@ -6284,7 +6286,8 @@ async function loadOrderStatus() {
   const { data } = await db.from('orders')
     .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail)')
     .not('status', 'in', '(cancelled,completed)')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(5000);
 
   // Emergency + Defect pending 맵 미리 로드 (카드 배지용)
   const [emergResult, defectResult] = await Promise.all([
@@ -8156,7 +8159,8 @@ async function loadCompleted() {
   const { data: orders } = await db.from('orders')
     .select('*, warehouses(code,name)')
     .in('status', ['invoiced','completed','cancelled'])
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(5000);
 
   _completedOrders = orders || [];
 
@@ -8259,7 +8263,8 @@ async function loadBackOrders() {
   const { data: orders } = await db.from('orders')
     .select('*, warehouses(code,name)')
     .eq('status', 'backordered')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(5000);
 
   const filtered = (orders||[]).filter(o => {
     if (whFilter === 'SC') return o.wh_code !== 'CA';
@@ -14855,6 +14860,196 @@ function updateBatchShipCount() {
     btnEl.onclick = (e) => { e.stopPropagation(); openBatchShipModal(cardWh); };
     placeholder.appendChild(btnEl);
   });
+}
+
+async function generateBatchBol() {
+  const items = window._batchShipItems || [];
+  if (items.length === 0) { showToast('❌ 선택된 오더가 없습니다.'); return; }
+
+  // 첫 번째 PO 기준으로 BOL 생성 (LTL 배치는 같은 트럭이므로)
+  const { orderId, wh } = items[0];
+  const uid = orderId + '_' + wh;
+
+  // 운송 정보 수집
+  const carrier = document.getElementById('bpo-carrier-' + uid)?.value || document.getElementById('batch-ltl-freight')?.value ? 'LTL' : '';
+  const freightCo = document.getElementById('bpo-freight-' + uid)?.value || document.getElementById('batch-ltl-freight')?.value || '';
+  const tracking = document.getElementById('bpo-tracking-' + uid)?.value || document.getElementById('batch-ltl-pro')?.value || '';
+  const weight = document.getElementById('bpo-weight-' + uid)?.value || document.getElementById('batch-ltl-weight')?.value || '';
+  const freightClass = document.getElementById('bpo-freight-class-' + uid)?.value || document.getElementById('batch-ltl-freight-class')?.value || '70';
+  const shipDate = document.getElementById('batch-ship-date')?.value || (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})();
+  const shipDateStr = shipDate ? new Date(shipDate + 'T00:00:00').toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' }) : '';
+
+  // 모든 PO의 오더 + 라인 데이터 로드
+  const allOrdersData = [];
+  for (const item of items) {
+    const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', item.orderId).single();
+    const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', item.orderId);
+    if (order && lines) allOrdersData.push({ order, lines: lines || [], wh: item.wh });
+  }
+  if (allOrdersData.length === 0) { showToast('❌ 오더 데이터를 불러올 수 없습니다.'); return; }
+
+  const shipInfo = {
+    carrier: carrier || 'LTL',
+    freightCarrier: freightCo,
+    tracking,
+    weight,
+    freightClass,
+    shipDate: shipDateStr,
+    wh
+  };
+
+  // 배치 BOL HTML 생성 (모든 PO를 하나의 BOL에)
+  const bolHtml = buildBatchBolHtml(allOrdersData, shipInfo);
+
+  // 새 창에서 프린트 미리보기
+  const win = window.open('', '_blank', 'width=900,height=700');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>BOL - Batch Ship</title>
+    <style>
+      @media print { body { margin: 0; } .no-print { display: none !important; } @page { margin: 0.5in; } }
+      body { font-family: Arial, sans-serif; }
+      .no-print { padding: 12px; background: #1e40af; text-align: center; }
+      .no-print button { padding: 8px 24px; background: #fff; color: #1e40af; border: none; border-radius: 6px; font-size: 14px; font-weight: 700; cursor: pointer; margin: 0 6px; }
+    </style>
+  </head><body>
+    <div class="no-print">
+      <button onclick="window.print()">🖨️ Print BOL</button>
+      <button onclick="window.close()">✕ Close</button>
+    </div>
+    ${bolHtml}
+  </body></html>`);
+  win.document.close();
+}
+
+function buildBatchBolHtml(allOrdersData, shipInfo) {
+  const dateStr = shipInfo.shipDate || new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const SIZE_ORDER_BOL = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL'];
+  const sizeOrd = s => (SIZE_ORDER_BOL.indexOf((s||'').toUpperCase()) + 1) || 99;
+
+  // 모든 PO 목록
+  const poList = allOrdersData.map(d => d.order.customer_po || d.order.order_number || '').filter(Boolean).join(', ');
+  const customerName = allOrdersData[0]?.order?.customer_name || '—';
+  const shipAddr = allOrdersData[0]?.order?.ship_addr || allOrdersData[0]?.order?.bill_addr || '';
+  const wh = shipInfo.wh || 'SC';
+  const bolNum = 'BATCH-' + new Date().toISOString().slice(2,10).replace(/-/g,'');
+
+  // 각 PO별 라인 섹션 생성
+  let grandTotalPcs = 0;
+  const poSections = allOrdersData.map(({ order, lines, wh: itemWh }) => {
+    const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+    const filteredLines = isSplit
+      ? lines.filter(l => wh === 'CA' ? (l.wh==='CA'||l.wh==='SC&CA') : (l.wh==='SC'||l.wh==='SC&CA'||!l.wh))
+      : lines;
+
+    const sorted = [...filteredLines].sort((a,b) => {
+      const ca = (a.color||'').localeCompare(b.color||'');
+      return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
+    });
+
+    let poTotalPcs = 0;
+    const rows = sorted.map(l => {
+      const isCA = wh === 'CA';
+      const alloc = isCA ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
+      const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
+      const fullBoxPcs = Object.entries(alloc)
+        .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
+        .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0)*ppb + (v.partial||0) : (v||0)), 0);
+      const pcrPcs = Object.entries(alloc)
+        .filter(([k]) => k.includes('PCR|PCR'))
+        .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
+      const shipPcs = fullBoxPcs + pcrPcs;
+      if (shipPcs === 0) return '';
+      poTotalPcs += shipPcs;
+      return `<tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:5px 8px;font-family:monospace;font-size:11px;">${l.styles?.style_number||''}</td>
+        <td style="padding:5px 8px;font-size:11px;">${l.styles?.description||''}</td>
+        <td style="padding:5px 8px;font-size:11px;">${(l.color||'').toUpperCase()}</td>
+        <td style="padding:5px 8px;font-size:11px;text-align:center;">${l.size||''}</td>
+        <td style="padding:5px 8px;font-size:11px;text-align:center;font-weight:700;">${shipPcs}</td>
+      </tr>`;
+    }).filter(Boolean).join('');
+
+    grandTotalPcs += poTotalPcs;
+    if (!rows) return '';
+    return `<div style="margin-bottom:12px;">
+      <div style="background:#f1f5f9;padding:5px 8px;font-size:11px;font-weight:700;color:#0f2744;border-left:3px solid #0f2744;">
+        PO# ${order.customer_po||'—'} &nbsp;·&nbsp; ${poTotalPcs} pcs
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        ${rows}
+      </table>
+    </div>`;
+  }).filter(Boolean).join('');
+
+  return `<div style="font-family:Arial,sans-serif;font-size:12px;padding:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;padding-bottom:12px;border-bottom:3px solid #111;">
+      <div>
+        <div style="font-size:22px;font-weight:800;letter-spacing:2px;color:#111;">PACIFIC SPORTS INC</div>
+        <div style="font-size:11px;color:#555;margin-top:4px;">1605 South Guignard Parkway, Sumter, SC 29150<br>Tel: (803) 760-6251</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:24px;font-weight:800;color:#0f2744;letter-spacing:1px;">BILL OF LADING</div>
+        <div style="font-size:11px;color:#555;margin-top:4px;"><b>BOL #:</b> ${bolNum}</div>
+        <div style="font-size:11px;color:#555;"><b>Date:</b> ${dateStr}</div>
+        <div style="font-size:11px;color:#0f2744;font-weight:700;margin-top:2px;"><b>PO(s):</b> ${poList}</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;">
+      <div style="border:1px solid #d1d5db;border-radius:6px;padding:10px;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">Ship From</div>
+        <div style="font-weight:700;font-size:12px;">PACIFIC SPORTS INC</div>
+        <div style="font-size:11px;color:#374151;margin-top:2px;">1605 South Guignard Pkwy<br>Sumter, SC 29150</div>
+      </div>
+      <div style="border:1px solid #d1d5db;border-radius:6px;padding:10px;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">Ship To</div>
+        <div style="font-weight:700;font-size:12px;">${customerName}</div>
+        <div style="font-size:11px;color:#374151;margin-top:2px;">${(shipAddr||'').replace(/\n/g,'<br>') || '—'}</div>
+      </div>
+      <div style="border:1px solid #d1d5db;border-radius:6px;padding:10px;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:6px;">Carrier Info</div>
+        <div style="font-size:11px;color:#374151;">
+          <div><b>Carrier:</b> ${shipInfo.carrier||'LTL'}</div>
+          ${shipInfo.freightCarrier ? `<div><b>Freight Co.:</b> ${shipInfo.freightCarrier}</div>` : ''}
+          ${shipInfo.tracking ? `<div><b>PRO #:</b> ${shipInfo.tracking}</div>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:10px;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px;">
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Total Pieces</div><div style="font-weight:700;font-size:16px;">${grandTotalPcs}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Total POs</div><div style="font-weight:700;font-size:16px;">${allOrdersData.length}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Total Weight</div><div style="font-weight:700;font-size:16px;">${shipInfo.weight ? shipInfo.weight + ' lbs' : '—'}</div></div>
+        <div><div style="color:#9ca3af;font-size:10px;text-transform:uppercase;">Freight Class</div><div style="font-weight:700;">${shipInfo.freightClass ? 'Class ' + shipInfo.freightClass : '—'}</div></div>
+      </div>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+      <thead>
+        <tr style="background:#0f2744;color:#fff;">
+          <th style="padding:7px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Style #</th>
+          <th style="padding:7px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Description</th>
+          <th style="padding:7px 8px;text-align:left;font-size:10px;text-transform:uppercase;">Color</th>
+          <th style="padding:7px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Size</th>
+          <th style="padding:7px 8px;text-align:center;font-size:10px;text-transform:uppercase;">Pcs</th>
+        </tr>
+      </thead>
+    </table>
+    ${poSections}
+
+    <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+      <div>
+        <div style="font-size:11px;font-weight:700;margin-bottom:6px;color:#374151;">Shipper Signature</div>
+        <div style="height:50px;border-bottom:1px solid #374151;margin-bottom:4px;"></div>
+        <div style="font-size:10px;color:#6b7280;">PACIFIC SPORTS INC</div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;margin-bottom:6px;color:#374151;">Driver Signature / Date</div>
+        <div style="height:50px;border-bottom:1px solid #374151;margin-bottom:4px;"></div>
+        <div style="font-size:10px;color:#6b7280;">Carrier: ${shipInfo.freightCarrier || shipInfo.carrier || '—'}</div>
+      </div>
+    </div>
+  </div>`;
 }
 
 async function openBatchShipModal(whFilter) {
@@ -22771,8 +22966,13 @@ function showCreditHoldFlash(overAmt) {
         <div style="font-size:12px;font-weight:600;color:#374151;">사진 또는 PDF 업로드</div>
         <div style="font-size:10px;color:#9ca3af;margin-top:2px;">클릭 · JPG, PNG, PDF · 여러 파일 가능</div>
       </div>
-      <div id="batch-bol-file-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px;"></div>
+      <div id="batch-bol-file-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px;"></div>
       <input type="file" id="batch-bol-file-input" accept="image/*,application/pdf" multiple style="display:none;" onchange="handleBatchBolFileSelect(this)">
+
+      <!-- BOL 생성 버튼 -->
+      <button onclick="generateBatchBol()" style="width:100%;padding:9px;margin-bottom:12px;background:#f0f7ff;border:1.5px solid #93c5fd;border-radius:8px;color:#1e40af;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+        📋 BOL 생성 (첫 번째 PO 기준)
+      </button>
 
       <!-- 이메일 -->
       <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;">
