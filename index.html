@@ -13549,11 +13549,13 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
         <table style="border-collapse:collapse;font-size:13px;">
           ${carrier ? `<tr><td style="padding:3px 0;color:#6b7280;width:120px;">Carrier</td><td style="font-weight:700;">${displayCarrier}</td></tr>` : ''}
           ${tracking && !isWillCall ? `<tr><td style="padding:3px 0;color:#6b7280;">${trackingLabel}</td><td style="font-weight:600;font-family:monospace;">${(() => {
-            const t = tracking;
-            if (carrier === 'UPS') return `<a href="https://www.ups.com/track?tracknum=${t}" style="color:#1e40af;font-weight:600;" target="_blank">${t} ↗</a>`;
-            if (carrier === 'FedEx') return `<a href="https://www.fedex.com/fedextrack/?trknbr=${t}" style="color:#6d28d9;font-weight:600;" target="_blank">${t} ↗</a>`;
-            if (isLtl) { const ltlUrl = getLtlTrackingUrl(freightCarrier || '', t); return `<a href="${ltlUrl}" style="color:#0369a1;font-weight:600;" target="_blank">${t} ↗</a>`; }
-            return t;
+            const nums = tracking.split(',').map(t => t.trim()).filter(Boolean);
+            return nums.map(t => {
+              if (carrier === 'UPS') return `<a href="https://www.ups.com/track?tracknum=${t}" style="color:#1e40af;font-weight:600;" target="_blank">${t} ↗</a>`;
+              if (carrier === 'FedEx') return `<a href="https://www.fedex.com/fedextrack/?trknbr=${t}" style="color:#6d28d9;font-weight:600;" target="_blank">${t} ↗</a>`;
+              if (isLtl) { const ltlUrl = getLtlTrackingUrl(freightCarrier || '', t); return `<a href="${ltlUrl}" style="color:#0369a1;font-weight:600;" target="_blank">${t} ↗</a>`; }
+              return t;
+            }).join('<br>');
           })()}</td></tr>` : ''}
           ${totalBoxes ? `<tr><td style="padding:3px 0;color:#6b7280;">Total Boxes</td><td style="font-weight:700;">${totalBoxes} boxes</td></tr>` : ''}
         </table>
@@ -17495,9 +17497,19 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
       : carrier === 'FedEx' ? `https://www.fedex.com/fedextrack/?trknbr=${tracking}`
       : isLtlInv ? getLtlTrackingUrl(freightCo || '', tracking)
       : null;
-    const trackingStr = tracking
-      ? (trackingUrl ? `<a href="${trackingUrl}" target="_blank" style="color:#1e40af;font-weight:600;font-family:monospace;">${tracking} ↗</a>` : tracking)
-      : '—';
+    const trackingStr = (() => {
+      if (!tracking) return '—';
+      const nums = tracking.split(',').map(t => t.trim()).filter(Boolean);
+      if (nums.length === 1) {
+        return trackingUrl ? `<a href="${trackingUrl}" target="_blank" style="color:#1e40af;font-weight:600;font-family:monospace;">${nums[0]} ↗</a>` : nums[0];
+      }
+      return nums.map(t => {
+        const url = carrier === 'UPS' ? `https://www.ups.com/track?tracknum=${t}`
+          : carrier === 'FedEx' ? `https://www.fedex.com/fedextrack/?trknbr=${t}`
+          : isLtlInv ? getLtlTrackingUrl(freightCo || '', t) : null;
+        return url ? `<a href="${url}" target="_blank" style="color:#1e40af;font-weight:600;font-family:monospace;">${t} ↗</a>` : t;
+      }).join('<br>');
+    })();
     const billAddr = (order.bill_addr || '').replace(/\n/g, '<br>') || order.customer_name || '—';
     const shipAddr = (order.ship_addr || '').replace(/\n/g, '<br>') || order.customer_name || '—';
     const paymentLines = (paymentInfo || '').replace(/\\n/g, '<br>').replace(/\n/g, '<br>').replace(/\r/g, '');
