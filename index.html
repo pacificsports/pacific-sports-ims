@@ -19614,36 +19614,43 @@ async function parsePoPdf(input) {
 
     document.getElementById('po-parsing-msg').textContent = 'Claude가 PO 분석 중...';
 
-    // Cloudflare Worker 호출 (최대 3회 재시도)
+    // Cloudflare Worker 호출 (최대 3회 재시도 — Worker 자체도 retry하지만 네트워크 오류 대비)
     let response, data;
     for (let attempt = 1; attempt <= 3; attempt++) {
       if (attempt > 1) {
         document.getElementById('po-parsing-msg').textContent = `재시도 중... (${attempt}/3)`;
-        await new Promise(r => setTimeout(r, 2000 * attempt));
+        await new Promise(r => setTimeout(r, 3000 * attempt));
       }
-      response = await fetch('https://parse-po.hjbae.workers.dev', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pdf_base64: base64 })
-      });
-      data = await response.json();
-      // Overloaded 에러면 재시도
-      if (response.ok || (!data.error?.toLowerCase().includes('overload') && !data.error?.toLowerCase().includes('529'))) break;
-      console.warn(`Attempt ${attempt} failed:`, data.error);
+      try {
+        response = await fetch('https://parse-po.hjbae.workers.dev', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pdf_base64: base64 })
+        });
+        data = await response.json();
+        // 529 Overloaded면 재시도
+        if (response.status === 529 || data.status === 529) {
+          console.warn(`Attempt ${attempt} overloaded`);
+          continue;
+        }
+        break;
+      } catch(fetchErr) {
+        if (attempt === 3) throw fetchErr;
+        console.warn(`Attempt ${attempt} network error:`, fetchErr);
+      }
     }
-    if (!response.ok) throw new Error(data.error || 'API 오류');
+    if (!response.ok) throw new Error(data?.error || 'API 오류 (' + response.status + ')');
 
-    // Claude 응답에서 JSON 추출
-    const text = (data.content || []).map(c => c.text || '').join('');
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('JSON 파싱 실패');
-    parsedPoData = JSON.parse(jsonMatch[0]);
+    // Worker 응답: { ok: true, data: { customer_po, lines, ... } }
+    const parsedRaw = data.data || data;
+    parsedPoData = parsedRaw;
     parsedPoData.lines = parsedPoData.lines || [];
 
     // Worker가 lines를 못 파싱했으면 로컬 파싱 시도
     if (parsedPoData.lines.length === 0) {
       console.warn('[parsePoPdf] Worker returned 0 lines, trying local parsePoText...');
-      const localResult = parsePoText(text);
+      const rawText = JSON.stringify(parsedRaw);
+      const localResult = parsePoText(rawText);
       if (localResult.lines.length > 0) {
         parsedPoData.lines = localResult.lines;
         parsedPoData.customer_name = parsedPoData.customer_name || localResult.customer_name;
