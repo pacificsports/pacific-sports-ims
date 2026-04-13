@@ -5426,7 +5426,6 @@ async function submitReceive() {
     const rr = _receiveRR;
     const order = _receiveOrder;
     const freightCredit = parseFloat(document.getElementById('receive-freight-credit')?.value || 0);
-    const adjReason = document.getElementById('receive-adj-reason')?.value || '';
 
     // 1. Reusable 수량 수집 + PC Room 재고 추가
     const reusableItems = [];
@@ -5487,18 +5486,11 @@ async function submitReceive() {
     // 2. Credit Memo 생성
     const totalQty = items.reduce((s,i) => s+(i.qty||0), 0);
     const totalAmt = items.reduce((s,i) => s+(i.qty||0)*(i.unit||i.unit_price||0), 0);
-    const cmLines = items.map((i, idx) => {
-      const isWrongSize = (i.reason||'').toLowerCase().includes('wrong size');
-      const displaySize = isWrongSize
-        ? (document.getElementById('correct-size-' + idx)?.value || i.size)
-        : i.size;
-      return {
-        style: i.style||'', color: i.color||'', size: displaySize,
-        sent_size: isWrongSize ? i.size : null,
-        qty: i.qty||0, unit: i.unit||i.unit_price||0,
-        amt: (i.qty||0)*(i.unit||i.unit_price||0), reason: i.reason||''
-      };
-    });
+    const cmLines = items.map(i => ({
+      style: i.style||'', color: i.color||'', size: i.size||'',
+      qty: i.qty||0, unit: i.unit||i.unit_price||0,
+      amt: (i.qty||0)*(i.unit||i.unit_price||0), reason: i.reason||''
+    }));
 
     const { data: custArr } = await db.from('customers').select('*').eq('id', order.customer_id).limit(1);
     const cust = custArr?.[0];
@@ -5538,6 +5530,7 @@ async function submitReceive() {
     showToast('✅ Receipt confirmed! Credit Memo ' + cmNum + ' created.');
 
     // 5. Credit Memo 모달 열기
+    const adjReason = document.getElementById('receive-adj-reason')?.value || '';
     await openCmModal(cmNum, order, cmLines, totalQty, totalAmt, cust, freightCredit, adjReason);
 
     // 6. 테이블 새로고침 (return map도 같이 업데이트)
@@ -5656,39 +5649,77 @@ async function _doSendCreditMemo() {
     const cmFullHtml = buildCreditMemoHtml(order, lines, cmNum, raNum, freightCredit, cmSettings2, adjReason);
     const cmPdfBase64 = await htmlToPdfBase64(cmFullHtml);
 
-    // 이메일 body - Invoice 스타일
+    // 이메일 body - Invoice 스타일 (라인 테이블 포함)
     const totalCredit = (lines||[]).reduce((s,l) => s+(l.amt||0), 0) + (freightCredit||0);
-    const emailBodyHtml = `<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;">
-      <div style="background:#111827;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="color:#fff;font-size:20px;font-weight:900;">PACIFIC SPORTS</div>
-        <div style="color:#fff;font-size:16px;font-weight:700;">CREDIT MEMO</div>
-      </div>
-      <div style="padding:24px;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;">
-        <p style="margin:0 0 12px;">Dear <strong>${order?.customer_name||''}</strong>,</p>
-        <p style="margin:0 0 16px;color:#374151;">Please find your Credit Memo <strong>${cmNum}</strong> attached for returned merchandise from PO# <strong>${order?.customer_po||''}</strong>.</p>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:16px;">
-          <table style="width:100%;font-size:13px;">
-            <tr>
-              <td style="color:#6b7280;padding:4px 0;">Credit Memo #</td>
-              <td style="font-weight:700;text-align:right;">${cmNum}</td>
-            </tr>
-            <tr>
-              <td style="color:#6b7280;padding:4px 0;">PO #</td>
-              <td style="font-weight:700;text-align:right;">${order?.customer_po||'—'}</td>
-            </tr>
-            <tr>
-              <td style="color:#6b7280;padding:4px 0;">RA #</td>
-              <td style="font-weight:700;text-align:right;">${raNum||'—'}</td>
-            </tr>
-            <tr style="border-top:1px solid #e5e7eb;">
-              <td style="color:#dc2626;font-weight:700;padding:8px 0 4px;">Total Credit</td>
-              <td style="font-weight:900;color:#dc2626;text-align:right;font-size:16px;">($${totalCredit.toFixed(2)})</td>
-            </tr>
-          </table>
+    const netCredit = (lines||[]).reduce((s,l) => s+(l.amt||0), 0);
+    const cmDate = new Date().toLocaleDateString('en-US', { year:'numeric', month:'numeric', day:'numeric' });
+    const SIZE_ORDER_CM = ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'];
+    const sizeOrdCm = s => { const i = SIZE_ORDER_CM.indexOf((s||'').toUpperCase()); return i === -1 ? 99 : i; };
+    const sortedLines = [...(lines||[])].sort((a,b) => {
+      const cc = (a.color||'').localeCompare(b.color||'');
+      return cc !== 0 ? cc : sizeOrdCm(a.size) - sizeOrdCm(b.size);
+    });
+    const cmEmailRows = sortedLines.map(l => {
+      const qty = l.qty || 0;
+      const price = l.unit || l.unit_price || 0;
+      const amt = qty * price;
+      return `<tr>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-family:monospace;font-size:12px;font-weight:600;">${l.style||''}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:12px;text-align:center;">${(l.color||'').toUpperCase()}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:12px;text-align:center;">${l.size||''}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:12px;text-align:center;font-weight:700;color:#dc2626;">${qty}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:12px;text-align:center;">PCS</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:12px;text-align:right;">$${price.toFixed(2)}</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:12px;text-align:right;font-weight:700;color:#dc2626;">($${amt.toFixed(2)})</td>
+        <td style="padding:6px 10px;border-bottom:1px solid #f3f4f6;font-size:11px;color:#6b7280;">${l.reason||''}</td>
+      </tr>`;
+    }).join('');
+    const emailBodyHtml = `<div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#111;">
+      <div style="background:#111827;padding:14px 24px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center;">
+        <div style="color:#fff;font-size:17px;font-weight:800;letter-spacing:1px;">PACIFIC SPORTS INC</div>
+        <div style="text-align:right;">
+          <div style="color:#fff;font-size:20px;font-weight:900;letter-spacing:2px;">CREDIT MEMO</div>
+          <div style="color:#9ca3af;font-size:11px;">CM #: ${cmNum}</div>
         </div>
-        <p style="font-size:12px;color:#6b7280;margin:0;">This credit will be applied to your account. Please see the attached Credit Memo for full details.</p>
       </div>
-      <div style="padding:12px 24px;text-align:center;font-size:11px;color:#9ca3af;border-top:1px solid #e5e7eb;">
+      <div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:10px 24px;font-size:12px;color:#374151;">
+        <span style="margin-right:24px;"><span style="color:#6b7280;">CM Date:</span> <strong>${cmDate}</strong></span>
+        <span style="margin-right:24px;"><span style="color:#6b7280;">PO #:</span> <strong>${order?.customer_po||'—'}</strong></span>
+        <span><span style="color:#6b7280;">RA #:</span> <strong>${raNum||'—'}</strong></span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">
+        <tr>
+          <td style="padding:12px 16px;border-right:1px solid #e5e7eb;width:50%;vertical-align:top;">
+            <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">CREDIT TO:</div>
+            <div style="font-size:12px;font-weight:700;">${order?.customer_name||'—'}</div>
+            <div style="font-size:11px;color:#374151;margin-top:3px;line-height:1.5;">${(order?.bill_addr||'').replace(/\n/g,'<br>')||'—'}</div>
+          </td>
+          <td style="padding:12px 16px;width:50%;vertical-align:top;">
+            <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SEND PAYMENT TO:</div>
+            <div style="font-size:11px;color:#374151;line-height:1.5;">${(cmSettings2?.payment_info||'Hana Commercial Finance\nDept. LA 24406\nPasadena, CA 91185-4406').replace(/\n/g,'<br>')}</div>
+          </td>
+        </tr>
+      </table>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">
+        <thead><tr style="background:#111827;color:#fff;">
+          <th style="padding:7px 10px;text-align:left;font-size:11px;">STYLE</th>
+          <th style="padding:7px 10px;text-align:center;font-size:11px;">COLOR</th>
+          <th style="padding:7px 10px;text-align:center;font-size:11px;">SIZE</th>
+          <th style="padding:7px 10px;text-align:center;font-size:11px;">QTY</th>
+          <th style="padding:7px 10px;text-align:center;font-size:11px;">UNIT</th>
+          <th style="padding:7px 10px;text-align:right;font-size:11px;">PRICE</th>
+          <th style="padding:7px 10px;text-align:right;font-size:11px;">CREDIT</th>
+          <th style="padding:7px 10px;text-align:left;font-size:11px;">REASON</th>
+        </tr></thead>
+        <tbody>${cmEmailRows}</tbody>
+        <tfoot>
+          <tr><td colspan="6" style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Net Credit:</td><td colspan="2" style="padding:6px 10px;text-align:right;font-weight:700;color:#dc2626;">($${netCredit.toFixed(2)})</td></tr>
+          ${freightCredit > 0 ? `<tr><td colspan="6" style="padding:4px 10px;text-align:right;font-size:11px;color:#6b7280;">${adjReason||'Adjustment'}:</td><td colspan="2" style="padding:4px 10px;text-align:right;color:#dc2626;">($${freightCredit.toFixed(2)})</td></tr>` : ''}
+          <tr style="background:#111827;color:#fff;"><td colspan="6" style="padding:10px;text-align:right;font-weight:700;font-size:13px;">TOTAL CREDIT:</td><td colspan="2" style="padding:10px;text-align:right;font-weight:900;font-size:16px;">($${totalCredit.toFixed(2)})</td></tr>
+          <tr style="background:#f1f5f9;"><td colspan="6" style="padding:8px 10px;text-align:right;font-weight:700;font-size:12px;">CREDIT BALANCE:</td><td colspan="2" style="padding:8px 10px;text-align:right;font-weight:800;font-size:14px;color:#dc2626;">($${totalCredit.toFixed(2)})</td></tr>
+        </tfoot>
+      </table>
+      <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;padding:12px 16px;font-size:11px;color:#6b7280;background:#fafafa;text-align:center;">
         Pacific Sports Inc · 1605 South Guignard Parkway, Sumter SC 29150 · (803) 840-2405
       </div>
     </div>`;
