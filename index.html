@@ -507,6 +507,13 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
     <div class="ntab" onclick="showPanel('customers',this)">🏢 Customers</div>
+    <!-- Accounting 드롭다운 -->
+    <div class="ntab ntab-dropdown" id="ntab-accounting" onmouseenter="showDropdown('dd-accounting')" onmouseleave="hideDropdown('dd-accounting')" onclick="toggleDropdown('dd-accounting')">
+      💰 Accounting ▾
+      <div class="ntab-dd" id="dd-accounting">
+        <div onclick="showPanel('ar',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📊 AR — Accounts Receivable</div>
+      </div>
+    </div>
     <div class="ntab" onclick="showPanel('settings',this)">⚙️ Settings</div>
   </div>
 
@@ -1416,6 +1423,175 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
 
+    <div class="panel" id="panel-ar">
+      <!-- AR Header -->
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:16px;font-weight:700;">📊 Accounts Receivable</h2>
+        <div style="flex:1;"></div>
+        <button class="btn" onclick="loadAR()">🔄 Refresh</button>
+        <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;" onclick="openPaymentModal()">💵 Record Payment</button>
+        <button class="btn" onclick="exportArCsv()">⬇ Export CSV</button>
+      </div>
+
+      <!-- AR KPI Cards -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;" id="ar-kpi-row">
+        <div class="kpi"><div class="kpi-label">Total AR Outstanding</div><div class="kpi-val" id="ar-kpi-total">—</div><div class="kpi-sub">all open invoices</div></div>
+        <div class="kpi r"><div class="kpi-label">Overdue (30+ days)</div><div class="kpi-val" id="ar-kpi-overdue">—</div><div class="kpi-sub" id="ar-kpi-overdue-ct">—</div></div>
+        <div class="kpi o"><div class="kpi-label">Due This Month</div><div class="kpi-val" id="ar-kpi-due-month">—</div><div class="kpi-sub" id="ar-kpi-due-month-ct">—</div></div>
+        <div class="kpi g"><div class="kpi-label">Collected (MTD)</div><div class="kpi-val" id="ar-kpi-collected">—</div><div class="kpi-sub">this month payments</div></div>
+        <div class="kpi"><div class="kpi-label">Avg Days Outstanding</div><div class="kpi-val" id="ar-kpi-dso">—</div><div class="kpi-sub">DSO</div></div>
+      </div>
+
+      <!-- AR Sub-tabs -->
+      <div style="display:flex;gap:2px;border-bottom:2px solid var(--border);margin-bottom:14px;">
+        <button id="ar-tab-aging" onclick="arSetTab('aging')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:var(--primary);color:#fff;border-radius:5px 5px 0 0;cursor:pointer;">📅 Aging Report</button>
+        <button id="ar-tab-invoices" onclick="arSetTab('invoices')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">🧾 Open Invoices</button>
+        <button id="ar-tab-payments" onclick="arSetTab('payments')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">💵 Payment History</button>
+        <button id="ar-tab-statement" onclick="arSetTab('statement')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📋 Statements</button>
+      </div>
+
+      <!-- Aging Report Tab -->
+      <div id="ar-pane-aging">
+        <div class="card">
+          <div class="card-head">
+            <span class="card-title">AR Aging Summary</span>
+            <span class="card-info" id="ar-aging-date"></span>
+          </div>
+          <!-- Aging summary grid -->
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);border-bottom:2px solid var(--border);">
+            <div style="padding:10px 14px;background:#f0fdf4;border-right:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;margin-bottom:4px;">Current</div>
+              <div style="font-size:18px;font-weight:800;color:#15803d;font-family:'IBM Plex Mono',monospace;" id="ar-age-current">—</div>
+              <div style="font-size:10px;color:#6b7280;" id="ar-age-current-ct">—</div>
+            </div>
+            <div style="padding:10px 14px;background:#fffbeb;border-right:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;margin-bottom:4px;">1–30 Days</div>
+              <div style="font-size:18px;font-weight:800;color:#b45309;font-family:'IBM Plex Mono',monospace;" id="ar-age-30">—</div>
+              <div style="font-size:10px;color:#6b7280;" id="ar-age-30-ct">—</div>
+            </div>
+            <div style="padding:10px 14px;background:#fff7ed;border-right:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;color:#9a3412;text-transform:uppercase;margin-bottom:4px;">31–60 Days</div>
+              <div style="font-size:18px;font-weight:800;color:#c2410c;font-family:'IBM Plex Mono',monospace;" id="ar-age-60">—</div>
+              <div style="font-size:10px;color:#6b7280;" id="ar-age-60-ct">—</div>
+            </div>
+            <div style="padding:10px 14px;background:#fef2f2;border-right:1px solid var(--border);">
+              <div style="font-size:10px;font-weight:700;color:#991b1b;text-transform:uppercase;margin-bottom:4px;">61–90 Days</div>
+              <div style="font-size:18px;font-weight:800;color:#dc2626;font-family:'IBM Plex Mono',monospace;" id="ar-age-90">—</div>
+              <div style="font-size:10px;color:#6b7280;" id="ar-age-90-ct">—</div>
+            </div>
+            <div style="padding:10px 14px;background:#fef2f2;">
+              <div style="font-size:10px;font-weight:700;color:#7f1d1d;text-transform:uppercase;margin-bottom:4px;">90+ Days</div>
+              <div style="font-size:18px;font-weight:800;color:#991b1b;font-family:'IBM Plex Mono',monospace;" id="ar-age-90p">—</div>
+              <div style="font-size:10px;color:#6b7280;" id="ar-age-90p-ct">—</div>
+            </div>
+          </div>
+          <!-- Aging by customer table -->
+          <div style="overflow-x:auto;">
+            <table class="tbl" id="ar-aging-table">
+              <thead><tr>
+                <th>Customer</th>
+                <th class="num">Total Outstanding</th>
+                <th class="num" style="color:#15803d;">Current</th>
+                <th class="num" style="color:#b45309;">1–30</th>
+                <th class="num" style="color:#c2410c;">31–60</th>
+                <th class="num" style="color:#dc2626;">61–90</th>
+                <th class="num" style="color:#991b1b;">90+</th>
+                <th>Action</th>
+              </tr></thead>
+              <tbody id="ar-aging-body"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Open Invoices Tab -->
+      <div id="ar-pane-invoices" style="display:none;">
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+          <input type="text" class="fi" id="ar-inv-search" placeholder="Search customer / invoice..." style="width:240px;" oninput="renderArInvoices()">
+          <select class="fi" id="ar-inv-filter" style="width:160px;" onchange="renderArInvoices()">
+            <option value="">All Status</option>
+            <option value="open">Open</option>
+            <option value="overdue">Overdue</option>
+            <option value="partial">Partial</option>
+            <option value="paid">Paid</option>
+          </select>
+          <select class="fi" id="ar-inv-cust-filter" style="width:200px;" onchange="renderArInvoices()">
+            <option value="">All Customers</option>
+          </select>
+        </div>
+        <div class="card">
+          <div style="overflow-x:auto;">
+            <table class="tbl">
+              <thead><tr>
+                <th>Invoice #</th>
+                <th>Customer</th>
+                <th>PO #</th>
+                <th>Invoice Date</th>
+                <th>Due Date</th>
+                <th>Terms</th>
+                <th class="num">Invoice Amt</th>
+                <th class="num" style="color:#16a34a;">Credits</th>
+                <th class="num" style="color:#1a56a0;">Payments</th>
+                <th class="num" style="color:#dc2626;">Balance</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr></thead>
+              <tbody id="ar-invoices-body"><tr><td colspan="12" class="empty">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Payment History Tab -->
+      <div id="ar-pane-payments" style="display:none;">
+        <div class="card">
+          <div class="card-head"><span class="card-title">Payment History</span></div>
+          <div style="overflow-x:auto;">
+            <table class="tbl">
+              <thead><tr>
+                <th>Date</th>
+                <th>Customer</th>
+                <th>Invoice #</th>
+                <th>Payment Method</th>
+                <th>Reference #</th>
+                <th class="num">Amount</th>
+                <th>Notes</th>
+                <th>Posted By</th>
+                <th>Action</th>
+              </tr></thead>
+              <tbody id="ar-payments-body"><tr><td colspan="9" class="empty">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Statements Tab -->
+      <div id="ar-pane-statement" style="display:none;">
+        <div class="card">
+          <div class="card-head"><span class="card-title">Customer Statements</span></div>
+          <div style="padding:16px;">
+            <div style="display:grid;grid-template-columns:240px 160px auto;gap:10px;align-items:end;margin-bottom:16px;">
+              <div>
+                <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Customer</label>
+                <select class="fi" id="ar-stmt-customer" style="width:100%;"></select>
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">As of Date</label>
+                <input type="date" class="fi" id="ar-stmt-date" style="width:100%;">
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;" onclick="previewStatement()">👁 Preview</button>
+                <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;" onclick="emailStatement()">📧 Email Statement</button>
+              </div>
+            </div>
+            <div id="ar-stmt-preview" style="background:#f9fafb;border:1px solid var(--border);border-radius:8px;padding:20px;min-height:200px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:13px;">
+              Select a customer to preview their statement
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="panel" id="panel-intransit">
       <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
         <h2 style="margin:0;font-size:16px;font-weight:700;">🚢 In Transit</h2>
@@ -2079,8 +2255,8 @@ let _currentEmployee = null; // 현재 로그인된 직원
 
 // 역할별 허용 탭
 const ROLE_TABS = {
-  admin:      ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','settings'],
-  supervisor: ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers'],
+  admin:      ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','settings','ar'],
+  supervisor: ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar'],
   staff:      ['orderstatus','backorders'],
 };
 
@@ -2242,7 +2418,8 @@ function _positionDropdown(dd, triggerId) {
 }
 const _ddTriggerMap = {
   'dd-orderproc': 'ntab-orderproc',
-  'dd-inventory': 'ntab-inventory'
+  'dd-inventory': 'ntab-inventory',
+  'dd-accounting': 'ntab-accounting'
 };
 function showDropdown(id) {
   const dd = document.getElementById(id);
@@ -2335,6 +2512,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'intransit') loadInTransit();
   if (name === 'completed') loadCompleted();
   if (name === 'settings') { loadSettings(); loadManagerApprovals(); updateBuildingUI(); setTimeout(_renderErrorLog, 100); setTimeout(loadDefectReport, 150); }
+  if (name === 'ar') loadAR();
 }
 
 // ══════════════════════════════════
@@ -19948,7 +20126,11 @@ function showPoPreview(data) {
     </div>`;
 
   // 라인 테이블 — 각 셀 인라인 편집 (styles 목록 로드 후 자동매칭)
-  loadAllStylesList().then(() => renderPoLines());
+  loadAllStylesList().then(() => {
+    renderPoLines();
+    // 가격 검증 (로드 후 약간 딜레이)
+    setTimeout(runPoPriceValidation, 500);
+  });
 }
 
 function renderPoLines() {
@@ -20440,21 +20622,22 @@ async function loadCustomers() {
   }
 
   const rows = customers.map(c => `
-    <tr onclick="openEditCustomer('${c.id}')" style="cursor:pointer">
-      <td style="font-weight:600">${c.name}</td>
-      <td>${c.contact_name || '—'}</td>
-      <td>${c.phone || '—'}</td>
-      <td>${c.email || '—'}</td>
-      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;">${c.terms || '—'}</td>
-      <td style="max-width:200px;white-space:pre-wrap;font-size:11px;">${(c.bill_address || '').replace(/\n/g,', ')}</td>
-      <td style="font-size:11px;color:var(--text3);">${c.notes || ''}</td>
+    <tr>
+      <td style="font-weight:600;cursor:pointer;" onclick="openEditCustomer('${c.id}')">${c.name}</td>
+      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${c.contact_name || '—'}</td>
+      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${c.phone || '—'}</td>
+      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${c.email || '—'}</td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;" onclick="openEditCustomer('${c.id}')">${c.terms || '—'}</td>
+      <td style="max-width:200px;white-space:pre-wrap;font-size:11px;cursor:pointer;" onclick="openEditCustomer('${c.id}')">${(c.bill_address || '').replace(/\n/g,', ')}</td>
+      <td style="font-size:11px;color:var(--text3);cursor:pointer;" onclick="openEditCustomer('${c.id}')">${c.notes || ''}</td>
+      <td><button class="btn btn-sm" style="background:#f0f7ff;color:#1a56a0;border-color:#93c5fd;white-space:nowrap;" onclick="openPriceSheet('${c.id}','${(c.name||'').replace(/'/g,"\\'")}')">💲 Price Sheet</button></td>
     </tr>`).join('');
 
   document.getElementById('customers-table-wrap').innerHTML = `
     <table class="tbl">
       <thead><tr>
         <th>Company</th><th>Contact</th><th>Phone</th><th>Email</th>
-        <th>Terms</th><th>Bill To</th><th>Notes</th>
+        <th>Terms</th><th>Bill To</th><th>Notes</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -23622,6 +23805,82 @@ function showCreditHoldFlash(overAmt) {
 </div>
 
 
+<!-- ── Price Sheet 모달 ── -->
+<div id="price-sheet-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:860px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <!-- Header -->
+    <div style="background:#1a56a0;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <div>
+        <span style="color:#fff;font-weight:800;font-size:15px;">💲 Price Sheet</span>
+        <span id="ps-customer-name" style="color:#bfdbfe;font-size:13px;margin-left:12px;font-weight:600;"></span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button onclick="downloadPriceSheetPdf()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">⬇ Download PDF</button>
+        <button onclick="document.getElementById('price-sheet-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#bfdbfe;line-height:1;">✕</button>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div style="padding:16px 20px;overflow-y:auto;flex:1;">
+      <!-- Size upcharge info -->
+      <div style="background:#f0f7ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11px;color:#1e40af;display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+        <span style="font-weight:700;">Size Upcharges:</span>
+        <span>2XL: Base <span style="font-weight:700;">+$<span id="ps-up-2xl">0.60</span></span></span>
+        <span>3XL: 2XL <span style="font-weight:700;">+$<span id="ps-up-3xl">0.60</span></span></span>
+        <span>4XL: 3XL <span style="font-weight:700;">+$<span id="ps-up-4xl">0.80</span></span></span>
+        <span>5XL: 4XL <span style="font-weight:700;">+$<span id="ps-up-5xl">1.20</span></span></span>
+        <button onclick="editUpcharges()" style="background:none;border:1px solid #bfdbfe;border-radius:4px;color:#1e40af;padding:2px 8px;font-size:10px;cursor:pointer;">✏️ Edit</button>
+      </div>
+
+      <!-- Add new style row -->
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;">
+        <div>
+          <div style="font-size:10px;font-weight:600;color:#374151;margin-bottom:3px;">Style #</div>
+          <input type="text" id="ps-new-style" class="fi" placeholder="1368" style="width:90px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:600;color:#374151;margin-bottom:3px;">Description</div>
+          <input type="text" id="ps-new-desc" class="fi" placeholder="T-Shirt 6oz..." style="width:200px;">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:600;color:#374151;margin-bottom:3px;">Base Price (XS–XL)</div>
+          <input type="number" id="ps-new-price" class="fi" placeholder="2.95" step="0.01" min="0" style="width:90px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:600;color:#374151;margin-bottom:3px;">Notes</div>
+          <input type="text" id="ps-new-notes" class="fi" placeholder="Optional..." style="width:150px;">
+        </div>
+        <button onclick="addPriceSheetRow()" class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;white-space:nowrap;">+ Add Style</button>
+      </div>
+
+      <!-- Price table -->
+      <table class="tbl" id="ps-table">
+        <thead><tr>
+          <th>Style #</th>
+          <th>Description</th>
+          <th class="num">XS–XL</th>
+          <th class="num">2XL</th>
+          <th class="num">3XL</th>
+          <th class="num">4XL</th>
+          <th class="num">5XL</th>
+          <th>Effective</th>
+          <th>Notes</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="ps-tbody">
+          <tr><td colspan="10" class="empty">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#fafafa;border-radius:0 0 12px 12px;flex-shrink:0;">
+      <span style="font-size:11px;color:#6b7280;" id="ps-count"></span>
+      <button class="btn" onclick="document.getElementById('price-sheet-modal').style.display='none'">닫기</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── RA (Return Authorization) 모달 ── -->
 <div id="ra-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:12px;width:820px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
@@ -23687,3 +23946,732 @@ function showCreditHoldFlash(overAmt) {
 </body>
 </html>
 <!-- updated Mon Apr 13 14:44:56 UTC 2026 -->
+<script>
+// ══════════════════════════════════════════════════════════════
+// PRICE SHEET MODULE
+// ══════════════════════════════════════════════════════════════
+let _psCustomerId = null;
+let _psCustomerName = '';
+let _psPrices = [];  // current customer's prices
+const PS_UPCHARGES = { '2XL': 0.60, '3XL': 0.60, '4XL': 0.80, '5XL': 1.20 };
+
+function getPsUpcharge(size) {
+  const s = (size||'').toUpperCase();
+  if (s === '2XL') return PS_UPCHARGES['2XL'];
+  if (s === '3XL') return PS_UPCHARGES['2XL'] + PS_UPCHARGES['3XL'];
+  if (s === '4XL') return PS_UPCHARGES['2XL'] + PS_UPCHARGES['3XL'] + PS_UPCHARGES['4XL'];
+  if (s === '5XL') return PS_UPCHARGES['2XL'] + PS_UPCHARGES['3XL'] + PS_UPCHARGES['4XL'] + PS_UPCHARGES['5XL'];
+  return 0;
+}
+
+function getPriceForSize(basePrice, size) {
+  return Math.round((basePrice + getPsUpcharge(size)) * 100) / 100;
+}
+
+async function openPriceSheet(customerId, customerName) {
+  _psCustomerId = customerId;
+  _psCustomerName = customerName;
+  document.getElementById('ps-customer-name').textContent = customerName;
+  document.getElementById('ps-new-style').value = '';
+  document.getElementById('ps-new-desc').value = '';
+  document.getElementById('ps-new-price').value = '';
+  document.getElementById('ps-new-notes').value = '';
+  document.getElementById('price-sheet-modal').style.display = 'flex';
+  await loadPriceSheet();
+}
+
+async function loadPriceSheet() {
+  document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="10" class="empty">Loading...</td></tr>';
+  const { data } = await db.from('customer_prices')
+    .select('*')
+    .eq('customer_id', _psCustomerId)
+    .order('style_number');
+  _psPrices = data || [];
+  renderPriceSheet();
+}
+
+function renderPriceSheet() {
+  document.getElementById('ps-count').textContent = `${_psPrices.length} styles`;
+  if (_psPrices.length === 0) {
+    document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="10" class="empty">No prices yet. Add a style above.</td></tr>';
+    return;
+  }
+  document.getElementById('ps-tbody').innerHTML = _psPrices.map((p, i) => {
+    const base = p.base_price || 0;
+    const p2xl = getPriceForSize(base, '2XL');
+    const p3xl = getPriceForSize(base, '3XL');
+    const p4xl = getPriceForSize(base, '4XL');
+    const p5xl = getPriceForSize(base, '5XL');
+    return `<tr>
+      <td style="font-family:'IBM Plex Mono',monospace;font-weight:700;">${p.style_number}</td>
+      <td style="font-size:12px;">${p.description || '—'}</td>
+      <td class="num">
+        <input type="number" value="${base.toFixed(2)}" step="0.01" min="0"
+          style="width:72px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;border:1px solid #d1d5db;border-radius:4px;padding:2px 6px;font-size:12px;"
+          onchange="updatePsBasePrice('${p.id}', this.value, ${i})">
+      </td>
+      <td class="num" style="font-family:'IBM Plex Mono',monospace;color:#374151;" id="ps-p2xl-${i}">$${p2xl.toFixed(2)}</td>
+      <td class="num" style="font-family:'IBM Plex Mono',monospace;color:#374151;" id="ps-p3xl-${i}">$${p3xl.toFixed(2)}</td>
+      <td class="num" style="font-family:'IBM Plex Mono',monospace;color:#374151;" id="ps-p4xl-${i}">$${p4xl.toFixed(2)}</td>
+      <td class="num" style="font-family:'IBM Plex Mono',monospace;color:#374151;" id="ps-p5xl-${i}">$${p5xl.toFixed(2)}</td>
+      <td style="font-size:11px;color:#6b7280;">${p.effective_date || '—'}</td>
+      <td style="font-size:11px;color:#6b7280;">${p.notes || '—'}</td>
+      <td>
+        <button onclick="deletePsRow('${p.id}')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px;padding:2px 6px;">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function updatePsBasePrice(id, newVal, idx) {
+  const base = parseFloat(newVal) || 0;
+  _psPrices[idx].base_price = base;
+  // Update derived price cells
+  document.getElementById('ps-p2xl-' + idx).textContent = '$' + getPriceForSize(base,'2XL').toFixed(2);
+  document.getElementById('ps-p3xl-' + idx).textContent = '$' + getPriceForSize(base,'3XL').toFixed(2);
+  document.getElementById('ps-p4xl-' + idx).textContent = '$' + getPriceForSize(base,'4XL').toFixed(2);
+  document.getElementById('ps-p5xl-' + idx).textContent = '$' + getPriceForSize(base,'5XL').toFixed(2);
+  await db.from('customer_prices').update({ base_price: base, updated_at: new Date().toISOString() }).eq('id', id);
+}
+
+async function addPriceSheetRow() {
+  const styleNum = document.getElementById('ps-new-style').value.trim();
+  const desc = document.getElementById('ps-new-desc').value.trim();
+  const price = parseFloat(document.getElementById('ps-new-price').value) || 0;
+  const notes = document.getElementById('ps-new-notes').value.trim();
+  if (!styleNum || !price) { showToast('❌ Style # and Base Price are required.'); return; }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const { error } = await db.from('customer_prices').upsert({
+    customer_id: _psCustomerId,
+    style_number: styleNum,
+    description: desc,
+    base_price: price,
+    notes,
+    effective_date: today,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'customer_id,style_number' });
+
+  if (error) { showToast('❌ Error: ' + error.message); return; }
+  document.getElementById('ps-new-style').value = '';
+  document.getElementById('ps-new-desc').value = '';
+  document.getElementById('ps-new-price').value = '';
+  document.getElementById('ps-new-notes').value = '';
+  showToast('✅ Style added!');
+  await loadPriceSheet();
+}
+
+async function deletePsRow(id) {
+  if (!confirm('Delete this price entry?')) return;
+  await db.from('customer_prices').delete().eq('id', id);
+  showToast('✕ Deleted');
+  await loadPriceSheet();
+}
+
+function editUpcharges() {
+  const cur = PS_UPCHARGES;
+  const v2 = prompt('2XL upcharge (current: $' + cur['2XL'].toFixed(2) + '):', cur['2XL'].toFixed(2));
+  if (v2 === null) return;
+  const v3 = prompt('3XL upcharge on top of 2XL (current: $' + cur['3XL'].toFixed(2) + '):', cur['3XL'].toFixed(2));
+  if (v3 === null) return;
+  const v4 = prompt('4XL upcharge on top of 3XL (current: $' + cur['4XL'].toFixed(2) + '):', cur['4XL'].toFixed(2));
+  if (v4 === null) return;
+  const v5 = prompt('5XL upcharge on top of 4XL (current: $' + cur['5XL'].toFixed(2) + '):', cur['5XL'].toFixed(2));
+  if (v5 === null) return;
+  PS_UPCHARGES['2XL'] = parseFloat(v2) || cur['2XL'];
+  PS_UPCHARGES['3XL'] = parseFloat(v3) || cur['3XL'];
+  PS_UPCHARGES['4XL'] = parseFloat(v4) || cur['4XL'];
+  PS_UPCHARGES['5XL'] = parseFloat(v5) || cur['5XL'];
+  document.getElementById('ps-up-2xl').textContent = PS_UPCHARGES['2XL'].toFixed(2);
+  document.getElementById('ps-up-3xl').textContent = PS_UPCHARGES['3XL'].toFixed(2);
+  document.getElementById('ps-up-4xl').textContent = PS_UPCHARGES['4XL'].toFixed(2);
+  document.getElementById('ps-up-5xl').textContent = PS_UPCHARGES['5XL'].toFixed(2);
+  renderPriceSheet();
+}
+
+// ── PDF Download ──
+function downloadPriceSheetPdf() {
+  const dateStr = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const rows = _psPrices.map(p => {
+    const base = p.base_price || 0;
+    return `<tr style="border-bottom:1px solid #e5e7eb;">
+      <td style="padding:8px 10px;font-family:monospace;font-weight:700;font-size:13px;">${p.style_number}</td>
+      <td style="padding:8px 10px;font-size:12px;">${p.description || ''}</td>
+      <td style="padding:8px 10px;text-align:right;font-weight:700;font-size:13px;">$${base.toFixed(2)}</td>
+      <td style="padding:8px 10px;text-align:right;font-size:12px;">$${getPriceForSize(base,'2XL').toFixed(2)}</td>
+      <td style="padding:8px 10px;text-align:right;font-size:12px;">$${getPriceForSize(base,'3XL').toFixed(2)}</td>
+      <td style="padding:8px 10px;text-align:right;font-size:12px;">$${getPriceForSize(base,'4XL').toFixed(2)}</td>
+      <td style="padding:8px 10px;text-align:right;font-size:12px;">$${getPriceForSize(base,'5XL').toFixed(2)}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: Arial, sans-serif; padding: 30px; color: #111; }
+    @media print { @page { margin: 0.5in; } }
+  </style>
+  </head><body>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;padding-bottom:14px;border-bottom:3px solid #0f2744;">
+      <div>
+        <div style="font-size:20px;font-weight:800;color:#0f2744;letter-spacing:1px;">PACIFIC SPORTS INC</div>
+        <div style="font-size:11px;color:#555;margin-top:4px;">1605 South Guignard Parkway, Sumter SC 29150</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:18px;font-weight:800;color:#1a56a0;">PRICE SHEET</div>
+        <div style="font-size:11px;color:#555;margin-top:2px;">${dateStr}</div>
+      </div>
+    </div>
+    <div style="background:#f0f7ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin-bottom:16px;">
+      <div style="font-size:13px;font-weight:700;color:#1e40af;">Customer: ${_psCustomerName}</div>
+      <div style="font-size:11px;color:#374151;margin-top:4px;">
+        Size Upcharges — 2XL: +$${PS_UPCHARGES['2XL'].toFixed(2)} &nbsp;|&nbsp;
+        3XL: +$${(PS_UPCHARGES['2XL']+PS_UPCHARGES['3XL']).toFixed(2)} cumulative &nbsp;|&nbsp;
+        4XL: +$${(PS_UPCHARGES['2XL']+PS_UPCHARGES['3XL']+PS_UPCHARGES['4XL']).toFixed(2)} cumulative &nbsp;|&nbsp;
+        5XL: +$${(PS_UPCHARGES['2XL']+PS_UPCHARGES['3XL']+PS_UPCHARGES['4XL']+PS_UPCHARGES['5XL']).toFixed(2)} cumulative
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr style="background:#0f2744;color:#fff;">
+          <th style="padding:8px 10px;text-align:left;font-size:11px;text-transform:uppercase;">Style #</th>
+          <th style="padding:8px 10px;text-align:left;font-size:11px;text-transform:uppercase;">Description</th>
+          <th style="padding:8px 10px;text-align:right;font-size:11px;text-transform:uppercase;">XS–XL</th>
+          <th style="padding:8px 10px;text-align:right;font-size:11px;text-transform:uppercase;">2XL</th>
+          <th style="padding:8px 10px;text-align:right;font-size:11px;text-transform:uppercase;">3XL</th>
+          <th style="padding:8px 10px;text-align:right;font-size:11px;text-transform:uppercase;">4XL</th>
+          <th style="padding:8px 10px;text-align:right;font-size:11px;text-transform:uppercase;">5XL</th>
+        </tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="7" style="padding:20px;text-align:center;color:#9ca3af;">No prices on file</td></tr>'}</tbody>
+    </table>
+    <div style="margin-top:30px;font-size:10px;color:#9ca3af;text-align:center;">
+      Prices effective as of ${dateStr} · Pacific Sports Inc · Confidential
+    </div>
+    <script>window.onload=()=>window.print();<\/script>
+  </body></html>`;
+
+  const win = window.open('', '_blank', 'width=800,height:650');
+  win.document.write(html);
+  win.document.close();
+}
+
+// ══════════════════════════════════════════════════════════════
+// PO PRICE VALIDATION — PO 업로드 시 우리 단가 vs PO 단가 비교
+// ══════════════════════════════════════════════════════════════
+async function validatePoprices(customerId, lines) {
+  if (!customerId || !lines?.length) return [];
+  const { data: prices } = await db.from('customer_prices')
+    .select('style_number, base_price')
+    .eq('customer_id', customerId);
+  if (!prices?.length) return [];
+
+  const priceMap = {};
+  prices.forEach(p => { priceMap[String(p.style_number)] = p.base_price; });
+
+  const mismatches = [];
+  lines.forEach((l, idx) => {
+    const styleNum = String(l.style_number || '').replace(/[^0-9]/g,'');
+    const base = priceMap[styleNum];
+    if (base === undefined) return; // 우리 시스템에 없는 스타일이면 패스
+    const expected = getPriceForSize(base, l.size || '');
+    const actual = parseFloat(l.unit_price) || 0;
+    if (Math.abs(expected - actual) > 0.005) {
+      mismatches.push({ idx, style: styleNum, size: l.size, expected, actual, diff: actual - expected });
+    }
+  });
+  return mismatches;
+}
+
+// showPoPreview 이후 가격 검증 실행
+async function runPoPriceValidation() {
+  // 거래처 ID 찾기
+  const custName = document.getElementById('po-edit-customer')?.value?.trim();
+  if (!custName || !parsedPoData?.lines?.length) return;
+  const cust = customers.find(c => c.name?.toLowerCase() === custName.toLowerCase()
+    || (c.aliases||'').toLowerCase().split(',').map(a=>a.trim()).includes(custName.toLowerCase()));
+  if (!cust) return;
+
+  const mismatches = await validatePoprices(cust.id, parsedPoData.lines);
+  if (!mismatches.length) return;
+
+  // 경고 배너 표시
+  const warnEl = document.getElementById('po-preview-warning');
+  if (warnEl) {
+    warnEl.style.display = 'block';
+    warnEl.style.background = '#fff1f2';
+    warnEl.style.borderColor = '#fecdd3';
+    warnEl.style.color = '#9f1239';
+    warnEl.innerHTML = `⚠️ <strong>Price Mismatch Detected (${mismatches.length} lines)</strong> — PO prices differ from our price sheet.<br>` +
+      mismatches.slice(0, 5).map(m =>
+        `Style ${m.style} ${m.size}: PO=$${m.actual.toFixed(2)} vs Our=$${m.expected.toFixed(2)} (${m.diff > 0 ? '+' : ''}$${m.diff.toFixed(2)})`
+      ).join(' &nbsp;|&nbsp; ');
+  }
+
+  // 라인별 하이라이트
+  mismatches.forEach(m => {
+    const tbody = document.getElementById('po-lines-tbody');
+    if (!tbody) return;
+    const rows = tbody.querySelectorAll('tr');
+    if (rows[m.idx]) {
+      rows[m.idx].style.background = '#fff1f2';
+      // Unit $ 셀 (7번째) 빨간 테두리
+      const cells = rows[m.idx].querySelectorAll('td');
+      if (cells[6]) cells[6].querySelector('input')?.style.setProperty('border-color','#f43f5e');
+    }
+  });
+}
+</script>
+// ══════════════════════════════════════════════════════════════
+let _arInvoices = [];   // enriched invoice list with balances
+let _arPayments = [];   // payments from DB
+let _arTab = 'aging';
+
+function arSetTab(tab) {
+  _arTab = tab;
+  ['aging','invoices','payments','statement'].forEach(t => {
+    const btn = document.getElementById('ar-tab-' + t);
+    const pane = document.getElementById('ar-pane-' + t);
+    if (!btn || !pane) return;
+    const active = t === tab;
+    btn.style.background = active ? 'var(--primary)' : '#f5f7fa';
+    btn.style.color = active ? '#fff' : 'var(--text2)';
+    pane.style.display = active ? '' : 'none';
+  });
+}
+
+async function loadAR() {
+  // 1. Load invoiced orders
+  const { data: orders } = await db.from('orders')
+    .select('id,invoice_number,order_number,customer_id,customer_name,customer_po,total_amount,terms,invoiced_at,ship_date,status')
+    .in('status', ['invoiced','completed'])
+    .order('invoiced_at', { ascending: false })
+    .limit(5000);
+
+  // 2. Load credit memos
+  const { data: cms } = await db.from('credit_memos')
+    .select('id,order_id,cm_number,total_amount,freight_credit,status,created_at')
+    .in('status', ['issued','draft'])
+    .limit(5000);
+
+  // 3. Load payments
+  const { data: pmts } = await db.from('payments')
+    .select('*')
+    .order('payment_date', { ascending: false })
+    .limit(5000);
+  _arPayments = pmts || [];
+
+  // 4. Build enriched invoice list
+  const cmByOrder = {};
+  (cms || []).forEach(cm => {
+    if (!cmByOrder[cm.order_id]) cmByOrder[cm.order_id] = [];
+    cmByOrder[cm.order_id].push(cm);
+  });
+  const pmtByOrder = {};
+  _arPayments.forEach(p => {
+    if (!pmtByOrder[p.order_id]) pmtByOrder[p.order_id] = [];
+    pmtByOrder[p.order_id].push(p);
+  });
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  _arInvoices = (orders || []).map(o => {
+    const invAmt = o.total_amount || 0;
+    const cmAmt = (cmByOrder[o.id] || []).reduce((s,c) => s + (c.total_amount||0) + (c.freight_credit||0), 0);
+    const pmtAmt = (pmtByOrder[o.id] || []).reduce((s,p) => s + (p.amount||0), 0);
+    const balance = Math.max(0, invAmt - cmAmt - pmtAmt);
+
+    // Due date from terms
+    const termsDays = parseInt((o.terms||'N30').replace(/[^0-9]/g,'')) || 30;
+    const invDate = o.invoiced_at ? new Date(o.invoiced_at) : new Date(o.ship_date || o.created_at || Date.now());
+    const dueDate = new Date(invDate); dueDate.setDate(dueDate.getDate() + termsDays);
+    const daysOverdue = Math.floor((today - dueDate) / 86400000);
+
+    let arStatus = 'open';
+    if (balance <= 0) arStatus = 'paid';
+    else if (pmtAmt > 0) arStatus = 'partial';
+    else if (daysOverdue > 0) arStatus = 'overdue';
+
+    return { ...o, invAmt, cmAmt, pmtAmt, balance, dueDate, daysOverdue, arStatus, invDate };
+  }).filter(o => o.balance > 0 || o.pmtAmt > 0); // include partial paid
+
+  _renderArKpis();
+  _renderArAging();
+  _renderArInvoices();
+  _renderArPayments();
+  _populateStatementCustomers();
+  document.getElementById('ar-aging-date').textContent = 'As of ' + today.toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'});
+}
+
+function _renderArKpis() {
+  const open = _arInvoices.filter(i => i.balance > 0);
+  const totalAR = open.reduce((s,i) => s+i.balance, 0);
+  const overdue = open.filter(i => i.daysOverdue > 0);
+  const now = new Date();
+  const mStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const mEnd = new Date(now.getFullYear(), now.getMonth()+1, 0);
+  const dueMonth = open.filter(i => i.dueDate >= mStart && i.dueDate <= mEnd);
+  const collectedMTD = _arPayments.filter(p => {
+    const d = new Date(p.payment_date);
+    return d >= mStart && d <= mEnd;
+  }).reduce((s,p) => s+(p.amount||0), 0);
+
+  // DSO = (AR / Total Credit Sales) * Days
+  const totalSales = _arInvoices.reduce((s,i) => s+i.invAmt, 0);
+  const dso = totalSales > 0 ? Math.round((totalAR / totalSales) * 365) : 0;
+
+  const fmt = v => '$' + v.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+  document.getElementById('ar-kpi-total').textContent = fmt(totalAR);
+  document.getElementById('ar-kpi-overdue').textContent = fmt(overdue.reduce((s,i)=>s+i.balance,0));
+  document.getElementById('ar-kpi-overdue-ct').textContent = overdue.length + ' invoices';
+  document.getElementById('ar-kpi-due-month').textContent = fmt(dueMonth.reduce((s,i)=>s+i.balance,0));
+  document.getElementById('ar-kpi-due-month-ct').textContent = dueMonth.length + ' invoices';
+  document.getElementById('ar-kpi-collected').textContent = fmt(collectedMTD);
+  document.getElementById('ar-kpi-dso').textContent = dso + ' days';
+}
+
+function _renderArAging() {
+  const open = _arInvoices.filter(i => i.balance > 0);
+  const fmt = v => '$' + v.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+
+  const buckets = { current:[], b30:[], b60:[], b90:[], b90p:[] };
+  open.forEach(i => {
+    if (i.daysOverdue <= 0) buckets.current.push(i);
+    else if (i.daysOverdue <= 30) buckets.b30.push(i);
+    else if (i.daysOverdue <= 60) buckets.b60.push(i);
+    else if (i.daysOverdue <= 90) buckets.b90.push(i);
+    else buckets.b90p.push(i);
+  });
+  const sum = arr => arr.reduce((s,i) => s+i.balance, 0);
+
+  document.getElementById('ar-age-current').textContent = fmt(sum(buckets.current));
+  document.getElementById('ar-age-current-ct').textContent = buckets.current.length + ' invoices';
+  document.getElementById('ar-age-30').textContent = fmt(sum(buckets.b30));
+  document.getElementById('ar-age-30-ct').textContent = buckets.b30.length + ' invoices';
+  document.getElementById('ar-age-60').textContent = fmt(sum(buckets.b60));
+  document.getElementById('ar-age-60-ct').textContent = buckets.b60.length + ' invoices';
+  document.getElementById('ar-age-90').textContent = fmt(sum(buckets.b90));
+  document.getElementById('ar-age-90-ct').textContent = buckets.b90.length + ' invoices';
+  document.getElementById('ar-age-90p').textContent = fmt(sum(buckets.b90p));
+  document.getElementById('ar-age-90p-ct').textContent = buckets.b90p.length + ' invoices';
+
+  // Group by customer for aging table
+  const byCustomer = {};
+  open.forEach(i => {
+    if (!byCustomer[i.customer_name]) byCustomer[i.customer_name] = { name: i.customer_name, custId: i.customer_id, current:0, b30:0, b60:0, b90:0, b90p:0, total:0 };
+    const c = byCustomer[i.customer_name];
+    c.total += i.balance;
+    if (i.daysOverdue <= 0) c.current += i.balance;
+    else if (i.daysOverdue <= 30) c.b30 += i.balance;
+    else if (i.daysOverdue <= 60) c.b60 += i.balance;
+    else if (i.daysOverdue <= 90) c.b90 += i.balance;
+    else c.b90p += i.balance;
+  });
+
+  const rows = Object.values(byCustomer).sort((a,b) => b.total - a.total);
+  const fmtCell = (v, color='') => `<td class="num" style="${color?'color:'+color+';':''} font-family:'IBM Plex Mono',monospace;">${v > 0 ? fmt(v) : '<span style="color:#d1d5db;">—</span>'}</td>`;
+
+  document.getElementById('ar-aging-body').innerHTML = rows.length === 0
+    ? '<tr><td colspan="8" class="empty">No outstanding AR</td></tr>'
+    : rows.map(r => `<tr>
+        <td style="font-weight:600;">${r.name}</td>
+        ${fmtCell(r.total)}
+        ${fmtCell(r.current,'#15803d')}
+        ${fmtCell(r.b30,'#b45309')}
+        ${fmtCell(r.b60,'#c2410c')}
+        ${fmtCell(r.b90,'#dc2626')}
+        ${fmtCell(r.b90p,'#991b1b')}
+        <td><button class="btn btn-sm" onclick="arSetTab('statement');document.getElementById('ar-stmt-customer').value='${r.custId}';previewStatement()">📋 Statement</button></td>
+      </tr>`).join('');
+}
+
+function _renderArInvoices() { renderArInvoices(); }
+
+function renderArInvoices() {
+  const search = (document.getElementById('ar-inv-search')?.value || '').toLowerCase();
+  const statusF = document.getElementById('ar-inv-filter')?.value || '';
+  const custF = document.getElementById('ar-inv-cust-filter')?.value || '';
+
+  // Populate customer filter
+  const custSel = document.getElementById('ar-inv-cust-filter');
+  if (custSel && custSel.options.length <= 1) {
+    const names = [...new Set(_arInvoices.map(i => i.customer_name).filter(Boolean))].sort();
+    names.forEach(n => {
+      const o = document.createElement('option'); o.value = n; o.textContent = n;
+      custSel.appendChild(o);
+    });
+  }
+
+  const fmt = v => '$' + v.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+  const statusBadge = s => {
+    const cfg = {
+      open:    ['#dbeafe','#1e40af','Open'],
+      overdue: ['#fef2f2','#dc2626','Overdue'],
+      partial: ['#fffbeb','#b45309','Partial'],
+      paid:    ['#f0fdf4','#15803d','Paid'],
+    }[s] || ['#f3f4f6','#6b7280',s];
+    return `<span style="background:${cfg[0]};color:${cfg[1]};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">${cfg[2]}</span>`;
+  };
+
+  let rows = _arInvoices
+    .filter(i => {
+      if (search && !i.customer_name?.toLowerCase().includes(search) && !i.invoice_number?.toLowerCase().includes(search) && !i.customer_po?.toLowerCase().includes(search)) return false;
+      if (statusF && i.arStatus !== statusF) return false;
+      if (custF && i.customer_name !== custF) return false;
+      return true;
+    })
+    .sort((a,b) => new Date(b.invoiced_at||0) - new Date(a.invoiced_at||0));
+
+  document.getElementById('ar-invoices-body').innerHTML = rows.length === 0
+    ? '<tr><td colspan="12" class="empty">No invoices found</td></tr>'
+    : rows.map(i => `<tr>
+        <td class="mono" style="font-weight:700;">${i.invoice_number || i.order_number || '—'}</td>
+        <td style="font-weight:600;">${i.customer_name}</td>
+        <td class="mono">${i.customer_po || '—'}</td>
+        <td class="mono">${i.invDate.toLocaleDateString('en-US')}</td>
+        <td class="mono" style="${i.daysOverdue > 0 && i.balance > 0 ? 'color:#dc2626;font-weight:700;' : ''}">${i.dueDate.toLocaleDateString('en-US')}</td>
+        <td style="font-size:11px;color:#6b7280;">${i.terms || 'N30'}</td>
+        <td class="num">$${i.invAmt.toFixed(2)}</td>
+        <td class="num" style="color:#16a34a;">${i.cmAmt > 0 ? '($'+i.cmAmt.toFixed(2)+')' : '—'}</td>
+        <td class="num" style="color:#1a56a0;">${i.pmtAmt > 0 ? '($'+i.pmtAmt.toFixed(2)+')' : '—'}</td>
+        <td class="num" style="font-weight:800;color:${i.balance>0?'#dc2626':'#15803d'};">$${i.balance.toFixed(2)}</td>
+        <td>${statusBadge(i.arStatus)}</td>
+        <td>
+          ${i.balance > 0 ? `<button class="btn btn-sm" style="background:#1a56a0;color:#fff;border-color:#1a56a0;" onclick="openPaymentModal('${i.id}')">💵 Pay</button>` : ''}
+        </td>
+      </tr>`).join('');
+}
+
+function _renderArPayments() {
+  const fmt = v => '$' + v.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+  const pmtMap = {};
+  _arInvoices.forEach(i => { pmtMap[i.id] = i; });
+
+  document.getElementById('ar-payments-body').innerHTML = _arPayments.length === 0
+    ? '<tr><td colspan="9" class="empty">No payment records</td></tr>'
+    : _arPayments.map(p => {
+        const inv = pmtMap[p.order_id];
+        return `<tr>
+          <td class="mono">${p.payment_date ? new Date(p.payment_date).toLocaleDateString('en-US') : '—'}</td>
+          <td style="font-weight:600;">${inv?.customer_name || p.customer_name || '—'}</td>
+          <td class="mono">${inv?.invoice_number || inv?.order_number || '—'}</td>
+          <td>${p.method || '—'}</td>
+          <td class="mono">${p.reference || '—'}</td>
+          <td class="num" style="font-weight:700;color:#15803d;">${fmt(p.amount||0)}</td>
+          <td style="font-size:11px;color:#6b7280;">${p.notes || '—'}</td>
+          <td style="font-size:11px;">${p.posted_by || '—'}</td>
+          <td>
+            <button class="btn btn-sm" style="color:#dc2626;border-color:#fca5a5;" onclick="voidPayment('${p.id}')">🗑 Void</button>
+          </td>
+        </tr>`;
+      }).join('');
+}
+
+function _populateStatementCustomers() {
+  const sel = document.getElementById('ar-stmt-customer');
+  if (!sel) return;
+  const today = new Date().toISOString().slice(0,10);
+  document.getElementById('ar-stmt-date').value = today;
+  const names = [...new Map(_arInvoices.map(i => [i.customer_id, {id:i.customer_id, name:i.customer_name}])).values()]
+    .sort((a,b) => a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">— Select Customer —</option>' + names.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+}
+
+// ── Payment Modal ──
+let _pmtOrderId = null;
+function openPaymentModal(orderId = null) {
+  _pmtOrderId = orderId;
+  const today = new Date().toISOString().slice(0,10);
+
+  // Build invoice selector
+  const openInvs = _arInvoices.filter(i => i.balance > 0);
+  const invOptions = openInvs.map(i =>
+    `<option value="${i.id}" ${i.id === orderId ? 'selected' : ''}>${i.customer_name} — ${i.invoice_number||i.order_number} (Balance: $${i.balance.toFixed(2)})</option>`
+  ).join('');
+
+  const html = `<div id="pmt-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;display:flex;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:12px;width:520px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div style="background:#1a56a0;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="color:#fff;font-weight:800;font-size:15px;">💵 Record Payment</span>
+        <button onclick="document.getElementById('pmt-modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#bfdbfe;">✕</button>
+      </div>
+      <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Invoice <span style="color:#dc2626">*</span></label>
+          <select class="fi" id="pmt-invoice" style="width:100%;" onchange="updatePaymentBalance()">${invOptions}</select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Payment Date <span style="color:#dc2626">*</span></label>
+            <input type="date" class="fi" id="pmt-date" value="${today}" style="width:100%;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Amount <span style="color:#dc2626">*</span></label>
+            <input type="number" class="fi" id="pmt-amount" min="0" step="0.01" placeholder="0.00" style="width:100%;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Payment Method</label>
+            <select class="fi" id="pmt-method" style="width:100%;">
+              <option>Check</option><option>ACH</option><option>Wire</option><option>Credit Card</option><option>Cash</option><option>Other</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Reference # (Check / Wire)</label>
+            <input type="text" class="fi" id="pmt-ref" placeholder="Check #, Wire ref..." style="width:100%;font-family:'IBM Plex Mono',monospace;">
+          </div>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Notes</label>
+          <input type="text" class="fi" id="pmt-notes" placeholder="Optional notes..." style="width:100%;">
+        </div>
+        <div id="pmt-balance-info" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px;font-size:12px;"></div>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;">
+        <button class="btn" onclick="document.getElementById('pmt-modal').remove()">Cancel</button>
+        <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;" onclick="savePayment()">💵 Post Payment</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+  updatePaymentBalance();
+}
+
+function updatePaymentBalance() {
+  const sel = document.getElementById('pmt-invoice');
+  const inv = _arInvoices.find(i => i.id === sel?.value);
+  const info = document.getElementById('pmt-balance-info');
+  if (!inv || !info) return;
+  if (!document.getElementById('pmt-amount').value) document.getElementById('pmt-amount').value = inv.balance.toFixed(2);
+  info.innerHTML = `<span style="color:#374151;">Invoice: <strong>${inv.invoice_number||inv.order_number}</strong></span> &nbsp;·&nbsp; <span>Amount: <strong>$${inv.invAmt.toFixed(2)}</strong></span> &nbsp;·&nbsp; <span style="color:#16a34a;">Credits: <strong>($${inv.cmAmt.toFixed(2)})</strong></span> &nbsp;·&nbsp; <span style="color:#dc2626;">Balance Due: <strong>$${inv.balance.toFixed(2)}</strong></span>`;
+}
+
+async function savePayment() {
+  const orderId = document.getElementById('pmt-invoice')?.value;
+  const date = document.getElementById('pmt-date')?.value;
+  const amount = parseFloat(document.getElementById('pmt-amount')?.value || 0);
+  const method = document.getElementById('pmt-method')?.value;
+  const ref = document.getElementById('pmt-ref')?.value;
+  const notes = document.getElementById('pmt-notes')?.value;
+
+  if (!orderId || !date || !amount || amount <= 0) {
+    showToast('❌ Invoice, date, and amount are required.'); return;
+  }
+  const inv = _arInvoices.find(i => i.id === orderId);
+  if (amount > (inv?.balance || 0) + 0.01) {
+    if (!confirm(`Payment $${amount.toFixed(2)} exceeds balance $${inv.balance.toFixed(2)}. Continue?`)) return;
+  }
+
+  const { error } = await db.from('payments').insert({
+    order_id: orderId,
+    customer_name: inv?.customer_name || '',
+    payment_date: date,
+    amount,
+    method,
+    reference: ref,
+    notes,
+    posted_by: _currentEmployee?.name || 'Admin',
+    created_at: new Date().toISOString()
+  });
+
+  if (error) { showToast('❌ Error: ' + error.message); return; }
+  document.getElementById('pmt-modal')?.remove();
+  showToast(`✅ Payment of $${amount.toFixed(2)} posted successfully!`);
+  await loadAR();
+}
+
+async function voidPayment(pmtId) {
+  if (!confirm('Void this payment? This cannot be undone.')) return;
+  await db.from('payments').delete().eq('id', pmtId);
+  showToast('✕ Payment voided');
+  await loadAR();
+}
+
+// ── Statement ──
+function previewStatement() {
+  const custId = document.getElementById('ar-stmt-customer')?.value;
+  const asOf = document.getElementById('ar-stmt-date')?.value;
+  if (!custId || !asOf) { showToast('Select a customer and date.'); return; }
+
+  const asOfDate = new Date(asOf + 'T23:59:59');
+  const custInvs = _arInvoices.filter(i => i.customer_id === custId);
+  const custName = custInvs[0]?.customer_name || '';
+  if (custInvs.length === 0) {
+    document.getElementById('ar-stmt-preview').innerHTML = '<div style="color:#6b7280;text-align:center;padding:40px;">No open invoices for this customer</div>';
+    return;
+  }
+
+  const fmt = v => '$' + v.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+  const totalBal = custInvs.filter(i => i.balance > 0).reduce((s,i) => s+i.balance, 0);
+  const dateStr = asOfDate.toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'});
+
+  const rows = custInvs.sort((a,b) => a.invDate - b.invDate).map(i => `
+    <tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:6px 10px;font-family:monospace;font-size:11px;">${i.invDate.toLocaleDateString('en-US')}</td>
+      <td style="padding:6px 10px;font-size:11px;font-weight:600;">${i.invoice_number||i.order_number||'—'}</td>
+      <td style="padding:6px 10px;font-size:11px;">${i.customer_po||'—'}</td>
+      <td style="padding:6px 10px;font-size:11px;font-family:monospace;">${i.dueDate.toLocaleDateString('en-US')}</td>
+      <td style="padding:6px 10px;text-align:right;font-size:11px;">$${i.invAmt.toFixed(2)}</td>
+      <td style="padding:6px 10px;text-align:right;font-size:11px;color:#16a34a;">${i.cmAmt > 0 ? '($'+i.cmAmt.toFixed(2)+')' : '—'}</td>
+      <td style="padding:6px 10px;text-align:right;font-size:11px;color:#1a56a0;">${i.pmtAmt > 0 ? '($'+i.pmtAmt.toFixed(2)+')' : '—'}</td>
+      <td style="padding:6px 10px;text-align:right;font-weight:700;font-size:11px;color:${i.balance>0?'#dc2626':'#15803d'};">$${i.balance.toFixed(2)}</td>
+      <td style="padding:6px 10px;font-size:10px;">
+        ${i.daysOverdue > 0 && i.balance > 0 ? `<span style="color:#dc2626;font-weight:700;">${i.daysOverdue}d overdue</span>` : '<span style="color:#15803d;">Current</span>'}
+      </td>
+    </tr>`).join('');
+
+  document.getElementById('ar-stmt-preview').innerHTML = `
+    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;">
+      <div style="background:#0f2744;padding:14px 20px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center;">
+        <div style="color:#fff;font-size:16px;font-weight:800;">PACIFIC SPORTS INC</div>
+        <div style="color:#fff;font-size:13px;font-weight:700;">ACCOUNT STATEMENT</div>
+      </div>
+      <div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:10px 20px;display:flex;justify-content:space-between;font-size:12px;">
+        <div><span style="color:#6b7280;">Customer:</span> <strong>${custName}</strong></div>
+        <div><span style="color:#6b7280;">As of:</span> <strong>${dateStr}</strong></div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">
+        <thead><tr style="background:#111827;color:#fff;font-size:10px;">
+          <th style="padding:7px 10px;text-align:left;">Date</th>
+          <th style="padding:7px 10px;text-align:left;">Invoice #</th>
+          <th style="padding:7px 10px;text-align:left;">PO #</th>
+          <th style="padding:7px 10px;text-align:left;">Due Date</th>
+          <th style="padding:7px 10px;text-align:right;">Invoice Amt</th>
+          <th style="padding:7px 10px;text-align:right;">Credits</th>
+          <th style="padding:7px 10px;text-align:right;">Payments</th>
+          <th style="padding:7px 10px;text-align:right;">Balance</th>
+          <th style="padding:7px 10px;text-align:left;">Status</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr style="background:#111827;color:#fff;">
+            <td colspan="7" style="padding:10px;text-align:right;font-weight:700;font-size:13px;">TOTAL BALANCE DUE:</td>
+            <td colspan="2" style="padding:10px;text-align:right;font-weight:900;font-size:16px;">${fmt(totalBal)}</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div style="padding:10px 20px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;font-size:10px;color:#6b7280;background:#fafafa;">
+        Please remit payment to: Hana Commercial Finance · Dept. LA 24406 · Pasadena, CA 91185-4406
+      </div>
+    </div>`;
+}
+
+async function emailStatement() {
+  showToast('📧 Statement email feature coming soon!');
+}
+
+function exportArCsv() {
+  const rows = [['Invoice #','Customer','PO #','Invoice Date','Due Date','Terms','Invoice Amt','Credits','Payments','Balance','Status']];
+  _arInvoices.forEach(i => rows.push([
+    i.invoice_number||i.order_number, i.customer_name, i.customer_po||'',
+    i.invDate.toLocaleDateString('en-US'), i.dueDate.toLocaleDateString('en-US'),
+    i.terms||'N30', i.invAmt.toFixed(2), i.cmAmt.toFixed(2), i.pmtAmt.toFixed(2),
+    i.balance.toFixed(2), i.arStatus
+  ]));
+  const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'AR_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
+</script>
