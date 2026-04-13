@@ -23805,18 +23805,44 @@ function showCreditHoldFlash(overAmt) {
 </div>
 
 
+<!-- ── Price Sheet PIN 모달 ── -->
+<div id="ps-pin-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:340px;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
+    <div style="background:#0f2744;padding:16px 20px;">
+      <div style="color:#fff;font-weight:800;font-size:15px;">🔒 Price Sheet</div>
+      <div style="color:#93c5fd;font-size:12px;margin-top:4px;" id="ps-pin-customer"></div>
+    </div>
+    <div style="padding:24px 20px;">
+      <div style="font-size:13px;color:#374151;margin-bottom:16px;text-align:center;">담당자 PIN을 입력하세요</div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+        <input type="password" id="ps-pin-input" maxlength="4" inputmode="numeric" autocomplete="off"
+          placeholder="●●●●"
+          style="width:140px;text-align:center;font-size:28px;letter-spacing:12px;font-family:'IBM Plex Mono',monospace;
+                 border:2px solid #e5e7eb;border-radius:8px;padding:10px 16px;outline:none;background:#f9fafb;"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyPsPin();"
+          onfocus="this.style.borderColor='#1a56a0'" onblur="this.style.borderColor='#e5e7eb'">
+        <div id="ps-pin-error" style="font-size:12px;color:#dc2626;min-height:16px;text-align:center;"></div>
+      </div>
+    </div>
+    <div style="padding:0 20px 20px;display:flex;gap:8px;justify-content:center;">
+      <button class="btn" onclick="document.getElementById('ps-pin-modal').style.display='none'">취소</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Price Sheet 모달 ── -->
 <div id="price-sheet-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:12px;width:920px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+  <div style="background:#fff;border-radius:12px;width:980px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
     <!-- Header -->
     <div style="background:#1a56a0;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
-      <div>
+      <div style="display:flex;align-items:center;gap:12px;">
         <span style="color:#fff;font-weight:800;font-size:15px;">💲 Price Sheet</span>
-        <span id="ps-customer-name" style="color:#bfdbfe;font-size:13px;margin-left:12px;font-weight:600;"></span>
+        <span id="ps-customer-name" style="color:#bfdbfe;font-size:13px;font-weight:600;"></span>
+        <span id="ps-viewer-badge" style="background:rgba(255,255,255,0.15);color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid rgba(255,255,255,0.3);"></span>
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
-        <button onclick="downloadPriceSheetPdf()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">⬇ Download PDF</button>
-        <button onclick="document.getElementById('price-sheet-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#bfdbfe;line-height:1;">✕</button>
+        <button onclick="downloadPriceSheetPdf()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">⬇ Download PDF (<span id="ps-selected-count">0</span> selected)</button>
+        <button onclick="closePriceSheet()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#bfdbfe;line-height:1;">✕</button>
       </div>
     </div>
 
@@ -23828,7 +23854,11 @@ function showCreditHoldFlash(overAmt) {
       <span style="font-size:11px;color:#1e40af;">4XL: 3XL <strong>+$<span id="ps-up-4xl">0.80</span></strong></span>
       <span style="font-size:11px;color:#1e40af;">5XL: 4XL <strong>+$<span id="ps-up-5xl">1.20</span></strong></span>
       <button onclick="editUpcharges()" style="background:none;border:1px solid #bfdbfe;border-radius:4px;color:#1e40af;padding:2px 8px;font-size:10px;cursor:pointer;">✏️ Edit</button>
-      <div style="margin-left:auto;font-size:11px;color:#6b7280;">가격 입력 후 자동 저장됩니다</div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:11px;color:#6b7280;">가격 입력 후 자동 저장</span>
+        <button onclick="psSelectAll(true)" style="font-size:10px;background:none;border:1px solid #bfdbfe;border-radius:4px;color:#1e40af;padding:2px 8px;cursor:pointer;">전체선택</button>
+        <button onclick="psSelectAll(false)" style="font-size:10px;background:none;border:1px solid #e5e7eb;border-radius:4px;color:#6b7280;padding:2px 8px;cursor:pointer;">선택해제</button>
+      </div>
     </div>
 
     <!-- Adults / Kids Tabs -->
@@ -23841,8 +23871,13 @@ function showCreditHoldFlash(overAmt) {
         style="padding:6px 20px;font-size:12px;font-weight:700;border:none;background:#f0f4f8;color:#6b7280;border-radius:6px 6px 0 0;cursor:pointer;">
         🧒 Kids
       </button>
-      <div style="margin-left:auto;padding-bottom:6px;">
-        <input type="text" id="ps-search" placeholder="스타일 검색..." class="fi" style="width:180px;font-size:11px;height:28px;" oninput="renderPriceSheet()">
+      <div style="margin-left:auto;padding-bottom:6px;display:flex;gap:8px;">
+        <select id="ps-filter-select" class="fi" style="height:28px;font-size:11px;" onchange="renderPriceSheet()">
+          <option value="all">전체 스타일</option>
+          <option value="priced">가격 있는 것만</option>
+          <option value="selected">선택된 것만</option>
+        </select>
+        <input type="text" id="ps-search" placeholder="스타일 검색..." class="fi" style="width:160px;font-size:11px;height:28px;" oninput="renderPriceSheet()">
       </div>
     </div>
 
@@ -23851,27 +23886,56 @@ function showCreditHoldFlash(overAmt) {
       <table class="tbl" style="table-layout:fixed;">
         <thead style="position:sticky;top:0;z-index:1;">
           <tr>
-            <th style="width:90px;">Style #</th>
+            <th style="width:36px;text-align:center;">
+              <input type="checkbox" id="ps-check-all" title="전체 선택"
+                style="width:14px;height:14px;cursor:pointer;accent-color:#1a56a0;"
+                onchange="psToggleAll(this.checked)">
+            </th>
+            <th style="width:80px;">Style #</th>
             <th>Description</th>
-            <th style="width:110px;text-align:right;color:#1a56a0;">XS–XL Price</th>
-            <th style="width:90px;text-align:right;color:#374151;">2XL</th>
-            <th style="width:90px;text-align:right;color:#374151;">3XL</th>
-            <th style="width:90px;text-align:right;color:#374151;">4XL</th>
-            <th style="width:90px;text-align:right;color:#374151;">5XL</th>
-            <th style="width:100px;">Effective</th>
-            <th style="width:120px;">Notes</th>
+            <th style="width:120px;text-align:right;color:#1a56a0;">XS–XL Price</th>
+            <th style="width:85px;text-align:right;color:#374151;">2XL</th>
+            <th style="width:85px;text-align:right;color:#374151;">3XL</th>
+            <th style="width:85px;text-align:right;color:#374151;">4XL</th>
+            <th style="width:85px;text-align:right;color:#374151;">5XL</th>
+            <th style="width:95px;">Effective</th>
+            <th style="width:110px;">Notes</th>
           </tr>
         </thead>
         <tbody id="ps-tbody">
-          <tr><td colspan="9" class="empty">Loading...</td></tr>
+          <tr><td colspan="10" class="empty">Loading...</td></tr>
         </tbody>
       </table>
     </div>
 
     <!-- Footer -->
     <div style="padding:10px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#fafafa;border-radius:0 0 12px 12px;flex-shrink:0;">
-      <span style="font-size:11px;color:#6b7280;" id="ps-count"></span>
-      <button class="btn" onclick="document.getElementById('price-sheet-modal').style.display='none'">닫기</button>
+      <div style="display:flex;align-items:center;gap:16px;">
+        <span style="font-size:11px;color:#6b7280;" id="ps-count"></span>
+        <button onclick="openPsLog()" style="font-size:11px;color:#6b7280;background:none;border:none;cursor:pointer;text-decoration:underline;">📋 접근 로그</button>
+      </div>
+      <button class="btn" onclick="closePriceSheet()">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Price Sheet 로그 모달 ── -->
+<div id="ps-log-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;width:640px;max-width:96vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+      <span style="color:#fff;font-weight:700;font-size:14px;">📋 Price Sheet 접근 로그 — <span id="ps-log-customer"></span></span>
+      <button onclick="document.getElementById('ps-log-modal').style.display='none'" style="background:none;border:none;font-size:18px;cursor:pointer;color:#93c5fd;">✕</button>
+    </div>
+    <div style="overflow-y:auto;flex:1;">
+      <table class="tbl">
+        <thead><tr>
+          <th>일시</th><th>담당자</th><th>Action</th><th>Detail</th>
+        </tr></thead>
+        <tbody id="ps-log-body"><tr><td colspan="4" class="empty">Loading...</td></tr></tbody>
+      </table>
+    </div>
+    <div style="padding:10px 20px;border-top:1px solid #e5e7eb;text-align:right;flex-shrink:0;">
+      <button class="btn" onclick="document.getElementById('ps-log-modal').style.display='none'">닫기</button>
     </div>
   </div>
 </div>
@@ -23943,14 +24007,17 @@ function showCreditHoldFlash(overAmt) {
 <!-- updated Mon Apr 13 14:44:56 UTC 2026 -->
 <script>
 // ══════════════════════════════════════════════════════════════
-// PRICE SHEET MODULE
+// PRICE SHEET MODULE — PIN 보호 + 체크박스 + 접근 로그
 // ══════════════════════════════════════════════════════════════
 let _psCustomerId = null;
 let _psCustomerName = '';
-let _psPrices = {};      // { style_number: { id, base_price, notes, effective_date } }
-let _psAllStyles = [];   // all styles from DB
-let _psTab = 'adults';   // 'adults' | 'kids'
-let _psSaveTimers = {};  // debounce timers per style
+let _psPrices = {};       // { style_number: { id, base_price, notes, effective_date, included } }
+let _psAllStyles = [];    // all styles from DB
+let _psTab = 'adults';
+let _psSaveTimers = {};   // debounce timers
+let _psUnlocked = false;  // PIN 인증 여부
+let _psViewer = null;     // 인증한 직원
+let _psSelected = new Set(); // 선택된 style_numbers (PDF 포함용)
 const PS_UPCHARGES = { '2XL': 0.60, '3XL': 0.60, '4XL': 0.80, '5XL': 1.20 };
 
 function getPsUpcharge(size) {
@@ -23961,11 +24028,98 @@ function getPsUpcharge(size) {
   if (s === '5XL') return PS_UPCHARGES['2XL'] + PS_UPCHARGES['3XL'] + PS_UPCHARGES['4XL'] + PS_UPCHARGES['5XL'];
   return 0;
 }
-
 function getPriceForSize(basePrice, size) {
   return Math.round((basePrice + getPsUpcharge(size)) * 100) / 100;
 }
 
+// ── PIN 단계 ──
+async function openPriceSheet(customerId, customerName) {
+  _psCustomerId = customerId;
+  _psCustomerName = customerName;
+  _psUnlocked = false;
+  _psViewer = null;
+
+  // PIN 모달 표시
+  document.getElementById('ps-pin-customer').textContent = customerName;
+  document.getElementById('ps-pin-input').value = '';
+  document.getElementById('ps-pin-error').textContent = '';
+  document.getElementById('ps-pin-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('ps-pin-input')?.focus(), 100);
+}
+
+async function verifyPsPin() {
+  const pin = document.getElementById('ps-pin-input').value;
+  if (pin.length < 4) return;
+  if (_pinEmployees.length === 0) await loadPinEmployees();
+  const emp = _pinEmployees.find(e => e.pin === pin);
+  if (!emp || !['manager','supervisor','admin'].includes(emp.role)) {
+    document.getElementById('ps-pin-error').textContent = '❌ 권한이 없거나 PIN이 틀렸습니다';
+    document.getElementById('ps-pin-input').value = '';
+    document.getElementById('ps-pin-input').focus();
+    return;
+  }
+  // 인증 성공
+  _psUnlocked = true;
+  _psViewer = emp;
+  document.getElementById('ps-pin-modal').style.display = 'none';
+
+  // 접근 로그 기록
+  await logPsAction('view', '가격표 열람');
+
+  // Price Sheet 열기
+  document.getElementById('ps-customer-name').textContent = _psCustomerName;
+  document.getElementById('ps-viewer-badge').textContent = '🔓 ' + emp.name;
+  document.getElementById('ps-search').value = '';
+  document.getElementById('ps-filter-select').value = 'all';
+  _psSelected = new Set();
+  _psTab = 'adults';
+  document.getElementById('price-sheet-modal').style.display = 'flex';
+  psSetTab('adults');
+  await loadPriceSheet();
+}
+
+function closePriceSheet() {
+  document.getElementById('price-sheet-modal').style.display = 'none';
+  _psUnlocked = false;
+  _psViewer = null;
+  _psAllStyles = []; // 닫으면 캐시 초기화 (보안)
+}
+
+// ── 로그 ──
+async function logPsAction(action, detail) {
+  if (!_psViewer) return;
+  try {
+    await db.from('price_sheet_logs').insert({
+      customer_id: _psCustomerId,
+      customer_name: _psCustomerName,
+      employee_name: _psViewer.name,
+      employee_id: _psViewer.id,
+      action,
+      detail,
+      created_at: new Date().toISOString()
+    });
+  } catch(e) { console.warn('Log error:', e); }
+}
+
+async function openPsLog() {
+  document.getElementById('ps-log-customer').textContent = _psCustomerName;
+  document.getElementById('ps-log-modal').style.display = 'flex';
+  document.getElementById('ps-log-body').innerHTML = '<tr><td colspan="4" class="empty">Loading...</td></tr>';
+  const { data } = await db.from('price_sheet_logs')
+    .select('*').eq('customer_id', _psCustomerId)
+    .order('created_at', { ascending: false }).limit(100);
+  const actionLabel = { view:'👁 열람', edit:'✏️ 수정', download:'⬇ 다운로드' };
+  document.getElementById('ps-log-body').innerHTML = (data||[]).length === 0
+    ? '<tr><td colspan="4" class="empty">로그 없음</td></tr>'
+    : (data||[]).map(l => `<tr>
+        <td style="font-size:11px;font-family:monospace;">${new Date(l.created_at).toLocaleString('ko-KR')}</td>
+        <td style="font-weight:600;">${l.employee_name||'—'}</td>
+        <td>${actionLabel[l.action]||l.action}</td>
+        <td style="font-size:11px;color:#6b7280;">${l.detail||''}</td>
+      </tr>`).join('');
+}
+
+// ── 탭 ──
 function psSetTab(tab) {
   _psTab = tab;
   ['adults','kids'].forEach(t => {
@@ -23977,37 +24131,30 @@ function psSetTab(tab) {
   renderPriceSheet();
 }
 
-async function openPriceSheet(customerId, customerName) {
-  _psCustomerId = customerId;
-  _psCustomerName = customerName;
-  _psTab = 'adults';
-  document.getElementById('ps-customer-name').textContent = customerName;
-  document.getElementById('ps-search').value = '';
-  document.getElementById('price-sheet-modal').style.display = 'flex';
-  psSetTab('adults');
-  await loadPriceSheet();
-}
-
+// ── 데이터 로드 ──
 async function loadPriceSheet() {
-  document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="9" class="empty">Loading...</td></tr>';
+  document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="10" class="empty">Loading...</td></tr>';
 
-  // 1. 모든 스타일 로드
-  if (!_psAllStyles.length) {
-    const { data } = await db.from('styles').select('id,style_number,description,category').order('style_number');
-    _psAllStyles = data || [];
-  }
+  // 모든 스타일 로드
+  const { data: styles } = await db.from('styles').select('id,style_number,description,category').order('style_number');
+  _psAllStyles = styles || [];
 
-  // 2. 이 거래처의 기존 가격 로드
-  const { data: prices } = await db.from('customer_prices')
-    .select('*').eq('customer_id', _psCustomerId);
+  // 이 거래처의 기존 가격 로드
+  const { data: prices } = await db.from('customer_prices').select('*').eq('customer_id', _psCustomerId);
   _psPrices = {};
   (prices || []).forEach(p => { _psPrices[p.style_number] = p; });
 
+  // 기존에 included=true인 스타일들 선택 상태 복원
+  _psSelected = new Set(Object.values(_psPrices).filter(p => p.included).map(p => p.style_number));
+
   renderPriceSheet();
+  updatePsSelectedCount();
 }
 
+// ── 렌더링 ──
 function renderPriceSheet() {
   const search = (document.getElementById('ps-search')?.value || '').toLowerCase();
+  const filterVal = document.getElementById('ps-filter-select')?.value || 'all';
 
   const filtered = _psAllStyles.filter(s => {
     const cat = (s.category || '').toLowerCase();
@@ -24015,40 +24162,52 @@ function renderPriceSheet() {
     if (_psTab === 'kids' && !isKids) return false;
     if (_psTab === 'adults' && isKids) return false;
     if (search && !s.style_number?.toLowerCase().includes(search) && !s.description?.toLowerCase().includes(search)) return false;
+    const hasPrice = (_psPrices[s.style_number]?.base_price || 0) > 0;
+    if (filterVal === 'priced' && !hasPrice) return false;
+    if (filterVal === 'selected' && !_psSelected.has(s.style_number)) return false;
     return true;
   });
 
-  const priced = filtered.filter(s => _psPrices[s.style_number]?.base_price > 0).length;
+  const priced = filtered.filter(s => (_psPrices[s.style_number]?.base_price || 0) > 0).length;
   document.getElementById('ps-count').textContent =
-    `${priced} / ${filtered.length} styles priced`;
+    `${priced} / ${filtered.length} styles priced · ${_psSelected.size} selected for PDF`;
 
   if (filtered.length === 0) {
-    document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="9" class="empty">No styles found</td></tr>';
+    document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="10" class="empty">No styles found</td></tr>';
     return;
   }
 
+  const today = new Date().toISOString().slice(0,10);
   document.getElementById('ps-tbody').innerHTML = filtered.map(s => {
     const p = _psPrices[s.style_number];
     const base = p?.base_price || 0;
     const hasPrce = base > 0;
-    const bgColor = hasPrce ? '#fff' : '#fafafa';
-    const today = new Date().toISOString().slice(0,10);
+    const isSelected = _psSelected.has(s.style_number);
+    const rowBg = isSelected ? '#f0f7ff' : (hasPrce ? '#fff' : '#fafafa');
 
-    return `<tr style="background:${bgColor};border-bottom:1px solid #f0f0f0;" id="ps-row-${s.style_number}">
+    const maskOrVal = (val) => _psUnlocked ? val : '●●●●';
+
+    return `<tr style="background:${rowBg};border-bottom:1px solid #f0f0f0;" id="ps-row-${s.style_number}">
+      <td style="text-align:center;padding:6px 4px;">
+        <input type="checkbox" ${isSelected ? 'checked' : ''}
+          style="width:15px;height:15px;cursor:pointer;accent-color:#1a56a0;"
+          onchange="psToogleStyle('${s.style_number}', this.checked)">
+      </td>
       <td style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:${hasPrce?'#111':'#9ca3af'};">${s.style_number}</td>
       <td style="font-size:12px;color:${hasPrce?'#374151':'#9ca3af'};">${s.description || '—'}</td>
       <td style="text-align:right;padding:6px 8px;">
-        <div style="display:flex;align-items:center;justify-content:flex-end;gap:4px;">
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:3px;">
           <span style="font-size:11px;color:#9ca3af;">$</span>
           <input type="number" value="${hasPrce ? base.toFixed(2) : ''}"
             placeholder="—" step="0.01" min="0"
             id="ps-input-${s.style_number}"
-            style="width:72px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;
-                   border:1px solid ${hasPrce?'#bfdbfe':'#e5e7eb'};border-radius:4px;padding:3px 6px;
-                   background:${hasPrce?'#f0f7ff':'#fff'};color:${hasPrce?'#1a56a0':'#374151'};"
-            oninput="onPsInput('${s.style_number}', '${s.description||''}', '${today}', this.value)"
-            onfocus="this.style.borderColor='#3b82f6';this.style.boxShadow='0 0 0 2px #dbeafe';"
-            onblur="this.style.boxShadow='none';">
+            ${!_psUnlocked ? 'disabled style="filter:blur(4px);pointer-events:none;' : 'style="'}
+            width:72px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;
+            border:1px solid ${hasPrce?'#bfdbfe':'#e5e7eb'};border-radius:4px;padding:3px 6px;
+            background:${hasPrce?'#f0f7ff':'#fff'};color:${hasPrce?'#1a56a0':'#374151'};"
+            oninput="onPsInput('${s.style_number}', '${(s.description||'').replace(/'/g,"\\'")}', '${today}', this.value)"
+            onfocus="this.style.borderColor='#3b82f6';"
+            onblur="this.style.borderColor='${hasPrce?'#bfdbfe':'#e5e7eb'}';">
         </div>
       </td>
       <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${hasPrce?'#374151':'#d1d5db'};" id="ps-2xl-${s.style_number}">${hasPrce ? '$'+getPriceForSize(base,'2XL').toFixed(2) : '—'}</td>
@@ -24065,60 +24224,91 @@ function renderPriceSheet() {
   }).join('');
 }
 
-function onPsInput(styleNum, desc, today, val) {
-  const base = parseFloat(val) || 0;
+// ── 체크박스 ──
+async function psToogleStyle(styleNum, checked) {
+  if (checked) _psSelected.add(styleNum);
+  else _psSelected.delete(styleNum);
 
-  // 즉시 derived 가격 업데이트 (빠른 피드백)
+  // DB에 included 저장
+  const p = _psPrices[styleNum];
+  if (p?.id) {
+    await db.from('customer_prices').update({ included: checked, updated_at: new Date().toISOString() }).eq('id', p.id);
+    _psPrices[styleNum].included = checked;
+  }
+  // 행 배경 업데이트
+  const row = document.getElementById('ps-row-' + styleNum);
+  if (row) row.style.background = checked ? '#f0f7ff' : ((_psPrices[styleNum]?.base_price||0) > 0 ? '#fff' : '#fafafa');
+
+  updatePsSelectedCount();
+}
+
+function psToggleAll(checked) {
+  // 현재 보이는 행들만
+  document.querySelectorAll('#ps-tbody input[type=checkbox]').forEach(cb => {
+    if (cb.checked !== checked) { cb.checked = checked; cb.dispatchEvent(new Event('change')); }
+  });
+}
+
+function psSelectAll(checked) {
+  document.querySelectorAll('#ps-tbody input[type=checkbox]').forEach(cb => {
+    if (cb.checked !== checked) { cb.checked = checked; cb.dispatchEvent(new Event('change')); }
+  });
+}
+
+function updatePsSelectedCount() {
+  document.getElementById('ps-selected-count').textContent = _psSelected.size;
+  const countEl = document.getElementById('ps-count');
+  if (countEl) {
+    const pricedCount = Object.values(_psPrices).filter(p => p.base_price > 0).length;
+    countEl.textContent = `${pricedCount} styles priced · ${_psSelected.size} selected for PDF`;
+  }
+}
+
+// ── 가격 입력 ──
+function onPsInput(styleNum, desc, today, val) {
+  if (!_psUnlocked) return;
+  const base = parseFloat(val) || 0;
   const update = (id, v) => { const el = document.getElementById(id); if (el) { el.textContent = v; el.style.color = base > 0 ? '#374151' : '#d1d5db'; } };
   update('ps-2xl-'+styleNum, base > 0 ? '$'+getPriceForSize(base,'2XL').toFixed(2) : '—');
   update('ps-3xl-'+styleNum, base > 0 ? '$'+getPriceForSize(base,'3XL').toFixed(2) : '—');
   update('ps-4xl-'+styleNum, base > 0 ? '$'+getPriceForSize(base,'4XL').toFixed(2) : '—');
   update('ps-5xl-'+styleNum, base > 0 ? '$'+getPriceForSize(base,'5XL').toFixed(2) : '—');
-
-  // 입력창 스타일
   const inp = document.getElementById('ps-input-'+styleNum);
   if (inp) {
     inp.style.background = base > 0 ? '#f0f7ff' : '#fff';
     inp.style.borderColor = base > 0 ? '#bfdbfe' : '#e5e7eb';
     inp.style.color = base > 0 ? '#1a56a0' : '#374151';
-    inp.style.fontWeight = base > 0 ? '700' : '400';
   }
-
-  // Debounce 저장 (800ms)
   clearTimeout(_psSaveTimers[styleNum]);
   _psSaveTimers[styleNum] = setTimeout(() => savePsPrice(styleNum, desc, base, today), 800);
 }
 
 async function savePsPrice(styleNum, desc, base, today) {
   if (base <= 0) {
-    // 가격 0이면 삭제
     if (_psPrices[styleNum]) {
       await db.from('customer_prices').delete().eq('id', _psPrices[styleNum].id);
       delete _psPrices[styleNum];
+      _psSelected.delete(styleNum);
     }
     const effEl = document.getElementById('ps-eff-'+styleNum);
     if (effEl) effEl.textContent = '—';
+    updatePsSelectedCount();
     return;
   }
-
   const payload = {
-    customer_id: _psCustomerId,
-    style_number: styleNum,
-    description: desc,
-    base_price: base,
-    effective_date: today,
+    customer_id: _psCustomerId, style_number: styleNum, description: desc,
+    base_price: base, effective_date: today, included: _psSelected.has(styleNum),
     updated_at: new Date().toISOString()
   };
-
   const { data, error } = await db.from('customer_prices')
-    .upsert(payload, { onConflict: 'customer_id,style_number' })
-    .select().single();
-
+    .upsert(payload, { onConflict: 'customer_id,style_number' }).select().single();
   if (!error && data) {
     _psPrices[styleNum] = data;
     const effEl = document.getElementById('ps-eff-'+styleNum);
     if (effEl) effEl.textContent = today;
   }
+  // 수정 로그
+  await logPsAction('edit', `Style ${styleNum}: $${base.toFixed(2)}`);
 }
 
 async function savePsNotes(styleNum, notes) {
@@ -24127,20 +24317,22 @@ async function savePsNotes(styleNum, notes) {
   _psPrices[styleNum].notes = notes;
 }
 
+// ── Upcharges 편집 ──
 function editUpcharges() {
+  if (!_psUnlocked) { showToast('❌ PIN 인증 후 수정 가능합니다.'); return; }
   const cur = PS_UPCHARGES;
-  const v2 = prompt('2XL upcharge (current: $' + cur['2XL'].toFixed(2) + '):', cur['2XL'].toFixed(2));
+  const v2 = prompt('2XL upcharge ($' + cur['2XL'].toFixed(2) + '):', cur['2XL'].toFixed(2));
   if (v2 === null) return;
-  const v3 = prompt('3XL upcharge on top of 2XL (current: $' + cur['3XL'].toFixed(2) + '):', cur['3XL'].toFixed(2));
+  const v3 = prompt('3XL upcharge on top of 2XL ($' + cur['3XL'].toFixed(2) + '):', cur['3XL'].toFixed(2));
   if (v3 === null) return;
-  const v4 = prompt('4XL upcharge on top of 3XL (current: $' + cur['4XL'].toFixed(2) + '):', cur['4XL'].toFixed(2));
+  const v4 = prompt('4XL upcharge on top of 3XL ($' + cur['4XL'].toFixed(2) + '):', cur['4XL'].toFixed(2));
   if (v4 === null) return;
-  const v5 = prompt('5XL upcharge on top of 4XL (current: $' + cur['5XL'].toFixed(2) + '):', cur['5XL'].toFixed(2));
+  const v5 = prompt('5XL upcharge on top of 4XL ($' + cur['5XL'].toFixed(2) + '):', cur['5XL'].toFixed(2));
   if (v5 === null) return;
-  PS_UPCHARGES['2XL'] = parseFloat(v2) || cur['2XL'];
-  PS_UPCHARGES['3XL'] = parseFloat(v3) || cur['3XL'];
-  PS_UPCHARGES['4XL'] = parseFloat(v4) || cur['4XL'];
-  PS_UPCHARGES['5XL'] = parseFloat(v5) || cur['5XL'];
+  PS_UPCHARGES['2XL'] = parseFloat(v2)||cur['2XL'];
+  PS_UPCHARGES['3XL'] = parseFloat(v3)||cur['3XL'];
+  PS_UPCHARGES['4XL'] = parseFloat(v4)||cur['4XL'];
+  PS_UPCHARGES['5XL'] = parseFloat(v5)||cur['5XL'];
   document.getElementById('ps-up-2xl').textContent = PS_UPCHARGES['2XL'].toFixed(2);
   document.getElementById('ps-up-3xl').textContent = PS_UPCHARGES['3XL'].toFixed(2);
   document.getElementById('ps-up-4xl').textContent = PS_UPCHARGES['4XL'].toFixed(2);
@@ -24148,47 +24340,40 @@ function editUpcharges() {
   renderPriceSheet();
 }
 
-// ── PDF Download ──
-function downloadPriceSheetPdf() {
-  const pricedStyles = _psAllStyles.filter(s => {
-    const p = _psPrices[s.style_number];
-    return p?.base_price > 0;
-  });
+// ── PDF Download (선택된 스타일만) ──
+async function downloadPriceSheetPdf() {
+  if (_psSelected.size === 0) { showToast('⚠️ PDF에 포함할 스타일을 먼저 선택하세요.'); return; }
 
-  const adultStyles = pricedStyles.filter(s => {
-    const cat = (s.category||'').toLowerCase();
-    return !cat.includes('kid') && !cat.includes('youth') && !cat.includes('toddler');
-  });
-  const kidsStyles = pricedStyles.filter(s => {
-    const cat = (s.category||'').toLowerCase();
-    return cat.includes('kid') || cat.includes('youth') || cat.includes('toddler');
-  });
+  const selectedStyles = _psAllStyles.filter(s => _psSelected.has(s.style_number) && (_psPrices[s.style_number]?.base_price||0) > 0);
+  if (selectedStyles.length === 0) { showToast('⚠️ 선택된 스타일 중 가격이 입력된 것이 없습니다.'); return; }
+
+  const adultStyles = selectedStyles.filter(s => { const c=(s.category||'').toLowerCase(); return !c.includes('kid')&&!c.includes('youth')&&!c.includes('toddler'); });
+  const kidsStyles  = selectedStyles.filter(s => { const c=(s.category||'').toLowerCase(); return c.includes('kid')||c.includes('youth')||c.includes('toddler'); });
 
   const buildTable = (styles, title) => {
     if (!styles.length) return '';
     const rows = styles.map(s => {
       const base = _psPrices[s.style_number].base_price;
       return `<tr style="border-bottom:1px solid #e5e7eb;">
-        <td style="padding:8px 10px;font-family:monospace;font-weight:700;font-size:13px;">${s.style_number}</td>
-        <td style="padding:8px 10px;font-size:12px;">${s.description||''}</td>
-        <td style="padding:8px 10px;text-align:right;font-weight:700;color:#1a56a0;font-size:13px;">$${base.toFixed(2)}</td>
-        <td style="padding:8px 10px;text-align:right;font-size:12px;">$${getPriceForSize(base,'2XL').toFixed(2)}</td>
-        <td style="padding:8px 10px;text-align:right;font-size:12px;">$${getPriceForSize(base,'3XL').toFixed(2)}</td>
-        <td style="padding:8px 10px;text-align:right;font-size:12px;">$${getPriceForSize(base,'4XL').toFixed(2)}</td>
-        <td style="padding:8px 10px;text-align:right;font-size:12px;">$${getPriceForSize(base,'5XL').toFixed(2)}</td>
+        <td style="padding:7px 10px;font-family:monospace;font-weight:700;">${s.style_number}</td>
+        <td style="padding:7px 10px;font-size:12px;">${s.description||''}</td>
+        <td style="padding:7px 10px;text-align:right;font-weight:700;color:#1a56a0;">$${base.toFixed(2)}</td>
+        <td style="padding:7px 10px;text-align:right;">$${getPriceForSize(base,'2XL').toFixed(2)}</td>
+        <td style="padding:7px 10px;text-align:right;">$${getPriceForSize(base,'3XL').toFixed(2)}</td>
+        <td style="padding:7px 10px;text-align:right;">$${getPriceForSize(base,'4XL').toFixed(2)}</td>
+        <td style="padding:7px 10px;text-align:right;">$${getPriceForSize(base,'5XL').toFixed(2)}</td>
       </tr>`;
     }).join('');
-    return `
-      <div style="font-size:12px;font-weight:700;color:#1a56a0;text-transform:uppercase;letter-spacing:1px;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #1a56a0;">${title}</div>
-      <table style="width:100%;border-collapse:collapse;">
+    return `<div style="font-size:11px;font-weight:700;color:#1a56a0;text-transform:uppercase;letter-spacing:1px;margin:18px 0 6px;padding-bottom:4px;border-bottom:2px solid #1a56a0;">${title}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
         <thead><tr style="background:#0f2744;color:#fff;">
-          <th style="padding:7px 10px;text-align:left;font-size:10px;text-transform:uppercase;">Style #</th>
-          <th style="padding:7px 10px;text-align:left;font-size:10px;text-transform:uppercase;">Description</th>
-          <th style="padding:7px 10px;text-align:right;font-size:10px;text-transform:uppercase;">XS–XL</th>
-          <th style="padding:7px 10px;text-align:right;font-size:10px;text-transform:uppercase;">2XL</th>
-          <th style="padding:7px 10px;text-align:right;font-size:10px;text-transform:uppercase;">3XL</th>
-          <th style="padding:7px 10px;text-align:right;font-size:10px;text-transform:uppercase;">4XL</th>
-          <th style="padding:7px 10px;text-align:right;font-size:10px;text-transform:uppercase;">5XL</th>
+          <th style="padding:7px 10px;text-align:left;">Style #</th>
+          <th style="padding:7px 10px;text-align:left;">Description</th>
+          <th style="padding:7px 10px;text-align:right;">XS–XL</th>
+          <th style="padding:7px 10px;text-align:right;">2XL</th>
+          <th style="padding:7px 10px;text-align:right;">3XL</th>
+          <th style="padding:7px 10px;text-align:right;">4XL</th>
+          <th style="padding:7px 10px;text-align:right;">5XL</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
@@ -24196,8 +24381,8 @@ function downloadPriceSheetPdf() {
 
   const dateStr = new Date().toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'});
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>* { margin:0; padding:0; box-sizing:border-box; } body { font-family:Arial,sans-serif; padding:30px; color:#111; }
-  @media print { @page { margin:0.5in; } .no-print { display:none!important; } }</style>
+  <style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:Arial,sans-serif;padding:30px;color:#111;}
+  @media print{@page{margin:0.5in;}.no-print{display:none!important;}}</style>
   </head><body>
     <div class="no-print" style="background:#1a56a0;padding:10px;text-align:center;margin-bottom:16px;border-radius:6px;">
       <button onclick="window.print()" style="background:#fff;color:#1a56a0;border:none;padding:6px 20px;border-radius:4px;font-weight:700;cursor:pointer;margin-right:8px;">🖨️ Print / Save PDF</button>
@@ -24213,34 +24398,28 @@ function downloadPriceSheetPdf() {
         <div style="font-size:11px;color:#555;margin-top:2px;">${dateStr}</div>
       </div>
     </div>
-    <div style="background:#f0f7ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
-      <div style="font-size:13px;font-weight:700;color:#1e40af;">Customer: ${_psCustomerName}</div>
+    <div style="background:#f0f7ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin-bottom:4px;display:flex;justify-content:space-between;">
+      <div style="font-size:13px;font-weight:700;color:#1e40af;">${_psCustomerName}</div>
       <div style="font-size:11px;color:#374151;">
         2XL +$${PS_UPCHARGES['2XL'].toFixed(2)} &nbsp;|&nbsp;
         3XL +$${(PS_UPCHARGES['2XL']+PS_UPCHARGES['3XL']).toFixed(2)} &nbsp;|&nbsp;
         4XL +$${(PS_UPCHARGES['2XL']+PS_UPCHARGES['3XL']+PS_UPCHARGES['4XL']).toFixed(2)} &nbsp;|&nbsp;
-        5XL +$${(PS_UPCHARGES['2XL']+PS_UPCHARGES['3XL']+PS_UPCHARGES['4XL']+PS_UPCHARGES['5XL']).toFixed(2)} (cumulative from XS–XL)
+        5XL +$${(PS_UPCHARGES['2XL']+PS_UPCHARGES['3XL']+PS_UPCHARGES['4XL']+PS_UPCHARGES['5XL']).toFixed(2)} (cumulative)
       </div>
     </div>
-    ${buildTable(adultStyles, '👕 Adults')}
-    ${buildTable(kidsStyles, '🧒 Kids / Youth')}
-    <div style="margin-top:24px;font-size:10px;color:#9ca3af;text-align:center;border-top:1px solid #e5e7eb;padding-top:10px;">
-      Prices effective as of ${dateStr} · Pacific Sports Inc · Confidential
+    ${buildTable(adultStyles,'👕 Adults')}
+    ${buildTable(kidsStyles,'🧒 Kids / Youth')}
+    <div style="margin-top:20px;font-size:10px;color:#9ca3af;text-align:center;border-top:1px solid #e5e7eb;padding-top:8px;">
+      Confidential · Pacific Sports Inc · ${dateStr}
     </div>
   </body></html>`;
 
   const win = window.open('', '_blank', 'width=850,height=700');
   win.document.write(html);
   win.document.close();
-}
 
-function getPsUpcharge(size) {
-  const s = (size||'').toUpperCase();
-  if (s === '2XL') return PS_UPCHARGES['2XL'];
-  if (s === '3XL') return PS_UPCHARGES['2XL'] + PS_UPCHARGES['3XL'];
-  if (s === '4XL') return PS_UPCHARGES['2XL'] + PS_UPCHARGES['3XL'] + PS_UPCHARGES['4XL'];
-  if (s === '5XL') return PS_UPCHARGES['2XL'] + PS_UPCHARGES['3XL'] + PS_UPCHARGES['4XL'] + PS_UPCHARGES['5XL'];
-  return 0;
+  // 다운로드 로그
+  await logPsAction('download', `${selectedStyles.length}개 스타일 PDF 다운로드`);
 }
 
 // ══════════════════════════════════════════════════════════════
