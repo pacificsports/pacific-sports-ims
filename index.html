@@ -404,13 +404,28 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <div style="padding:16px 20px;overflow-y:auto;flex:1;">
       <div id="cm-preview" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;"></div>
     </div>
-    <div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:#f8fafc;border-radius:0 0 12px 12px;">
-      <div>
-        Send to: <span id="cm-email-to" style="font-weight:600;color:#111;"></span>
+    <div style="padding:14px 20px;border-top:1px solid #e5e7eb;flex-shrink:0;background:#f8fafc;border-radius:0 0 12px 12px;">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+        <div style="font-size:12px;color:#6b7280;">Send to: <span id="cm-email-to" style="font-weight:600;color:#111;"></span></div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <label style="color:#6b7280;white-space:nowrap;">Adjustment</label>
+          <input id="cm-adj-reason" type="text" placeholder="Reason (e.g. Freight)" class="fi"
+            style="width:130px;font-size:12px;padding:4px 8px;" oninput="updateCmAdjustment()">
+          <span style="color:#6b7280;">$</span>
+          <input id="cm-adj-amt" type="number" min="0" step="0.01" value="0" class="fi"
+            style="width:70px;font-size:12px;padding:4px 8px;" oninput="updateCmAdjustment()">
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <label style="color:#6b7280;white-space:nowrap;">🔐 Manager PIN</label>
+          <input id="cm-pin-inline" type="password" inputmode="numeric" maxlength="4" class="fi"
+            style="width:80px;font-size:13px;letter-spacing:6px;font-family:'IBM Plex Mono',monospace;padding:4px 8px;text-align:center;"
+            placeholder="" oninput="this.value=this.value.replace(/[^0-9]/g,'');if(this.value.length===4)verifyCmPinInline();">
+          <span id="cm-pin-status" style="font-size:11px;color:#6b7280;"></span>
+        </div>
       </div>
-      <div style="display:flex;gap:8px;">
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button class="btn" onclick="document.getElementById('cm-modal').style.display='none'">닫기</button>
-        <button id="cm-submit-btn" class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="submitCreditMemo()">📧 Send Credit Memo</button>
+        <button id="cm-submit-btn" class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="_doSendCreditMemo()">📧 Send Credit Memo</button>
       </div>
     </div>
   </div>
@@ -5521,13 +5536,75 @@ async function openCmModal(cmNum, order, lines, totalQty, totalAmt, cust, freigh
   document.getElementById('cm-preview').innerHTML = cmHtml;
 
   window._cmData = { cmNum, order, lines, totalQty, totalAmt, toEmail, freightCredit, adjReason, raNum: _receiveRR?.ra_number||'' };
+  // PIN/Adjustment 초기화
+  window._cmApprovedEmp = null;
+  const _cmPinEl = document.getElementById('cm-pin-inline');
+  const _cmPinStatus = document.getElementById('cm-pin-status');
+  const _cmAdjReason = document.getElementById('cm-adj-reason');
+  const _cmAdjAmt = document.getElementById('cm-adj-amt');
+  if (_cmPinEl) _cmPinEl.value = '';
+  if (_cmPinStatus) { _cmPinStatus.textContent = ''; }
+  if (_cmAdjReason) _cmAdjReason.value = adjReason || '';
+  if (_cmAdjAmt) _cmAdjAmt.value = freightCredit || 0;
+  // Send 버튼 텍스트
+  const _cmSendBtn = document.getElementById('cm-submit-btn');
+  if (_cmSendBtn) _cmSendBtn.onclick = submitCreditMemo;
   document.getElementById('cm-modal').style.display = 'flex';
 }
 
+async function verifyCmPinInline() {
+  const pin = document.getElementById('cm-pin-inline')?.value || '';
+  const status = document.getElementById('cm-pin-status');
+  if (pin.length < 4) return;
+  const { data: emps } = await db.from('employees').select('*').eq('pin', pin).eq('active', true);
+  const emp = emps?.[0];
+  if (!emp || !['manager','supervisor','admin'].includes(emp.role)) {
+    if (status) { status.textContent = '❌ PIN 오류'; status.style.color = '#dc2626'; }
+    document.getElementById('cm-pin-inline').value = '';
+    document.getElementById('cm-pin-inline')?.focus();
+    window._cmApprovedEmp = null;
+    return;
+  }
+  window._cmApprovedEmp = emp;
+  if (status) { status.textContent = '✅ ' + emp.name; status.style.color = '#15803d'; status.style.fontWeight = '600'; }
+}
+
+function updateCmAdjustment() {
+  const reason = document.getElementById('cm-adj-reason')?.value || '';
+  const amt = parseFloat(document.getElementById('cm-adj-amt')?.value || 0);
+  // _cmData 업데이트
+  if (window._cmData) {
+    window._cmData.freightCredit = amt;
+    window._cmData.adjReason = reason;
+  }
+  // 프리뷰 업데이트
+  if (window._cmData?.order) {
+    db.from('company_settings').select('key,value').then(({ data }) => {
+      const s = {};
+      (data||[]).forEach(r => { s[r.key] = r.value; });
+      const html = buildCreditMemoHtml(
+        window._cmData.order, window._cmData.lines,
+        window._cmData.cmNum, window._cmData.raNum,
+        amt, s, reason
+      );
+      document.getElementById('cm-preview').innerHTML = html;
+    });
+  }
+}
+
 async function submitCreditMemo() {
-  openPinModal('📄', 'Credit Memo 발송', 'Manager PIN을 입력하세요', async (emp) => {
-    await _doSendCreditMemo();
-  });
+  if (!window._cmApprovedEmp) {
+    const pin = document.getElementById('cm-pin-inline')?.value || '';
+    const status = document.getElementById('cm-pin-status');
+    if (pin.length < 4) {
+      if (status) { status.textContent = '❌ PIN을 먼저 입력하세요'; status.style.color = '#dc2626'; }
+      document.getElementById('cm-pin-inline')?.focus();
+      return;
+    }
+    await verifyCmPinInline();
+    if (!window._cmApprovedEmp) return;
+  }
+  await _doSendCreditMemo();
 }
 
 async function _doSendCreditMemo() {
