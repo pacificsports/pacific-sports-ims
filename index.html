@@ -5426,6 +5426,7 @@ async function submitReceive() {
     const rr = _receiveRR;
     const order = _receiveOrder;
     const freightCredit = parseFloat(document.getElementById('receive-freight-credit')?.value || 0);
+    const adjReason = document.getElementById('receive-adj-reason')?.value || '';
 
     // 1. Reusable 수량 수집 + PC Room 재고 추가
     const reusableItems = [];
@@ -5486,11 +5487,18 @@ async function submitReceive() {
     // 2. Credit Memo 생성
     const totalQty = items.reduce((s,i) => s+(i.qty||0), 0);
     const totalAmt = items.reduce((s,i) => s+(i.qty||0)*(i.unit||i.unit_price||0), 0);
-    const cmLines = items.map(i => ({
-      style: i.style||'', color: i.color||'', size: i.size||'',
-      qty: i.qty||0, unit: i.unit||i.unit_price||0,
-      amt: (i.qty||0)*(i.unit||i.unit_price||0), reason: i.reason||''
-    }));
+    const cmLines = items.map((i, idx) => {
+      const isWrongSize = (i.reason||'').toLowerCase().includes('wrong size');
+      const displaySize = isWrongSize
+        ? (document.getElementById('correct-size-' + idx)?.value || i.size)
+        : i.size;
+      return {
+        style: i.style||'', color: i.color||'', size: displaySize,
+        sent_size: isWrongSize ? i.size : null,
+        qty: i.qty||0, unit: i.unit||i.unit_price||0,
+        amt: (i.qty||0)*(i.unit||i.unit_price||0), reason: i.reason||''
+      };
+    });
 
     const { data: custArr } = await db.from('customers').select('*').eq('id', order.customer_id).limit(1);
     const cust = custArr?.[0];
@@ -5530,7 +5538,6 @@ async function submitReceive() {
     showToast('✅ Receipt confirmed! Credit Memo ' + cmNum + ' created.');
 
     // 5. Credit Memo 모달 열기
-    const adjReason = document.getElementById('receive-adj-reason')?.value || '';
     await openCmModal(cmNum, order, cmLines, totalQty, totalAmt, cust, freightCredit, adjReason);
 
     // 6. 테이블 새로고침 (return map도 같이 업데이트)
