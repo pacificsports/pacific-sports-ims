@@ -19398,12 +19398,18 @@ async function parsePoPdf(input) {
     }
     if (!response.ok) throw new Error(data.error || 'API 오류');
 
-    // Claude 응답에서 JSON 추출
-    const text = (data.content || []).map(c => c.text || '').join('');
+    // Worker { ok, data } 형태로 리턴 → data.data가 파싱된 PO JSON
+    const text = JSON.stringify(data.data || {});
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('JSON 파싱 실패');
     parsedPoData = JSON.parse(jsonMatch[0]);
-    parsedPoData.lines = parsedPoData.lines || [];
+    // worker 필드명 통일 (customer_po → po_number)
+    if (!parsedPoData.po_number && parsedPoData.customer_po) parsedPoData.po_number = parsedPoData.customer_po;
+    parsedPoData.lines = (parsedPoData.lines || []).map(l => ({
+      ...l,
+      style_number: l.style_number || l.style || l.item_code || '',
+      unit_price: l.unit_price || l.unit || 0,
+    }));
 
     // Worker가 lines를 못 파싱했으면 로컬 파싱 시도
     if (parsedPoData.lines.length === 0) {
