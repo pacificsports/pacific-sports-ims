@@ -4490,23 +4490,40 @@ async function _doSaveInvoice() {
   const isEditMode = !!existingOrderId;
 
   // ── 2. Order 저장
-  // PO 번호 자동생성 — PO-2026-0001 형식 (신규 시만)
+  // 오더 번호 자동생성 — 20260001 형식 (신규 시만)
   const year = new Date().getFullYear();
-  let seq = 1;
+  let orderNum;
   if (!existingOrderId) {
-    const { data: lastOrders } = await db.from('orders')
-      .select('order_number')
-      .like('order_number', `${year}%`)
-      .not('order_number', 'like', '%-BO%')
-      .order('order_number', { ascending: false })
-      .limit(1);
-    if (lastOrders && lastOrders.length > 0) {
-      const lastNum = lastOrders[0].order_number;
-      const parts = lastNum.split('-');
-      seq = (parseInt(parts[parts.length - 1]) || 0) + 1;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      // 올해 오더 중 BO/RSVP 제외하고 가장 최근 번호 가져오기
+      const { data: lastOrders } = await db.from('orders')
+        .select('order_number')
+        .like('order_number', `${year}%`)
+        .not('order_number', 'like', '%-BO%')
+        .not('order_number', 'like', '%-RSVP%')
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      // 올바른 형식(20260001 = 8자리)인 것만 찾아서 최대값 추출
+      let maxSeq = 0;
+      (lastOrders || []).forEach(o => {
+        const num = String(o.order_number || '');
+        // 정확히 8자리이고 숫자로만 된 것만 (2026XXXX)
+        if (/^\d{8}$/.test(num) && num.startsWith(String(year))) {
+          const seq = parseInt(num.slice(4));
+          if (seq > maxSeq) maxSeq = seq;
+        }
+      });
+
+      const nextSeq = maxSeq + 1 + attempt;
+      orderNum = `${year}${String(nextSeq).padStart(4, '0')}`;
+
+      // 중복 체크
+      const { data: existing } = await db.from('orders')
+        .select('id').eq('order_number', orderNum).limit(1);
+      if (!existing || existing.length === 0) break;
     }
   }
-  // SC/CA 수량·금액 분리 계산
   const scTotalPcs = lineChecks.reduce((s, l) => {
     const allocSC = l.allocSC || {};
     const scQty = Object.values(allocSC).reduce((a,v)=>a+(v||0),0);
@@ -4530,12 +4547,9 @@ async function _doSaveInvoice() {
     return s + qty * (l.price || 0);
   }, 0);
 
-  // Edit 모드면 기존 order_number 재사용, 신규면 새 번호 생성
-  let orderNum;
+  // Edit 모드면 기존 order_number 재사용, 신규면 위에서 생성된 번호 사용
   if (isEditMode) {
     orderNum = currentInvoiceData.order.order_number;
-  } else {
-    orderNum = `${year}${String(seq).padStart(4, '0')}`;
   }
 
   let order, error;
