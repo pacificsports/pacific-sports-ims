@@ -19858,9 +19858,13 @@ async function parsePoPdf(input) {
         const m = String(line.style_number).match(/^(\d{4})/);
         if (m) line.style_number = m[1];
       }
-      // Color 정규화: "Heather" → "Htr", "heather" → "Htr"
+      // Color 정규화: "Heather" → "Htr"
       if (line.color) {
         line.color = normalizePoColor(line.color);
+      }
+      // Size 정규화: XXL→2XL, XXXL→3XL, XL/1XL→XL 등
+      if (line.size) {
+        line.size = normalizePoSize(line.size);
       }
     });
 
@@ -19871,7 +19875,7 @@ async function parsePoPdf(input) {
       if (sa !== sb) return sa.localeCompare(sb, undefined, {numeric:true});
       var ca = String(a.color || '').toLowerCase(), cb = String(b.color || '').toLowerCase();
       if (ca !== cb) return ca.localeCompare(cb);
-      var ia = szOrd.indexOf(a.size), ib = szOrd.indexOf(b.size);
+      var ia = szOrd.indexOf((a.size||'').toUpperCase()), ib = szOrd.indexOf((b.size||'').toUpperCase());
       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
     });
 
@@ -19893,12 +19897,26 @@ async function parsePoPdf(input) {
 
 function normalizePoColor(color) {
   if (!color) return color;
-  // "Charcoal Heather" → "Charcoal Htr", "Grey Heather" → "Grey Htr" 등
   return color
     .replace(/\bHeathered\b/gi, 'Htr')
     .replace(/\bHeather\b/gi, 'Htr')
     .replace(/\bHthr\b/gi, 'Htr')
     .trim();
+}
+
+function normalizePoSize(size) {
+  if (!size) return size;
+  const s = size.toString().trim().toUpperCase();
+  // XXL 계열 → 2XL 등으로 정규화
+  if (s === 'XXL' || s === '2X' || s === '1XXL' || s === 'XL/XXL') return '2XL';
+  if (s === 'XXXL' || s === '3X') return '3XL';
+  if (s === 'XXXXL' || s === '4X') return '4XL';
+  if (s === 'XXXXXL' || s === '5X') return '5XL';
+  if (s === '1XL' || s === 'XLG') return 'XL';
+  if (s === 'SML' || s === 'SM') return 'S';
+  if (s === 'MED') return 'M';
+  if (s === 'LRG' || s === 'LG') return 'L';
+  return s;
 }
 
 function parsePoText(text) {
