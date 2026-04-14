@@ -27485,21 +27485,41 @@ async function loadVendorList() {
   const { data } = await db.from('vendors').select('*').order('name');
   document.getElementById('vendor-list-tbody').innerHTML = (data||[]).length === 0
     ? '<tr><td colspan="6" class="empty">No vendors yet</td></tr>'
-    : (data||[]).map(v => `<tr style="border-bottom:1px solid #f0f0f0;">
-        <td style="font-weight:600;">${v.name}</td>
+    : (data||[]).map(v => `<tr style="border-bottom:1px solid #f0f0f0;${!v.is_active?'opacity:0.5;':''}">
+        <td style="font-weight:600;${!v.is_active?'color:#9ca3af;':''}">${v.name}</td>
         <td style="font-size:11px;color:#6b7280;">
           ${[v.address, v.city, v.state, v.zip].filter(Boolean).join(', ') || '—'}
         </td>
         <td style="font-size:12px;color:#6b7280;">${v.email||'—'}</td>
         <td style="font-size:12px;">${v.terms||'Net 30'}</td>
         <td style="font-size:11px;color:#1a56a0;font-family:'IBM Plex Mono',monospace;">${v.default_account_code ? v.default_account_code + ' — ' + (v.default_account_name||'') : '<span style="color:#9ca3af;">—</span>'}</td>
-        <td style="text-align:center;display:flex;gap:6px;justify-content:center;">
-          <button onclick="showVendorForm('${v.id}')" style="background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;color:#374151;">✏️ Edit</button>
-          <button onclick="toggleVendorActive('${v.id}',${!v.is_active})" style="background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;color:${v.is_active?'#dc2626':'#16a34a'};">
-            ${v.is_active ? 'Deactivate' : 'Activate'}
+        <td style="text-align:center;display:flex;gap:4px;justify-content:center;flex-wrap:wrap;">
+          <button onclick="editVendorInline('${v.id}')" style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">✏️ Edit</button>
+          <button onclick="toggleVendorActive('${v.id}',${!v.is_active})" style="background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;color:${v.is_active?'#92400e':'#16a34a'};">
+            ${v.is_active ? '🔒 Deactivate' : '🔓 Activate'}
           </button>
+          <button onclick="deleteVendor('${v.id}','${v.name.replace(/'/g,"\\'")}')" style="background:none;border:1px solid #fecaca;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;color:#dc2626;">🗑 Delete</button>
         </td>
       </tr>`).join('');
+}
+
+function editVendorInline(vendorId) {
+  // 폼 위로 스크롤 후 펼치기
+  showVendorForm(vendorId);
+  const form = document.getElementById('vendor-form');
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function deleteVendor(id, name) {
+  if (!confirm(`"${name}" 벤더를 삭제하시겠습니까?\n\n⚠ 이미 등록된 인보이스는 유지됩니다.`)) return;
+  const { error } = await db.from('vendors').delete().eq('id', id);
+  if (error) {
+    showToast('❌ 삭제 실패: ' + error.message);
+    return;
+  }
+  showToast(`✅ "${name}" 삭제 완료`);
+  await loadVendorList();
+  await loadAP();
 }
 
 function filterVendorAccounts(query) {
