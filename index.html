@@ -512,6 +512,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       💰 Accounting ▾
       <div class="ntab-dd" id="dd-accounting">
         <div onclick="showPanel('ar',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📊 AR — Accounts Receivable</div>
+        <div onclick="showPanel('ap',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">💳 AP — Accounts Payable</div>
         <div onclick="showPanel('pl',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📈 Income Statement (P&L)</div>
         <div onclick="showPanel('bs',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">🏦 Balance Sheet</div>
         <div onclick="showPanel('gl',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📒 General Ledger</div>
@@ -1662,46 +1663,483 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
     <!-- ── General Ledger ── -->
     <div class="panel" id="panel-gl">
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
         <h2 style="margin:0;font-size:16px;font-weight:700;">📒 General Ledger</h2>
         <div style="flex:1;"></div>
-        <input type="text" id="gl-search-acct" class="fi" placeholder="계정 검색..." style="width:200px;font-size:12px;" oninput="renderGLAccounts()">
-        <select id="gl-filter-type" class="fi" style="width:150px;font-size:12px;" onchange="renderGLAccounts()">
-          <option value="">전체 계정</option>
-          <option value="asset">Assets</option>
-          <option value="liability">Liabilities</option>
-          <option value="equity">Equity</option>
-          <option value="revenue">Revenue</option>
-          <option value="expense">Expenses</option>
-        </select>
+        <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;" onclick="openJEModal()">+ New Journal Entry</button>
         <button class="btn" onclick="loadGL()">🔄 Refresh</button>
       </div>
-      <!-- Trial Balance style table -->
-      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
-        <table class="tbl" style="table-layout:fixed;">
-          <thead>
-            <tr style="background:#0f2744;color:#fff;">
-              <th style="width:110px;">Account #</th>
-              <th>Account Name</th>
-              <th style="width:80px;">Type</th>
-              <th style="width:130px;text-align:right;">Debit</th>
-              <th style="width:130px;text-align:right;">Credit</th>
-              <th style="width:140px;text-align:right;">Balance</th>
-            </tr>
-          </thead>
-          <tbody id="gl-tbody">
-            <tr><td colspan="6" class="empty">Loading...</td></tr>
-          </tbody>
-          <tfoot>
-            <tr style="background:#f0f4f8;font-weight:700;border-top:2px solid #e5e7eb;">
-              <td colspan="2" style="padding:10px 12px;font-size:12px;">TOTAL</td>
-              <td></td>
-              <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-debit">—</td>
-              <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-credit">—</td>
-              <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-balance">—</td>
-            </tr>
-          </tfoot>
-        </table>
+
+      <!-- GL Sub-tabs -->
+      <div style="display:flex;gap:2px;border-bottom:2px solid var(--border);margin-bottom:14px;">
+        <button id="gl-tab-je" onclick="glSetTab('je')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:var(--primary);color:#fff;border-radius:5px 5px 0 0;cursor:pointer;">📝 Journal Entries</button>
+        <button id="gl-tab-tb" onclick="glSetTab('tb')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">⚖️ Trial Balance</button>
+      </div>
+
+      <!-- Journal Entries Tab -->
+      <div id="gl-pane-je">
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+          <input type="date" id="je-filter-from" class="fi" style="width:130px;font-size:12px;">
+          <span style="font-size:12px;color:#6b7280;">~</span>
+          <input type="date" id="je-filter-to" class="fi" style="width:130px;font-size:12px;">
+          <select id="je-filter-status" class="fi" style="width:120px;font-size:12px;">
+            <option value="">전체</option>
+            <option value="posted">Posted</option>
+            <option value="draft">Draft</option>
+            <option value="void">Void</option>
+          </select>
+          <input type="text" id="je-filter-search" class="fi" placeholder="검색..." style="width:160px;font-size:12px;" oninput="renderJEList()">
+          <button class="btn" onclick="loadJE()">🔄</button>
+        </div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <table class="tbl">
+            <thead><tr>
+              <th style="width:120px;">Entry #</th>
+              <th style="width:100px;">Date</th>
+              <th>Description</th>
+              <th style="width:80px;">Source</th>
+              <th style="width:120px;text-align:right;">Debit</th>
+              <th style="width:120px;text-align:right;">Credit</th>
+              <th style="width:70px;text-align:center;">Status</th>
+              <th style="width:80px;"></th>
+            </tr></thead>
+            <tbody id="je-tbody"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Trial Balance Tab -->
+      <div id="gl-pane-tb" style="display:none;">
+        <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
+          <input type="text" id="gl-search-acct" class="fi" placeholder="계정 검색..." style="width:200px;font-size:12px;" oninput="renderGLAccounts()">
+          <select id="gl-filter-type" class="fi" style="width:150px;font-size:12px;" onchange="renderGLAccounts()">
+            <option value="">전체 계정</option>
+            <option value="asset">Assets</option>
+            <option value="liability">Liabilities</option>
+            <option value="equity">Equity</option>
+            <option value="revenue">Revenue</option>
+            <option value="expense">Expenses</option>
+          </select>
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="gl-show-zero" onchange="renderGLAccounts()"> 잔액 0 포함
+          </label>
+        </div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <table class="tbl" style="table-layout:fixed;">
+            <thead>
+              <tr style="background:#0f2744;color:#fff;">
+                <th style="width:110px;">Account #</th>
+                <th>Account Name</th>
+                <th style="width:90px;text-align:center;">Type</th>
+                <th style="width:140px;text-align:right;">Debit</th>
+                <th style="width:140px;text-align:right;">Credit</th>
+                <th style="width:150px;text-align:right;">Balance</th>
+              </tr>
+            </thead>
+            <tbody id="gl-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+            <tfoot>
+              <tr style="background:#0f2744;color:#fff;font-weight:700;">
+                <td colspan="2" style="padding:10px 12px;font-size:12px;">TOTAL</td>
+                <td></td>
+                <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-debit">—</td>
+                <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-credit">—</td>
+                <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-balance">—</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Journal Entry 입력 모달 ── -->
+    <div id="je-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:860px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <!-- Header -->
+        <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+          <div>
+            <span style="color:#fff;font-weight:800;font-size:15px;">📝 Journal Entry</span>
+            <span id="je-modal-number" style="color:#93c5fd;font-size:13px;margin-left:12px;font-family:'IBM Plex Mono',monospace;"></span>
+          </div>
+          <button onclick="closeJEModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
+        </div>
+
+        <!-- Entry Info -->
+        <div style="padding:14px 20px;border-bottom:1px solid #e5e7eb;display:flex;gap:12px;flex-wrap:wrap;flex-shrink:0;">
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">DATE</div>
+            <input type="date" id="je-date" class="fi" style="width:140px;font-size:13px;">
+          </div>
+          <div style="flex:1;min-width:200px;">
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">DESCRIPTION</div>
+            <input type="text" id="je-desc" class="fi" placeholder="e.g. April rent payment" style="width:100%;font-size:13px;">
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">SOURCE</div>
+            <select id="je-source" class="fi" style="width:140px;font-size:13px;">
+              <option value="manual">Manual</option>
+              <option value="ar_invoice">AR Invoice</option>
+              <option value="payment">Payment</option>
+              <option value="ap_invoice">AP Invoice</option>
+              <option value="ap_payment">AP Payment</option>
+              <option value="adjustment">Adjustment</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">STATUS</div>
+            <select id="je-status" class="fi" style="width:110px;font-size:13px;">
+              <option value="posted">Posted</option>
+              <option value="draft">Draft</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Lines table -->
+        <div style="overflow-y:auto;flex:1;padding:0;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead style="position:sticky;top:0;z-index:1;">
+              <tr style="background:#f8fafc;border-bottom:2px solid #e5e7eb;">
+                <th style="padding:8px 12px;text-align:left;font-weight:700;width:200px;">Account #</th>
+                <th style="padding:8px 12px;text-align:left;font-weight:700;">Account Name</th>
+                <th style="padding:8px 12px;text-align:left;font-weight:700;width:200px;">Description</th>
+                <th style="padding:8px 12px;text-align:right;font-weight:700;width:130px;color:#1a56a0;">Debit</th>
+                <th style="padding:8px 12px;text-align:right;font-weight:700;width:130px;color:#dc2626;">Credit</th>
+                <th style="width:40px;"></th>
+              </tr>
+            </thead>
+            <tbody id="je-lines-tbody"></tbody>
+          </table>
+        </div>
+
+        <!-- Footer with totals -->
+        <div style="padding:12px 20px;border-top:2px solid #e5e7eb;flex-shrink:0;">
+          <!-- Totals row -->
+          <div style="display:flex;justify-content:flex-end;gap:40px;margin-bottom:12px;font-family:'IBM Plex Mono',monospace;">
+            <div style="text-align:right;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:2px;">TOTAL DEBIT</div>
+              <div style="font-size:16px;font-weight:800;color:#1a56a0;" id="je-total-debit">$0.00</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:2px;">TOTAL CREDIT</div>
+              <div style="font-size:16px;font-weight:800;color:#dc2626;" id="je-total-credit">$0.00</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:2px;">DIFFERENCE</div>
+              <div style="font-size:16px;font-weight:800;" id="je-difference">$0.00</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;">
+            <button onclick="addJELine()" style="background:none;border:1px dashed #d1d5db;color:#6b7280;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;">+ Add Line</button>
+            <div style="display:flex;gap:8px;">
+              <button class="btn" onclick="closeJEModal()">Cancel</button>
+              <button id="je-save-btn" class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;font-weight:700;min-width:120px;" onclick="saveJE()">💾 Post Entry</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── JE 상세보기 모달 ── -->
+    <div id="je-view-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:700px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">📝 Journal Entry Detail</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button id="je-void-btn" onclick="voidJE()" style="background:rgba(220,38,38,0.2);border:1px solid rgba(220,38,38,0.4);color:#fca5a5;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">🚫 Void</button>
+            <button onclick="document.getElementById('je-view-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
+          </div>
+        </div>
+        <div style="overflow-y:auto;flex:1;padding:20px;" id="je-view-content"></div>
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;text-align:right;flex-shrink:0;">
+          <button class="btn" onclick="document.getElementById('je-view-modal').style.display='none'">닫기</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── AP (Accounts Payable) 패널 ── -->
+    <div class="panel" id="panel-ap">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:16px;font-weight:700;">💳 Accounts Payable</h2>
+        <div style="flex:1;"></div>
+        <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;" onclick="openAPInvoiceModal()">+ New Invoice</button>
+        <button class="btn" onclick="openVendorModal()">🏢 Vendors</button>
+        <button class="btn" onclick="loadAP()">🔄 Refresh</button>
+      </div>
+
+      <!-- AP KPI Cards -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;">
+        <div class="kpi"><div class="kpi-label">Total AP Outstanding</div><div class="kpi-val" id="ap-kpi-total">—</div><div class="kpi-sub">all open invoices</div></div>
+        <div class="kpi r"><div class="kpi-label">Overdue</div><div class="kpi-val" id="ap-kpi-overdue">—</div><div class="kpi-sub" id="ap-kpi-overdue-ct">—</div></div>
+        <div class="kpi o"><div class="kpi-label">Due This Month</div><div class="kpi-val" id="ap-kpi-due-month">—</div><div class="kpi-sub" id="ap-kpi-due-month-ct">—</div></div>
+        <div class="kpi g"><div class="kpi-label">Paid (MTD)</div><div class="kpi-val" id="ap-kpi-paid">—</div><div class="kpi-sub">this month payments</div></div>
+        <div class="kpi"><div class="kpi-label">Vendors</div><div class="kpi-val" id="ap-kpi-vendors">—</div><div class="kpi-sub">active vendors</div></div>
+      </div>
+
+      <!-- AP Sub-tabs -->
+      <div style="display:flex;gap:2px;border-bottom:2px solid var(--border);margin-bottom:14px;">
+        <button id="ap-tab-invoices" onclick="apSetTab('invoices')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:var(--primary);color:#fff;border-radius:5px 5px 0 0;cursor:pointer;">🧾 Open Invoices</button>
+        <button id="ap-tab-aging" onclick="apSetTab('aging')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📅 AP Aging</button>
+        <button id="ap-tab-payments" onclick="apSetTab('payments')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">💵 Payment History</button>
+      </div>
+
+      <!-- Open Invoices Tab -->
+      <div id="ap-pane-invoices">
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+          <select id="ap-filter-vendor" class="fi" style="width:180px;font-size:12px;">
+            <option value="">전체 벤더</option>
+          </select>
+          <select id="ap-filter-status" class="fi" style="width:120px;font-size:12px;" onchange="renderAPInvoices()">
+            <option value="open,partial">Open / Partial</option>
+            <option value="">전체</option>
+            <option value="open">Open</option>
+            <option value="partial">Partial</option>
+            <option value="paid">Paid</option>
+            <option value="void">Void</option>
+          </select>
+          <input type="text" id="ap-filter-search" class="fi" placeholder="검색..." style="width:160px;font-size:12px;" oninput="renderAPInvoices()">
+        </div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <table class="tbl">
+            <thead><tr>
+              <th style="width:130px;">Invoice #</th>
+              <th style="width:160px;">Vendor</th>
+              <th style="width:100px;">Date</th>
+              <th style="width:100px;">Due Date</th>
+              <th style="width:130px;text-align:right;">Amount</th>
+              <th style="width:130px;text-align:right;">Balance</th>
+              <th style="width:80px;text-align:center;">Status</th>
+              <th style="width:100px;"></th>
+            </tr></thead>
+            <tbody id="ap-invoices-tbody"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- AP Aging Tab -->
+      <div id="ap-pane-aging" style="display:none;">
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:14px;">
+          <div style="padding:12px 14px;background:#f0fdf4;border-right:1px solid #e5e7eb;">
+            <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;margin-bottom:4px;">Current</div>
+            <div style="font-size:18px;font-weight:800;color:#15803d;font-family:'IBM Plex Mono',monospace;" id="ap-age-current">—</div>
+          </div>
+          <div style="padding:12px 14px;background:#fffbeb;border-right:1px solid #e5e7eb;">
+            <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;margin-bottom:4px;">1–30 Days</div>
+            <div style="font-size:18px;font-weight:800;color:#b45309;font-family:'IBM Plex Mono',monospace;" id="ap-age-30">—</div>
+          </div>
+          <div style="padding:12px 14px;background:#fff7ed;border-right:1px solid #e5e7eb;">
+            <div style="font-size:10px;font-weight:700;color:#9a3412;text-transform:uppercase;margin-bottom:4px;">31–60 Days</div>
+            <div style="font-size:18px;font-weight:800;color:#c2410c;font-family:'IBM Plex Mono',monospace;" id="ap-age-60">—</div>
+          </div>
+          <div style="padding:12px 14px;background:#fef2f2;border-right:1px solid #e5e7eb;">
+            <div style="font-size:10px;font-weight:700;color:#991b1b;text-transform:uppercase;margin-bottom:4px;">61–90 Days</div>
+            <div style="font-size:18px;font-weight:800;color:#dc2626;font-family:'IBM Plex Mono',monospace;" id="ap-age-90">—</div>
+          </div>
+          <div style="padding:12px 14px;background:#fef2f2;">
+            <div style="font-size:10px;font-weight:700;color:#7f1d1d;text-transform:uppercase;margin-bottom:4px;">90+ Days</div>
+            <div style="font-size:18px;font-weight:800;color:#991b1b;font-family:'IBM Plex Mono',monospace;" id="ap-age-90p">—</div>
+          </div>
+        </div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <table class="tbl">
+            <thead><tr>
+              <th>Vendor</th>
+              <th class="num">Total Outstanding</th>
+              <th class="num" style="color:#15803d;">Current</th>
+              <th class="num" style="color:#b45309;">1–30</th>
+              <th class="num" style="color:#c2410c;">31–60</th>
+              <th class="num" style="color:#dc2626;">61–90</th>
+              <th class="num" style="color:#991b1b;">90+</th>
+            </tr></thead>
+            <tbody id="ap-aging-tbody"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Payment History Tab -->
+      <div id="ap-pane-payments" style="display:none;">
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <table class="tbl">
+            <thead><tr>
+              <th style="width:100px;">Date</th>
+              <th style="width:160px;">Vendor</th>
+              <th>Invoice #</th>
+              <th style="width:100px;">Method</th>
+              <th style="width:120px;">Reference</th>
+              <th style="width:130px;text-align:right;">Amount</th>
+              <th style="width:80px;"></th>
+            </tr></thead>
+            <tbody id="ap-payments-tbody"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── AP Invoice 입력 모달 ── -->
+    <div id="ap-invoice-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:820px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="background:#7f1d1d;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">💳 AP Invoice</span>
+          <button onclick="document.getElementById('ap-invoice-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fca5a5;">✕</button>
+        </div>
+
+        <!-- Invoice Header -->
+        <div style="padding:14px 20px;border-bottom:1px solid #e5e7eb;display:flex;gap:12px;flex-wrap:wrap;flex-shrink:0;">
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">VENDOR *</div>
+            <select id="ap-inv-vendor" class="fi" style="width:200px;font-size:13px;" onchange="onAPVendorChange(this.value)">
+              <option value="">-- 벤더 선택 --</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">INVOICE # *</div>
+            <input type="text" id="ap-inv-number" class="fi" placeholder="INV-2026-001" style="width:150px;font-size:13px;">
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">INVOICE DATE *</div>
+            <input type="date" id="ap-inv-date" class="fi" style="width:140px;font-size:13px;">
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">TERMS</div>
+            <select id="ap-inv-terms" class="fi" style="width:120px;font-size:13px;" onchange="calcAPDueDate()">
+              <option value="Net 30">Net 30</option>
+              <option value="Net 60">Net 60</option>
+              <option value="Net 90">Net 90</option>
+              <option value="Due on Receipt">Due on Receipt</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">DUE DATE</div>
+            <input type="date" id="ap-inv-due" class="fi" style="width:140px;font-size:13px;">
+          </div>
+          <div style="flex:1;min-width:180px;">
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">DESCRIPTION</div>
+            <input type="text" id="ap-inv-desc" class="fi" placeholder="Invoice description..." style="width:100%;font-size:13px;">
+          </div>
+        </div>
+
+        <!-- Line items -->
+        <div style="overflow-y:auto;flex:1;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead style="position:sticky;top:0;z-index:1;">
+              <tr style="background:#f8fafc;border-bottom:2px solid #e5e7eb;">
+                <th style="padding:8px 12px;text-align:left;width:220px;">Account</th>
+                <th style="padding:8px 12px;text-align:left;">Description</th>
+                <th style="padding:8px 12px;text-align:right;width:150px;color:#7f1d1d;">Amount</th>
+                <th style="width:40px;"></th>
+              </tr>
+            </thead>
+            <tbody id="ap-inv-lines-tbody"></tbody>
+          </table>
+        </div>
+
+        <!-- Footer -->
+        <div style="padding:12px 20px;border-top:2px solid #e5e7eb;flex-shrink:0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <button onclick="addAPInvLine()" style="background:none;border:1px dashed #d1d5db;color:#6b7280;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:12px;">+ Add Line</button>
+            <div style="display:flex;gap:20px;align-items:center;">
+              <div style="text-align:right;">
+                <div style="font-size:10px;font-weight:700;color:#374151;">TOTAL</div>
+                <div style="font-size:20px;font-weight:800;color:#7f1d1d;font-family:'IBM Plex Mono',monospace;" id="ap-inv-total">$0.00</div>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button class="btn" onclick="document.getElementById('ap-invoice-modal').style.display='none'">Cancel</button>
+                <button class="btn" style="background:#7f1d1d;color:#fff;border-color:#7f1d1d;font-weight:700;min-width:130px;" onclick="saveAPInvoice()">💾 Save Invoice</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── AP Payment 모달 ── -->
+    <div id="ap-payment-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:500px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="background:#7f1d1d;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">💵 Record Payment</span>
+          <button onclick="document.getElementById('ap-payment-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fca5a5;">✕</button>
+        </div>
+        <div style="padding:20px;">
+          <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 14px;margin-bottom:16px;">
+            <div style="font-size:11px;color:#991b1b;font-weight:700;" id="ap-pmt-invoice-info"></div>
+            <div style="font-size:13px;font-weight:800;color:#7f1d1d;margin-top:4px;" id="ap-pmt-balance-info"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">PAYMENT DATE *</div>
+              <input type="date" id="ap-pmt-date" class="fi" style="width:100%;font-size:13px;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">AMOUNT *</div>
+              <input type="number" id="ap-pmt-amount" class="fi" step="0.01" min="0" style="width:100%;font-size:13px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">METHOD</div>
+              <select id="ap-pmt-method" class="fi" style="width:100%;font-size:13px;">
+                <option value="wire">Wire Transfer</option>
+                <option value="check">Check</option>
+                <option value="ach">ACH</option>
+                <option value="credit_card">Credit Card</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">REFERENCE #</div>
+              <input type="text" id="ap-pmt-ref" class="fi" placeholder="Check #, Wire ref..." style="width:100%;font-size:13px;">
+            </div>
+            <div style="grid-column:1/-1;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">NOTES</div>
+              <input type="text" id="ap-pmt-notes" class="fi" placeholder="Optional notes..." style="width:100%;font-size:13px;">
+            </div>
+            <div style="grid-column:1/-1;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">CASH ACCOUNT</div>
+              <select id="ap-pmt-cash-acct" class="fi" style="width:100%;font-size:13px;">
+                <option value="101-001">101-001 — BOA Checking</option>
+                <option value="101-002">101-002 — BOA Payroll</option>
+                <option value="101-003">101-003 — BOA Merchant</option>
+                <option value="101-008">101-008 — BOA 6897</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn" onclick="document.getElementById('ap-payment-modal').style.display='none'">Cancel</button>
+          <button class="btn" style="background:#7f1d1d;color:#fff;border-color:#7f1d1d;font-weight:700;" onclick="saveAPPayment()">💵 Record Payment</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Vendor 관리 모달 ── -->
+    <div id="vendor-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:700px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">🏢 Vendor Management</span>
+          <button onclick="document.getElementById('vendor-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
+        </div>
+        <div style="padding:14px 20px;border-bottom:1px solid #e5e7eb;flex-shrink:0;">
+          <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;" onclick="showVendorForm()">+ New Vendor</button>
+        </div>
+        <div id="vendor-form" style="display:none;padding:14px 20px;border-bottom:1px solid #e5e7eb;background:#f9fafb;flex-shrink:0;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div style="grid-column:1/-1;"><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">VENDOR NAME *</div><input type="text" id="vendor-name" class="fi" style="width:100%;font-size:13px;"></div>
+            <div><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">CONTACT</div><input type="text" id="vendor-contact" class="fi" style="width:100%;font-size:12px;"></div>
+            <div><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">EMAIL</div><input type="email" id="vendor-email" class="fi" style="width:100%;font-size:12px;"></div>
+            <div><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">PHONE</div><input type="text" id="vendor-phone" class="fi" style="width:100%;font-size:12px;"></div>
+            <div><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">TERMS</div>
+              <select id="vendor-terms" class="fi" style="width:100%;font-size:12px;">
+                <option value="Net 30">Net 30</option><option value="Net 60">Net 60</option><option value="Net 90">Net 90</option><option value="Due on Receipt">Due on Receipt</option>
+              </select>
+            </div>
+            <div style="grid-column:1/-1;"><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">ADDRESS</div><input type="text" id="vendor-address" class="fi" style="width:100%;font-size:12px;"></div>
+            <div style="grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;">
+              <button class="btn" onclick="document.getElementById('vendor-form').style.display='none'">Cancel</button>
+              <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;" onclick="saveVendor()">Save Vendor</button>
+            </div>
+          </div>
+        </div>
+        <div style="overflow-y:auto;flex:1;">
+          <table class="tbl">
+            <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Terms</th><th style="width:80px;"></th></tr></thead>
+            <tbody id="vendor-list-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -2368,9 +2806,9 @@ let _currentEmployee = null; // 현재 로그인된 직원
 
 // 역할별 허용 탭
 const ROLE_TABS = {
-  admin:      ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','settings','ar','pl','bs','gl'],
-  supervisor: ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar','pl','bs','gl'],
-  manager:    ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar','pl','bs','gl'],
+  admin:      ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','settings','ar','ap','pl','bs','gl'],
+  supervisor: ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar','ap','pl','bs','gl'],
+  manager:    ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar','ap','pl','bs','gl'],
   staff:      ['orderstatus','backorders'],
 };
 
@@ -2627,9 +3065,10 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'completed') loadCompleted();
   if (name === 'settings') { loadSettings(); loadManagerApprovals(); updateBuildingUI(); setTimeout(_renderErrorLog, 100); setTimeout(loadDefectReport, 150); }
   if (name === 'ar') loadAR();
+  if (name === 'ap') { loadGL(); loadAP(); }
   if (name === 'pl') { loadGL(); loadPL(); }
   if (name === 'bs') { loadGL(); loadBS(); }
-  if (name === 'gl') loadGL();
+  if (name === 'gl') { loadGL(); loadJE(); }
 }
 
 // ══════════════════════════════════
@@ -24812,6 +25251,929 @@ function arSetTab(tab) {
     pane.style.display = active ? '' : 'none';
   });
   if (tab === 'analytics') renderArAnalytics();
+}
+
+// ══════════════════════════════════════════════════════════════
+// AP (ACCOUNTS PAYABLE) MODULE
+// ══════════════════════════════════════════════════════════════
+let _apInvoices = [];
+let _apVendors = [];
+let _apPayments = [];
+let _apCurrentInvoiceId = null;
+let _apInvLineCount = 0;
+
+function apSetTab(tab) {
+  ['invoices','aging','payments'].forEach(t => {
+    const btn = document.getElementById('ap-tab-' + t);
+    const pane = document.getElementById('ap-pane-' + t);
+    if (!btn || !pane) return;
+    const active = t === tab;
+    btn.style.background = active ? 'var(--primary)' : '#f5f7fa';
+    btn.style.color = active ? '#fff' : 'var(--text2)';
+    pane.style.display = active ? '' : 'none';
+  });
+  if (tab === 'aging') renderAPAging();
+  if (tab === 'payments') renderAPPayments();
+}
+
+async function loadAP() {
+  // 벤더 로드
+  const { data: vendors } = await db.from('vendors').select('*').eq('is_active', true).order('name');
+  _apVendors = vendors || [];
+
+  // 인보이스 로드
+  const { data: invoices } = await db.from('ap_invoices')
+    .select('*, vendors(name)')
+    .order('invoice_date', { ascending: false })
+    .limit(500);
+  _apInvoices = invoices || [];
+
+  // 지급 로드
+  const { data: payments } = await db.from('ap_payments')
+    .select('*, vendors(name), ap_invoices(invoice_number)')
+    .order('payment_date', { ascending: false })
+    .limit(500);
+  _apPayments = payments || [];
+
+  // KPI
+  _renderAPKpis();
+  renderAPInvoices();
+  populateAPVendorFilter();
+}
+
+function _renderAPKpis() {
+  const open = _apInvoices.filter(i => ['open','partial'].includes(i.status));
+  const totalAP = open.reduce((s,i) => s + (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0), 0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const overdue = open.filter(i => i.due_date && new Date(i.due_date) < today);
+  const now = new Date();
+  const mStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const mEnd = new Date(now.getFullYear(), now.getMonth()+1, 0);
+  const dueMonth = open.filter(i => {
+    if (!i.due_date) return false;
+    const d = new Date(i.due_date);
+    return d >= mStart && d <= mEnd;
+  });
+  const paidMTD = _apPayments
+    .filter(p => { const d = new Date(p.payment_date); return d >= mStart && d <= mEnd; })
+    .reduce((s,p) => s + (parseFloat(p.amount)||0), 0);
+
+  const fmt = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  document.getElementById('ap-kpi-total').textContent = fmt(totalAP);
+  document.getElementById('ap-kpi-overdue').textContent = fmt(overdue.reduce((s,i) => s+(parseFloat(i.total_amount)||0)-(parseFloat(i.paid_amount)||0), 0));
+  document.getElementById('ap-kpi-overdue-ct').textContent = overdue.length + ' invoices';
+  document.getElementById('ap-kpi-due-month').textContent = fmt(dueMonth.reduce((s,i) => s+(parseFloat(i.total_amount)||0)-(parseFloat(i.paid_amount)||0), 0));
+  document.getElementById('ap-kpi-due-month-ct').textContent = dueMonth.length + ' invoices';
+  document.getElementById('ap-kpi-paid').textContent = fmt(paidMTD);
+  document.getElementById('ap-kpi-vendors').textContent = _apVendors.length;
+}
+
+function populateAPVendorFilter() {
+  const sel = document.getElementById('ap-filter-vendor');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">전체 벤더</option>' +
+    _apVendors.map(v => `<option value="${v.id}">${v.name}</option>`).join('');
+  sel.onchange = renderAPInvoices;
+
+  // AP Invoice 모달 벤더 선택도 업데이트
+  const invSel = document.getElementById('ap-inv-vendor');
+  if (invSel) {
+    invSel.innerHTML = '<option value="">-- 벤더 선택 --</option>' +
+      _apVendors.map(v => `<option value="${v.id}" data-terms="${v.terms||'Net 30'}">${v.name}</option>`).join('');
+  }
+}
+
+function renderAPInvoices() {
+  const vendorFilter = document.getElementById('ap-filter-vendor')?.value || '';
+  const statusFilter = document.getElementById('ap-filter-status')?.value || 'open,partial';
+  const search = (document.getElementById('ap-filter-search')?.value || '').toLowerCase();
+  const statuses = statusFilter ? statusFilter.split(',') : [];
+
+  const filtered = _apInvoices.filter(i => {
+    if (statuses.length && !statuses.includes(i.status)) return false;
+    if (vendorFilter && i.vendor_id !== vendorFilter) return false;
+    if (search && !i.invoice_number?.toLowerCase().includes(search) &&
+        !i.vendor_name?.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const statusBadge = s => {
+    const map = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a', void:'#9ca3af' };
+    return `<span style="background:${map[s]||'#6b7280'}20;color:${map[s]||'#6b7280'};border:1px solid ${map[s]||'#6b7280'}40;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;">${s}</span>`;
+  };
+
+  if (!filtered.length) {
+    document.getElementById('ap-invoices-tbody').innerHTML = '<tr><td colspan="8" class="empty">No invoices found</td></tr>';
+    return;
+  }
+
+  document.getElementById('ap-invoices-tbody').innerHTML = filtered.map(i => {
+    const balance = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+    const isOverdue = i.due_date && new Date(i.due_date) < today && balance > 0;
+    return `<tr style="border-bottom:1px solid #f0f0f0;background:${isOverdue?'#fff8f8':'#fff'};">
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#1a56a0;">${i.invoice_number}</td>
+      <td style="font-size:12px;font-weight:600;">${i.vendor_name||i.vendors?.name||'—'}</td>
+      <td style="font-size:12px;">${i.invoice_date||'—'}</td>
+      <td style="font-size:12px;color:${isOverdue?'#dc2626':'#374151'};font-weight:${isOverdue?'700':'400'};">${i.due_date||'—'}${isOverdue?' ⚠️':''}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;">${fmt(i.total_amount)}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:${balance>0?'#dc2626':'#16a34a'};">${fmt(balance)}</td>
+      <td style="text-align:center;">${statusBadge(i.status)}</td>
+      <td style="text-align:center;">
+        ${balance > 0 ? `<button onclick="openAPPaymentModal('${i.id}')" style="background:#16a34a;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:700;">Pay</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderAPAging() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const open = _apInvoices.filter(i => ['open','partial'].includes(i.status));
+
+  const buckets = { current:0, d30:0, d60:0, d90:0, d90p:0 };
+  const vendorMap = {};
+
+  open.forEach(i => {
+    const balance = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+    const due = i.due_date ? new Date(i.due_date) : today;
+    const days = Math.floor((today - due) / 86400000);
+    let bucket = 'current';
+    if (days > 90) bucket = 'd90p';
+    else if (days > 60) bucket = 'd90';
+    else if (days > 30) bucket = 'd60';
+    else if (days > 0) bucket = 'd30';
+    buckets[bucket] += balance;
+
+    const vid = i.vendor_id || i.vendor_name;
+    if (!vendorMap[vid]) vendorMap[vid] = { name: i.vendor_name||'—', current:0, d30:0, d60:0, d90:0, d90p:0, total:0 };
+    vendorMap[vid][bucket] += balance;
+    vendorMap[vid].total += balance;
+  });
+
+  const fmt = n => n === 0 ? '—' : '$' + n.toLocaleString('en-US', {minimumFractionDigits:2});
+  document.getElementById('ap-age-current').textContent = fmt(buckets.current);
+  document.getElementById('ap-age-30').textContent = fmt(buckets.d30);
+  document.getElementById('ap-age-60').textContent = fmt(buckets.d60);
+  document.getElementById('ap-age-90').textContent = fmt(buckets.d90);
+  document.getElementById('ap-age-90p').textContent = fmt(buckets.d90p);
+
+  const rows = Object.values(vendorMap).sort((a,b) => b.total - a.total);
+  document.getElementById('ap-aging-tbody').innerHTML = rows.length === 0
+    ? '<tr><td colspan="7" class="empty">No outstanding AP</td></tr>'
+    : rows.map(v => `<tr style="border-bottom:1px solid #f0f0f0;">
+        <td style="font-weight:600;">${v.name}</td>
+        <td class="num" style="font-weight:700;color:#dc2626;">${fmt(v.total)}</td>
+        <td class="num" style="color:#15803d;">${fmt(v.current)}</td>
+        <td class="num" style="color:#b45309;">${fmt(v.d30)}</td>
+        <td class="num" style="color:#c2410c;">${fmt(v.d60)}</td>
+        <td class="num" style="color:#dc2626;">${fmt(v.d90)}</td>
+        <td class="num" style="color:#991b1b;">${fmt(v.d90p)}</td>
+      </tr>`).join('');
+}
+
+function renderAPPayments() {
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  document.getElementById('ap-payments-tbody').innerHTML = _apPayments.length === 0
+    ? '<tr><td colspan="7" class="empty">No payments found</td></tr>'
+    : _apPayments.map(p => `<tr style="border-bottom:1px solid #f0f0f0;">
+        <td style="font-size:12px;">${p.payment_date}</td>
+        <td style="font-size:12px;font-weight:600;">${p.vendor_name||p.vendors?.name||'—'}</td>
+        <td style="font-size:12px;font-family:'IBM Plex Mono',monospace;">${p.ap_invoices?.invoice_number||'—'}</td>
+        <td style="font-size:12px;">${p.method||'—'}</td>
+        <td style="font-size:12px;color:#6b7280;">${p.reference||'—'}</td>
+        <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#16a34a;">${fmt(p.amount)}</td>
+        <td></td>
+      </tr>`).join('');
+}
+
+// ── AP Invoice 모달 ──
+async function openAPInvoiceModal() {
+  _apInvLineCount = 0;
+  document.getElementById('ap-inv-number').value = '';
+  document.getElementById('ap-inv-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('ap-inv-desc').value = '';
+  document.getElementById('ap-inv-terms').value = 'Net 30';
+  document.getElementById('ap-inv-lines-tbody').innerHTML = '';
+  document.getElementById('ap-inv-total').textContent = '$0.00';
+  calcAPDueDate();
+  addAPInvLine();
+  addAPInvLine();
+  document.getElementById('ap-invoice-modal').style.display = 'flex';
+}
+
+function onAPVendorChange(vendorId) {
+  const vendor = _apVendors.find(v => v.id === vendorId);
+  if (vendor?.terms) {
+    document.getElementById('ap-inv-terms').value = vendor.terms;
+    calcAPDueDate();
+  }
+}
+
+function calcAPDueDate() {
+  const dateVal = document.getElementById('ap-inv-date').value;
+  const terms = document.getElementById('ap-inv-terms').value;
+  if (!dateVal) return;
+  const days = parseInt(terms.replace(/[^0-9]/g,'')) || 0;
+  const due = new Date(dateVal);
+  due.setDate(due.getDate() + days);
+  document.getElementById('ap-inv-due').value = due.toISOString().slice(0,10);
+}
+
+function addAPInvLine(acctCode='', desc='', amount=0) {
+  const idx = _apInvLineCount++;
+  const acctOptions = _glAccounts.map(a =>
+    `<option value="${a.code}" ${a.code===acctCode?'selected':''}>${a.code} — ${a.name}</option>`
+  ).join('');
+  const tr = document.createElement('tr');
+  tr.id = `ap-inv-line-${idx}`;
+  tr.style.borderBottom = '1px solid #f0f0f0';
+  tr.innerHTML = `
+    <td style="padding:6px 8px;">
+      <select style="width:100%;font-size:12px;border:1px solid #e5e7eb;border-radius:4px;padding:5px 6px;">
+        <option value="">-- 계정 선택 --</option>${acctOptions}
+      </select>
+    </td>
+    <td style="padding:6px 4px;">
+      <input type="text" value="${desc}" placeholder="Description..." style="width:100%;border:1px solid #e5e7eb;border-radius:4px;padding:5px 6px;font-size:12px;">
+    </td>
+    <td style="padding:6px 4px;">
+      <input type="number" value="${amount > 0 ? amount.toFixed(2) : ''}" placeholder="0.00" step="0.01" min="0"
+        style="width:100%;text-align:right;border:1px solid #e5e7eb;border-radius:4px;padding:5px 6px;font-size:13px;font-family:'IBM Plex Mono',monospace;color:#7f1d1d;font-weight:700;"
+        oninput="updateAPInvTotal()">
+    </td>
+    <td style="padding:6px 4px;text-align:center;">
+      <button onclick="document.getElementById('ap-inv-line-${idx}').remove();updateAPInvTotal()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;">×</button>
+    </td>`;
+  document.getElementById('ap-inv-lines-tbody').appendChild(tr);
+}
+
+function updateAPInvTotal() {
+  let total = 0;
+  document.querySelectorAll('#ap-inv-lines-tbody input[type="number"]').forEach(inp => {
+    total += parseFloat(inp.value) || 0;
+  });
+  document.getElementById('ap-inv-total').textContent = '$' + total.toLocaleString('en-US', {minimumFractionDigits:2});
+}
+
+async function saveAPInvoice() {
+  const vendorId = document.getElementById('ap-inv-vendor').value;
+  const invNumber = document.getElementById('ap-inv-number').value.trim();
+  const invDate = document.getElementById('ap-inv-date').value;
+  const dueDate = document.getElementById('ap-inv-due').value;
+  const terms = document.getElementById('ap-inv-terms').value;
+  const desc = document.getElementById('ap-inv-desc').value.trim();
+
+  if (!vendorId) { showToast('❌ 벤더를 선택하세요.'); return; }
+  if (!invNumber) { showToast('❌ Invoice # 을 입력하세요.'); return; }
+  if (!invDate) { showToast('❌ 날짜를 입력하세요.'); return; }
+
+  const vendor = _apVendors.find(v => v.id === vendorId);
+  const lines = [];
+  document.querySelectorAll('#ap-inv-lines-tbody tr').forEach(row => {
+    const acct = row.querySelector('select')?.value;
+    const lineDesc = row.querySelectorAll('input')[0]?.value || '';
+    const amount = parseFloat(row.querySelectorAll('input')[1]?.value) || 0;
+    if (acct && amount > 0) lines.push({ account_code: acct, description: lineDesc, amount });
+  });
+
+  if (!lines.length) { showToast('❌ 라인을 입력하세요.'); return; }
+  const totalAmount = lines.reduce((s,l) => s+l.amount, 0);
+
+  try {
+    // 1. AP Invoice 저장
+    const { data: inv, error } = await db.from('ap_invoices').insert({
+      invoice_number: invNumber,
+      vendor_id: vendorId,
+      vendor_name: vendor?.name || '',
+      invoice_date: invDate,
+      due_date: dueDate || null,
+      terms,
+      total_amount: totalAmount,
+      paid_amount: 0,
+      status: 'open',
+      description: desc,
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    }).select().single();
+    if (error) throw error;
+
+    // 2. AP Invoice 라인 저장
+    await db.from('ap_invoice_lines').insert(
+      lines.map(l => ({ ...l, ap_invoice_id: inv.id }))
+    );
+
+    // 3. 자동 분개 생성
+    // DR 각 expense 계정 / CR 200-001 Accounts Payable
+    const year = new Date().getFullYear();
+    const { data: lastJE } = await db.from('journal_entries')
+      .select('entry_number').like('entry_number', `JE-${year}-%`)
+      .order('entry_number', { ascending: false }).limit(1);
+    const lastNum = lastJE?.[0] ? parseInt(lastJE[0].entry_number.split('-')[2]) || 0 : 0;
+    const jeNum = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+
+    const { data: je } = await db.from('journal_entries').insert({
+      entry_number: jeNum,
+      entry_date: invDate,
+      description: `AP Invoice: ${invNumber} — ${vendor?.name||''}`,
+      source: 'ap_invoice',
+      source_id: inv.id,
+      status: 'posted',
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    }).select().single();
+
+    if (je) {
+      const jeLines = [
+        ...lines.map(l => ({ journal_entry_id: je.id, account_code: l.account_code, description: l.description, debit: l.amount, credit: 0 })),
+        { journal_entry_id: je.id, account_code: '200-001', description: `AP: ${invNumber}`, debit: 0, credit: totalAmount }
+      ];
+      await db.from('journal_lines').insert(jeLines);
+      await db.from('ap_invoices').update({ journal_entry_id: je.id }).eq('id', inv.id);
+    }
+
+    showToast(`✅ Invoice ${invNumber} 저장 완료! 분개: ${jeNum}`);
+    document.getElementById('ap-invoice-modal').style.display = 'none';
+    await loadAP();
+
+  } catch(e) {
+    showToast('❌ 저장 실패: ' + e.message);
+  }
+}
+
+// ── AP Payment 모달 ──
+async function openAPPaymentModal(invoiceId) {
+  _apCurrentInvoiceId = invoiceId;
+  const inv = _apInvoices.find(i => i.id === invoiceId);
+  if (!inv) return;
+  const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+
+  document.getElementById('ap-pmt-invoice-info').textContent = `${inv.invoice_number} — ${inv.vendor_name}`;
+  document.getElementById('ap-pmt-balance-info').textContent = `Balance Due: $${balance.toLocaleString('en-US',{minimumFractionDigits:2})}`;
+  document.getElementById('ap-pmt-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('ap-pmt-amount').value = balance.toFixed(2);
+  document.getElementById('ap-pmt-ref').value = '';
+  document.getElementById('ap-pmt-notes').value = '';
+  document.getElementById('ap-payment-modal').style.display = 'flex';
+}
+
+async function saveAPPayment() {
+  const inv = _apInvoices.find(i => i.id === _apCurrentInvoiceId);
+  if (!inv) return;
+
+  const payDate = document.getElementById('ap-pmt-date').value;
+  const amount = parseFloat(document.getElementById('ap-pmt-amount').value) || 0;
+  const method = document.getElementById('ap-pmt-method').value;
+  const ref = document.getElementById('ap-pmt-ref').value.trim();
+  const notes = document.getElementById('ap-pmt-notes').value.trim();
+  const cashAcct = document.getElementById('ap-pmt-cash-acct').value;
+
+  if (!payDate || amount <= 0) { showToast('❌ 날짜와 금액을 입력하세요.'); return; }
+
+  const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+  if (amount > balance + 0.01) { showToast(`❌ 금액이 잔액($${balance.toFixed(2)})을 초과합니다.`); return; }
+
+  try {
+    // 1. 자동 분개: DR AP / CR Cash
+    const year = new Date().getFullYear();
+    const { data: lastJE } = await db.from('journal_entries')
+      .select('entry_number').like('entry_number', `JE-${year}-%`)
+      .order('entry_number', { ascending: false }).limit(1);
+    const lastNum = lastJE?.[0] ? parseInt(lastJE[0].entry_number.split('-')[2]) || 0 : 0;
+    const jeNum = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+
+    const { data: je } = await db.from('journal_entries').insert({
+      entry_number: jeNum,
+      entry_date: payDate,
+      description: `AP Payment: ${inv.invoice_number} — ${inv.vendor_name}`,
+      source: 'ap_payment',
+      source_id: _apCurrentInvoiceId,
+      status: 'posted',
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    }).select().single();
+
+    if (je) {
+      await db.from('journal_lines').insert([
+        { journal_entry_id: je.id, account_code: '200-001', description: `Pay: ${inv.invoice_number}`, debit: amount, credit: 0 },
+        { journal_entry_id: je.id, account_code: cashAcct, description: `Pay: ${inv.invoice_number}`, debit: 0, credit: amount }
+      ]);
+    }
+
+    // 2. Payment 기록
+    await db.from('ap_payments').insert({
+      ap_invoice_id: _apCurrentInvoiceId,
+      vendor_id: inv.vendor_id,
+      vendor_name: inv.vendor_name,
+      payment_date: payDate,
+      amount, method, reference: ref, notes,
+      journal_entry_id: je?.id,
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    });
+
+    // 3. Invoice 잔액 업데이트
+    const newPaid = (parseFloat(inv.paid_amount)||0) + amount;
+    const newBalance = (parseFloat(inv.total_amount)||0) - newPaid;
+    const newStatus = newBalance <= 0.01 ? 'paid' : 'partial';
+    await db.from('ap_invoices').update({
+      paid_amount: newPaid, status: newStatus, updated_at: new Date().toISOString()
+    }).eq('id', _apCurrentInvoiceId);
+
+    showToast(`✅ Payment $${amount.toFixed(2)} 기록 완료! 분개: ${jeNum}`);
+    document.getElementById('ap-payment-modal').style.display = 'none';
+    await loadAP();
+
+  } catch(e) {
+    showToast('❌ 저장 실패: ' + e.message);
+  }
+}
+
+// ── Vendor 관리 ──
+async function openVendorModal() {
+  document.getElementById('vendor-modal').style.display = 'flex';
+  document.getElementById('vendor-form').style.display = 'none';
+  await loadVendorList();
+}
+
+async function loadVendorList() {
+  const { data } = await db.from('vendors').select('*').order('name');
+  document.getElementById('vendor-list-tbody').innerHTML = (data||[]).length === 0
+    ? '<tr><td colspan="5" class="empty">No vendors yet</td></tr>'
+    : (data||[]).map(v => `<tr style="border-bottom:1px solid #f0f0f0;">
+        <td style="font-weight:600;">${v.name}</td>
+        <td style="font-size:12px;color:#6b7280;">${v.contact||'—'}</td>
+        <td style="font-size:12px;color:#6b7280;">${v.email||'—'}</td>
+        <td style="font-size:12px;">${v.terms||'Net 30'}</td>
+        <td style="text-align:center;">
+          <button onclick="toggleVendorActive('${v.id}',${!v.is_active})" style="background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;color:${v.is_active?'#dc2626':'#16a34a'};">
+            ${v.is_active ? 'Deactivate' : 'Activate'}
+          </button>
+        </td>
+      </tr>`).join('');
+}
+
+function showVendorForm() {
+  document.getElementById('vendor-name').value = '';
+  document.getElementById('vendor-contact').value = '';
+  document.getElementById('vendor-email').value = '';
+  document.getElementById('vendor-phone').value = '';
+  document.getElementById('vendor-terms').value = 'Net 30';
+  document.getElementById('vendor-address').value = '';
+  document.getElementById('vendor-form').style.display = 'block';
+}
+
+async function saveVendor() {
+  const name = document.getElementById('vendor-name').value.trim();
+  if (!name) { showToast('❌ Vendor name을 입력하세요.'); return; }
+  const { error } = await db.from('vendors').insert({
+    name,
+    contact: document.getElementById('vendor-contact').value.trim(),
+    email: document.getElementById('vendor-email').value.trim(),
+    phone: document.getElementById('vendor-phone').value.trim(),
+    terms: document.getElementById('vendor-terms').value,
+    address: document.getElementById('vendor-address').value.trim(),
+    is_active: true,
+    created_at: new Date().toISOString()
+  });
+  if (error) { showToast('❌ 저장 실패: ' + error.message); return; }
+  showToast('✅ 벤더 추가 완료!');
+  document.getElementById('vendor-form').style.display = 'none';
+  await loadVendorList();
+  await loadAP(); // 벤더 목록 새로고침
+}
+
+async function toggleVendorActive(id, active) {
+  await db.from('vendors').update({ is_active: active }).eq('id', id);
+  await loadVendorList();
+}
+
+// ══════════════════════════════════════════════════════════════
+// JOURNAL ENTRY MODULE
+// ══════════════════════════════════════════════════════════════
+let _jeList = [];
+let _jeEditId = null;
+let _jeLineCount = 0;
+
+function glSetTab(tab) {
+  ['je','tb'].forEach(t => {
+    const btn = document.getElementById('gl-tab-' + t);
+    const pane = document.getElementById('gl-pane-' + t);
+    if (!btn || !pane) return;
+    const active = t === tab;
+    btn.style.background = active ? 'var(--primary)' : '#f5f7fa';
+    btn.style.color = active ? '#fff' : 'var(--text2)';
+    pane.style.display = active ? '' : 'none';
+  });
+  if (tab === 'tb') renderGLAccounts();
+}
+
+// ── JE 목록 로드 ──
+async function loadJE() {
+  document.getElementById('je-tbody').innerHTML = '<tr><td colspan="8" class="empty">Loading...</td></tr>';
+
+  // 날짜 기본값 설정
+  const now = new Date();
+  const fromEl = document.getElementById('je-filter-from');
+  const toEl = document.getElementById('je-filter-to');
+  if (!fromEl.value) fromEl.value = `${now.getFullYear()}-01-01`;
+  if (!toEl.value) toEl.value = now.toISOString().slice(0,10);
+
+  const { data } = await db.from('journal_entries')
+    .select('*, journal_lines(debit, credit)')
+    .gte('entry_date', fromEl.value)
+    .lte('entry_date', toEl.value)
+    .order('entry_date', { ascending: false })
+    .order('entry_number', { ascending: false })
+    .limit(500);
+
+  _jeList = data || [];
+  renderJEList();
+}
+
+function renderJEList() {
+  const search = (document.getElementById('je-filter-search')?.value || '').toLowerCase();
+  const statusFilter = document.getElementById('je-filter-status')?.value || '';
+
+  const filtered = _jeList.filter(je => {
+    if (statusFilter && je.status !== statusFilter) return false;
+    if (search && !je.entry_number?.toLowerCase().includes(search) &&
+        !je.description?.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  if (!filtered.length) {
+    document.getElementById('je-tbody').innerHTML = '<tr><td colspan="8" class="empty">No journal entries found</td></tr>';
+    return;
+  }
+
+  const statusBadge = s => {
+    const map = { posted:'#16a34a', draft:'#d97706', void:'#9ca3af' };
+    return `<span style="background:${map[s]||'#6b7280'}20;color:${map[s]||'#6b7280'};border:1px solid ${map[s]||'#6b7280'}40;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;">${s}</span>`;
+  };
+
+  const sourceLabel = s => ({ manual:'Manual', ar_invoice:'AR', payment:'Payment', ap_invoice:'AP', ap_payment:'AP Pmt', opening_balance:'Opening Bal', adjustment:'Adj' }[s] || s);
+
+  document.getElementById('je-tbody').innerHTML = filtered.map(je => {
+    const totalDebit = (je.journal_lines||[]).reduce((s,l) => s+(parseFloat(l.debit)||0), 0);
+    const totalCredit = (je.journal_lines||[]).reduce((s,l) => s+(parseFloat(l.credit)||0), 0);
+    const fmt = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+    return `<tr style="border-bottom:1px solid #f0f0f0;${je.status==='void'?'opacity:0.5;text-decoration:line-through;':''}" onclick="viewJE('${je.id}')" style="cursor:pointer;">
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#1a56a0;cursor:pointer;" onclick="viewJE('${je.id}')">${je.entry_number||'—'}</td>
+      <td style="font-size:12px;">${je.entry_date||'—'}</td>
+      <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${je.description||'—'}</td>
+      <td style="font-size:11px;color:#6b7280;">${sourceLabel(je.source)}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1a56a0;">${fmt(totalDebit)}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#dc2626;">${fmt(totalCredit)}</td>
+      <td style="text-align:center;">${statusBadge(je.status)}</td>
+      <td style="text-align:center;">
+        ${je.status !== 'void' && je.source === 'manual' ? `<button onclick="event.stopPropagation();editJE('${je.id}')" style="background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;color:#374151;">✏️</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── JE 모달 열기 ──
+async function openJEModal(editId = null) {
+  _jeEditId = editId;
+  _jeLineCount = 0;
+
+  // 계정 목록 로드
+  if (!_glAccounts.length) {
+    const { data } = await db.from('accounts').select('*').order('code');
+    _glAccounts = data || [];
+  }
+
+  // 날짜 기본값
+  document.getElementById('je-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('je-desc').value = '';
+  document.getElementById('je-source').value = 'manual';
+  document.getElementById('je-status').value = 'posted';
+
+  // 새 번호 생성
+  if (!editId) {
+    const year = new Date().getFullYear();
+    const { data: last } = await db.from('journal_entries')
+      .select('entry_number')
+      .like('entry_number', `JE-${year}-%`)
+      .order('entry_number', { ascending: false })
+      .limit(1);
+    const lastNum = last?.[0] ? parseInt(last[0].entry_number.split('-')[2]) || 0 : 0;
+    document.getElementById('je-modal-number').textContent = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+  }
+
+  // 라인 초기화
+  document.getElementById('je-lines-tbody').innerHTML = '';
+
+  if (editId) {
+    // 편집 모드 — 기존 데이터 로드
+    const { data: je } = await db.from('journal_entries').select('*').eq('id', editId).single();
+    const { data: lines } = await db.from('journal_lines').select('*').eq('journal_entry_id', editId).order('id');
+    if (je) {
+      document.getElementById('je-modal-number').textContent = je.entry_number;
+      document.getElementById('je-date').value = je.entry_date;
+      document.getElementById('je-desc').value = je.description || '';
+      document.getElementById('je-source').value = je.source || 'manual';
+      document.getElementById('je-status').value = je.status || 'posted';
+    }
+    (lines || []).forEach(l => addJELine(l.account_code, l.description, l.debit, l.credit));
+  } else {
+    // 기본 2줄
+    addJELine(); addJELine();
+  }
+
+  updateJETotals();
+  document.getElementById('je-modal').style.display = 'flex';
+  setTimeout(() => document.querySelector('#je-lines-tbody input[data-type="acct"]')?.focus(), 100);
+}
+
+function closeJEModal() {
+  document.getElementById('je-modal').style.display = 'none';
+  _jeEditId = null;
+}
+
+// ── JE 라인 추가 ──
+function addJELine(acctCode='', desc='', debit=0, credit=0) {
+  const idx = _jeLineCount++;
+  const acctOptions = _glAccounts.map(a =>
+    `<option value="${a.code}" ${a.code===acctCode?'selected':''}>${a.code} — ${a.name}</option>`
+  ).join('');
+
+  const tr = document.createElement('tr');
+  tr.id = `je-line-${idx}`;
+  tr.style.borderBottom = '1px solid #f0f0f0';
+  tr.innerHTML = `
+    <td style="padding:6px 8px;">
+      <select data-type="acct" data-idx="${idx}"
+        style="width:100%;font-size:12px;border:1px solid #e5e7eb;border-radius:4px;padding:5px 6px;font-family:'IBM Plex Mono',monospace;"
+        onchange="onJEAcctChange(${idx}, this.value)">
+        <option value="">-- 계정 선택 --</option>
+        ${acctOptions}
+      </select>
+    </td>
+    <td style="padding:6px 4px;">
+      <div id="je-acct-name-${idx}" style="font-size:11px;color:#6b7280;padding:4px 6px;">${acctCode ? (_glAccounts.find(a=>a.code===acctCode)?.name||'') : '계정을 선택하세요'}</div>
+    </td>
+    <td style="padding:6px 4px;">
+      <input type="text" value="${desc}" placeholder="Line description..."
+        style="width:100%;border:1px solid #e5e7eb;border-radius:4px;padding:5px 6px;font-size:12px;"
+        data-type="desc" data-idx="${idx}">
+    </td>
+    <td style="padding:6px 4px;">
+      <input type="number" value="${debit > 0 ? debit.toFixed(2) : ''}" placeholder="0.00" step="0.01" min="0"
+        style="width:100%;text-align:right;border:1px solid #e5e7eb;border-radius:4px;padding:5px 6px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:#1a56a0;"
+        data-type="debit" data-idx="${idx}"
+        oninput="onJEAmtInput(${idx},'debit',this.value)"
+        onfocus="if(this.value==='0.00'||this.value==='0')this.value=''">
+    </td>
+    <td style="padding:6px 4px;">
+      <input type="number" value="${credit > 0 ? credit.toFixed(2) : ''}" placeholder="0.00" step="0.01" min="0"
+        style="width:100%;text-align:right;border:1px solid #e5e7eb;border-radius:4px;padding:5px 6px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:#dc2626;"
+        data-type="credit" data-idx="${idx}"
+        oninput="onJEAmtInput(${idx},'credit',this.value)"
+        onfocus="if(this.value==='0.00'||this.value==='0')this.value=''">
+    </td>
+    <td style="padding:6px 4px;text-align:center;">
+      <button onclick="removeJELine(${idx})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:2px 6px;">×</button>
+    </td>`;
+  document.getElementById('je-lines-tbody').appendChild(tr);
+}
+
+function onJEAcctChange(idx, code) {
+  const acct = _glAccounts.find(a => a.code === code);
+  const nameEl = document.getElementById('je-acct-name-' + idx);
+  if (nameEl) nameEl.textContent = acct ? acct.name : '계정을 선택하세요';
+}
+
+function onJEAmtInput(idx, type, val) {
+  // Debit 입력하면 Credit 클리어, vice versa
+  if (parseFloat(val) > 0) {
+    const other = type === 'debit' ? 'credit' : 'debit';
+    const otherInp = document.querySelector(`input[data-type="${other}"][data-idx="${idx}"]`);
+    if (otherInp) otherInp.value = '';
+  }
+  updateJETotals();
+}
+
+function removeJELine(idx) {
+  const tr = document.getElementById('je-line-' + idx);
+  if (tr) tr.remove();
+  updateJETotals();
+}
+
+function updateJETotals() {
+  let totalDebit = 0, totalCredit = 0;
+  document.querySelectorAll('#je-lines-tbody input[data-type="debit"]').forEach(inp => {
+    totalDebit += parseFloat(inp.value) || 0;
+  });
+  document.querySelectorAll('#je-lines-tbody input[data-type="credit"]').forEach(inp => {
+    totalCredit += parseFloat(inp.value) || 0;
+  });
+
+  const fmt = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:2});
+  document.getElementById('je-total-debit').textContent = fmt(totalDebit);
+  document.getElementById('je-total-credit').textContent = fmt(totalCredit);
+
+  const diff = totalDebit - totalCredit;
+  const diffEl = document.getElementById('je-difference');
+  diffEl.textContent = diff === 0 ? '✓ Balanced' : fmt(Math.abs(diff));
+  diffEl.style.color = diff === 0 ? '#16a34a' : '#dc2626';
+}
+
+// ── JE 저장 ──
+async function saveJE() {
+  const btn = document.getElementById('je-save-btn');
+  const date = document.getElementById('je-date').value;
+  const desc = document.getElementById('je-desc').value.trim();
+  const source = document.getElementById('je-source').value;
+  const status = document.getElementById('je-status').value;
+  const entryNumber = document.getElementById('je-modal-number').textContent;
+
+  if (!date) { showToast('❌ 날짜를 입력하세요.'); return; }
+  if (!desc) { showToast('❌ Description을 입력하세요.'); return; }
+
+  // 라인 수집
+  const lines = [];
+  const rows = document.querySelectorAll('#je-lines-tbody tr');
+  rows.forEach(row => {
+    const idx = row.id.replace('je-line-','');
+    const acct = row.querySelector(`select[data-type="acct"]`)?.value;
+    const lineDesc = row.querySelector(`input[data-type="desc"]`)?.value || '';
+    const debit = parseFloat(row.querySelector(`input[data-type="debit"]`)?.value) || 0;
+    const credit = parseFloat(row.querySelector(`input[data-type="credit"]`)?.value) || 0;
+    if (acct && (debit > 0 || credit > 0)) {
+      lines.push({ account_code: acct, description: lineDesc, debit, credit });
+    }
+  });
+
+  if (lines.length < 2) { showToast('❌ 최소 2개 라인이 필요합니다.'); return; }
+
+  const totalDebit = lines.reduce((s,l) => s+l.debit, 0);
+  const totalCredit = lines.reduce((s,l) => s+l.credit, 0);
+  if (Math.abs(totalDebit - totalCredit) > 0.01) {
+    showToast('❌ Debit과 Credit이 일치하지 않습니다. (차이: $' + Math.abs(totalDebit-totalCredit).toFixed(2) + ')');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Saving...';
+
+  try {
+    let jeId;
+    if (_jeEditId) {
+      // 수정 — 기존 라인 삭제 후 재입력
+      await db.from('journal_lines').delete().eq('journal_entry_id', _jeEditId);
+      await db.from('journal_entries').update({
+        entry_date: date, description: desc, source, status,
+        updated_at: new Date().toISOString()
+      }).eq('id', _jeEditId);
+      jeId = _jeEditId;
+    } else {
+      // 신규
+      const { data: je, error } = await db.from('journal_entries').insert({
+        entry_number: entryNumber,
+        entry_date: date,
+        description: desc,
+        source, status,
+        created_by: _currentEmployee?.name || 'System',
+        created_at: new Date().toISOString()
+      }).select().single();
+      if (error) throw error;
+      jeId = je.id;
+    }
+
+    // 라인 저장
+    const linePayload = lines.map(l => ({ ...l, journal_entry_id: jeId }));
+    const { error: lineErr } = await db.from('journal_lines').insert(linePayload);
+    if (lineErr) throw lineErr;
+
+    showToast(`✅ Journal Entry ${entryNumber} 저장 완료!`);
+    closeJEModal();
+    await loadJE();
+    await loadGL(); // TB 업데이트
+
+  } catch(e) {
+    showToast('❌ 저장 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Post Entry';
+  }
+}
+
+// ── JE 상세보기 ──
+async function viewJE(jeId) {
+  const { data: je } = await db.from('journal_entries').select('*').eq('id', jeId).single();
+  const { data: lines } = await db.from('journal_lines').select('*').eq('journal_entry_id', jeId).order('id');
+  if (!je) return;
+
+  const voidBtn = document.getElementById('je-void-btn');
+  if (voidBtn) {
+    voidBtn.style.display = (je.status !== 'void') ? 'block' : 'none';
+    voidBtn.onclick = () => voidJE(jeId, je.entry_number);
+  }
+
+  const fmt = n => n > 0 ? '$' + parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:2}) : '—';
+  const totalD = (lines||[]).reduce((s,l) => s+(parseFloat(l.debit)||0), 0);
+  const totalC = (lines||[]).reduce((s,l) => s+(parseFloat(l.credit)||0), 0);
+
+  const statusColor = { posted:'#16a34a', draft:'#d97706', void:'#9ca3af' }[je.status] || '#6b7280';
+
+  document.getElementById('je-view-content').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+      <div><div style="font-size:10px;font-weight:700;color:#6b7280;">ENTRY NUMBER</div>
+        <div style="font-size:16px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#0f2744;">${je.entry_number}</div></div>
+      <div><div style="font-size:10px;font-weight:700;color:#6b7280;">DATE</div>
+        <div style="font-size:14px;font-weight:600;">${je.entry_date}</div></div>
+      <div style="grid-column:1/-1;"><div style="font-size:10px;font-weight:700;color:#6b7280;">DESCRIPTION</div>
+        <div style="font-size:13px;">${je.description||'—'}</div></div>
+      <div><div style="font-size:10px;font-weight:700;color:#6b7280;">SOURCE</div>
+        <div style="font-size:12px;color:#6b7280;">${je.source||'manual'}</div></div>
+      <div><div style="font-size:10px;font-weight:700;color:#6b7280;">STATUS</div>
+        <span style="background:${statusColor}20;color:${statusColor};border:1px solid ${statusColor}40;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;">${je.status}</span></div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr style="background:#0f2744;color:#fff;">
+        <th style="padding:8px 12px;text-align:left;">Account</th>
+        <th style="padding:8px 12px;text-align:left;">Description</th>
+        <th style="padding:8px 12px;text-align:right;color:#93c5fd;">Debit</th>
+        <th style="padding:8px 12px;text-align:right;color:#fca5a5;">Credit</th>
+      </tr></thead>
+      <tbody>
+        ${(lines||[]).map(l => {
+          const acct = _glAccounts.find(a => a.code === l.account_code);
+          return `<tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:7px 12px;font-family:'IBM Plex Mono',monospace;font-size:11px;">
+              <span style="font-weight:700;">${l.account_code}</span>
+              <span style="color:#6b7280;margin-left:6px;">${acct?.name||''}</span>
+            </td>
+            <td style="padding:7px 12px;font-size:11px;color:#6b7280;">${l.description||''}</td>
+            <td style="padding:7px 12px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#1a56a0;">${fmt(l.debit)}</td>
+            <td style="padding:7px 12px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;">${fmt(l.credit)}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="background:#f0f4f8;font-weight:700;border-top:2px solid #e5e7eb;">
+          <td colspan="2" style="padding:10px 12px;">TOTAL</td>
+          <td style="padding:10px 12px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#1a56a0;">$${totalD.toLocaleString('en-US',{minimumFractionDigits:2})}</td>
+          <td style="padding:10px 12px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;">$${totalC.toLocaleString('en-US',{minimumFractionDigits:2})}</td>
+        </tr>
+      </tfoot>
+    </table>
+    <div style="margin-top:10px;font-size:11px;color:#9ca3af;text-align:right;">
+      Created by ${je.created_by||'System'} · ${new Date(je.created_at).toLocaleString('ko-KR')}
+    </div>`;
+
+  document.getElementById('je-view-modal').style.display = 'flex';
+}
+
+async function editJE(jeId) {
+  await openJEModal(jeId);
+}
+
+async function voidJE(jeId, entryNumber) {
+  if (!confirm(`${entryNumber} — 이 분개를 Void 처리하시겠습니까?\n\n(반대 분개가 자동 생성됩니다)`)) return;
+
+  // 원래 라인 가져오기
+  const { data: lines } = await db.from('journal_lines').select('*').eq('journal_entry_id', jeId);
+
+  // 상태 void로 변경
+  await db.from('journal_entries').update({ status: 'void', updated_at: new Date().toISOString() }).eq('id', jeId);
+
+  // 반대 분개 자동 생성
+  const year = new Date().getFullYear();
+  const { data: last } = await db.from('journal_entries')
+    .select('entry_number').like('entry_number', `JE-${year}-%`)
+    .order('entry_number', { ascending: false }).limit(1);
+  const lastNum = last?.[0] ? parseInt(last[0].entry_number.split('-')[2]) || 0 : 0;
+  const reverseNum = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+
+  const { data: reverseJE } = await db.from('journal_entries').insert({
+    entry_number: reverseNum,
+    entry_date: new Date().toISOString().slice(0,10),
+    description: `VOID: ${entryNumber}`,
+    source: 'manual', status: 'posted',
+    created_by: _currentEmployee?.name || 'System',
+    created_at: new Date().toISOString()
+  }).select().single();
+
+  if (reverseJE) {
+    const reverseLines = (lines||[]).map(l => ({
+      journal_entry_id: reverseJE.id,
+      account_code: l.account_code,
+      description: `Void of ${entryNumber}`,
+      debit: l.credit,   // 반전
+      credit: l.debit,
+    }));
+    await db.from('journal_lines').insert(reverseLines);
+  }
+
+  showToast(`✅ ${entryNumber} Void 처리 완료. 반대 분개: ${reverseNum}`);
+  document.getElementById('je-view-modal').style.display = 'none';
+  await loadJE();
+  await loadGL();
 }
 
 // ══════════════════════════════════════════════════════════════
