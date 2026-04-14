@@ -26403,10 +26403,15 @@ async function parseAPInvoicesBatch(input) {
       });
 
       const mediaType = item.file.type || 'application/pdf';
+      // expense/liability 계정만 전송 (코드+이름만)
+      const accountList = _glAccounts
+        .filter(a => ['expense','liability'].includes(a.type) && a.is_active !== false)
+        .map(a => ({ code: a.code, name: a.name }));
+
       const resp = await fetch('https://po-confirm-email.hjbae.workers.dev/parse-ap-invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_base64: base64, media_type: mediaType, vendors: vendorNames })
+        body: JSON.stringify({ file_base64: base64, media_type: mediaType, vendors: vendorNames, accounts: accountList })
       });
 
       const result = await resp.json();
@@ -26438,11 +26443,17 @@ async function parseAPInvoicesBatch(input) {
         targetItem.terms = d.terms || 'Net 30';
         targetItem.description = d.description || '';
         targetItem.totalAmount = parseFloat(d.total_amount) || 0;
-        targetItem.lines = (d.lines || []).map(l => ({
-          account_code: matched?.default_account_code || '',
-          description: l.description || '',
-          amount: parseFloat(l.amount) || 0,
-        }));
+        targetItem.lines = (d.lines || []).map(l => {
+          // 우선순위: 1) AI 추천 계정 2) 벤더 default account 3) 빈칸
+          const aiAcct = l.account_code && _glAccounts.find(a => a.code === l.account_code) ? l.account_code : null;
+          const vendorAcct = matched?.default_account_code || null;
+          return {
+            account_code: aiAcct || vendorAcct || '',
+            account_recommended: !!aiAcct, // AI 추천 여부 표시용
+            description: l.description || '',
+            amount: parseFloat(l.amount) || 0,
+          };
+        });
       };
 
       // 첫 번째 인보이스는 기존 item에
@@ -26491,6 +26502,82 @@ async function parseAPInvoicesBatch(input) {
     if (i < _apBatchItems.length - 1) {
       await new Promise(r => setTimeout(r, 3000));
     }
+  }
+}
+
+function renderBatchJEPreview(item) {
+  const vendor = _apVendors.find(v => v.id === item.vendorId);
+  const vendorName = vendor?.name || item.detectedVendorName || '(벤더 미선택)';
+  const invNum = item.invoiceNumber || '—';
+  const lines = item.lines.filter(l => l.amount > 0);
+  const total = lines.reduce((s,l) => s+l.amount, 0);
+  const fmt = n => '$' + n.toLocaleString('en-US',{minimumFractionDigits:2});
+
+  const jeNum = `JE-${new Date().getFullYear()}-XXXX`;
+
+  const drLines = lines.map(l => {
+    const acct = _glAccounts.find(a => a.code === l.account_code);
+    const acctLabel = acct ? `${l.account_code} — ${acct.name}` : (l.account_code || '⚠ 계정 미선택');
+    const hasAcct = !!l.account_code;
+    return `<tr>
+      <td style="padding:3px 8px;font-size:11px;color:#1a56a0;font-weight:700;">DR</td>
+      <td style="padding:3px 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:${hasAcct?'#374151':'#dc2626'};">${acctLabel}</td>
+      <td style="padding:3px 8px;font-size:11px;color:#6b7280;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${l.description||''}</td>
+      <td style="padding:3px 8px;font-size:11px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#1a56a0;font-weight:700;">${fmt(l.amount)}</td>
+      <td></td>
+    </tr>`;
+  }).join('');
+
+  const balanced = lines.length > 0 && total > 0;
+
+  return `
+    <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:6px;overflow:hidden;border:1px solid #e5e7eb;font-size:11px;">
+      <thead>
+        <tr style="background:#0f2744;color:#fff;">
+          <th style="padding:5px 8px;width:36px;"></th>
+          <th style="padding:5px 8px;text-align:left;">Account</th>
+          <th style="padding:5px 8px;text-align:left;">Description</th>
+          <th style="padding:5px 8px;text-align:right;width:110px;color:#93c5fd;">Debit</th>
+          <th style="padding:5px 8px;text-align:right;width:110px;color:#fca5a5;">Credit</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${drLines}
+        <tr style="border-top:2px solid #e5e7eb;background:#fef2f2;">
+          <td style="padding:4px 8px;font-size:11px;color:#dc2626;font-weight:700;">CR</td>
+          <td style="padding:4px 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#374151;">200-001 — Accounts Payable</td>
+          <td style="padding:4px 8px;font-size:11px;color:#6b7280;">AP: ${invNum} — ${vendorName}</td>
+          <td style="padding:4px 8px;text-align:right;"></td>
+          <td style="padding:4px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;font-weight:700;">${fmt(total)}</td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr style="background:#f0f4f8;border-top:1px solid #e5e7eb;">
+          <td colspan="3" style="padding:5px 8px;font-size:11px;font-weight:700;">
+            ${balanced
+              ? `<span style="color:#16a34a;">✓ Balanced — DR ${fmt(total)} = CR ${fmt(total)}</span>`
+              : `<span style="color:#dc2626;">⚠ 계정 또는 금액을 확인하세요</span>`}
+          </td>
+          <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;">${fmt(total)}</td>
+          <td style="padding:5px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#dc2626;">${fmt(total)}</td>
+        </tr>
+      </tfoot>
+    </table>`;
+}
+
+function toggleBatchJE(itemId) {
+  const preview = document.getElementById(`je-preview-${itemId}`);
+  const icon = document.getElementById(`je-toggle-icon-${itemId}`);
+  const item = _apBatchItems[itemId];
+  if (!preview || !icon) return;
+
+  if (preview.style.display === 'none') {
+    preview.style.display = 'block';
+    preview.innerHTML = renderBatchJEPreview(item);
+    icon.textContent = '▲ 접기';
+  } else {
+    preview.style.display = 'none';
+    icon.textContent = '▼ 펼치기';
   }
 }
 
@@ -26552,14 +26639,22 @@ function renderBatchCard(item) {
   const linesHtml = item.lines.map((l, li) => {
     const acctName = _glAccounts.find(a => a.code === l.account_code)?.name || '';
     const displayVal = l.account_code ? `${l.account_code} — ${acctName}` : '';
+    const isAI = l.account_recommended && l.account_code;
+    const borderCol = isAI ? '#3b82f6' : '#e5e7eb';
+    const bgCol = isAI ? '#eff6ff' : '#fff';
     return `<tr style="border-bottom:1px solid #f0f0f0;" id="ap-batch-line-${item.id}-${li}">
       <td style="padding:4px 6px;position:relative;">
-        <input type="text" value="${displayVal}" placeholder="계정 검색..." 
-          style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:3px;padding:3px;"
-          oninput="filterBatchAcct(${item.id},${li},this.value)"
-          onfocus="filterBatchAcct(${item.id},${li},this.value)"
-          onblur="setTimeout(()=>{const d=document.getElementById('batchd-${item.id}-${li}');if(d)d.style.display='none'},250)">
-        <div id="batchd-${item.id}-${li}" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:160px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);min-width:280px;"></div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          ${isAI ? '<span style="background:#3b82f6;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap;flex-shrink:0;">AI</span>' : ''}
+          <div style="position:relative;flex:1;">
+            <input type="text" value="${displayVal}" placeholder="계정 검색..."
+              style="width:100%;font-size:11px;border:1px solid ${borderCol};border-radius:3px;padding:3px;background:${bgCol};"
+              oninput="filterBatchAcct(${item.id},${li},this.value)"
+              onfocus="filterBatchAcct(${item.id},${li},this.value)"
+              onblur="setTimeout(()=>{const d=document.getElementById('batchd-${item.id}-${li}');if(d)d.style.display='none'},250)">
+            <div id="batchd-${item.id}-${li}" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:160px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);min-width:280px;"></div>
+          </div>
+        </div>
       </td>
       <td style="padding:4px 6px;">
         <input type="text" value="${l.description}" style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:3px;padding:3px;" oninput="_apBatchItems[${item.id}].lines[${li}].description=this.value">
@@ -26573,65 +26668,85 @@ function renderBatchCard(item) {
     </tr>`;
   }).join('');
 
+  const lineTotal = item.lines.reduce((s,l)=>s+l.amount,0);
+  const parsedTotal = item.totalAmount || lineTotal;
+  const totalMatch = Math.abs(lineTotal - parsedTotal) < 0.02;
+  const totalColor = totalMatch ? '#16a34a' : '#dc2626';
+  const totalNote = totalMatch ? '✓ 일치' : `⚠ 인보이스 합계: $${parsedTotal.toLocaleString('en-US',{minimumFractionDigits:2})}`;
+
   el.innerHTML = `
     <div style="background:${bgColor};border:1.5px solid ${borderColor};border-radius:8px;overflow:hidden;opacity:${item.skip?'0.5':'1'};">
-      <!-- 카드 헤더 -->
-      <div style="background:${bgColor};padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid ${borderColor};">
-        <input type="checkbox" ${item.skip ? '' : 'checked'} style="width:16px;height:16px;accent-color:#7f1d1d;cursor:pointer;"
-          onchange="_apBatchItems[${item.id}].skip=!this.checked;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary()" title="포함/제외">
-        <div style="font-size:11px;color:#6b7280;font-style:italic;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${item.file.name}</div>
-        ${hasIssue && !item.skip ? '<span style="background:#f59e0b;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">⚠ 확인 필요</span>' : ''}
-        ${!item.vendorId && item.detectedVendorName && !item.skip ? `<span style="background:#3b82f6;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;" title="저장 시 자동 생성됩니다">🆕 "${item.detectedVendorName}" 자동생성</span>` : ''}
-        ${!hasIssue && !item.skip ? '<span style="background:#16a34a;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">✓ Ready</span>' : ''}
+      <!-- 1줄: 체크 + 파일명 + 뱃지 + 벤더 (풀 너비) -->
+      <div style="background:${bgColor};padding:8px 12px;display:flex;gap:8px;align-items:center;border-bottom:1px solid #e5e7eb;">
+        <input type="checkbox" ${item.skip ? '' : 'checked'} style="width:15px;height:15px;accent-color:#7f1d1d;cursor:pointer;flex-shrink:0;"
+          onchange="_apBatchItems[${item.id}].skip=!this.checked;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary()">
+        <div style="font-size:10px;color:#9ca3af;font-style:italic;white-space:nowrap;flex-shrink:0;">${item.fileName||item.file.name}</div>
+        ${hasIssue && !item.skip ? '<span style="background:#f59e0b;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;white-space:nowrap;">⚠ 확인 필요</span>' : ''}
+        ${!item.vendorId && item.detectedVendorName && !item.skip ? `<span style="background:#3b82f6;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;white-space:nowrap;">🆕 자동생성</span>` : ''}
+        ${!hasIssue && !item.skip ? '<span style="background:#16a34a;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;white-space:nowrap;">✓ Ready</span>' : ''}
+        <!-- 벤더 선택 (넓게) -->
+        <select style="flex:1;font-size:12px;border:1px solid ${!item.vendorId?'#f59e0b':'#d1d5db'};border-radius:4px;padding:4px 8px;font-weight:600;min-width:0;"
+          onchange="_apBatchItems[${item.id}].vendorId=this.value;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary()">
+          <option value="">-- 벤더 선택 * --</option>${vendorOptions}
+        </select>
+      </div>
 
-        <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <!-- 벤더 -->
-          <select style="font-size:12px;border:1px solid ${!item.vendorId?'#f59e0b':'#d1d5db'};border-radius:4px;padding:4px 6px;font-weight:600;"
-            onchange="_apBatchItems[${item.id}].vendorId=this.value;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary()">
-            <option value="">-- 벤더 선택 * --</option>${vendorOptions}
-          </select>
-          <!-- Invoice # -->
-          <input type="text" value="${item.invoiceNumber}" placeholder="Invoice # *" style="font-size:12px;border:1px solid ${!item.invoiceNumber?'#f59e0b':'#d1d5db'};border-radius:4px;padding:4px 6px;width:120px;font-family:'IBM Plex Mono',monospace;font-weight:700;"
-            oninput="_apBatchItems[${item.id}].invoiceNumber=this.value;updateBatchSummary()">
-          <!-- 날짜 -->
-          <input type="date" value="${item.invoiceDate}" style="font-size:12px;border:1px solid ${!item.invoiceDate?'#f59e0b':'#d1d5db'};border-radius:4px;padding:4px 6px;"
-            oninput="_apBatchItems[${item.id}].invoiceDate=this.value;updateBatchSummary()">
-          <!-- Due date -->
-          <input type="date" value="${item.dueDate}" placeholder="Due date" style="font-size:12px;border:1px solid #d1d5db;border-radius:4px;padding:4px 6px;"
-            oninput="_apBatchItems[${item.id}].dueDate=this.value">
-          <!-- Terms -->
-          <select style="font-size:12px;border:1px solid #d1d5db;border-radius:4px;padding:4px 6px;"
-            onchange="_apBatchItems[${item.id}].terms=this.value">${termsOptions}</select>
-          <!-- Account 일괄 적용 -->
-          <div style="position:relative;display:inline-block;">
-            <input type="text" placeholder="계정 일괄 적용..." id="bulk-acct-inp-${item.id}"
-              style="font-size:11px;border:1px solid #d1d5db;border-radius:4px;padding:4px 6px;width:160px;background:#fffbeb;"
-              oninput="filterBulkAcct(${item.id},this.value)"
-              onfocus="filterBulkAcct(${item.id},this.value)"
-              onblur="setTimeout(()=>{const d=document.getElementById('bulk-acct-dd-${item.id}');if(d)d.style.display='none'},250)"
-              title="선택하면 이 인보이스의 모든 라인에 적용">
-            <div id="bulk-acct-dd-${item.id}" style="display:none;position:absolute;top:100%;left:0;min-width:280px;max-height:160px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
+      <!-- 2줄: Invoice# / 날짜 / Due / Terms / 계정일괄 / Total -->
+      <div style="background:${bgColor};padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid ${borderColor};">
+        <input type="text" value="${item.invoiceNumber}" placeholder="Invoice # *"
+          style="font-size:11px;border:1px solid ${!item.invoiceNumber?'#f59e0b':'#d1d5db'};border-radius:4px;padding:3px 6px;width:110px;font-family:'IBM Plex Mono',monospace;font-weight:700;"
+          oninput="_apBatchItems[${item.id}].invoiceNumber=this.value;updateBatchSummary()">
+        <input type="date" value="${item.invoiceDate}"
+          style="font-size:11px;border:1px solid ${!item.invoiceDate?'#f59e0b':'#d1d5db'};border-radius:4px;padding:3px 6px;"
+          oninput="_apBatchItems[${item.id}].invoiceDate=this.value;updateBatchSummary()">
+        <input type="date" value="${item.dueDate}" placeholder="Due date"
+          style="font-size:11px;border:1px solid #d1d5db;border-radius:4px;padding:3px 6px;"
+          oninput="_apBatchItems[${item.id}].dueDate=this.value">
+        <select style="font-size:11px;border:1px solid #d1d5db;border-radius:4px;padding:3px 6px;"
+          onchange="_apBatchItems[${item.id}].terms=this.value">${termsOptions}</select>
+        <!-- 계정 일괄 적용 -->
+        <div style="position:relative;flex:1;min-width:140px;">
+          <input type="text" placeholder="🔖 계정 일괄 적용..." id="bulk-acct-inp-${item.id}"
+            style="font-size:11px;border:1px solid #d1d5db;border-radius:4px;padding:3px 6px;width:100%;background:#fffbeb;"
+            oninput="filterBulkAcct(${item.id},this.value)"
+            onfocus="filterBulkAcct(${item.id},this.value)"
+            onblur="setTimeout(()=>{const d=document.getElementById('bulk-acct-dd-${item.id}');if(d)d.style.display='none'},250)"
+            title="선택하면 모든 라인에 일괄 적용">
+          <div id="bulk-acct-dd-${item.id}" style="display:none;position:absolute;top:100%;left:0;min-width:280px;max-height:160px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
+        </div>
+        <!-- Total (라인 합산 vs 파싱 합계) -->
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:15px;color:${totalColor};">
+            $${lineTotal.toLocaleString('en-US',{minimumFractionDigits:2})}
           </div>
-          <!-- Total -->
-          <span style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:14px;color:#7f1d1d;">
-            $${item.lines.reduce((s,l)=>s+l.amount,0).toLocaleString('en-US',{minimumFractionDigits:2})}
-          </span>
+          <div style="font-size:9px;color:${totalColor};">${totalNote}</div>
         </div>
       </div>
 
       <!-- 라인 항목 -->
-      <div style="padding:8px 14px;">
+      <div style="padding:6px 12px;">
         <table style="width:100%;border-collapse:collapse;font-size:11px;">
           <thead><tr style="border-bottom:1px solid #e5e7eb;">
-            <th style="padding:4px 6px;text-align:left;color:#6b7280;width:40%;">Account</th>
-            <th style="padding:4px 6px;text-align:left;color:#6b7280;">Description</th>
-            <th style="padding:4px 6px;text-align:right;color:#7f1d1d;width:110px;">Amount</th>
-            <th style="width:28px;"></th>
+            <th style="padding:3px 6px;text-align:left;color:#6b7280;width:38%;">Account</th>
+            <th style="padding:3px 6px;text-align:left;color:#6b7280;">Description</th>
+            <th style="padding:3px 6px;text-align:right;color:#7f1d1d;width:100px;">Amount</th>
+            <th style="width:26px;"></th>
           </tr></thead>
           <tbody>${linesHtml}</tbody>
         </table>
         <button onclick="_apBatchItems[${item.id}].lines.push({account_code:'',description:'',amount:0});renderBatchCard(_apBatchItems[${item.id}])"
-          style="margin-top:6px;background:none;border:1px dashed #d1d5db;color:#9ca3af;padding:3px 12px;border-radius:4px;cursor:pointer;font-size:11px;">+ Add Line</button>
+          style="margin-top:4px;background:none;border:1px dashed #d1d5db;color:#9ca3af;padding:2px 10px;border-radius:4px;cursor:pointer;font-size:11px;">+ Add Line</button>
+      </div>
+
+      <!-- Journal Entry 미리보기 -->
+      <div style="border-top:1px solid #e5e7eb;background:#f8fafc;">
+        <div onclick="toggleBatchJE(${item.id})" style="padding:6px 12px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;">
+          <span style="font-size:11px;font-weight:700;color:#374151;">📒 Journal Entry 미리보기</span>
+          <span id="je-toggle-icon-${item.id}" style="font-size:10px;color:#6b7280;">▼ 펼치기</span>
+        </div>
+        <div id="je-preview-${item.id}" style="display:none;padding:0 12px 10px;">
+          ${renderBatchJEPreview(item)}
+        </div>
       </div>
     </div>`;
 }
