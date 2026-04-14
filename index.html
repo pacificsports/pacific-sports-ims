@@ -26485,9 +26485,13 @@ async function parseAPInvoicesBatch(input) {
     updateBatchSummary();
   };
 
-  // 3개씩 병렬 처리
-  for (let i = 0; i < _apBatchItems.length; i += 3) {
-    await Promise.all(_apBatchItems.slice(i, i+3).map(parseOne));
+  // 순서대로 1개씩 처리 (rate limit 방지)
+  for (let i = 0; i < _apBatchItems.length; i++) {
+    await parseOne(_apBatchItems[i]);
+    // 연속 요청 사이 딜레이 (rate limit 방지)
+    if (i < _apBatchItems.length - 1) {
+      await new Promise(r => setTimeout(r, 1500));
+    }
   }
 }
 
