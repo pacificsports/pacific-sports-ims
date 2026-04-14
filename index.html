@@ -2089,12 +2089,13 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <th style="width:160px;">Vendor</th>
               <th style="width:100px;">Date</th>
               <th style="width:100px;">Due Date</th>
-              <th style="width:130px;text-align:right;">Amount</th>
-              <th style="width:130px;text-align:right;">Balance</th>
+              <th style="width:90px;text-align:center;">Past Due</th>
+              <th style="width:120px;text-align:right;">Amount</th>
+              <th style="width:120px;text-align:right;">Balance</th>
               <th style="width:80px;text-align:center;">Status</th>
-              <th style="width:100px;"></th>
+              <th style="width:80px;"></th>
             </tr></thead>
-            <tbody id="ap-invoices-tbody"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
+            <tbody id="ap-invoices-tbody"><tr><td colspan="9" class="empty">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -26374,6 +26375,27 @@ function renderAPInvoices() {
   document.getElementById('ap-invoices-tbody').innerHTML = filtered.map(i => {
     const balance = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
     const isOverdue = i.due_date && new Date(i.due_date) < today && balance > 0;
+    const daysPast = isOverdue ? Math.floor((today - new Date(i.due_date)) / 86400000) : 0;
+
+    // Past Due 표시
+    let pastDueCell = '<td style="text-align:center;">—</td>';
+    if (isOverdue && daysPast > 0) {
+      const col = daysPast > 90 ? '#991b1b' : daysPast > 60 ? '#dc2626' : daysPast > 30 ? '#c2410c' : '#d97706';
+      const bg = daysPast > 90 ? '#fef2f2' : daysPast > 60 ? '#fef2f2' : daysPast > 30 ? '#fff7ed' : '#fffbeb';
+      pastDueCell = `<td style="text-align:center;">
+        <span style="background:${bg};color:${col};border:1px solid ${col}40;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">${daysPast}d</span>
+      </td>`;
+    } else if (!isOverdue && i.due_date && balance > 0) {
+      const daysLeft = Math.floor((new Date(i.due_date) - today) / 86400000);
+      if (daysLeft <= 7) {
+        pastDueCell = `<td style="text-align:center;">
+          <span style="background:#fffbeb;color:#92400e;border:1px solid #fcd34d;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap;">${daysLeft}d left</span>
+        </td>`;
+      } else {
+        pastDueCell = '<td style="text-align:center;font-size:11px;color:#9ca3af;">Current</td>';
+      }
+    }
+
     return `<tr style="border-bottom:1px solid #f0f0f0;background:${isOverdue?'#fff8f8':'#fff'};">
       <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;">
         <span onclick="viewAPInvoice('${i.id}')" style="color:#1a56a0;cursor:pointer;text-decoration:underline;text-underline-offset:2px;">${i.invoice_number}</span>
@@ -26381,6 +26403,7 @@ function renderAPInvoices() {
       <td style="font-size:12px;font-weight:600;">${i.vendor_name||i.vendors?.name||'—'}</td>
       <td style="font-size:12px;">${i.invoice_date||'—'}</td>
       <td style="font-size:12px;color:${isOverdue?'#dc2626':'#374151'};font-weight:${isOverdue?'700':'400'};">${i.due_date||'—'}${isOverdue?' ⚠️':''}</td>
+      ${pastDueCell}
       <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;">${fmt(i.total_amount)}</td>
       <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:${balance>0?'#dc2626':'#16a34a'};">${fmt(balance)}</td>
       <td style="text-align:center;">${statusBadge(i.status)}</td>
