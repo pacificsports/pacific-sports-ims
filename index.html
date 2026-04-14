@@ -512,6 +512,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       💰 Accounting ▾
       <div class="ntab-dd" id="dd-accounting">
         <div onclick="showPanel('ar',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📊 AR — Accounts Receivable</div>
+        <div onclick="showPanel('pl',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📈 Income Statement (P&L)</div>
+        <div onclick="showPanel('bs',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">🏦 Balance Sheet</div>
+        <div onclick="showPanel('gl',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📒 General Ledger</div>
       </div>
     </div>
     <div class="ntab" onclick="showPanel('settings',this)">⚙️ Settings</div>
@@ -1622,6 +1625,86 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
 
+    <!-- ── P&L (Income Statement) ── -->
+    <div class="panel" id="panel-pl">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:16px;font-weight:700;">📈 Income Statement</h2>
+        <div style="flex:1;"></div>
+        <select id="pl-period" class="fi" style="width:160px;font-size:12px;" onchange="loadPL()">
+          <option value="ytd">Year to Date</option>
+          <option value="mtd">Month to Date</option>
+          <option value="custom">Custom Period</option>
+        </select>
+        <input type="date" id="pl-from" class="fi" style="width:130px;font-size:12px;">
+        <span style="font-size:12px;color:#6b7280;">~</span>
+        <input type="date" id="pl-to" class="fi" style="width:130px;font-size:12px;">
+        <button class="btn" onclick="loadPL()">🔄 Refresh</button>
+        <button class="btn" onclick="printFinancial('pl')">🖨️ Print</button>
+      </div>
+      <div id="pl-body" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:0;overflow:hidden;">
+        <div class="empty" style="padding:40px;">Loading...</div>
+      </div>
+    </div>
+
+    <!-- ── Balance Sheet ── -->
+    <div class="panel" id="panel-bs">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:16px;font-weight:700;">🏦 Balance Sheet</h2>
+        <div style="flex:1;"></div>
+        <input type="date" id="bs-asof" class="fi" style="width:150px;font-size:12px;">
+        <button class="btn" onclick="loadBS()">🔄 Refresh</button>
+        <button class="btn" onclick="printFinancial('bs')">🖨️ Print</button>
+      </div>
+      <div id="bs-body" style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:0;overflow:hidden;">
+        <div class="empty" style="padding:40px;">Loading...</div>
+      </div>
+    </div>
+
+    <!-- ── General Ledger ── -->
+    <div class="panel" id="panel-gl">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:16px;font-weight:700;">📒 General Ledger</h2>
+        <div style="flex:1;"></div>
+        <input type="text" id="gl-search-acct" class="fi" placeholder="계정 검색..." style="width:200px;font-size:12px;" oninput="renderGLAccounts()">
+        <select id="gl-filter-type" class="fi" style="width:150px;font-size:12px;" onchange="renderGLAccounts()">
+          <option value="">전체 계정</option>
+          <option value="asset">Assets</option>
+          <option value="liability">Liabilities</option>
+          <option value="equity">Equity</option>
+          <option value="revenue">Revenue</option>
+          <option value="expense">Expenses</option>
+        </select>
+        <button class="btn" onclick="loadGL()">🔄 Refresh</button>
+      </div>
+      <!-- Trial Balance style table -->
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <table class="tbl" style="table-layout:fixed;">
+          <thead>
+            <tr style="background:#0f2744;color:#fff;">
+              <th style="width:110px;">Account #</th>
+              <th>Account Name</th>
+              <th style="width:80px;">Type</th>
+              <th style="width:130px;text-align:right;">Debit</th>
+              <th style="width:130px;text-align:right;">Credit</th>
+              <th style="width:140px;text-align:right;">Balance</th>
+            </tr>
+          </thead>
+          <tbody id="gl-tbody">
+            <tr><td colspan="6" class="empty">Loading...</td></tr>
+          </tbody>
+          <tfoot>
+            <tr style="background:#f0f4f8;font-weight:700;border-top:2px solid #e5e7eb;">
+              <td colspan="2" style="padding:10px 12px;font-size:12px;">TOTAL</td>
+              <td></td>
+              <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-debit">—</td>
+              <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-credit">—</td>
+              <td style="text-align:right;padding:10px 12px;font-family:'IBM Plex Mono',monospace;" id="gl-total-balance">—</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
     <div class="panel" id="panel-intransit">
       <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
         <h2 style="margin:0;font-size:16px;font-weight:700;">🚢 In Transit</h2>
@@ -2543,6 +2626,9 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'completed') loadCompleted();
   if (name === 'settings') { loadSettings(); loadManagerApprovals(); updateBuildingUI(); setTimeout(_renderErrorLog, 100); setTimeout(loadDefectReport, 150); }
   if (name === 'ar') loadAR();
+  if (name === 'pl') { loadGL(); loadPL(); }
+  if (name === 'bs') { loadGL(); loadBS(); }
+  if (name === 'gl') loadGL();
 }
 
 // ══════════════════════════════════
@@ -24725,6 +24811,377 @@ function arSetTab(tab) {
     pane.style.display = active ? '' : 'none';
   });
   if (tab === 'analytics') renderArAnalytics();
+}
+
+// ══════════════════════════════════════════════════════════════
+// GENERAL LEDGER MODULE
+// ══════════════════════════════════════════════════════════════
+let _glAccounts = [];
+let _glBalances = {};
+
+async function loadGL() {
+  document.getElementById('gl-tbody').innerHTML = '<tr><td colspan="6" class="empty">Loading...</td></tr>';
+
+  // Load all accounts
+  const { data: accounts } = await db.from('accounts').select('*').order('code');
+  _glAccounts = accounts || [];
+
+  // Load all journal lines with their entries
+  const { data: lines } = await db.from('journal_lines')
+    .select('account_code, debit, credit');
+
+  // Sum by account
+  _glBalances = {};
+  (lines || []).forEach(l => {
+    if (!_glBalances[l.account_code]) _glBalances[l.account_code] = { debit: 0, credit: 0 };
+    _glBalances[l.account_code].debit += parseFloat(l.debit) || 0;
+    _glBalances[l.account_code].credit += parseFloat(l.credit) || 0;
+  });
+
+  renderGLAccounts();
+}
+
+function renderGLAccounts() {
+  const search = (document.getElementById('gl-search-acct')?.value || '').toLowerCase();
+  const typeFilter = document.getElementById('gl-filter-type')?.value || '';
+
+  const filtered = _glAccounts.filter(a => {
+    if (typeFilter && a.type !== typeFilter) return false;
+    if (search && !a.code.toLowerCase().includes(search) && !a.name.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  const fmt = n => n === 0 ? '—' : '$' + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+  let totalDebit = 0, totalCredit = 0;
+  let currentSection = '';
+  let rows = '';
+
+  filtered.forEach(a => {
+    const b = _glBalances[a.code] || { debit: 0, credit: 0 };
+    const balance = b.debit - b.credit;
+    totalDebit += b.debit;
+    totalCredit += b.credit;
+
+    // Section header
+    const section = a.type.charAt(0).toUpperCase() + a.type.slice(1);
+    if (section !== currentSection) {
+      currentSection = section;
+      const sectionColors = { Asset:'#0f2744', Liability:'#7f1d1d', Equity:'#1e40af', Revenue:'#14532d', Expense:'#92400e' };
+      const color = sectionColors[section] || '#374151';
+      rows += `<tr style="background:${color};color:#fff;">
+        <td colspan="6" style="padding:6px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;">${section}s</td>
+      </tr>`;
+    }
+
+    const hasActivity = b.debit > 0 || b.credit > 0;
+    rows += `<tr style="background:${hasActivity?'#fff':'#fafafa'};border-bottom:1px solid #f0f0f0;${!hasActivity?'color:#9ca3af;':''}">
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;">${a.code}</td>
+      <td style="font-size:12px;">${a.name}</td>
+      <td style="font-size:10px;color:#6b7280;">${a.subtype||''}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${b.debit>0?'#1a56a0':'#9ca3af'};">${fmt(b.debit)}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${b.credit>0?'#dc2626':'#9ca3af'};">${fmt(b.credit)}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:${balance>=0?'#111':'#dc2626'};">${balance===0?'—':'$'+Math.abs(balance).toLocaleString('en-US',{minimumFractionDigits:2})}</td>
+    </tr>`;
+  });
+
+  document.getElementById('gl-tbody').innerHTML = rows || '<tr><td colspan="6" class="empty">No accounts found</td></tr>';
+  document.getElementById('gl-total-debit').textContent = '$' + totalDebit.toLocaleString('en-US', {minimumFractionDigits:2});
+  document.getElementById('gl-total-credit').textContent = '$' + totalCredit.toLocaleString('en-US', {minimumFractionDigits:2});
+  const diff = totalDebit - totalCredit;
+  const diffEl = document.getElementById('gl-total-balance');
+  diffEl.textContent = diff === 0 ? '✓ Balanced' : '$' + Math.abs(diff).toLocaleString('en-US', {minimumFractionDigits:2});
+  diffEl.style.color = diff === 0 ? '#16a34a' : '#dc2626';
+}
+
+// ══════════════════════════════════════════════════════════════
+// INCOME STATEMENT (P&L) MODULE — MAS 200 형식
+// ══════════════════════════════════════════════════════════════
+async function loadPL() {
+  document.getElementById('pl-body').innerHTML = '<div class="empty" style="padding:40px;">Loading...</div>';
+
+  // Set default dates if empty
+  const now = new Date();
+  const fromEl = document.getElementById('pl-from');
+  const toEl = document.getElementById('pl-to');
+  const period = document.getElementById('pl-period').value;
+
+  if (period === 'ytd') {
+    fromEl.value = `${now.getFullYear()}-01-01`;
+    toEl.value = now.toISOString().slice(0,10);
+  } else if (period === 'mtd') {
+    fromEl.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+    toEl.value = now.toISOString().slice(0,10);
+  }
+
+  const fromDate = fromEl.value || `${now.getFullYear()}-01-01`;
+  const toDate = toEl.value || now.toISOString().slice(0,10);
+
+  // Load journal lines for the period
+  const { data: lines } = await db.from('journal_lines')
+    .select('account_code, debit, credit, journal_entries(entry_date, status)')
+    .gte('journal_entries.entry_date', fromDate)
+    .lte('journal_entries.entry_date', toDate);
+
+  // Also load all accounts for structure
+  if (!_glAccounts.length) {
+    const { data: accounts } = await db.from('accounts').select('*').order('code');
+    _glAccounts = accounts || [];
+  }
+
+  // Build balance map for the period
+  const periodBalance = {};
+  (lines || []).forEach(l => {
+    if (!l.journal_entries || l.journal_entries.status === 'void') return;
+    if (!periodBalance[l.account_code]) periodBalance[l.account_code] = 0;
+    // Normal balance: debit accounts → debit - credit, credit accounts → credit - debit
+    const acct = _glAccounts.find(a => a.code === l.account_code);
+    if (!acct) return;
+    if (acct.normal_balance === 'debit') {
+      periodBalance[l.account_code] += (parseFloat(l.debit)||0) - (parseFloat(l.credit)||0);
+    } else {
+      periodBalance[l.account_code] += (parseFloat(l.credit)||0) - (parseFloat(l.debit)||0);
+    }
+  });
+
+  // Build P&L structure matching MAS 200
+  const fmt = (n, paren=false) => {
+    if (n === 0) return '<span style="color:#9ca3af;">—</span>';
+    const abs = Math.abs(n).toLocaleString('en-US', {minimumFractionDigits:2});
+    if (paren && n < 0) return `<span style="color:#dc2626;">(${abs})</span>`;
+    return `$${abs}`;
+  };
+
+  const getBalance = (codes) => {
+    let total = 0;
+    _glAccounts.filter(a => codes.some(c => a.code.startsWith(c))).forEach(a => {
+      total += periodBalance[a.code] || 0;
+    });
+    return total;
+  };
+
+  const renderSection = (title, codePrefixes, color='#374151') => {
+    const accts = _glAccounts.filter(a =>
+      codePrefixes.some(c => a.code.startsWith(c)) &&
+      (periodBalance[a.code] || 0) !== 0
+    );
+    if (!accts.length) return { html: '', total: 0 };
+
+    let html = `<tr style="background:#f8fafc;"><td colspan="3" style="padding:8px 16px;font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.5px;">${title}</td></tr>`;
+    let total = 0;
+    accts.forEach(a => {
+      const bal = periodBalance[a.code] || 0;
+      total += bal;
+      html += `<tr style="border-bottom:1px solid #f5f5f5;">
+        <td style="padding:5px 16px 5px 28px;font-size:11px;color:#6b7280;font-family:'IBM Plex Mono',monospace;">${a.code}</td>
+        <td style="padding:5px 8px;font-size:12px;">${a.name}</td>
+        <td style="padding:5px 16px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;">${fmt(bal, true)}</td>
+      </tr>`;
+    });
+    return { html, total };
+  };
+
+  // Revenue sections
+  const rev = renderSection('Revenue', ['400', '425'], '#14532d');
+  const totalRevenue = rev.total;
+
+  // COS sections
+  const cos1 = renderSection('Cost of Garment Sales', ['430'], '#7f1d1d');
+  const cos2 = renderSection('Cost of Sales I', ['450', '455'], '#7f1d1d');
+  const cos3 = renderSection('Cost of Sales II', ['460', '470', '480', '490'], '#7f1d1d');
+  const cos4 = renderSection('Cost of Sales Overhead', ['510', '514', '515', '520', '525', '555', '560', '562', '564', '566'], '#7f1d1d');
+  const totalCOS = cos1.total + cos2.total + cos3.total + cos4.total;
+  const grossProfit = totalRevenue - totalCOS;
+
+  // Operating expenses
+  const opex = renderSection('Operating Expenses', ['605','610','611','620','622','623','624','625','635','640','641','645','660','664','665'], '#92400e');
+  const totalOpEx = opex.total;
+  const operatingIncome = grossProfit - totalOpEx;
+
+  // Non-operating
+  const nonop = renderSection('Non-Operating Expenses', ['667','672','674','675'], '#1e40af');
+  const otherIncome = renderSection('Other Income & Expense', ['980'], '#14532d');
+  const totalNonOp = nonop.total - otherIncome.total;
+  const netIncome = operatingIncome - totalNonOp;
+
+  const pctRev = (n) => totalRevenue !== 0 ? ((n/totalRevenue)*100).toFixed(2)+'%' : '—';
+
+  const summaryRow = (label, val, bold=false, borderTop=false) => `
+    <tr style="${borderTop?'border-top:2px solid #e5e7eb;':''}background:${bold?'#f0f4f8':'#fff'};">
+      <td colspan="2" style="padding:8px 16px;font-size:12px;font-weight:${bold?'700':'500'};color:#374151;">${label}</td>
+      <td style="padding:8px 16px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:${bold?'800':'600'};color:${val<0?'#dc2626':'#111'};">
+        ${val === 0 ? '—' : (val<0?'(':'')+'$'+Math.abs(val).toLocaleString('en-US',{minimumFractionDigits:2})+(val<0?')':'')}
+        <span style="font-size:10px;color:#9ca3af;margin-left:8px;">${pctRev(val)}</span>
+      </td>
+    </tr>`;
+
+  const html = `
+    <div style="padding:20px 24px;background:#0f2744;color:#fff;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-size:16px;font-weight:800;">PEACE TEXTILE AMERICA, INC.</div>
+        <div style="font-size:13px;color:#93c5fd;margin-top:2px;">Income Statement — ${fromDate} to ${toDate}</div>
+      </div>
+      <div style="text-align:right;font-size:11px;color:#93c5fd;">
+        <div>Period to Date</div>
+        <div style="font-size:10px;opacity:0.7;">% of Revenue</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <colgroup><col style="width:120px"><col><col style="width:180px"></colgroup>
+      ${rev.html}
+      ${summaryRow('Total Revenue', totalRevenue, true)}
+      <tr style="background:#fef2f2;"><td colspan="3" style="padding:6px 16px;font-size:11px;font-weight:700;color:#991b1b;text-transform:uppercase;">Cost of Sales</td></tr>
+      ${cos1.html}${cos2.html}${cos3.html}${cos4.html}
+      ${summaryRow('Total Cost of Sales', totalCOS, true)}
+      ${summaryRow('Gross Profit', grossProfit, true, true)}
+      ${opex.html}
+      ${summaryRow('Total Operating Expenses', totalOpEx, true)}
+      ${summaryRow('Net Income from Operations', operatingIncome, true, true)}
+      ${nonop.html}
+      ${otherIncome.html}
+      ${summaryRow('Total Non-Operating', totalNonOp, false)}
+      ${summaryRow('NET INCOME (LOSS)', netIncome, true, true)}
+    </table>`;
+
+  document.getElementById('pl-body').innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════
+// BALANCE SHEET MODULE — MAS 200 형식
+// ══════════════════════════════════════════════════════════════
+async function loadBS() {
+  document.getElementById('bs-body').innerHTML = '<div class="empty" style="padding:40px;">Loading...</div>';
+
+  const asofEl = document.getElementById('bs-asof');
+  if (!asofEl.value) asofEl.value = new Date().toISOString().slice(0,10);
+  const asof = asofEl.value;
+
+  // Load all journal lines up to as-of date
+  if (!_glAccounts.length) {
+    const { data: accounts } = await db.from('accounts').select('*').order('code');
+    _glAccounts = accounts || [];
+  }
+
+  const { data: lines } = await db.from('journal_lines')
+    .select('account_code, debit, credit, journal_entries(entry_date, status)')
+    .lte('journal_entries.entry_date', asof);
+
+  const balance = {};
+  (lines || []).forEach(l => {
+    if (!l.journal_entries || l.journal_entries.status === 'void') return;
+    if (!balance[l.account_code]) balance[l.account_code] = 0;
+    const acct = _glAccounts.find(a => a.code === l.account_code);
+    if (!acct) return;
+    if (acct.normal_balance === 'debit') {
+      balance[l.account_code] += (parseFloat(l.debit)||0) - (parseFloat(l.credit)||0);
+    } else {
+      balance[l.account_code] += (parseFloat(l.credit)||0) - (parseFloat(l.debit)||0);
+    }
+  });
+
+  const fmt = (n) => n === 0 ? '<span style="color:#9ca3af;">—</span>' :
+    `<span style="color:${n<0?'#dc2626':'#111'};">${n<0?'(':''}$${Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2})}${n<0?')':''}</span>`;
+
+  const renderBSSection = (title, codePrefixes, color) => {
+    const accts = _glAccounts.filter(a =>
+      codePrefixes.some(c => a.code.startsWith(c)) &&
+      (balance[a.code] || 0) !== 0
+    );
+    let total = 0;
+    let html = `<tr style="background:#f8fafc;"><td colspan="2" style="padding:7px 16px;font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.5px;padding-left:24px;">${title}</td><td></td></tr>`;
+    accts.forEach(a => {
+      const bal = balance[a.code] || 0;
+      total += bal;
+      html += `<tr style="border-bottom:1px solid #f5f5f5;">
+        <td style="padding:4px 16px 4px 36px;font-size:11px;color:#6b7280;font-family:'IBM Plex Mono',monospace;width:120px;">${a.code}</td>
+        <td style="padding:4px 8px;font-size:12px;">${a.name}</td>
+        <td style="padding:4px 16px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;width:160px;">${fmt(bal)}</td>
+      </tr>`;
+    });
+    return { html, total };
+  };
+
+  const totalRow = (label, val, bold=true, indent=0) => `
+    <tr style="background:${bold?'#f0f4f8':'#fff'};border-top:1px solid #e5e7eb;">
+      <td colspan="2" style="padding:8px 16px;padding-left:${indent+16}px;font-size:12px;font-weight:${bold?'700':'500'};">${label}</td>
+      <td style="padding:8px 16px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:${bold?'800':'600'};color:${val<0?'#dc2626':'#111'};">
+        ${val<0?'(':''}$${Math.abs(val).toLocaleString('en-US',{minimumFractionDigits:2})}${val<0?')':''}
+      </td>
+    </tr>`;
+
+  // Assets
+  const cash = renderBSSection('Cash & Bank', ['100','101'], '#14532d');
+  const ar = renderBSSection('Accounts Receivable', ['105'], '#14532d');
+  const inv = renderBSSection('Inventory', ['115','116'], '#14532d');
+  const prepaid = renderBSSection('Prepaid & Other', ['120'], '#14532d');
+  const totalCurrentAssets = cash.total + ar.total + inv.total + prepaid.total;
+
+  const fixedAssets = renderBSSection('Property, Plant & Equipment', ['150','155','156','157','158','159','160','161','162','163','165','166','170','175'], '#0f2744');
+  const otherAssets = renderBSSection('Other Assets', ['183','184','185','186'], '#0f2744');
+  const deferred = renderBSSection('Deferred Charges', ['191'], '#0f2744');
+  const totalAssets = totalCurrentAssets + fixedAssets.total + otherAssets.total + deferred.total;
+
+  // Liabilities
+  const ap = renderBSSection('Accounts Payable', ['200'], '#7f1d1d');
+  const accrued = renderBSSection('Accrued Liabilities', ['211','215','221','222','225'], '#7f1d1d');
+  const currentDebt = renderBSSection('Current Debt & Lease', ['240'], '#7f1d1d');
+  const totalCurrentLiab = ap.total + accrued.total + currentDebt.total;
+
+  const ltDebt = renderBSSection('Long-Term Debt', ['274','276','277','278','279','280'], '#7f1d1d');
+  const totalLiabilities = totalCurrentLiab + ltDebt.total;
+
+  // Equity
+  const equity = renderBSSection('Stockholder\'s Equity', ['300','320'], '#1e40af');
+  const totalEquity = equity.total;
+  const totalLiabEquity = totalLiabilities + totalEquity;
+
+  const html = `
+    <div style="padding:20px 24px;background:#0f2744;color:#fff;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-size:16px;font-weight:800;">PEACE TEXTILE AMERICA, INC.</div>
+        <div style="font-size:13px;color:#93c5fd;margin-top:2px;">Balance Sheet — As of ${asof}</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <tr style="background:#14532d;color:#fff;"><td colspan="3" style="padding:8px 16px;font-size:12px;font-weight:700;">ASSETS</td></tr>
+      <tr style="background:#f0fdf4;"><td colspan="3" style="padding:6px 16px;font-size:11px;font-weight:700;color:#166534;">Current Assets</td></tr>
+      ${cash.html}${ar.html}${inv.html}${prepaid.html}
+      ${totalRow('Total Current Assets', totalCurrentAssets, true, 8)}
+      <tr style="background:#f0fdf4;"><td colspan="3" style="padding:6px 16px;font-size:11px;font-weight:700;color:#166534;">Fixed & Other Assets</td></tr>
+      ${fixedAssets.html}${otherAssets.html}${deferred.html}
+      ${totalRow('TOTAL ASSETS', totalAssets, true)}
+
+      <tr style="background:#7f1d1d;color:#fff;"><td colspan="3" style="padding:8px 16px;font-size:12px;font-weight:700;">LIABILITIES</td></tr>
+      <tr style="background:#fef2f2;"><td colspan="3" style="padding:6px 16px;font-size:11px;font-weight:700;color:#991b1b;">Current Liabilities</td></tr>
+      ${ap.html}${accrued.html}${currentDebt.html}
+      ${totalRow('Total Current Liabilities', totalCurrentLiab, true, 8)}
+      <tr style="background:#fef2f2;"><td colspan="3" style="padding:6px 16px;font-size:11px;font-weight:700;color:#991b1b;">Long-Term Liabilities</td></tr>
+      ${ltDebt.html}
+      ${totalRow('TOTAL LIABILITIES', totalLiabilities, true)}
+
+      <tr style="background:#1e40af;color:#fff;"><td colspan="3" style="padding:8px 16px;font-size:12px;font-weight:700;">EQUITY</td></tr>
+      ${equity.html}
+      ${totalRow('Total Equity', totalEquity, true)}
+      ${totalRow('TOTAL LIABILITIES & EQUITY', totalLiabEquity, true)}
+      <tr style="background:${Math.abs(totalAssets - totalLiabEquity) < 1 ? '#f0fdf4':'#fef2f2'};">
+        <td colspan="3" style="padding:8px 16px;text-align:center;font-size:11px;font-weight:700;color:${Math.abs(totalAssets - totalLiabEquity) < 1 ?'#16a34a':'#dc2626'};">
+          ${Math.abs(totalAssets - totalLiabEquity) < 1 ? '✓ Balanced' : '⚠ Difference: $'+Math.abs(totalAssets-totalLiabEquity).toLocaleString('en-US',{minimumFractionDigits:2})}
+        </td>
+      </tr>
+    </table>`;
+
+  document.getElementById('bs-body').innerHTML = html;
+}
+
+function printFinancial(type) {
+  const el = document.getElementById(type === 'pl' ? 'pl-body' : 'bs-body');
+  const win = window.open('', '_blank', 'width=900,height=700');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <style>* { margin:0;padding:0;box-sizing:border-box; } body { font-family:Arial,sans-serif; font-size:12px; }
+    table { width:100%;border-collapse:collapse; } @media print { @page { margin:0.5in; } }</style>
+    </head><body>${el.innerHTML}
+    <script>window.onload=()=>window.print();<\/script></body></html>`);
+  win.document.close();
 }
 
 async function loadAR() {
