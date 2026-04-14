@@ -2156,9 +2156,16 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">CONTACT</div><input type="text" id="vendor-contact" class="fi" style="width:100%;font-size:12px;"></div>
             <div><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">EMAIL</div><input type="email" id="vendor-email" class="fi" style="width:100%;font-size:12px;"></div>
             <div><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">PHONE</div><input type="text" id="vendor-phone" class="fi" style="width:100%;font-size:12px;"></div>
-            <div><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">TERMS</div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">TERMS</div>
               <select id="vendor-terms" class="fi" style="width:100%;font-size:12px;">
                 <option value="Net 30">Net 30</option><option value="Net 60">Net 60</option><option value="Net 90">Net 90</option><option value="Due on Receipt">Due on Receipt</option>
+              </select>
+            </div>
+            <div style="grid-column:1/-1;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">DEFAULT EXPENSE ACCOUNT <span style="font-weight:400;color:#6b7280;">(AP Invoice 입력 시 자동 채워짐)</span></div>
+              <select id="vendor-default-account" class="fi" style="width:100%;font-size:12px;">
+                <option value="">-- 계정 선택 (선택사항) --</option>
               </select>
             </div>
             <div style="grid-column:1/-1;"><div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">ADDRESS</div><input type="text" id="vendor-address" class="fi" style="width:100%;font-size:12px;"></div>
@@ -2170,8 +2177,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
         <div style="overflow-y:auto;flex:1;">
           <table class="tbl">
-            <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Terms</th><th style="width:80px;"></th></tr></thead>
-            <tbody id="vendor-list-tbody"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody>
+            <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Terms</th><th>Default Account</th><th style="width:140px;"></th></tr></thead>
+            <tbody id="vendor-list-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -25629,9 +25636,25 @@ async function openAPInvoiceModal() {
 
 function onAPVendorChange(vendorId) {
   const vendor = _apVendors.find(v => v.id === vendorId);
-  if (vendor?.terms) {
+  if (!vendor) return;
+
+  // Terms 자동 적용
+  if (vendor.terms) {
     document.getElementById('ap-inv-terms').value = vendor.terms;
     calcAPDueDate();
+  }
+
+  // Default account가 있으면 첫 번째 라인에 자동 채우기
+  if (vendor.default_account_code) {
+    const firstSelect = document.querySelector('#ap-inv-lines-tbody select');
+    if (firstSelect) {
+      firstSelect.value = vendor.default_account_code;
+      // Description도 자동으로
+      const firstDesc = document.querySelector('#ap-inv-lines-tbody input[type="text"]');
+      if (firstDesc && !firstDesc.value) {
+        firstDesc.value = vendor.default_account_name || '';
+      }
+    }
   }
 }
 
@@ -25864,13 +25887,15 @@ async function openVendorModal() {
 async function loadVendorList() {
   const { data } = await db.from('vendors').select('*').order('name');
   document.getElementById('vendor-list-tbody').innerHTML = (data||[]).length === 0
-    ? '<tr><td colspan="5" class="empty">No vendors yet</td></tr>'
+    ? '<tr><td colspan="6" class="empty">No vendors yet</td></tr>'
     : (data||[]).map(v => `<tr style="border-bottom:1px solid #f0f0f0;">
         <td style="font-weight:600;">${v.name}</td>
         <td style="font-size:12px;color:#6b7280;">${v.contact||'—'}</td>
         <td style="font-size:12px;color:#6b7280;">${v.email||'—'}</td>
         <td style="font-size:12px;">${v.terms||'Net 30'}</td>
-        <td style="text-align:center;">
+        <td style="font-size:11px;color:#1a56a0;font-family:'IBM Plex Mono',monospace;">${v.default_account_code ? v.default_account_code + ' — ' + (v.default_account_name||'') : '<span style="color:#9ca3af;">—</span>'}</td>
+        <td style="text-align:center;display:flex;gap:6px;justify-content:center;">
+          <button onclick="showVendorForm('${v.id}')" style="background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;color:#374151;">✏️ Edit</button>
           <button onclick="toggleVendorActive('${v.id}',${!v.is_active})" style="background:none;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;color:${v.is_active?'#dc2626':'#16a34a'};">
             ${v.is_active ? 'Deactivate' : 'Activate'}
           </button>
@@ -25878,34 +25903,73 @@ async function loadVendorList() {
       </tr>`).join('');
 }
 
-function showVendorForm() {
+function showVendorForm(vendorId = null) {
   document.getElementById('vendor-name').value = '';
   document.getElementById('vendor-contact').value = '';
   document.getElementById('vendor-email').value = '';
   document.getElementById('vendor-phone').value = '';
   document.getElementById('vendor-terms').value = 'Net 30';
   document.getElementById('vendor-address').value = '';
+  document.getElementById('vendor-default-account').value = '';
+
+  // 계정 목록 채우기 — expense 계정만 (AP Invoice에 의미있는 것들)
+  const acctSel = document.getElementById('vendor-default-account');
+  const expenseAccts = _glAccounts.filter(a => ['expense','liability'].includes(a.type));
+  acctSel.innerHTML = '<option value="">-- 계정 선택 (선택사항) --</option>' +
+    expenseAccts.map(a => `<option value="${a.code}">${a.code} — ${a.name}</option>`).join('');
+
+  // 편집 모드면 기존 값 채우기
+  if (vendorId) {
+    const v = _apVendors.find(x => x.id === vendorId);
+    if (v) {
+      document.getElementById('vendor-name').value = v.name || '';
+      document.getElementById('vendor-contact').value = v.contact || '';
+      document.getElementById('vendor-email').value = v.email || '';
+      document.getElementById('vendor-phone').value = v.phone || '';
+      document.getElementById('vendor-terms').value = v.terms || 'Net 30';
+      document.getElementById('vendor-address').value = v.address || '';
+      document.getElementById('vendor-default-account').value = v.default_account_code || '';
+      document.getElementById('vendor-form').dataset.editId = vendorId;
+    }
+  } else {
+    delete document.getElementById('vendor-form').dataset.editId;
+  }
+
   document.getElementById('vendor-form').style.display = 'block';
 }
 
 async function saveVendor() {
   const name = document.getElementById('vendor-name').value.trim();
   if (!name) { showToast('❌ Vendor name을 입력하세요.'); return; }
-  const { error } = await db.from('vendors').insert({
+
+  const defaultAcctCode = document.getElementById('vendor-default-account')?.value || '';
+  const defaultAcct = _glAccounts.find(a => a.code === defaultAcctCode);
+  const editId = document.getElementById('vendor-form').dataset.editId;
+
+  const payload = {
     name,
     contact: document.getElementById('vendor-contact').value.trim(),
     email: document.getElementById('vendor-email').value.trim(),
     phone: document.getElementById('vendor-phone').value.trim(),
     terms: document.getElementById('vendor-terms').value,
     address: document.getElementById('vendor-address').value.trim(),
-    is_active: true,
-    created_at: new Date().toISOString()
-  });
+    default_account_code: defaultAcctCode || null,
+    default_account_name: defaultAcct?.name || null,
+  };
+
+  let error;
+  if (editId) {
+    ({ error } = await db.from('vendors').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', editId));
+  } else {
+    ({ error } = await db.from('vendors').insert({ ...payload, is_active: true, created_at: new Date().toISOString() }));
+  }
+
   if (error) { showToast('❌ 저장 실패: ' + error.message); return; }
-  showToast('✅ 벤더 추가 완료!');
+  showToast(editId ? '✅ 벤더 수정 완료!' : '✅ 벤더 추가 완료!');
   document.getElementById('vendor-form').style.display = 'none';
+  delete document.getElementById('vendor-form').dataset.editId;
   await loadVendorList();
-  await loadAP(); // 벤더 목록 새로고침
+  await loadAP();
 }
 
 async function toggleVendorActive(id, active) {
