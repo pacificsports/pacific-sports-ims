@@ -26602,14 +26602,23 @@ function renderBatchCard(item) {
             title="선택하면 모든 라인에 일괄 적용">
           <div id="bulk-acct-dd-${item.id}" style="display:none;position:absolute;top:100%;left:0;min-width:280px;max-height:160px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
         </div>
-        <!-- 라인 합치기 버튼 -->
+        <!-- 라인 합치기 / 분리 버튼 -->
         <button onclick="mergeBatchLines(${item.id})"
           style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;color:#374151;white-space:nowrap;flex-shrink:0;"
           title="모든 라인을 하나로 합산">⊕ 합산</button>
-        <!-- Total (라인 합산 vs 파싱 합계) -->
+        <button onclick="splitBatchLines(${item.id})"
+          style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;color:#374151;white-space:nowrap;flex-shrink:0;"
+          title="원래 라인으로 복원">⊖ 분리</button>
+        <!-- Total — 직접 수정 가능 -->
         <div style="text-align:right;flex-shrink:0;">
-          <div style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:15px;color:${totalColor};">
-            $${lineTotal.toLocaleString('en-US',{minimumFractionDigits:2})}
+          <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end;">
+            <span style="font-size:11px;color:#6b7280;">$</span>
+            <input type="number" step="0.01" min="0"
+              value="${lineTotal.toFixed(2)}"
+              id="batch-total-inp-${item.id}"
+              style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:14px;color:${totalColor};border:1px solid ${totalColor}40;border-radius:4px;padding:2px 6px;width:110px;text-align:right;background:${lineTotal===parsedTotal?'transparent':'#fffbeb'};"
+              oninput="onBatchTotalChange(${item.id}, this.value)"
+              title="총액을 직접 수정하면 마지막 라인에 자동 반영">
           </div>
           <div style="font-size:9px;color:${totalColor};">${totalNote}</div>
         </div>
@@ -27719,9 +27728,59 @@ async function saveQuickVendor() {
 }
 
 // ── 라인 합치기 ──
-function mergeBatchLines(itemId) {
+function splitBatchLines(itemId) {
+  const item = _apBatchItems[itemId];
+  if (!item || !item.data) { showToast('⚠ 원본 데이터가 없습니다.'); return; }
+
+  // 원본 파싱 데이터로 복원
+  const d = item.data;
+  const matched = _apVendors.find(v => v.id === item.vendorId);
+  item.lines = (d.lines || []).map(l => ({
+    account_code: l.account_code && _glAccounts.find(a => a.code === l.account_code) ? l.account_code : (matched?.default_account_code || ''),
+    account_recommended: !!l.account_code,
+    description: l.description || '',
+    amount: parseFloat(l.amount) || 0,
+  }));
+  renderBatchCard(item);
+  updateBatchSummary();
+  showToast('✅ 원본 라인으로 복원');
+}
+
+function onBatchTotalChange(itemId, newTotalStr) {
   const item = _apBatchItems[itemId];
   if (!item || !item.lines.length) return;
+  const newTotal = parseFloat(newTotalStr) || 0;
+  const currentTotal = item.lines.reduce((s,l) => s+(parseFloat(l.amount)||0), 0);
+  const diff = newTotal - currentTotal;
+  if (Math.abs(diff) < 0.001) return;
+
+  // 마지막 라인 금액에 차이를 더함
+  const lastLine = item.lines[item.lines.length - 1];
+  lastLine.amount = Math.max(0, (parseFloat(lastLine.amount)||0) + diff);
+
+  // 라인 인풋 UI 업데이트
+  const lastIdx = item.lines.length - 1;
+  const row = document.getElementById(`ap-batch-line-${itemId}-${lastIdx}`);
+  if (row) {
+    const amtInp = row.querySelector('input[type="number"]');
+    if (amtInp) amtInp.value = lastLine.amount.toFixed(2);
+  }
+
+  // total note 업데이트
+  const parsedTotal = item.totalAmount || newTotal;
+  const match = Math.abs(newTotal - parsedTotal) < 0.02;
+  const inp = document.getElementById(`batch-total-inp-${itemId}`);
+  if (inp) {
+    inp.style.color = match ? '#16a34a' : '#dc2626';
+    inp.style.background = match ? 'transparent' : '#fffbeb';
+  }
+
+  updateBatchSummary();
+  refreshBatchJEPreview(itemId);
+}
+
+function mergeBatchLines(itemId) {
+  const item = _apBatchItems[itemId];
 
   const total = item.lines.reduce((s,l) => s + (parseFloat(l.amount)||0), 0);
   // 가장 많이 쓰인 계정 사용
