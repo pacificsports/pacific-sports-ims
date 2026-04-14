@@ -1861,6 +1861,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <h2 style="margin:0;font-size:16px;font-weight:700;">💳 Accounts Payable</h2>
         <div style="flex:1;"></div>
         <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;" onclick="openAPInvoiceModal()">+ New Invoice</button>
+        <button class="btn" style="background:#7f1d1d;color:#fff;border-color:#7f1d1d;font-weight:700;" onclick="document.getElementById('ap-parse-input').click()">📎 Parse Invoice</button>
+        <input type="file" id="ap-parse-input" accept=".pdf,.png,.jpg,.jpeg" style="display:none;" onchange="parseAPInvoice(this)">
         <button class="btn" onclick="openVendorModal()">🏢 Vendors</button>
         <button class="btn" onclick="loadAP()">🔄 Refresh</button>
       </div>
@@ -2136,6 +2138,94 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
           <button class="btn" onclick="document.getElementById('ap-payment-modal').style.display='none'">Cancel</button>
           <button class="btn" style="background:#7f1d1d;color:#fff;border-color:#7f1d1d;font-weight:700;" onclick="saveAPPayment()">💵 Record Payment</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── AP Invoice 파싱 결과 확인 모달 ── -->
+    <div id="ap-parse-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:700px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="background:#7f1d1d;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+          <div>
+            <span style="color:#fff;font-weight:800;font-size:15px;">📎 Invoice 파싱 결과</span>
+            <span style="color:#fca5a5;font-size:12px;margin-left:10px;">내용을 확인하고 수정 후 저장하세요</span>
+          </div>
+          <button onclick="document.getElementById('ap-parse-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fca5a5;">✕</button>
+        </div>
+
+        <!-- 파싱 중 표시 -->
+        <div id="ap-parse-loading" style="padding:60px;text-align:center;display:none;">
+          <div class="spinner" style="margin:0 auto 16px;"></div>
+          <div style="font-size:14px;color:#6b7280;">AI가 인보이스를 읽는 중...</div>
+        </div>
+
+        <!-- 결과 폼 -->
+        <div id="ap-parse-result" style="overflow-y:auto;flex:1;padding:20px;display:none;">
+          <!-- 헤더 정보 -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+            <div style="grid-column:1/-1;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">VENDOR</div>
+              <select id="ap-parse-vendor" class="fi" style="width:100%;font-size:13px;">
+                <option value="">-- 벤더 선택 --</option>
+              </select>
+              <div id="ap-parse-vendor-detected" style="font-size:11px;color:#6b7280;margin-top:3px;"></div>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">INVOICE #</div>
+              <input type="text" id="ap-parse-invnum" class="fi" style="width:100%;font-size:13px;font-family:'IBM Plex Mono',monospace;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">INVOICE DATE</div>
+              <input type="date" id="ap-parse-date" class="fi" style="width:100%;font-size:13px;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">DUE DATE</div>
+              <input type="date" id="ap-parse-due" class="fi" style="width:100%;font-size:13px;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">TERMS</div>
+              <select id="ap-parse-terms" class="fi" style="width:100%;font-size:13px;">
+                <option value="Net 30">Net 30</option>
+                <option value="Net 60">Net 60</option>
+                <option value="Net 90">Net 90</option>
+                <option value="Due on Receipt">Due on Receipt</option>
+              </select>
+            </div>
+            <div style="grid-column:1/-1;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">DESCRIPTION</div>
+              <input type="text" id="ap-parse-desc" class="fi" style="width:100%;font-size:13px;">
+            </div>
+          </div>
+
+          <!-- 라인 항목 -->
+          <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">Invoice Lines</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;">
+            <thead>
+              <tr style="background:#f8fafc;border-bottom:2px solid #e5e7eb;">
+                <th style="padding:7px 10px;text-align:left;">Account</th>
+                <th style="padding:7px 10px;text-align:left;">Description</th>
+                <th style="padding:7px 10px;text-align:right;width:130px;color:#7f1d1d;">Amount</th>
+                <th style="width:36px;"></th>
+              </tr>
+            </thead>
+            <tbody id="ap-parse-lines-tbody"></tbody>
+          </table>
+          <button onclick="addAPParseLine()" style="background:none;border:1px dashed #d1d5db;color:#6b7280;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:12px;">+ Add Line</button>
+
+          <!-- 합계 -->
+          <div style="margin-top:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:12px;color:#991b1b;font-weight:600;">파싱된 Total</span>
+            <span style="font-size:18px;font-weight:800;color:#7f1d1d;font-family:'IBM Plex Mono',monospace;" id="ap-parse-total">$0.00</span>
+          </div>
+        </div>
+
+        <!-- 푸터 -->
+        <div id="ap-parse-footer" style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;display:none;">
+          <div style="font-size:11px;color:#6b7280;">✅ AI 파싱 완료 — 내용 확인 후 저장하세요</div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn" onclick="document.getElementById('ap-parse-modal').style.display='none'">Cancel</button>
+            <button class="btn" style="background:#7f1d1d;color:#fff;border-color:#7f1d1d;font-weight:700;min-width:140px;" onclick="saveAPParsedInvoice()">💾 Save Invoice</button>
+          </div>
         </div>
       </div>
     </div>
@@ -25617,6 +25707,210 @@ function renderAPPayments() {
         <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#16a34a;">${fmt(p.amount)}</td>
         <td></td>
       </tr>`).join('');
+}
+
+// ── AP Invoice 파싱 ──
+let _apParseLineCount = 0;
+let _apParsedData = null;
+
+async function parseAPInvoice(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  // 모달 열고 로딩 표시
+  document.getElementById('ap-parse-modal').style.display = 'flex';
+  document.getElementById('ap-parse-loading').style.display = 'block';
+  document.getElementById('ap-parse-result').style.display = 'none';
+  document.getElementById('ap-parse-footer').style.display = 'none';
+
+  try {
+    // 파일 → base64
+    const base64 = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result.split(',')[1]);
+      r.onerror = () => rej(new Error('파일 읽기 실패'));
+      r.readAsDataURL(file);
+    });
+
+    // media type 판별
+    const mediaType = file.type || 'application/pdf';
+
+    // 벤더 목록 전달 (매칭용)
+    const vendorNames = _apVendors.map(v => v.name);
+
+    // Worker 호출
+    const resp = await fetch('https://po-confirm-email.hjbae.workers.dev/parse-ap-invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_base64: base64, media_type: mediaType, vendors: vendorNames })
+    });
+
+    const result = await resp.json();
+    if (!result.ok) throw new Error(result.error || '파싱 실패');
+
+    _apParsedData = result.data;
+    renderAPParseResult(result.data);
+
+  } catch(e) {
+    document.getElementById('ap-parse-loading').style.display = 'none';
+    showToast('❌ 파싱 실패: ' + e.message);
+    document.getElementById('ap-parse-modal').style.display = 'none';
+  }
+}
+
+function renderAPParseResult(data) {
+  document.getElementById('ap-parse-loading').style.display = 'none';
+  document.getElementById('ap-parse-result').style.display = 'block';
+  document.getElementById('ap-parse-footer').style.display = 'flex';
+  _apParseLineCount = 0;
+
+  // 벤더 드롭다운 채우기
+  const vendorSel = document.getElementById('ap-parse-vendor');
+  vendorSel.innerHTML = '<option value="">-- 벤더 선택 --</option>' +
+    _apVendors.map(v => `<option value="${v.id}" data-code="${v.default_account_code||''}" data-acctname="${v.default_account_name||''}">${v.name}</option>`).join('');
+
+  // 파싱된 벤더명으로 자동 매칭
+  const detectedVendor = data.vendor_name || '';
+  document.getElementById('ap-parse-vendor-detected').textContent = detectedVendor ? `📎 파싱된 벤더: "${detectedVendor}"` : '';
+
+  // 벤더명 매칭 시도
+  const matched = _apVendors.find(v =>
+    v.name.toLowerCase().includes(detectedVendor.toLowerCase()) ||
+    detectedVendor.toLowerCase().includes(v.name.toLowerCase())
+  );
+  if (matched) {
+    vendorSel.value = matched.id;
+    vendorSel.style.borderColor = '#16a34a';
+  }
+
+  // 헤더 채우기
+  document.getElementById('ap-parse-invnum').value = data.invoice_number || '';
+  document.getElementById('ap-parse-date').value = data.invoice_date || '';
+  document.getElementById('ap-parse-due').value = data.due_date || '';
+  document.getElementById('ap-parse-desc').value = data.description || '';
+  if (data.terms) {
+    const termsEl = document.getElementById('ap-parse-terms');
+    const matchingOption = [...termsEl.options].find(o => o.value.toLowerCase().includes((data.terms||'').toLowerCase().replace('net','').trim()));
+    if (matchingOption) termsEl.value = matchingOption.value;
+  }
+
+  // 라인 채우기
+  document.getElementById('ap-parse-lines-tbody').innerHTML = '';
+  const defaultAcct = matched?.default_account_code || '';
+  const defaultAcctName = matched?.default_account_name || '';
+
+  (data.lines || []).forEach(l => {
+    addAPParseLine(defaultAcct, l.description || '', l.amount || 0);
+  });
+
+  // total 표시
+  const total = parseFloat(data.total_amount) || 0;
+  document.getElementById('ap-parse-total').textContent = '$' + total.toLocaleString('en-US', {minimumFractionDigits:2});
+}
+
+function addAPParseLine(acctCode = '', desc = '', amount = 0) {
+  const idx = _apParseLineCount++;
+  const acctOptions = _glAccounts
+    .filter(a => ['expense','liability'].includes(a.type))
+    .map(a => `<option value="${a.code}" ${a.code === acctCode ? 'selected' : ''}>${a.code} — ${a.name}</option>`)
+    .join('');
+
+  const tr = document.createElement('tr');
+  tr.id = `ap-parse-line-${idx}`;
+  tr.style.borderBottom = '1px solid #f0f0f0';
+  tr.innerHTML = `
+    <td style="padding:5px 6px;width:220px;">
+      <select style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:4px;padding:4px 5px;">
+        <option value="">-- 계정 --</option>${acctOptions}
+      </select>
+    </td>
+    <td style="padding:5px 4px;">
+      <input type="text" value="${desc}" placeholder="Description..."
+        style="width:100%;border:1px solid #e5e7eb;border-radius:4px;padding:4px 6px;font-size:12px;">
+    </td>
+    <td style="padding:5px 4px;">
+      <input type="number" value="${amount > 0 ? amount.toFixed(2) : ''}" placeholder="0.00" step="0.01" min="0"
+        style="width:100%;text-align:right;border:1px solid #e5e7eb;border-radius:4px;padding:4px 6px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:#7f1d1d;font-weight:700;">
+    </td>
+    <td style="padding:5px 4px;text-align:center;">
+      <button onclick="document.getElementById('ap-parse-line-${idx}').remove()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;">×</button>
+    </td>`;
+  document.getElementById('ap-parse-lines-tbody').appendChild(tr);
+}
+
+async function saveAPParsedInvoice() {
+  const vendorId = document.getElementById('ap-parse-vendor').value;
+  const invNumber = document.getElementById('ap-parse-invnum').value.trim();
+  const invDate = document.getElementById('ap-parse-date').value;
+  const dueDate = document.getElementById('ap-parse-due').value;
+  const terms = document.getElementById('ap-parse-terms').value;
+  const desc = document.getElementById('ap-parse-desc').value.trim();
+
+  if (!vendorId) { showToast('❌ 벤더를 선택하세요.'); return; }
+  if (!invNumber) { showToast('❌ Invoice # 을 입력하세요.'); return; }
+  if (!invDate) { showToast('❌ 날짜를 입력하세요.'); return; }
+
+  const vendor = _apVendors.find(v => v.id === vendorId);
+  const lines = [];
+  document.querySelectorAll('#ap-parse-lines-tbody tr').forEach(row => {
+    const acct = row.querySelector('select')?.value;
+    const lineDesc = row.querySelectorAll('input')[0]?.value || '';
+    const amount = parseFloat(row.querySelectorAll('input')[1]?.value) || 0;
+    if (amount > 0) lines.push({ account_code: acct || (vendor?.default_account_code || ''), description: lineDesc, amount });
+  });
+
+  if (!lines.length) { showToast('❌ 라인을 입력하세요.'); return; }
+  const totalAmount = lines.reduce((s,l) => s+l.amount, 0);
+
+  try {
+    // AP Invoice 저장 (saveAPInvoice 로직 재사용)
+    const { data: inv, error } = await db.from('ap_invoices').insert({
+      invoice_number: invNumber,
+      vendor_id: vendorId,
+      vendor_name: vendor?.name || '',
+      invoice_date: invDate,
+      due_date: dueDate || null,
+      terms, total_amount: totalAmount, paid_amount: 0,
+      status: 'open', description: desc,
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    }).select().single();
+    if (error) throw error;
+
+    await db.from('ap_invoice_lines').insert(lines.map(l => ({ ...l, ap_invoice_id: inv.id })));
+
+    // 자동 분개
+    const year = new Date().getFullYear();
+    const { data: lastJE } = await db.from('journal_entries')
+      .select('entry_number').like('entry_number', `JE-${year}-%`)
+      .order('entry_number', { ascending: false }).limit(1);
+    const lastNum = lastJE?.[0] ? parseInt(lastJE[0].entry_number.split('-')[2]) || 0 : 0;
+    const jeNum = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+
+    const { data: je } = await db.from('journal_entries').insert({
+      entry_number: jeNum, entry_date: invDate,
+      description: `AP Invoice: ${invNumber} — ${vendor?.name||''}`,
+      source: 'ap_invoice', source_id: inv.id, status: 'posted',
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    }).select().single();
+
+    if (je) {
+      await db.from('journal_lines').insert([
+        ...lines.map(l => ({ journal_entry_id: je.id, account_code: l.account_code || '665-000', description: l.description, debit: l.amount, credit: 0 })),
+        { journal_entry_id: je.id, account_code: '200-001', description: `AP: ${invNumber}`, debit: 0, credit: totalAmount }
+      ]);
+      await db.from('ap_invoices').update({ journal_entry_id: je.id }).eq('id', inv.id);
+    }
+
+    showToast(`✅ ${invNumber} 저장 완료! (분개: ${jeNum})`);
+    document.getElementById('ap-parse-modal').style.display = 'none';
+    await loadAP();
+
+  } catch(e) {
+    showToast('❌ 저장 실패: ' + e.message);
+  }
 }
 
 // ── AP Invoice 모달 ──
