@@ -24730,9 +24730,9 @@ function arSetTab(tab) {
 async function loadAR() {
   // 1. Load invoiced orders
   const { data: orders } = await db.from('orders')
-    .select('id,invoice_number,order_number,customer_id,customer_name,customer_po,total_amount,terms,invoiced_at,ship_date,status')
+    .select('id,invoice_number,order_number,customer_id,customer_name,customer_po,total_amount,terms,created_at,shipped_at,sc_shipped_at,ca_shipped_at,ship_date,status')
     .in('status', ['invoiced','completed'])
-    .order('invoiced_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(5000);
 
   // 2. Load credit memos
@@ -24762,14 +24762,14 @@ async function loadAR() {
 
   const today = new Date(); today.setHours(0,0,0,0);
   _arInvoices = (orders || []).map(o => {
-    const invAmt = o.total_amount || 0;
-    const cmAmt = (cmByOrder[o.id] || []).reduce((s,c) => s + (c.total_amount||0) + (c.freight_credit||0), 0);
-    const pmtAmt = (pmtByOrder[o.id] || []).reduce((s,p) => s + (p.amount||0), 0);
+    const invAmt = parseFloat(o.total_amount) || 0;
+    const cmAmt = (cmByOrder[o.id] || []).reduce((s,c) => s + (parseFloat(c.total_amount)||0) + (parseFloat(c.freight_credit)||0), 0);
+    const pmtAmt = (pmtByOrder[o.id] || []).reduce((s,p) => s + (parseFloat(p.amount)||0), 0);
     const balance = Math.max(0, invAmt - cmAmt - pmtAmt);
 
-    // Due date from terms
+    // Invoice date: shipped_at 우선, 없으면 created_at
     const termsDays = parseInt((o.terms||'N30').replace(/[^0-9]/g,'')) || 30;
-    const invDate = o.invoiced_at ? new Date(o.invoiced_at) : new Date(o.ship_date || o.created_at || Date.now());
+    const invDate = new Date(o.shipped_at || o.sc_shipped_at || o.ca_shipped_at || o.created_at || Date.now());
     const dueDate = new Date(invDate); dueDate.setDate(dueDate.getDate() + termsDays);
     const daysOverdue = Math.floor((today - dueDate) / 86400000);
 
@@ -24779,7 +24779,7 @@ async function loadAR() {
     else if (daysOverdue > 0) arStatus = 'overdue';
 
     return { ...o, invAmt, cmAmt, pmtAmt, balance, dueDate, daysOverdue, arStatus, invDate };
-  }).filter(o => o.balance > 0 || o.pmtAmt > 0); // include partial paid
+  }); // 모든 invoiced 오더 표시 (balance 0도 포함)
 
   _renderArKpis();
   _renderArAging();
