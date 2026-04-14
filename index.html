@@ -2363,6 +2363,46 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
 
+    <!-- ── Quick 벤더 등록 모달 (batch 내에서 사용) ── -->
+    <div id="quick-vendor-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:440px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+        <div style="background:#1a56a0;border-radius:12px 12px 0 0;padding:13px 18px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#fff;font-weight:800;font-size:14px;">🏢 새 벤더 등록</span>
+          <button onclick="document.getElementById('quick-vendor-modal').style.display='none'" style="background:none;border:none;font-size:18px;cursor:pointer;color:#93c5fd;">✕</button>
+        </div>
+        <div style="padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div style="grid-column:1/-1;">
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">VENDOR NAME *</div>
+            <input type="text" id="qv-name" class="fi" style="width:100%;font-size:13px;font-weight:600;">
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">TERMS</div>
+            <select id="qv-terms" class="fi" style="width:100%;font-size:12px;">
+              <option>Net 15</option><option selected>Net 30</option><option>Net 60</option><option>Net 90</option><option>Due on Receipt</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">EMAIL</div>
+            <input type="email" id="qv-email" class="fi" style="width:100%;font-size:12px;">
+          </div>
+          <div style="grid-column:1/-1;">
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">DEFAULT ACCOUNT</div>
+            <div style="position:relative;">
+              <input type="text" id="qv-acct-search" class="fi" placeholder="계정 검색..." style="width:100%;font-size:12px;"
+                oninput="filterQVAcct(this.value)" onfocus="filterQVAcct(this.value)"
+                onblur="setTimeout(()=>{const d=document.getElementById('qv-acct-dd');if(d)d.style.display='none'},250)">
+              <input type="hidden" id="qv-acct-code" value="">
+              <div id="qv-acct-dd" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:150px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 6px 6px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
+            </div>
+          </div>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn" onclick="document.getElementById('quick-vendor-modal').style.display='none'">Cancel</button>
+          <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;" onclick="saveQuickVendor()">💾 저장 후 선택</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── AP Invoice 파싱 결과 확인 모달 ── -->
     <div id="ap-parse-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999999;align-items:center;justify-content:center;">
       <div style="background:#fff;border-radius:12px;width:700px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
@@ -26689,9 +26729,14 @@ function renderBatchCard(item) {
           onchange="_apBatchItems[${item.id}].vendorId=this.value;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary()">
           <option value="">-- 벤더 선택 * --</option>${vendorOptions}
         </select>
+        <!-- 새 벤더 등록 버튼 -->
+        <button onclick="openQuickVendorModal(${item.id})"
+          style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0;">
+          + 새 벤더
+        </button>
       </div>
 
-      <!-- 2줄: Invoice# / 날짜 / Due / Terms / 계정일괄 / Total -->
+      <!-- 2줄: Invoice# / 날짜 / Due / Terms / 계정일괄 / 라인합치기 / Total -->
       <div style="background:${bgColor};padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid ${borderColor};">
         <input type="text" value="${item.invoiceNumber}" placeholder="Invoice # *"
           style="font-size:11px;border:1px solid ${!item.invoiceNumber?'#f59e0b':'#d1d5db'};border-radius:4px;padding:3px 6px;width:110px;font-family:'IBM Plex Mono',monospace;font-weight:700;"
@@ -26705,7 +26750,7 @@ function renderBatchCard(item) {
         <select style="font-size:11px;border:1px solid #d1d5db;border-radius:4px;padding:3px 6px;"
           onchange="_apBatchItems[${item.id}].terms=this.value">${termsOptions}</select>
         <!-- 계정 일괄 적용 -->
-        <div style="position:relative;flex:1;min-width:140px;">
+        <div style="position:relative;flex:1;min-width:120px;">
           <input type="text" placeholder="🔖 계정 일괄 적용..." id="bulk-acct-inp-${item.id}"
             style="font-size:11px;border:1px solid #d1d5db;border-radius:4px;padding:3px 6px;width:100%;background:#fffbeb;"
             oninput="filterBulkAcct(${item.id},this.value)"
@@ -26714,6 +26759,10 @@ function renderBatchCard(item) {
             title="선택하면 모든 라인에 일괄 적용">
           <div id="bulk-acct-dd-${item.id}" style="display:none;position:absolute;top:100%;left:0;min-width:280px;max-height:160px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
         </div>
+        <!-- 라인 합치기 버튼 -->
+        <button onclick="mergeBatchLines(${item.id})"
+          style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer;color:#374151;white-space:nowrap;flex-shrink:0;"
+          title="모든 라인을 하나로 합산">⊕ 합산</button>
         <!-- Total (라인 합산 vs 파싱 합계) -->
         <div style="text-align:right;flex-shrink:0;">
           <div style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:15px;color:${totalColor};">
@@ -27483,7 +27532,98 @@ function filterVendorAccounts(query) {
   dropdown.style.display = 'block';
 }
 
-// ── Batch 모달 드래그 ──
+// ── Quick 벤더 등록 ──
+let _quickVendorBatchItemId = null;
+
+function openQuickVendorModal(itemId) {
+  _quickVendorBatchItemId = itemId;
+  const item = _apBatchItems[itemId];
+  document.getElementById('qv-name').value = item?.detectedVendorName || '';
+  document.getElementById('qv-terms').value = 'Net 30';
+  document.getElementById('qv-email').value = '';
+  document.getElementById('qv-acct-search').value = '';
+  document.getElementById('qv-acct-code').value = '';
+  document.getElementById('quick-vendor-modal').style.display = 'flex';
+  setTimeout(() => document.getElementById('qv-name').focus(), 100);
+}
+
+function filterQVAcct(query) {
+  const dd = document.getElementById('qv-acct-dd');
+  const q = (query || '').toLowerCase().trim();
+  const filtered = _glAccounts
+    .filter(a => ['expense','liability'].includes(a.type))
+    .filter(a => !q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
+    .slice(0, 20);
+  dd.innerHTML = filtered.map(a => `
+    <div onmousedown="event.preventDefault();document.getElementById('qv-acct-search').value='${a.code} — ${a.name.replace(/'/g,"\\'")}';document.getElementById('qv-acct-code').value='${a.code}';document.getElementById('qv-acct-dd').style.display='none'"
+      style="padding:6px 10px;cursor:pointer;font-size:11px;display:flex;gap:8px;border-bottom:1px solid #f5f5f5;"
+      onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background='#fff'">
+      <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;min-width:70px;">${a.code}</span>
+      <span>${a.name}</span>
+    </div>`).join('');
+  dd.style.display = filtered.length ? 'block' : 'none';
+}
+
+async function saveQuickVendor() {
+  const name = document.getElementById('qv-name').value.trim();
+  if (!name) { showToast('❌ 벤더명을 입력하세요.'); return; }
+
+  const acctCode = document.getElementById('qv-acct-code').value;
+  const acctName = acctCode ? _glAccounts.find(a => a.code === acctCode)?.name || '' : '';
+
+  const { data: newVendor, error } = await db.from('vendors').insert({
+    name,
+    email: document.getElementById('qv-email').value.trim(),
+    terms: document.getElementById('qv-terms').value,
+    default_account_code: acctCode || null,
+    default_account_name: acctName || null,
+    is_active: true,
+    created_at: new Date().toISOString()
+  }).select().single();
+
+  if (error) { showToast('❌ 저장 실패: ' + error.message); return; }
+
+  _apVendors.push(newVendor);
+  showToast(`✅ "${name}" 등록 완료!`);
+  document.getElementById('quick-vendor-modal').style.display = 'none';
+
+  // 해당 인보이스 카드에 새 벤더 자동 선택
+  if (_quickVendorBatchItemId !== null) {
+    const item = _apBatchItems[_quickVendorBatchItemId];
+    if (item) {
+      item.vendorId = newVendor.id;
+      item.autoCreateVendor = false;
+      // 계정도 자동 적용
+      if (acctCode) {
+        item.lines = item.lines.map(l => ({ ...l, account_code: l.account_code || acctCode }));
+      }
+      renderBatchCard(item);
+      updateBatchSummary();
+    }
+  }
+}
+
+// ── 라인 합치기 ──
+function mergeBatchLines(itemId) {
+  const item = _apBatchItems[itemId];
+  if (!item || !item.lines.length) return;
+
+  const total = item.lines.reduce((s,l) => s + (parseFloat(l.amount)||0), 0);
+  // 가장 많이 쓰인 계정 사용
+  const acctMap = {};
+  item.lines.forEach(l => { if (l.account_code) acctMap[l.account_code] = (acctMap[l.account_code]||0) + l.amount; });
+  const topAcct = Object.entries(acctMap).sort((a,b) => b[1]-a[1])[0]?.[0] || '';
+
+  item.lines = [{
+    account_code: topAcct,
+    account_recommended: false,
+    description: item.description || item.invoiceNumber || 'Invoice total',
+    amount: total,
+  }];
+  renderBatchCard(item);
+  updateBatchSummary();
+  showToast('✅ 라인 합산 완료');
+}
 (function() {
   let isDragging = false, startX, startY, startLeft, startTop;
 
