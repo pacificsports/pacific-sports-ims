@@ -2080,6 +2080,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <option value="void">Void</option>
           </select>
           <input type="text" id="ap-filter-search" class="fi" placeholder="검색..." style="width:160px;font-size:12px;" oninput="renderAPInvoices()">
+          <button id="ap-sort-reset" onclick="_apInvSortKeys=[];renderAPInvoices()" style="display:none;background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;color:#374151;">✕ 정렬 초기화</button>
         </div>
         <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
           <table class="tbl">
@@ -26099,16 +26100,24 @@ function populateAPVendorFilter() {
   }
 }
 
-// AP 인보이스 정렬 상태
-let _apInvSortCol = 'due_date';
-let _apInvSortDir = 1; // 1=asc, -1=desc
+// AP 인보이스 다중 정렬
+let _apInvSortKeys = []; // [{col, dir}] — 최대 3개
 
 function apInvSort(col) {
-  if (_apInvSortCol === col) {
-    _apInvSortDir *= -1;
+  const existing = _apInvSortKeys.findIndex(k => k.col === col);
+  if (existing === 0) {
+    // 1번 기준 → 방향 토글
+    _apInvSortKeys[0].dir *= -1;
+  } else if (existing > 0) {
+    // 이미 2,3번에 있으면 1번으로 올리고 방향 토글
+    const item = _apInvSortKeys.splice(existing, 1)[0];
+    item.dir *= -1;
+    _apInvSortKeys.unshift(item);
   } else {
-    _apInvSortCol = col;
-    _apInvSortDir = col === 'days_past' ? -1 : 1; // past due는 기본 내림차순
+    // 새 컬럼 — 1번으로 추가, 기존은 밀림 (최대 3개)
+    const defaultDir = col === 'days_past' ? -1 : 1;
+    _apInvSortKeys.unshift({ col, dir: defaultDir });
+    if (_apInvSortKeys.length > 3) _apInvSortKeys.pop();
   }
   renderAPInvoices();
 }
@@ -26130,46 +26139,49 @@ function renderAPInvoices() {
   const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
   const today = new Date(); today.setHours(0,0,0,0);
 
-  // 정렬 적용
-  const getDaysPast = i => {
-    const balance = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
-    if (!i.due_date || balance <= 0) return -9999;
-    return Math.floor((today - new Date(i.due_date)) / 86400000);
+  // 다중 정렬
+  const getVal = (inv, col) => {
+    if (col === 'days_past') {
+      const bal = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+      if (!inv.due_date || bal <= 0) return -9999;
+      return Math.floor((today - new Date(inv.due_date)) / 86400000);
+    }
+    if (col === 'balance') return (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+    if (col === 'total_amount') return parseFloat(inv.total_amount)||0;
+    return (inv[col]||'').toString().toLowerCase();
   };
 
-  filtered.sort((a, b) => {
-    let va, vb;
-    if (_apInvSortCol === 'days_past') {
-      va = getDaysPast(a); vb = getDaysPast(b);
-    } else if (_apInvSortCol === 'balance') {
-      va = (parseFloat(a.total_amount)||0) - (parseFloat(a.paid_amount)||0);
-      vb = (parseFloat(b.total_amount)||0) - (parseFloat(b.paid_amount)||0);
-    } else if (_apInvSortCol === 'total_amount') {
-      va = parseFloat(a.total_amount)||0; vb = parseFloat(b.total_amount)||0;
-    } else {
-      va = (a[_apInvSortCol]||'').toString().toLowerCase();
-      vb = (b[_apInvSortCol]||'').toString().toLowerCase();
-    }
-    if (va < vb) return -1 * _apInvSortDir;
-    if (va > vb) return 1 * _apInvSortDir;
-    return 0;
-  });
+  if (_apInvSortKeys.length > 0) {
+    filtered.sort((a, b) => {
+      for (const { col, dir } of _apInvSortKeys) {
+        const va = getVal(a, col), vb = getVal(b, col);
+        if (va < vb) return -1 * dir;
+        if (va > vb) return 1 * dir;
+      }
+      return 0;
+    });
+  }
 
   // 헤더 아이콘 업데이트
-  ['invoice_number','vendor_name','invoice_date','due_date','days_past','total_amount','balance'].forEach(col => {
+  const colLabels = { invoice_number:'Invoice #', vendor_name:'Vendor', invoice_date:'Date', due_date:'Due Date', days_past:'Past Due', total_amount:'Amount', balance:'Balance' };
+  Object.keys(colLabels).forEach(col => {
     const el = document.getElementById(`ap-sort-${col}`);
     if (!el) return;
-    const base = { invoice_number:'Invoice #', vendor_name:'Vendor', invoice_date:'Date', due_date:'Due Date', days_past:'Past Due', total_amount:'Amount', balance:'Balance' }[col];
-    if (col === _apInvSortCol) {
-      el.innerHTML = `${base} ${_apInvSortDir === 1 ? '▲' : '▼'}`;
-      el.parentElement.style.color = '#fff';
-      el.parentElement.style.background = 'rgba(255,255,255,0.15)';
+    const sortIdx = _apInvSortKeys.findIndex(k => k.col === col);
+    if (sortIdx >= 0) {
+      const { dir } = _apInvSortKeys[sortIdx];
+      const num = _apInvSortKeys.length > 1 ? `<sup style="font-size:9px;background:#fbbf24;color:#000;border-radius:50%;padding:0 3px;margin-left:2px;">${sortIdx+1}</sup>` : '';
+      el.innerHTML = `${colLabels[col]}${num} ${dir === 1 ? '▲' : '▼'}`;
+      el.parentElement.style.background = sortIdx === 0 ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)';
     } else {
-      el.innerHTML = `${base} <span style="opacity:0.4;font-size:9px;">⇅</span>`;
+      el.innerHTML = `${colLabels[col]} <span style="opacity:0.35;font-size:9px;">⇅</span>`;
       el.parentElement.style.background = '';
-      el.parentElement.style.color = '';
     }
   });
+
+  // 정렬 초기화 버튼
+  const resetBtn = document.getElementById('ap-sort-reset');
+  if (resetBtn) resetBtn.style.display = _apInvSortKeys.length > 0 ? 'inline-block' : 'none';
 
   const statusBadge = s => {
     const map = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a', void:'#9ca3af' };
