@@ -26409,33 +26409,67 @@ async function parseAPInvoicesBatch(input) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ file_base64: base64, media_type: mediaType, vendors: vendorNames })
       });
+
       const result = await resp.json();
       if (!result.ok) throw new Error(result.error || '파싱 실패');
 
-      const d = result.data;
-      item.status = 'done';
-      item.data = d;
+      // Worker 새버전: invoices 배열 / 구버전: data 객체
+      let invoices = [];
+      if (Array.isArray(result.invoices) && result.invoices.length > 0) {
+        invoices = result.invoices;
+      } else if (result.data && typeof result.data === 'object') {
+        invoices = [result.data];
+      } else {
+        throw new Error('인보이스를 찾을 수 없습니다');
+      }
 
-      // 벤더 자동 매칭
-      const matched = _apVendors.find(v =>
-        v.name.toLowerCase().includes((d.vendor_name||'').toLowerCase()) ||
-        (d.vendor_name||'').toLowerCase().includes(v.name.toLowerCase())
-      );
-      item.vendorId = matched?.id || '';
-      // 벤더 못 찾으면 자동 생성 플래그
-      item.detectedVendorName = d.vendor_name || '';
-      item.autoCreateVendor = !matched && !!d.vendor_name;
-      item.invoiceNumber = d.invoice_number || '';
-      item.invoiceDate = d.invoice_date || '';
-      item.dueDate = d.due_date || '';
-      item.terms = d.terms || 'Net 30';
-      item.description = d.description || '';
-      item.totalAmount = parseFloat(d.total_amount) || 0;
-      item.lines = (d.lines || []).map(l => ({
-        account_code: matched?.default_account_code || '',
-        description: l.description || '',
-        amount: parseFloat(l.amount) || 0,
-      }));
+      const processInvoice = (targetItem, d) => {
+        const matched = _apVendors.find(v =>
+          v.name.toLowerCase().includes((d.vendor_name||'').toLowerCase()) ||
+          (d.vendor_name||'').toLowerCase().includes(v.name.toLowerCase())
+        );
+        targetItem.status = 'done';
+        targetItem.data = d;
+        targetItem.vendorId = matched?.id || '';
+        targetItem.detectedVendorName = d.vendor_name || '';
+        targetItem.autoCreateVendor = !matched && !!d.vendor_name;
+        targetItem.invoiceNumber = d.invoice_number || '';
+        targetItem.invoiceDate = d.invoice_date || '';
+        targetItem.dueDate = d.due_date || '';
+        targetItem.terms = d.terms || 'Net 30';
+        targetItem.description = d.description || '';
+        targetItem.totalAmount = parseFloat(d.total_amount) || 0;
+        targetItem.lines = (d.lines || []).map(l => ({
+          account_code: matched?.default_account_code || '',
+          description: l.description || '',
+          amount: parseFloat(l.amount) || 0,
+        }));
+      };
+
+      // 첫 번째 인보이스는 기존 item에
+      processInvoice(item, invoices[0]);
+      item.fileName = item.file.name + (invoices.length > 1 ? ` (1/${invoices.length})` : '');
+
+      // 추가 인보이스는 새 item으로 추가
+      for (let i = 1; i < invoices.length; i++) {
+        const newItem = {
+          id: _apBatchItems.length,
+          file: item.file,
+          fileName: item.file.name + ` (${i+1}/${invoices.length})`,
+          status: 'pending', data: null, error: null,
+          vendorId: '', invoiceNumber: '', invoiceDate: '',
+          dueDate: '', terms: 'Net 30', description: '',
+          lines: [], totalAmount: 0, skip: false,
+          detectedVendorName: '', autoCreateVendor: false,
+        };
+        processInvoice(newItem, invoices[i]);
+        _apBatchItems.push(newItem);
+        const listEl = document.getElementById('ap-batch-list');
+        const div = document.createElement('div');
+        div.id = `ap-batch-card-${newItem.id}`;
+        listEl.appendChild(div);
+        renderBatchCard(newItem);
+      }
 
     } catch(e) {
       item.status = 'error';
@@ -26445,10 +26479,9 @@ async function parseAPInvoicesBatch(input) {
     done++;
     const pct = Math.round((done / files.length) * 100);
     document.getElementById('ap-batch-progress-bar').style.width = pct + '%';
-    document.getElementById('ap-batch-progress').textContent = `${done} / ${files.length} 파일 완료 (총 ${_apBatchItems.filter(i=>i.status==='done').length}개 인보이스)`;
+    document.getElementById('ap-batch-progress').textContent =
+      `${done} / ${files.length} 파일 완료 (총 ${_apBatchItems.filter(i=>i.status==='done').length}개 인보이스)`;
     renderBatchCard(item);
-    // 추가된 새 카드들도 렌더링
-    _apBatchItems.forEach(bi => { if (bi.id !== item.id && bi.status === 'done') renderBatchCard(bi); });
     updateBatchSummary();
   };
 
