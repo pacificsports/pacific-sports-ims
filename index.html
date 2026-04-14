@@ -26547,15 +26547,16 @@ function renderBatchCard(item) {
   const bgColor = item.skip ? '#fafafa' : (hasIssue ? '#fffbeb' : '#f0fdf4');
 
   const linesHtml = item.lines.map((l, li) => {
-    const acctOptions = _glAccounts
-      .filter(a => ['expense','liability'].includes(a.type))
-      .map(a => `<option value="${a.code}" ${a.code === l.account_code ? 'selected' : ''}>${a.code} — ${a.name}</option>`)
-      .join('');
-    return `<tr style="border-bottom:1px solid #f0f0f0;">
-      <td style="padding:4px 6px;">
-        <select style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:3px;padding:3px;" onchange="_apBatchItems[${item.id}].lines[${li}].account_code=this.value;updateBatchSummary()">
-          <option value="">-- 계정 --</option>${acctOptions}
-        </select>
+    const acctName = _glAccounts.find(a => a.code === l.account_code)?.name || '';
+    const displayVal = l.account_code ? `${l.account_code} — ${acctName}` : '';
+    return `<tr style="border-bottom:1px solid #f0f0f0;" id="ap-batch-line-${item.id}-${li}">
+      <td style="padding:4px 6px;position:relative;">
+        <input type="text" value="${displayVal}" placeholder="계정 검색..." 
+          style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:3px;padding:3px;"
+          oninput="filterBatchAcct(${item.id},${li},this.value)"
+          onfocus="filterBatchAcct(${item.id},${li},this.value)"
+          onblur="setTimeout(()=>{const d=document.getElementById('batchd-${item.id}-${li}');if(d)d.style.display='none'},250)">
+        <div id="batchd-${item.id}-${li}" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:160px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);min-width:280px;"></div>
       </td>
       <td style="padding:4px 6px;">
         <input type="text" value="${l.description}" style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:3px;padding:3px;" oninput="_apBatchItems[${item.id}].lines[${li}].description=this.value">
@@ -27327,6 +27328,75 @@ async function loadVendorList() {
 function filterVendorAccounts(query) {
   const q = (query || '').toLowerCase().trim();
   const list = document.getElementById('vendor-acct-list');
+  const dropdown = document.getElementById('vendor-acct-dropdown');
+  if (!list) return;
+
+  const filtered = _glAccounts
+    .filter(a => ['expense','liability'].includes(a.type))
+    .filter(a => {
+      if (!q) return true;
+      return a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q);
+    })
+    .slice(0, 30);
+
+  if (!filtered.length) {
+    list.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#9ca3af;">검색 결과 없음</div>';
+    dropdown.style.display = 'block';
+    return;
+  }
+
+  list.innerHTML = filtered.map(a => `
+    <div onmousedown="event.preventDefault();selectVendorAccount('${a.code}', '${a.name.replace(/'/g,"\\'").replace(/"/g,'&quot;')}')"
+      style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0;display:flex;gap:10px;align-items:center;"
+      onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background='#fff'">
+      <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;min-width:80px;">${a.code}</span>
+      <span style="color:#374151;">${a.name}</span>
+    </div>`).join('');
+  dropdown.style.display = 'block';
+}
+
+function filterBatchAcct(itemId, lineIdx, query) {
+  const dropdown = document.getElementById(`batchd-${itemId}-${lineIdx}`);
+  if (!dropdown) return;
+  const q = (query || '').toLowerCase().trim();
+
+  const filtered = _glAccounts
+    .filter(a => ['expense','liability'].includes(a.type))
+    .filter(a => !q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
+    .slice(0, 25);
+
+  if (!filtered.length) {
+    dropdown.innerHTML = '<div style="padding:8px 10px;font-size:11px;color:#9ca3af;">검색 결과 없음</div>';
+  } else {
+    dropdown.innerHTML = filtered.map(a => `
+      <div onmousedown="event.preventDefault();selectBatchAcct(${itemId},${lineIdx},'${a.code}','${a.name.replace(/'/g,"\\'")}')"
+        style="padding:6px 10px;cursor:pointer;font-size:11px;display:flex;gap:8px;border-bottom:1px solid #f5f5f5;"
+        onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background='#fff'">
+        <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;min-width:70px;">${a.code}</span>
+        <span style="color:#374151;">${a.name}</span>
+      </div>`).join('');
+  }
+  dropdown.style.display = 'block';
+}
+
+function selectBatchAcct(itemId, lineIdx, code, name) {
+  // 데이터 업데이트
+  if (_apBatchItems[itemId] && _apBatchItems[itemId].lines[lineIdx] !== undefined) {
+    _apBatchItems[itemId].lines[lineIdx].account_code = code;
+  }
+  // 인풋 업데이트
+  const row = document.getElementById(`ap-batch-line-${itemId}-${lineIdx}`);
+  if (row) {
+    const inp = row.querySelector('input[type="text"]');
+    if (inp) inp.value = `${code} — ${name}`;
+  }
+  const dropdown = document.getElementById(`batchd-${itemId}-${lineIdx}`);
+  if (dropdown) dropdown.style.display = 'none';
+  updateBatchSummary();
+}
+
+function filterVendorAccounts(query) {
+  const q = (query || '').toLowerCase().trim();
   const dropdown = document.getElementById('vendor-acct-dropdown');
   if (!list) return;
 
