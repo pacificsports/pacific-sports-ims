@@ -2363,7 +2363,25 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
 
-    <!-- ── Quick 벤더 등록 모달 (batch 내에서 사용) ── -->
+    <!-- ── AP Invoice 상세보기 모달 ── -->
+    <div id="ap-inv-detail-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:680px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="background:#7f1d1d;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">🧾 AP Invoice 상세</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button id="ap-inv-void-btn" style="background:rgba(220,38,38,0.2);border:1px solid rgba(220,38,38,0.4);color:#fca5a5;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">🚫 Void</button>
+            <button onclick="document.getElementById('ap-inv-detail-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fca5a5;">✕</button>
+          </div>
+        </div>
+        <div style="overflow-y:auto;flex:1;padding:20px;" id="ap-inv-detail-content"></div>
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+          <div id="ap-inv-detail-pay-area"></div>
+          <button class="btn" onclick="document.getElementById('ap-inv-detail-modal').style.display='none'">닫기</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Quick 벤더 등록 모달 ── -->
     <div id="quick-vendor-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999999;align-items:center;justify-content:center;">
       <div style="background:#fff;border-radius:12px;width:440px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
         <div style="background:#1a56a0;border-radius:12px 12px 0 0;padding:13px 18px;display:flex;justify-content:space-between;align-items:center;">
@@ -26321,7 +26339,9 @@ function renderAPInvoices() {
     const balance = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
     const isOverdue = i.due_date && new Date(i.due_date) < today && balance > 0;
     return `<tr style="border-bottom:1px solid #f0f0f0;background:${isOverdue?'#fff8f8':'#fff'};">
-      <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#1a56a0;">${i.invoice_number}</td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;">
+        <span onclick="viewAPInvoice('${i.id}')" style="color:#1a56a0;cursor:pointer;text-decoration:underline;text-underline-offset:2px;">${i.invoice_number}</span>
+      </td>
       <td style="font-size:12px;font-weight:600;">${i.vendor_name||i.vendors?.name||'—'}</td>
       <td style="font-size:12px;">${i.invoice_date||'—'}</td>
       <td style="font-size:12px;color:${isOverdue?'#dc2626':'#374151'};font-weight:${isOverdue?'700':'400'};">${i.due_date||'—'}${isOverdue?' ⚠️':''}</td>
@@ -27526,7 +27546,7 @@ function filterVendorAccounts(query) {
   const q = (query || '').toLowerCase().trim();
   const list = document.getElementById('vendor-acct-list');
   const dropdown = document.getElementById('vendor-acct-dropdown');
-  if (!list) return;
+  if (!list || !dropdown) return;
 
   const filtered = _glAccounts
     .filter(a => ['expense','liability'].includes(a.type))
@@ -27552,7 +27572,134 @@ function filterVendorAccounts(query) {
   dropdown.style.display = 'block';
 }
 
-// ── Quick 벤더 등록 ──
+// ── AP Invoice 상세보기 ──
+async function viewAPInvoice(invoiceId) {
+  const { data: inv } = await db.from('ap_invoices').select('*').eq('id', invoiceId).single();
+  const { data: lines } = await db.from('ap_invoice_lines').select('*').eq('ap_invoice_id', invoiceId).order('id');
+  const { data: payments } = await db.from('ap_payments').select('*').eq('ap_invoice_id', invoiceId).order('payment_date');
+  if (!inv) return;
+
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+  const statusColor = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a', void:'#9ca3af' }[inv.status] || '#6b7280';
+
+  // Void 버튼
+  const voidBtn = document.getElementById('ap-inv-void-btn');
+  if (voidBtn) {
+    voidBtn.style.display = inv.status === 'void' ? 'none' : 'block';
+    voidBtn.onclick = () => voidAPInvoice(invoiceId, inv.invoice_number);
+  }
+
+  document.getElementById('ap-inv-detail-content').innerHTML = `
+    <!-- 헤더 정보 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;">
+      <div>
+        <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:2px;">INVOICE #</div>
+        <div style="font-size:18px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#7f1d1d;">${inv.invoice_number}</div>
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:2px;">VENDOR</div>
+        <div style="font-size:14px;font-weight:700;">${inv.vendor_name||'—'}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:2px;">STATUS</div>
+        <span style="background:${statusColor}20;color:${statusColor};border:1px solid ${statusColor}40;padding:3px 12px;border-radius:10px;font-size:12px;font-weight:700;text-transform:uppercase;">${inv.status}</span>
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:2px;">INVOICE DATE</div>
+        <div style="font-size:13px;">${inv.invoice_date||'—'}</div>
+      </div>
+      <div>
+        <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:2px;">DUE DATE</div>
+        <div style="font-size:13px;color:${balance>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'#dc2626':'#374151'};font-weight:${balance>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'700':'400'};">${inv.due_date||'—'}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:2px;">TERMS</div>
+        <div style="font-size:13px;">${inv.terms||'—'}</div>
+      </div>
+    </div>
+
+    <!-- 라인 항목 -->
+    <div style="margin-bottom:14px;">
+      <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Invoice Lines</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#0f2744;color:#fff;">
+          <th style="padding:7px 10px;text-align:left;">Account</th>
+          <th style="padding:7px 10px;text-align:left;">Description</th>
+          <th style="padding:7px 10px;text-align:right;width:120px;">Amount</th>
+        </tr></thead>
+        <tbody>
+          ${(lines||[]).length === 0
+            ? '<tr><td colspan="3" style="padding:10px;text-align:center;color:#9ca3af;">라인 정보 없음</td></tr>'
+            : (lines||[]).map(l => {
+                const acct = _glAccounts.find(a => a.code === l.account_code);
+                return `<tr style="border-bottom:1px solid #f0f0f0;">
+                  <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;">
+                    <span style="font-weight:700;color:#1a56a0;">${l.account_code||'—'}</span>
+                    <span style="color:#6b7280;margin-left:6px;">${acct?.name||''}</span>
+                  </td>
+                  <td style="padding:6px 10px;font-size:11px;color:#374151;">${l.description||'—'}</td>
+                  <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;">${fmt(l.amount)}</td>
+                </tr>`;
+              }).join('')}
+        </tbody>
+        <tfoot>
+          <tr style="background:#f8fafc;border-top:2px solid #e5e7eb;font-weight:700;">
+            <td colspan="2" style="padding:8px 10px;">TOTAL</td>
+            <td style="padding:8px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:14px;color:#7f1d1d;">${fmt(inv.total_amount)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <!-- 지급 내역 -->
+    ${(payments||[]).length > 0 ? `
+    <div style="margin-bottom:8px;">
+      <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">Payment History</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#f0fdf4;">
+          <th style="padding:6px 10px;text-align:left;color:#166534;">Date</th>
+          <th style="padding:6px 10px;text-align:left;color:#166534;">Method</th>
+          <th style="padding:6px 10px;text-align:left;color:#166534;">Reference</th>
+          <th style="padding:6px 10px;text-align:right;color:#166534;">Amount</th>
+        </tr></thead>
+        <tbody>
+          ${(payments||[]).map(p => `<tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:5px 10px;">${p.payment_date}</td>
+            <td style="padding:5px 10px;text-transform:capitalize;">${p.method||'—'}</td>
+            <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7280;">${p.reference||'—'}</td>
+            <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#16a34a;">${fmt(p.amount)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+
+    <!-- 잔액 요약 -->
+    <div style="background:${balance>0?'#fef2f2':'#f0fdf4'};border:1px solid ${balance>0?'#fecaca':'#bbf7d0'};border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-size:11px;color:#6b7280;">Paid: ${fmt(inv.paid_amount)} &nbsp;|&nbsp; Balance Due:</div>
+      </div>
+      <div style="font-size:20px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:${balance>0?'#dc2626':'#16a34a'};">${fmt(balance)}</div>
+    </div>`;
+
+  // Pay 버튼
+  const payArea = document.getElementById('ap-inv-detail-pay-area');
+  if (payArea) {
+    payArea.innerHTML = balance > 0
+      ? `<button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="document.getElementById('ap-inv-detail-modal').style.display='none';openAPPaymentModal('${invoiceId}')">💵 Pay Now</button>`
+      : '';
+  }
+
+  document.getElementById('ap-inv-detail-modal').style.display = 'flex';
+}
+
+async function voidAPInvoice(invoiceId, invNumber) {
+  if (!confirm(`Invoice ${invNumber}을 Void 처리하시겠습니까?`)) return;
+  await db.from('ap_invoices').update({ status: 'void', updated_at: new Date().toISOString() }).eq('id', invoiceId);
+  showToast(`✅ ${invNumber} Void 처리 완료`);
+  document.getElementById('ap-inv-detail-modal').style.display = 'none';
+  await loadAP();
+}
 let _quickVendorBatchItemId = null;
 
 function openQuickVendorModal(itemId) {
@@ -27817,9 +27964,10 @@ function showVendorForm(vendorId = null) {
   document.getElementById('vendor-acct-selected').textContent = '';
   delete document.getElementById('vendor-form').dataset.editId;
 
-  filterVendorAccounts('');
-
   if (vendorId) {
+    // 먼저 폼 표시
+    document.getElementById('vendor-form').style.display = 'block';
+    filterVendorAccounts('');
     // _apVendors 또는 DB에서 벤더 찾기
     const fillForm = (v) => {
       if (!v) { document.getElementById('vendor-form').style.display = 'block'; return; }
@@ -27850,6 +27998,7 @@ function showVendorForm(vendorId = null) {
     }
   } else {
     document.getElementById('vendor-form').style.display = 'block';
+    filterVendorAccounts('');
   }
 }
 
