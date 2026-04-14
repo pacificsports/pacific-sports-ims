@@ -2538,8 +2538,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 <input type="text" id="vendor-default-account-search" class="fi" placeholder="계정 검색... (예: 514, insurance, freight)"
                   style="width:100%;font-size:12px;"
                   oninput="filterVendorAccounts(this.value)"
-                  onfocus="document.getElementById('vendor-acct-dropdown').style.display='block'"
-                  onblur="setTimeout(()=>document.getElementById('vendor-acct-dropdown').style.display='none',300)">
+                  onfocus="filterVendorAccounts(this.value)"
+                  onblur="setTimeout(()=>{const d=document.getElementById('vendor-acct-dropdown');if(d)d.style.display='none'},250)">
                 <input type="hidden" id="vendor-default-account" value="">
                 <div id="vendor-acct-dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:200px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-top:none;border-radius:0 0 6px 6px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);">
                   <div id="vendor-acct-list"></div>
@@ -27498,6 +27498,16 @@ async function saveAPPayment() {
 async function openVendorModal() {
   document.getElementById('vendor-modal').style.display = 'flex';
   document.getElementById('vendor-form').style.display = 'none';
+
+  // 계정 목록이 없으면 로드
+  if (!_glAccounts.length) {
+    const { data } = await db.from('accounts').select('*').order('code');
+    _glAccounts = data || [];
+  }
+  // 벤더 목록 최신화
+  const { data: vendors } = await db.from('vendors').select('*').eq('is_active', true).order('name');
+  _apVendors = vendors || [];
+
   await loadVendorList();
 }
 
@@ -27915,8 +27925,9 @@ function selectBatchAcct(itemId, lineIdx, code, name) {
 
 function filterVendorAccounts(query) {
   const q = (query || '').toLowerCase().trim();
+  const list = document.getElementById('vendor-acct-list');
   const dropdown = document.getElementById('vendor-acct-dropdown');
-  if (!list) return;
+  if (!list || !dropdown) return;
 
   const filtered = _glAccounts
     .filter(a => ['expense','liability'].includes(a.type))
