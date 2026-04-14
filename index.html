@@ -25729,7 +25729,6 @@ function arSetTab(tab) {
 // CHART OF ACCOUNTS MODULE
 // ══════════════════════════════════════════════════════════════
 let _coaList = [];
-let _coaEditId = null;
 
 async function loadCOA() {
   document.getElementById('coa-tbody').innerHTML = '<tr><td colspan="7" class="empty">Loading...</td></tr>';
@@ -26423,6 +26422,9 @@ async function parseAPInvoicesBatch(input) {
         (d.vendor_name||'').toLowerCase().includes(v.name.toLowerCase())
       );
       item.vendorId = matched?.id || '';
+      // 벤더 못 찾으면 자동 생성 플래그
+      item.detectedVendorName = d.vendor_name || '';
+      item.autoCreateVendor = !matched && !!d.vendor_name;
       item.invoiceNumber = d.invoice_number || '';
       item.invoiceDate = d.invoice_date || '';
       item.dueDate = d.due_date || '';
@@ -26540,6 +26542,7 @@ function renderBatchCard(item) {
           onchange="_apBatchItems[${item.id}].skip=!this.checked;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary()" title="포함/제외">
         <div style="font-size:11px;color:#6b7280;font-style:italic;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${item.file.name}</div>
         ${hasIssue && !item.skip ? '<span style="background:#f59e0b;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">⚠ 확인 필요</span>' : ''}
+        ${!item.vendorId && item.detectedVendorName && !item.skip ? `<span style="background:#3b82f6;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;" title="저장 시 자동 생성됩니다">🆕 "${item.detectedVendorName}" 자동생성</span>` : ''}
         ${!hasIssue && !item.skip ? '<span style="background:#16a34a;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">✓ Ready</span>' : ''}
 
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -26626,8 +26629,8 @@ async function retryBatchItem(id) {
 
 function updateBatchSummary() {
   const active = _apBatchItems.filter(i => !i.skip && i.status === 'done');
-  const ready = active.filter(i => i.vendorId && i.invoiceNumber && i.invoiceDate);
-  const issues = active.filter(i => !i.vendorId || !i.invoiceNumber || !i.invoiceDate);
+  const ready = active.filter(i => (i.vendorId || i.detectedVendorName) && i.invoiceNumber && i.invoiceDate);
+  const issues = active.filter(i => (!i.vendorId && !i.detectedVendorName) || !i.invoiceNumber || !i.invoiceDate);
   const totalAmt = ready.reduce((s,i) => s + i.lines.reduce((s2,l)=>s2+l.amount,0), 0);
 
   document.getElementById('ap-batch-summary').innerHTML =
@@ -26641,7 +26644,11 @@ function updateBatchSummary() {
 }
 
 async function saveAPBatch() {
-  const toSave = _apBatchItems.filter(i => !i.skip && i.status === 'done' && i.vendorId && i.invoiceNumber && i.invoiceDate);
+  const toSave = _apBatchItems.filter(i =>
+    !i.skip && i.status === 'done' &&
+    (i.vendorId || i.detectedVendorName) &&  // 벤더 있거나 자동생성 가능
+    i.invoiceNumber && i.invoiceDate
+  );
   if (!toSave.length) { showToast('⚠ 저장할 인보이스가 없습니다.'); return; }
 
   const btn = document.getElementById('ap-batch-save-btn');
@@ -26653,15 +26660,36 @@ async function saveAPBatch() {
 
   for (const item of toSave) {
     try {
-      const vendor = _apVendors.find(v => v.id === item.vendorId);
+      let vendorId = item.vendorId;
+      let vendorName = '';
+
+      // 벤더 자동 생성
+      if (!vendorId && item.detectedVendorName) {
+        const { data: newVendor, error: vErr } = await db.from('vendors').insert({
+          name: item.detectedVendorName,
+          terms: item.terms || 'Net 30',
+          is_active: true,
+          created_at: new Date().toISOString()
+        }).select().single();
+        if (!vErr && newVendor) {
+          vendorId = newVendor.id;
+          vendorName = newVendor.name;
+          _apVendors.push(newVendor);
+          showToast(`✅ 새 벤더 자동 생성: ${vendorName}`);
+        }
+      } else {
+        const vendor = _apVendors.find(v => v.id === vendorId);
+        vendorName = vendor?.name || '';
+      }
+
       const lines = item.lines.filter(l => l.amount > 0);
       const totalAmount = lines.reduce((s,l) => s+l.amount, 0);
 
       // AP Invoice 저장
       const { data: inv, error } = await db.from('ap_invoices').insert({
         invoice_number: item.invoiceNumber,
-        vendor_id: item.vendorId,
-        vendor_name: vendor?.name || '',
+        vendor_id: vendorId,
+        vendor_name: vendorName,
         invoice_date: item.invoiceDate,
         due_date: item.dueDate || null,
         terms: item.terms,
@@ -26688,7 +26716,7 @@ async function saveAPBatch() {
       const { data: je } = await db.from('journal_entries').insert({
         entry_number: jeNum,
         entry_date: item.invoiceDate,
-        description: `AP: ${item.invoiceNumber} — ${vendor?.name||''}`,
+        description: `AP: ${item.invoiceNumber} — ${vendorName}`,
         source: 'ap_invoice', source_id: inv.id, status: 'posted',
         created_by: _currentEmployee?.name || 'System',
         created_at: new Date().toISOString()
@@ -27237,6 +27265,8 @@ function selectVendorAccount(code, name) {
   document.getElementById('vendor-acct-selected').textContent = '✓ ' + code + ' — ' + name;
   document.getElementById('vendor-acct-dropdown').style.display = 'none';
 }
+
+function showVendorForm(vendorId = null) {
   document.getElementById('vendor-name').value = '';
   document.getElementById('vendor-contact').value = '';
   document.getElementById('vendor-email').value = '';
