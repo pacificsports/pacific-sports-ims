@@ -2083,14 +2083,14 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
         <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
           <table class="tbl">
-            <thead><tr>
-              <th style="width:130px;">Invoice #</th>
-              <th style="width:160px;">Vendor</th>
-              <th style="width:100px;">Date</th>
-              <th style="width:100px;">Due Date</th>
-              <th style="width:90px;text-align:center;">Past Due</th>
-              <th style="width:120px;text-align:right;">Amount</th>
-              <th style="width:120px;text-align:right;">Balance</th>
+            <thead><tr id="ap-inv-thead">
+              <th style="width:130px;cursor:pointer;user-select:none;" onclick="apInvSort('invoice_number')"><span id="ap-sort-invoice_number">Invoice #</span></th>
+              <th style="width:160px;cursor:pointer;user-select:none;" onclick="apInvSort('vendor_name')"><span id="ap-sort-vendor_name">Vendor</span></th>
+              <th style="width:100px;cursor:pointer;user-select:none;" onclick="apInvSort('invoice_date')"><span id="ap-sort-invoice_date">Date</span></th>
+              <th style="width:100px;cursor:pointer;user-select:none;" onclick="apInvSort('due_date')"><span id="ap-sort-due_date">Due Date</span></th>
+              <th style="width:90px;text-align:center;cursor:pointer;user-select:none;" onclick="apInvSort('days_past')"><span id="ap-sort-days_past">Past Due</span></th>
+              <th style="width:120px;text-align:right;cursor:pointer;user-select:none;" onclick="apInvSort('total_amount')"><span id="ap-sort-total_amount">Amount</span></th>
+              <th style="width:120px;text-align:right;cursor:pointer;user-select:none;" onclick="apInvSort('balance')"><span id="ap-sort-balance">Balance</span></th>
               <th style="width:80px;text-align:center;">Status</th>
               <th style="width:80px;"></th>
             </tr></thead>
@@ -26099,6 +26099,20 @@ function populateAPVendorFilter() {
   }
 }
 
+// AP 인보이스 정렬 상태
+let _apInvSortCol = 'due_date';
+let _apInvSortDir = 1; // 1=asc, -1=desc
+
+function apInvSort(col) {
+  if (_apInvSortCol === col) {
+    _apInvSortDir *= -1;
+  } else {
+    _apInvSortCol = col;
+    _apInvSortDir = col === 'days_past' ? -1 : 1; // past due는 기본 내림차순
+  }
+  renderAPInvoices();
+}
+
 function renderAPInvoices() {
   const vendorFilter = document.getElementById('ap-filter-vendor')?.value || '';
   const statusFilter = document.getElementById('ap-filter-status')?.value || 'open,partial';
@@ -26115,6 +26129,47 @@ function renderAPInvoices() {
 
   const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
   const today = new Date(); today.setHours(0,0,0,0);
+
+  // 정렬 적용
+  const getDaysPast = i => {
+    const balance = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+    if (!i.due_date || balance <= 0) return -9999;
+    return Math.floor((today - new Date(i.due_date)) / 86400000);
+  };
+
+  filtered.sort((a, b) => {
+    let va, vb;
+    if (_apInvSortCol === 'days_past') {
+      va = getDaysPast(a); vb = getDaysPast(b);
+    } else if (_apInvSortCol === 'balance') {
+      va = (parseFloat(a.total_amount)||0) - (parseFloat(a.paid_amount)||0);
+      vb = (parseFloat(b.total_amount)||0) - (parseFloat(b.paid_amount)||0);
+    } else if (_apInvSortCol === 'total_amount') {
+      va = parseFloat(a.total_amount)||0; vb = parseFloat(b.total_amount)||0;
+    } else {
+      va = (a[_apInvSortCol]||'').toString().toLowerCase();
+      vb = (b[_apInvSortCol]||'').toString().toLowerCase();
+    }
+    if (va < vb) return -1 * _apInvSortDir;
+    if (va > vb) return 1 * _apInvSortDir;
+    return 0;
+  });
+
+  // 헤더 아이콘 업데이트
+  ['invoice_number','vendor_name','invoice_date','due_date','days_past','total_amount','balance'].forEach(col => {
+    const el = document.getElementById(`ap-sort-${col}`);
+    if (!el) return;
+    const base = { invoice_number:'Invoice #', vendor_name:'Vendor', invoice_date:'Date', due_date:'Due Date', days_past:'Past Due', total_amount:'Amount', balance:'Balance' }[col];
+    if (col === _apInvSortCol) {
+      el.innerHTML = `${base} ${_apInvSortDir === 1 ? '▲' : '▼'}`;
+      el.parentElement.style.color = '#fff';
+      el.parentElement.style.background = 'rgba(255,255,255,0.15)';
+    } else {
+      el.innerHTML = `${base} <span style="opacity:0.4;font-size:9px;">⇅</span>`;
+      el.parentElement.style.background = '';
+      el.parentElement.style.color = '';
+    }
+  });
 
   const statusBadge = s => {
     const map = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a', void:'#9ca3af' };
