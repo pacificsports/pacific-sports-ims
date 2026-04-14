@@ -1448,6 +1448,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button id="ar-tab-invoices" onclick="arSetTab('invoices')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">🧾 Open Invoices</button>
         <button id="ar-tab-payments" onclick="arSetTab('payments')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">💵 Payment History</button>
         <button id="ar-tab-statement" onclick="arSetTab('statement')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📋 Statements</button>
+        <button id="ar-tab-analytics" onclick="arSetTab('analytics')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📈 Analytics</button>
       </div>
 
       <!-- Aging Report Tab -->
@@ -1573,20 +1574,49 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div style="display:grid;grid-template-columns:240px 160px auto;gap:10px;align-items:end;margin-bottom:16px;">
               <div>
                 <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">Customer</label>
-                <select class="fi" id="ar-stmt-customer" style="width:100%;"></select>
+                <select class="fi" id="ar-stmt-customer" style="width:100%;" onchange="previewStatement()"></select>
               </div>
               <div>
                 <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">As of Date</label>
-                <input type="date" class="fi" id="ar-stmt-date" style="width:100%;">
+                <input type="date" class="fi" id="ar-stmt-date" style="width:100%;" onchange="previewStatement()">
               </div>
               <div style="display:flex;gap:8px;">
-                <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;" onclick="previewStatement()">👁 Preview</button>
-                <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;" onclick="emailStatement()">📧 Email Statement</button>
+                <button class="btn" onclick="previewStatement()">👁 Preview</button>
+                <button class="btn" onclick="printStatement()" style="background:#f0f7ff;color:#1a56a0;border-color:#bfdbfe;">🖨️ Print</button>
+                <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;" onclick="emailStatement()">📧 Email</button>
               </div>
             </div>
             <div id="ar-stmt-preview" style="background:#f9fafb;border:1px solid var(--border);border-radius:8px;padding:20px;min-height:200px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:13px;">
               Select a customer to preview their statement
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Analytics Tab -->
+      <div id="ar-pane-analytics" style="display:none;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+          <!-- 거래처별 매출 랭킹 -->
+          <div class="card">
+            <div class="card-head"><span class="card-title">🏆 Customer Revenue Ranking</span></div>
+            <div id="ar-analytics-ranking" style="padding:12px;"></div>
+          </div>
+          <!-- 월별 매출 트렌드 -->
+          <div class="card">
+            <div class="card-head"><span class="card-title">📈 Monthly Revenue Trend</span></div>
+            <div id="ar-analytics-trend" style="padding:12px;"></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <!-- 미수금 vs 입금 -->
+          <div class="card">
+            <div class="card-head"><span class="card-title">💰 AR vs Payments (Last 6 Months)</span></div>
+            <div id="ar-analytics-cashflow" style="padding:12px;"></div>
+          </div>
+          <!-- 거래처별 DSO -->
+          <div class="card">
+            <div class="card-head"><span class="card-title">📊 Customer DSO (Days Sales Outstanding)</span></div>
+            <div id="ar-analytics-dso" style="padding:12px;"></div>
           </div>
         </div>
       </div>
@@ -24051,10 +24081,9 @@ function showCreditHoldFlash(overAmt) {
     </div>
   </div>
 
-</body>
-</html>
-<!-- updated Mon Apr 13 14:44:56 UTC 2026 -->
+
 <script>
+
 // ══════════════════════════════════════════════════════════════
 // PRICE SHEET MODULE — PIN 보호 + 체크박스 + 접근 로그
 // ══════════════════════════════════════════════════════════════
@@ -24678,7 +24707,7 @@ async function runPoPriceValidation() {
     }
   });
 }
-</script>
+
 // ══════════════════════════════════════════════════════════════
 let _arInvoices = [];   // enriched invoice list with balances
 let _arPayments = [];   // payments from DB
@@ -24686,7 +24715,7 @@ let _arTab = 'aging';
 
 function arSetTab(tab) {
   _arTab = tab;
-  ['aging','invoices','payments','statement'].forEach(t => {
+  ['aging','invoices','payments','statement','analytics'].forEach(t => {
     const btn = document.getElementById('ar-tab-' + t);
     const pane = document.getElementById('ar-pane-' + t);
     if (!btn || !pane) return;
@@ -24695,6 +24724,7 @@ function arSetTab(tab) {
     btn.style.color = active ? '#fff' : 'var(--text2)';
     pane.style.display = active ? '' : 'none';
   });
+  if (tab === 'analytics') renderArAnalytics();
 }
 
 async function loadAR() {
@@ -25131,4 +25161,7 @@ function exportArCsv() {
   a.download = 'AR_' + new Date().toISOString().slice(0,10) + '.csv';
   a.click();
 }
+
 </script>
+</body>
+</html>
