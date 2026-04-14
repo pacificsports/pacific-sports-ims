@@ -26600,6 +26600,15 @@ async function parseAPInvoicesBatch(input) {
   }
 }
 
+function refreshBatchJEPreview(itemId) {
+  const item = _apBatchItems[itemId];
+  if (!item) return;
+  const preview = document.getElementById(`je-preview-${itemId}`);
+  if (preview && preview.style.display !== 'none') {
+    preview.innerHTML = renderBatchJEPreview(item);
+  }
+}
+
 function renderBatchJEPreview(item) {
   const vendor = _apVendors.find(v => v.id === item.vendorId);
   const vendorName = vendor?.name || item.detectedVendorName || '(벤더 미선택)';
@@ -26755,7 +26764,7 @@ function renderBatchCard(item) {
         <input type="text" value="${l.description}" style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:3px;padding:3px;" oninput="_apBatchItems[${item.id}].lines[${li}].description=this.value">
       </td>
       <td style="padding:4px 6px;width:110px;">
-        <input type="number" value="${l.amount.toFixed(2)}" step="0.01" style="width:100%;font-size:11px;text-align:right;border:1px solid #e5e7eb;border-radius:3px;padding:3px;font-family:'IBM Plex Mono',monospace;color:#7f1d1d;font-weight:700;" oninput="_apBatchItems[${item.id}].lines[${li}].amount=parseFloat(this.value)||0;updateBatchSummary()">
+        <input type="number" value="${l.amount.toFixed(2)}" step="0.01" style="width:100%;font-size:11px;text-align:right;border:1px solid #e5e7eb;border-radius:3px;padding:3px;font-family:'IBM Plex Mono',monospace;color:#7f1d1d;font-weight:700;" oninput="_apBatchItems[${item.id}].lines[${li}].amount=parseFloat(this.value)||0;updateBatchSummary();refreshBatchJEPreview(${item.id})">
       </td>
       <td style="padding:4px;text-align:center;width:28px;">
         <button onclick="_apBatchItems[${item.id}].lines.splice(${li},1);renderBatchCard(_apBatchItems[${item.id}])" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px;">×</button>
@@ -28031,6 +28040,8 @@ function applyBulkAcct(itemId, code, name) {
   if (dd) dd.style.display = 'none';
   updateBatchSummary();
   showToast(`✅ ${item.lines.length}개 라인에 ${code} 적용`);
+  // JE 미리보기 실시간 업데이트
+  refreshBatchJEPreview(itemId);
 }
 
 function filterBatchAcct(itemId, lineIdx, query) {
@@ -28058,11 +28069,10 @@ function filterBatchAcct(itemId, lineIdx, query) {
 }
 
 function selectBatchAcct(itemId, lineIdx, code, name) {
-  // 데이터 업데이트
   if (_apBatchItems[itemId] && _apBatchItems[itemId].lines[lineIdx] !== undefined) {
     _apBatchItems[itemId].lines[lineIdx].account_code = code;
+    _apBatchItems[itemId].lines[lineIdx].account_recommended = false;
   }
-  // 인풋 업데이트
   const row = document.getElementById(`ap-batch-line-${itemId}-${lineIdx}`);
   if (row) {
     const inp = row.querySelector('input[type="text"]');
@@ -28071,6 +28081,8 @@ function selectBatchAcct(itemId, lineIdx, code, name) {
   const dropdown = document.getElementById(`batchd-${itemId}-${lineIdx}`);
   if (dropdown) dropdown.style.display = 'none';
   updateBatchSummary();
+  // JE 미리보기 실시간 업데이트
+  refreshBatchJEPreview(itemId);
 }
 
 function filterVendorAccounts(query) {
