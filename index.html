@@ -27815,14 +27815,14 @@ function showVendorForm(vendorId = null) {
   document.getElementById('vendor-default-account-search').value = '';
   document.getElementById('vendor-default-account').value = '';
   document.getElementById('vendor-acct-selected').textContent = '';
+  delete document.getElementById('vendor-form').dataset.editId;
 
-  // 계정 목록 초기화
   filterVendorAccounts('');
 
-  // 편집 모드면 기존 값 채우기
   if (vendorId) {
-    const v = _apVendors.find(x => x.id === vendorId);
-    if (v) {
+    // _apVendors 또는 DB에서 벤더 찾기
+    const fillForm = (v) => {
+      if (!v) { document.getElementById('vendor-form').style.display = 'block'; return; }
       document.getElementById('vendor-name').value = v.name || '';
       document.getElementById('vendor-contact').value = v.contact || '';
       document.getElementById('vendor-email').value = v.email || '';
@@ -27838,12 +27838,19 @@ function showVendorForm(vendorId = null) {
         document.getElementById('vendor-acct-selected').textContent = '✓ ' + v.default_account_code + ' — ' + (v.default_account_name||'');
       }
       document.getElementById('vendor-form').dataset.editId = vendorId;
+      document.getElementById('vendor-form').style.display = 'block';
+    };
+
+    // 먼저 메모리에서 찾고, 없으면 DB에서
+    const cached = _apVendors.find(x => x.id === vendorId);
+    if (cached) {
+      fillForm(cached);
+    } else {
+      db.from('vendors').select('*').eq('id', vendorId).single().then(({ data }) => fillForm(data));
     }
   } else {
-    delete document.getElementById('vendor-form').dataset.editId;
+    document.getElementById('vendor-form').style.display = 'block';
   }
-
-  document.getElementById('vendor-form').style.display = 'block';
 }
 
 async function saveVendor() {
