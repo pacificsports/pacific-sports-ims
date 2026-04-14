@@ -26779,10 +26779,18 @@ async function parseAPInvoice(input) {
     });
 
     const result = await resp.json();
+    console.log('[parseAPInvoice] response:', JSON.stringify(result).slice(0, 500));
     if (!result.ok) throw new Error(result.error || '파싱 실패');
 
-    // 여러 인보이스 처리 (한 파일에 여러 인보이스 있을 수 있음)
-    const invoices = result.invoices || (result.data ? [result.data] : []);
+    // 여러 인보이스 처리 — invoices 배열 또는 구버전 data 객체 모두 처리
+    let invoices = [];
+    if (Array.isArray(result.invoices) && result.invoices.length > 0) {
+      invoices = result.invoices;
+    } else if (result.data && typeof result.data === 'object') {
+      invoices = [result.data];
+    } else {
+      throw new Error('파싱 결과가 비어있습니다. Worker를 재배포했는지 확인하세요.');
+    }
     
     // 기존 item을 첫 번째 인보이스로 업데이트
     const processInvoice = (item, d) => {
