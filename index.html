@@ -26530,7 +26530,7 @@ function renderAPAging() {
   document.getElementById('ap-age-90p').textContent = fmt(totals.d90p);
 
   const bucketCol = { current:'#15803d', d30:'#b45309', d60:'#c2410c', d90:'#dc2626', d90p:'#991b1b' };
-  const vendors = Object.values(vendorMap).sort((a,b) => b.total - a.total);
+  const vendors = Object.values(vendorMap).sort((a,b) => a.name.localeCompare(b.name));
 
   let rows = '';
   let vendorIdx = 0;
@@ -26648,7 +26648,7 @@ function generateAgingHTML() {
     totals.d90 += v.d90; totals.d90p += v.d90p; totals.total += v.total;
   });
 
-  const vendors = Object.values(vendorMap).sort((a,b) => b.total - a.total);
+  const vendors = Object.values(vendorMap).sort((a,b) => a.name.localeCompare(b.name));
 
   const vendorRows = vendors.map(v => {
     const invRows = v.invoices.sort((a,b) => new Date(a.due_date||0) - new Date(b.due_date||0)).map(i => `
@@ -28114,26 +28114,30 @@ function cpRenderCalibration() {
   rulers += `<div style="position:absolute;left:8px;top:${divY+4}px;font-size:9px;font-weight:700;color:#64748b;background:rgba(248,250,252,0.9);padding:1px 5px;border-radius:2px;z-index:3;">CHECK</div>`;
 
   const txt = (xIn, yIn, val, color, bold=true) =>
-    `<div style="position:absolute;${p(xIn,yIn)}font-size:${fs}px;font-family:Arial,sans-serif;font-weight:${bold?700:400};color:${color};background:rgba(255,255,255,0.82);border-bottom:1.5px solid ${color};padding:0 2px;white-space:nowrap;z-index:5;line-height:1.4;">${val}</div>`;
+    `<div style="position:absolute;${p(xIn,yIn)}font-size:${fs}px;font-family:Arial,sans-serif;font-weight:${bold?700:400};color:${color};background:rgba(255,255,255,0.82);padding:0 2px;white-space:nowrap;z-index:5;line-height:1.4;">${val}</div>`;
+
+  const invCount = q.invoices.length;
+  const totalY_c = 0.91 + invCount * 0.18 + 0.10;
 
   const invTxt = q.invoices.map((inv,i) =>
-    txt(0.33, 0.75+i*0.16, `Invoice ${inv.invoice_number}`, STUB_COLOR) +
-    txt(7.50, 0.75+i*0.16, `$${inv.payAmount.toFixed(2)}`, STUB_COLOR)
+    txt(0.33, 0.91+i*0.18, `Invoice ${inv.invoice_number}`, STUB_COLOR) +
+    txt(7.50, 0.91+i*0.18, `$${inv.payAmount.toFixed(2)}`, STUB_COLOR)
   ).join('');
 
   overlay.innerHTML = rulers +
     // STUB (0~3.5")
-    txt(0.33, 0.55, `${dateStr}    ${q.vendorName}`, STUB_COLOR) +
-    txt(7.50, 0.55, `$${total.toFixed(2)}`, STUB_COLOR) +
+    txt(0.33, 0.55, dateStr, STUB_COLOR) +
+    txt(0.33, 0.72, q.vendorName, STUB_COLOR) +
     invTxt +
-    txt(0.33, 3.20, `CHECK ${q.checkNo} · ${dateStr} · ${q.vendorName}`, STUB_COLOR) +
-    // CHECK (3.5~7") — 체크번호는 용지 pre-printed
+    txt(7.50, totalY_c, `$${total.toFixed(2)}`, STUB_COLOR) +
+    // CHECK (3.5~7")
+    txt(6.90, 4.24, q.checkNo,    CHK_COLOR) +
     txt(0.20, 4.95, words,        '#166534') +
     txt(5.53, 5.15, dateStr,      CHK_COLOR) +
-    txt(7.31, 5.15, amtStr,       CHK_COLOR) +
-    txt(0.85, 5.42, q.vendorName, '#7f1d1d') +
-    (q.vendorAddr1 ? txt(0.85, 5.60, q.vendorAddr1, '#7f1d1d', false) : '') +
-    (q.vendorAddr2 ? txt(0.85, 5.74, q.vendorAddr2, '#7f1d1d', false) : '');
+    txt(7.00, 5.15, `$${total.toFixed(2)}`, CHK_COLOR) +
+    txt(0.85, 5.48, q.vendorName, '#7f1d1d') +
+    (q.vendorAddr1 ? txt(0.85, 5.66, q.vendorAddr1, '#7f1d1d', false) : '') +
+    (q.vendorAddr2 ? txt(0.85, 5.81, q.vendorAddr2, '#7f1d1d', false) : '');
 }
 
 function cpUpdateCheckNumbers() {
@@ -28275,41 +28279,47 @@ function cpPrintAll() {
 
     const invLines = q.invoices.map((inv, i) => {
       const invAmt = inv.payAmount.toFixed(2);
-      return `<div class="abs f10" style="${pos(0.33, 0.75 + i*0.16)}">Invoice ${inv.invoice_number}</div>` +
-             `<div class="abs f10" style="${pos(7.50, 0.75 + i*0.16)}">$${invAmt}</div>`;
+      return `<div class="abs f10" style="${pos(0.33, 0.91 + i*0.18)}">Invoice ${inv.invoice_number}</div>` +
+             `<div class="abs f10" style="${pos(7.50, 0.91 + i*0.18)}">$${invAmt}</div>`;
     }).join('');
+
+    // Total 위치: 인보이스 목록 바로 아래
+    const invCount = q.invoices.length;
+    const totalY = 0.75 + invCount * 0.18 + 0.10;
 
     return `<div class="pg">
 
       <!-- ══ STUB (0" ~ 3.5") ══════════════════════════════════════════ -->
 
-      <!-- 날짜 + 거래처명 (회사명 아래) -->
-      <div class="abs f10" style="${pos(0.33, 0.55)}">${dateStr}&nbsp;&nbsp;&nbsp;&nbsp;${q.vendorName}</div>
+      <!-- 날짜 -->
+      <div class="abs f10" style="${pos(0.33, 0.55)}">${dateStr}</div>
+      <!-- 거래처명 -->
+      <div class="abs f10" style="${pos(0.33, 0.72)}">${q.vendorName}</div>
 
-      <!-- 인보이스 목록: 번호, 금액 -->
+      <!-- 인보이스 목록: Invoice # 왼쪽, 금액 오른쪽 -->
       ${invLines}
 
-      <!-- Stub 우측 Total -->
-      <div class="abs f10 bold" style="${pos(7.50, 0.55)}">$${totalStr}</div>
+      <!-- Total (인보이스 목록 바로 아래) -->
+      <div class="abs f10 bold" style="${pos(7.50, totalY)}">$${totalStr}</div>
 
-      <!-- CHECK 라인 (stub 하단) -->
-      <div class="abs f9" style="${pos(0.33, 3.20)}">CHECK ${q.checkNo} · ${dateStr} · ${q.vendorName}</div>
+    <!-- ══ CHECK (3.5" ~ 7") ══════════════════════════════════════════ -->
 
-      <!-- ══ CHECK (3.5" ~ 7") ══════════════════════════════════════════ -->
+      <!-- CHECK NO. 옆에 체크번호 -->
+      <div class="abs f10 bold mono" style="${pos(6.90, 4.24)}">${q.checkNo}</div>
 
-      <!-- Amount in words: 회사 주소(4.5") ~ PAY TO(5.36") 사이 빈 공간 -->
+      <!-- Amount in words (로고 아래 ~ PAY TO 위) -->
       <div class="abs f10 bold" style="${pos(0.20, 4.95)} max-width:5.5in; white-space:normal; line-height:1.25;">${words}</div>
 
-      <!-- DATE 라벨(5.00") 바로 아래 날짜 -->
+      <!-- DATE 값 (DATE 라벨 바로 아래) -->
       <div class="abs f10 bold" style="${pos(5.53, 5.15)}">${dateStr}</div>
 
-      <!-- AMOUNT 라벨(5.00") 바로 아래 금액 -->
-      <div class="abs f10 bold mono" style="${pos(7.31, 5.15)}">${amtStr}</div>
+      <!-- AMOUNT 값 (AMOUNT 라벨 바로 아래, **** 없이) -->
+      <div class="abs f10 bold mono" style="${pos(7.00, 5.15)}">$${totalStr}</div>
 
-      <!-- Payee: PAY TO 오른쪽 (y=5.48" 이후 빈공간) -->
-      <div class="abs f11 bold" style="${pos(0.85, 5.42)}">${q.vendorName}</div>
-      ${q.vendorAddr1 ? `<div class="abs f10" style="${pos(0.85, 5.60)}">${q.vendorAddr1}</div>` : ''}
-      ${q.vendorAddr2 ? `<div class="abs f10" style="${pos(0.85, 5.74)}">${q.vendorAddr2}</div>` : ''}
+      <!-- Payee 이름 + 주소 (간격 충분히) -->
+      <div class="abs f11 bold" style="${pos(0.85, 5.48)}">${q.vendorName}</div>
+      ${q.vendorAddr1 ? `<div class="abs f10" style="${pos(0.85, 5.66)}">${q.vendorAddr1}</div>` : ''}
+      ${q.vendorAddr2 ? `<div class="abs f10" style="${pos(0.85, 5.81)}">${q.vendorAddr2}</div>` : ''}
 
     </div>`;
   };
