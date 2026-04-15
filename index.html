@@ -26966,28 +26966,38 @@ async function bulkScanUpload(input) {
       });
       const mediaType = file.type || 'application/pdf';
 
-      // Claude AI — 파일 내 모든 체크번호 추출 (멀티페이지 지원)
-      const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+      // Worker를 통해 Claude AI 호출 (CORS 우회)
+      const aiResp = await fetch('https://po-confirm-email.hjbae.workers.dev/parse-ap-invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 300,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'document', source: { type: 'base64', media_type: mediaType, data: base64 } },
-              { type: 'text', text: `This is a scanned bank check or multi-page PDF containing one or more checks. Extract ALL check numbers found in this document. Known check numbers in our system: ${knownCheckNos.join(', ')}. Reply with ONLY the check numbers as a comma-separated list (e.g. "47697,47700,47701"). If none found, reply "NONE".` }
-            ]
-          }]
+          file_base64: base64,
+          media_type: mediaType,
+          vendors: [],
+          accounts: [],
+          custom_prompt: `This is a scanned bank check or multi-page PDF containing one or more checks issued by Peace Textile America, Inc. Extract ALL unique check numbers found in this document. Known check numbers in our system: ${knownCheckNos.join(', ')}. A check number is typically a 5-digit number printed prominently on the check (e.g. 47699, 47700, 47701). Reply with ONLY a JSON object: {"check_numbers": ["47699","47700"]}. If none found, reply {"check_numbers": []}.`
         })
       });
       const aiData = await aiResp.json();
-      const rawText = (aiData.content?.[0]?.text || '').trim();
 
-      // 체크번호 파싱 (쉼표 구분)
-      const foundNos = rawText === 'NONE' ? [] :
-        rawText.split(/[,\s]+/).map(s => s.replace(/\D/g,'')).filter(Boolean);
+      // Worker 응답에서 체크번호 파싱
+      let foundNos = [];
+      try {
+        // custom_prompt 응답은 raw_text 또는 data 필드에 있을 수 있음
+        const rawText = aiData.raw_text || aiData.text || JSON.stringify(aiData);
+        const match = rawText.match(/\{"check_numbers":\s*(\[.*?\])\}/);
+        if (match) {
+          foundNos = JSON.parse(match[1]).map(s => String(s).replace(/\D/g,'').trim()).filter(Boolean);
+        } else {
+          // fallback: 5자리 숫자 직접 추출
+          const nums = rawText.match(/\b4\d{4}\b/g) || [];
+          foundNos = [...new Set(nums)];
+        }
+      } catch(e) {
+        // fallback: known check numbers가 텍스트에 있는지 확인
+        const rawText = JSON.stringify(aiData);
+        foundNos = knownCheckNos.filter(no => rawText.includes(no));
+      }
 
       if (!foundNos.length) {
         totalFailed++;
