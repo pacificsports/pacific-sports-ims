@@ -30071,6 +30071,7 @@ function renderVendorEditForm(vendorId) {
 }
 
 let _vefAcctHighlight = -1;
+let _vefAcctFiltered = [];
 
 function vefFilterAccounts(query) {
   const dd = document.getElementById('vef-acct-dd');
@@ -30078,87 +30079,81 @@ function vefFilterAccounts(query) {
   if (!dd || !list) return;
 
   const q = (query || '').toLowerCase().trim();
-  const filtered = _glAccounts
+  _vefAcctFiltered = _glAccounts
     .filter(a => ['expense','liability'].includes(a.type))
     .filter(a => !q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
     .slice(0, 60);
 
   _vefAcctHighlight = -1;
 
-  if (!filtered.length) {
+  if (!_vefAcctFiltered.length) {
     list.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#9ca3af;">검색 결과 없음</div>';
     dd.style.display = 'block';
     return;
   }
 
-  const clearHtml = `<div id="vef-acct-item--1"
-    onmousedown="event.preventDefault();vefSelectAcct('','','')"
-    style="padding:8px 12px;cursor:pointer;font-size:12px;color:#6b7280;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px;"
-    onmouseenter="vefSetHighlight(-1)" onmouseleave="">
-    <span style="color:#dc2626;font-size:14px;">✕</span> 선택 안 함
-  </div>`;
-
-  list.innerHTML = clearHtml + filtered.map((a, idx) => `
-    <div id="vef-acct-item-${idx}"
-      onmousedown="event.preventDefault();vefSelectAcct('${a.code}','${a.name.replace(/'/g,"\\'")}','${a.code} — ${a.name.replace(/'/g,"\\'")}')"
-      style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #f5f5f5;display:flex;gap:10px;align-items:center;"
-      onmouseenter="vefSetHighlight(${idx})">
+  const rows = _vefAcctFiltered.map((a, idx) =>
+    `<div class="vef-acct-row" data-idx="${idx}"
+      onmousedown="event.preventDefault();vefSelectAcct(${idx})"
+      onmouseenter="vefSetHighlight(${idx})"
+      style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #f5f5f5;display:flex;gap:10px;align-items:center;">
       <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;min-width:72px;font-size:11px;">${a.code}</span>
       <span style="color:#374151;">${a.name}</span>
-    </div>`).join('');
+    </div>`
+  ).join('');
 
+  const clearRow = `<div class="vef-acct-row" data-idx="-1"
+    onmousedown="event.preventDefault();vefClearAcct()"
+    onmouseenter="vefSetHighlight(-1)"
+    style="padding:8px 12px;cursor:pointer;font-size:12px;color:#6b7280;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:8px;">
+    <span style="color:#dc2626;">✕</span> 선택 안 함
+  </div>`;
+
+  list.innerHTML = clearRow + rows;
   dd.style.display = 'block';
 }
 
 function vefSetHighlight(idx) {
-  // Remove highlight from all items
-  const list = document.getElementById('vef-acct-list');
-  if (!list) return;
-  list.querySelectorAll('div[id^="vef-acct-item-"]').forEach(el => {
-    el.style.background = '';
-  });
-  // Apply highlight to target
   _vefAcctHighlight = idx;
-  const target = document.getElementById(`vef-acct-item-${idx}`);
-  if (target) target.style.background = '#eff6ff';
+  document.querySelectorAll('.vef-acct-row').forEach(el => {
+    el.style.background = parseInt(el.dataset.idx) === idx ? '#eff6ff' : '';
+  });
 }
 
 function vefAcctKeyNav(e) {
   const dd = document.getElementById('vef-acct-dd');
-  const list = document.getElementById('vef-acct-list');
 
+  // 드롭다운 닫혀있으면 열기
   if (!dd || dd.style.display === 'none') {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
       vefFilterAccounts(document.getElementById('vef-acct-search')?.value || '');
-      return;
     }
+    return;
   }
 
-  const items = list?.querySelectorAll('div[id^="vef-acct-item-"]') || [];
-  const count = items.length;
-  if (!count) return;
+  const total = _vefAcctFiltered.length; // clear row 제외 실제 항목 수
+  // idx: -1 = clear row, 0..total-1 = actual items
 
   if (e.key === 'ArrowDown') {
     e.preventDefault();
-    // Map item index: item-0 is clearBtn (id=-1), item-1..N are idx 0..N-1
-    // We track by the actual items array index
-    const nextIdx = Math.min(_vefAcctHighlight + 1, count - 1);
-    const nextItemId = items[nextIdx]?.id?.replace('vef-acct-item-', '');
-    vefSetHighlight(parseInt(nextItemId));
-    items[nextIdx]?.scrollIntoView({ block: 'nearest' });
+    const next = _vefAcctHighlight < total - 1 ? _vefAcctHighlight + 1 : -1;
+    vefSetHighlight(next);
+    document.querySelector(`.vef-acct-row[data-idx="${next}"]`)?.scrollIntoView({ block: 'nearest' });
 
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
-    const prevIdx = Math.max(_vefAcctHighlight === -1 ? count - 1 : 
-      Array.from(items).findIndex(el => el.id === `vef-acct-item-${_vefAcctHighlight}`) - 1, 0);
-    const prevItemId = items[prevIdx]?.id?.replace('vef-acct-item-', '');
-    vefSetHighlight(parseInt(prevItemId));
-    items[prevIdx]?.scrollIntoView({ block: 'nearest' });
+    const prev = _vefAcctHighlight === -1 ? total - 1 : _vefAcctHighlight - 1;
+    vefSetHighlight(prev);
+    document.querySelector(`.vef-acct-row[data-idx="${prev}"]`)?.scrollIntoView({ block: 'nearest' });
 
   } else if (e.key === 'Enter') {
     e.preventDefault();
-    const highlighted = list?.querySelector(`#vef-acct-item-${_vefAcctHighlight}`);
-    if (highlighted) highlighted.dispatchEvent(new MouseEvent('mousedown'));
+    if (_vefAcctHighlight === -1) {
+      vefClearAcct();
+    } else if (_vefAcctHighlight >= 0) {
+      vefSelectAcct(_vefAcctHighlight);
+    }
 
   } else if (e.key === 'Escape') {
     dd.style.display = 'none';
@@ -30166,13 +30161,23 @@ function vefAcctKeyNav(e) {
   }
 }
 
-function vefSelectAcct(code, name, display) {
-  document.getElementById('vef-acct-code').value = code;
-  document.getElementById('vef-acct-name').value = name;
+function vefSelectAcct(idx) {
+  const a = _vefAcctFiltered[idx];
+  if (!a) return;
+  const display = `${a.code} — ${a.name}`;
+  document.getElementById('vef-acct-code').value = a.code;
+  document.getElementById('vef-acct-name').value = a.name;
   document.getElementById('vef-acct-search').value = display;
-  document.getElementById('vef-acct-badge').innerHTML = display
-    ? `<span style="color:#1a56a0;">✓ ${display}</span>`
-    : '<span style="color:#9ca3af;">선택 안 함</span>';
+  document.getElementById('vef-acct-badge').innerHTML = `<span style="color:#1a56a0;">✓ ${display}</span>`;
+  document.getElementById('vef-acct-dd').style.display = 'none';
+  _vefAcctHighlight = -1;
+}
+
+function vefClearAcct() {
+  document.getElementById('vef-acct-code').value = '';
+  document.getElementById('vef-acct-name').value = '';
+  document.getElementById('vef-acct-search').value = '';
+  document.getElementById('vef-acct-badge').innerHTML = '<span style="color:#9ca3af;">선택 안 함</span>';
   document.getElementById('vef-acct-dd').style.display = 'none';
   _vefAcctHighlight = -1;
 }
