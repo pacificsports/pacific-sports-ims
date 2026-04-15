@@ -25929,6 +25929,13 @@ let _apInvoices = [];
 let _apVendors = [];
 let _apPayments = [];
 let _apCurrentInvoiceId = null;
+let _apPaymentModalOrigHTML = '';
+
+// AP Payment 모달 원본 저장 (DOM 로드 후)
+document.addEventListener('DOMContentLoaded', () => {
+  const m = document.getElementById('ap-payment-modal');
+  if (m) _apPaymentModalOrigHTML = m.innerHTML;
+});
 let _apInvLineCount = 0;
 
 let _apCalYear = new Date().getFullYear();
@@ -27584,6 +27591,11 @@ async function saveAPInvoice() {
 
 // ── AP Payment 모달 ──
 async function openAPPaymentModal(invoiceId) {
+  // 모달 HTML 원복 (이전 success screen이 남아있을 경우)
+  const modal = document.getElementById('ap-payment-modal');
+  if (!modal.querySelector('#ap-pmt-date')) {
+    modal.innerHTML = _apPaymentModalOrigHTML;
+  }
   _apCurrentInvoiceId = invoiceId;
   const inv = _apInvoices.find(i => i.id === invoiceId);
   if (!inv) return;
@@ -27688,8 +27700,89 @@ async function saveAPPayment() {
       paid_amount: newPaid, status: newStatus, updated_at: new Date().toISOString()
     }).eq('id', _apCurrentInvoiceId);
 
-    showToast(`✅ Payment $${amount.toFixed(2)} 기록 완료! 분개: ${jeNum}`);
-    document.getElementById('ap-payment-modal').style.display = 'none';
+    // 4. 결과 화면 표시
+    const fmt = n => '$' + parseFloat(n).toLocaleString('en-US', {minimumFractionDigits:2});
+    const methodLabel = { wire:'Wire Transfer', check:'Check', ach:'ACH', credit_card:'Credit Card' }[method] || method;
+    const cashAcctName = document.getElementById('ap-pmt-cash-acct').options[document.getElementById('ap-pmt-cash-acct').selectedIndex]?.text || cashAcct;
+
+    document.getElementById('ap-payment-modal').innerHTML = `
+      <div style="background:#fff;border-radius:12px;width:500px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;">
+        <!-- 성공 헤더 -->
+        <div style="background:#16a34a;padding:20px;text-align:center;">
+          <div style="font-size:36px;margin-bottom:8px;">✅</div>
+          <div style="color:#fff;font-weight:800;font-size:18px;">Payment 완료!</div>
+          <div style="color:#bbf7d0;font-size:13px;margin-top:4px;">${inv.vendor_name}</div>
+        </div>
+
+        <!-- 금액 강조 -->
+        <div style="background:#f0fdf4;padding:16px;text-align:center;border-bottom:1px solid #e5e7eb;">
+          <div style="font-size:11px;color:#6b7280;font-weight:700;text-transform:uppercase;">지급 금액</div>
+          <div style="font-size:32px;font-weight:900;color:#16a34a;font-family:'IBM Plex Mono',monospace;">${fmt(amount)}</div>
+        </div>
+
+        <!-- 상세 내역 -->
+        <div style="padding:16px 20px;">
+          <table style="width:100%;font-size:12px;border-collapse:collapse;">
+            <tr style="border-bottom:1px solid #f0f0f0;">
+              <td style="padding:7px 0;color:#6b7280;font-weight:600;">Invoice #</td>
+              <td style="padding:7px 0;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;">${inv.invoice_number}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #f0f0f0;">
+              <td style="padding:7px 0;color:#6b7280;font-weight:600;">Payment Date</td>
+              <td style="padding:7px 0;text-align:right;">${payDate}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #f0f0f0;">
+              <td style="padding:7px 0;color:#6b7280;font-weight:600;">Method</td>
+              <td style="padding:7px 0;text-align:right;">${methodLabel}</td>
+            </tr>
+            ${ref ? `<tr style="border-bottom:1px solid #f0f0f0;">
+              <td style="padding:7px 0;color:#6b7280;font-weight:600;">Reference #</td>
+              <td style="padding:7px 0;text-align:right;font-family:'IBM Plex Mono',monospace;">${ref}</td>
+            </tr>` : ''}
+            <tr style="border-bottom:1px solid #f0f0f0;">
+              <td style="padding:7px 0;color:#6b7280;font-weight:600;">Cash Account</td>
+              <td style="padding:7px 0;text-align:right;font-size:11px;">${cashAcctName}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #f0f0f0;">
+              <td style="padding:7px 0;color:#6b7280;font-weight:600;">Remaining Balance</td>
+              <td style="padding:7px 0;text-align:right;font-weight:700;color:${newBalance <= 0.01 ? '#16a34a' : '#dc2626'};">${fmt(newBalance)} ${newBalance <= 0.01 ? '✓ PAID' : ''}</td>
+            </tr>
+            ${confirmationPath ? `<tr style="border-bottom:1px solid #f0f0f0;">
+              <td style="padding:7px 0;color:#6b7280;font-weight:600;">Confirmation</td>
+              <td style="padding:7px 0;text-align:right;color:#16a34a;">📎 업로드 완료</td>
+            </tr>` : ''}
+          </table>
+
+          <!-- Journal Entry -->
+          <div style="margin-top:12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;">
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">📒 Journal Entry — ${jeNum}</div>
+            <table style="width:100%;font-size:11px;border-collapse:collapse;">
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <td style="padding:4px 0;font-weight:700;color:#1a56a0;width:32px;">DR</td>
+                <td style="padding:4px 0;font-family:'IBM Plex Mono',monospace;font-size:10px;">200-001 — Accounts Payable</td>
+                <td style="padding:4px 0;text-align:right;font-family:'IBM Plex Mono',monospace;color:#1a56a0;font-weight:700;">${fmt(amount)}</td>
+              </tr>
+              <tr>
+                <td style="padding:4px 0;font-weight:700;color:#dc2626;">CR</td>
+                <td style="padding:4px 0;font-family:'IBM Plex Mono',monospace;font-size:10px;">${cashAcct} — ${cashAcctName.split('—')[1]?.trim()||''}</td>
+                <td style="padding:4px 0;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;font-weight:700;">${fmt(amount)}</td>
+              </tr>
+              <tr style="border-top:1px solid #e5e7eb;background:#f0f4f8;">
+                <td colspan="2" style="padding:4px 0;font-size:10px;color:#16a34a;font-weight:700;">✓ Balanced</td>
+                <td></td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
+          <button onclick="document.getElementById('ap-payment-modal').style.display='none';location.reload();" 
+            style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:8px 20px;font-size:13px;font-weight:700;cursor:pointer;">
+            확인
+          </button>
+        </div>
+      </div>`;
+    document.getElementById('ap-payment-modal').style.display = 'flex';
     await loadAP();
 
   } catch(e) {
