@@ -2340,6 +2340,25 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 <option value="101-008">101-008 — BOA 6897</option>
               </select>
             </div>
+            <!-- Confirmation 파일 첨부 -->
+            <div style="grid-column:1/-1;">
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:6px;">CONFIRMATION FILE <span style="font-weight:400;color:#6b7280;">(Wire / ACH confirmation — 선택)</span></div>
+              <label id="ap-pmt-file-label" style="display:flex;align-items:center;gap:10px;border:2px dashed #d1d5db;border-radius:8px;padding:12px 14px;cursor:pointer;background:#f9fafb;transition:border-color 0.2s;"
+                onmouseover="this.style.borderColor='#1a56a0'" onmouseout="this.style.borderColor='#d1d5db'">
+                <span style="font-size:20px;">📎</span>
+                <div>
+                  <div id="ap-pmt-file-name" style="font-size:12px;font-weight:600;color:#374151;">파일 선택 또는 드래그</div>
+                  <div style="font-size:10px;color:#9ca3af;margin-top:2px;">PDF, PNG, JPG — 최대 10MB</div>
+                </div>
+                <input type="file" id="ap-pmt-file" accept=".pdf,.png,.jpg,.jpeg" style="display:none;"
+                  onchange="onAPPaymentFileSelect(this)">
+              </label>
+              <div id="ap-pmt-file-preview" style="display:none;margin-top:6px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 12px;display:none;align-items:center;gap:8px;">
+                <span style="font-size:16px;">📄</span>
+                <span id="ap-pmt-file-preview-name" style="font-size:12px;font-weight:600;color:#1a56a0;flex:1;"></span>
+                <button onclick="clearAPPaymentFile()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;" title="파일 제거">×</button>
+              </div>
+            </div>
           </div>
         </div>
         <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
@@ -27576,7 +27595,23 @@ async function openAPPaymentModal(invoiceId) {
   document.getElementById('ap-pmt-amount').value = balance.toFixed(2);
   document.getElementById('ap-pmt-ref').value = '';
   document.getElementById('ap-pmt-notes').value = '';
+  clearAPPaymentFile();
   document.getElementById('ap-payment-modal').style.display = 'flex';
+}
+
+function onAPPaymentFileSelect(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  document.getElementById('ap-pmt-file-name').textContent = file.name;
+  const preview = document.getElementById('ap-pmt-file-preview');
+  document.getElementById('ap-pmt-file-preview-name').textContent = `${file.name} (${(file.size/1024).toFixed(0)} KB)`;
+  preview.style.display = 'flex';
+}
+
+function clearAPPaymentFile() {
+  document.getElementById('ap-pmt-file').value = '';
+  document.getElementById('ap-pmt-file-name').textContent = '파일 선택 또는 드래그';
+  document.getElementById('ap-pmt-file-preview').style.display = 'none';
 }
 
 async function saveAPPayment() {
@@ -27589,6 +27624,8 @@ async function saveAPPayment() {
   const ref = document.getElementById('ap-pmt-ref').value.trim();
   const notes = document.getElementById('ap-pmt-notes').value.trim();
   const cashAcct = document.getElementById('ap-pmt-cash-acct').value;
+  const fileInput = document.getElementById('ap-pmt-file');
+  const file = fileInput?.files?.[0] || null;
 
   if (!payDate || amount <= 0) { showToast('❌ 날짜와 금액을 입력하세요.'); return; }
 
@@ -27596,6 +27633,14 @@ async function saveAPPayment() {
   if (amount > balance + 0.01) { showToast(`❌ 금액이 잔액($${balance.toFixed(2)})을 초과합니다.`); return; }
 
   try {
+    // Confirmation 파일 업로드
+    let confirmationPath = null;
+    if (file) {
+      const ext = file.name.split('.').pop();
+      const fileName = `${new Date().getFullYear()}/${inv.invoice_number.replace(/[^a-zA-Z0-9]/g,'-')}-${Date.now()}.${ext}`;
+      const { data: uploadData } = await db.storage.from('ap-invoices').upload(fileName, file, { upsert: true });
+      confirmationPath = uploadData?.path || null;
+    }
     // 1. 자동 분개: DR AP / CR Cash
     const year = new Date().getFullYear();
     const { data: lastJE } = await db.from('journal_entries')
@@ -27630,6 +27675,7 @@ async function saveAPPayment() {
       payment_date: payDate,
       amount, method, reference: ref, notes,
       journal_entry_id: je?.id,
+      confirmation_path: confirmationPath,
       created_by: _currentEmployee?.name || 'System',
       created_at: new Date().toISOString()
     });
