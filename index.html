@@ -2041,6 +2041,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
         <h2 style="margin:0;font-size:16px;font-weight:700;">💳 Accounts Payable</h2>
         <div style="flex:1;"></div>
+        <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;font-weight:700;" onclick="openCheckPrintingModal()">🖨️ Check Printing</button>
         <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;" onclick="openAPInvoiceModal()">+ New Invoice</button>
         <button class="btn" style="background:#7f1d1d;color:#fff;border-color:#7f1d1d;font-weight:700;" onclick="document.getElementById('ap-parse-input').click()">📎 Parse Invoices</button>
         <input type="file" id="ap-parse-input" accept=".pdf,.png,.jpg,.jpeg" multiple style="display:none;" onchange="parseAPInvoicesBatch(this)">
@@ -2320,6 +2321,120 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     </div>
 
     <!-- ── AP Payment 모달 ── -->
+    <!-- ── CHECK PRINTING 모달 ── -->
+    <div id="cp-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:99999;align-items:flex-start;justify-content:center;padding-top:30px;">
+      <div style="background:#fff;border-radius:12px;width:1000px;max-width:97vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+
+        <!-- Header -->
+        <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <span style="color:#fff;font-weight:800;font-size:16px;">🖨️ Check Printing</span>
+            <span style="background:rgba(255,255,255,0.15);color:#93c5fd;font-size:11px;padding:2px 10px;border-radius:10px;font-family:'IBM Plex Mono',monospace;" id="cp-check-count">0 checks queued</span>
+          </div>
+          <button onclick="closeCheckPrintingModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
+        </div>
+
+        <!-- Step indicator -->
+        <div style="background:#1e3a5f;padding:8px 20px;display:flex;gap:0;flex-shrink:0;">
+          <div id="cp-step-1-ind" style="display:flex;align-items:center;gap:6px;font-size:11px;color:#93c5fd;font-weight:700;">
+            <span style="width:20px;height:20px;background:#1a56a0;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;">1</span>
+            Select Invoices
+          </div>
+          <div style="width:40px;height:1px;background:rgba(255,255,255,0.2);align-self:center;margin:0 8px;"></div>
+          <div id="cp-step-2-ind" style="display:flex;align-items:center;gap:6px;font-size:11px;color:rgba(255,255,255,0.4);font-weight:600;">
+            <span style="width:20px;height:20px;background:rgba(255,255,255,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;">2</span>
+            Review & Print
+          </div>
+          <div style="width:40px;height:1px;background:rgba(255,255,255,0.2);align-self:center;margin:0 8px;"></div>
+          <div id="cp-step-3-ind" style="display:flex;align-items:center;gap:6px;font-size:11px;color:rgba(255,255,255,0.4);font-weight:600;">
+            <span style="width:20px;height:20px;background:rgba(255,255,255,0.15);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;">3</span>
+            Journal Entry
+          </div>
+        </div>
+
+        <!-- STEP 1: Vendor + Invoice Selection -->
+        <div id="cp-step-1" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;">
+          <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:12px;align-items:flex-end;flex-shrink:0;">
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;text-transform:uppercase;">Vendor</div>
+              <select id="cp-vendor-select" class="fi" style="width:240px;font-size:13px;" onchange="cpLoadVendorInvoices()">
+                <option value="">— Select Vendor —</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;text-transform:uppercase;">Payment Date</div>
+              <input type="date" id="cp-pay-date" class="fi" style="width:140px;font-size:13px;">
+            </div>
+            <div>
+              <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;text-transform:uppercase;">Cash Account</div>
+              <select id="cp-cash-acct" class="fi" style="width:200px;font-size:13px;">
+                <option value="101-001">101-001 — BOA Checking</option>
+                <option value="101-002">101-002 — BOA Payroll</option>
+                <option value="101-003">101-003 — BOA Merchant</option>
+                <option value="101-008">101-008 — BOA 6897</option>
+              </select>
+            </div>
+            <button onclick="cpAddVendorToQueue()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add to Queue</button>
+          </div>
+
+          <!-- Vendor invoice list -->
+          <div id="cp-vendor-invoices" style="flex:1;padding:16px 20px;">
+            <div style="color:#9ca3af;text-align:center;padding:40px;font-size:13px;">벤더를 선택하면 오픈 인보이스가 표시됩니다.</div>
+          </div>
+
+          <!-- Queued checks summary -->
+          <div id="cp-queue-section" style="border-top:2px solid #e5e7eb;background:#f0f7ff;flex-shrink:0;display:none;">
+            <div style="padding:10px 20px;display:flex;align-items:center;justify-content:space-between;">
+              <div style="font-size:12px;font-weight:700;color:#0f2744;">📋 Check Queue</div>
+              <div style="font-size:12px;color:#6b7280;" id="cp-queue-total"></div>
+            </div>
+            <div id="cp-queue-list" style="padding:0 20px 12px;display:flex;flex-direction:column;gap:6px;"></div>
+          </div>
+
+          <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+            <button onclick="closeCheckPrintingModal()" style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>
+            <button onclick="cpGoToReview()" id="cp-next-btn" style="background:#0f2744;color:#fff;border:none;border-radius:6px;padding:8px 24px;font-size:13px;font-weight:700;cursor:pointer;opacity:0.4;" disabled>Review & Print →</button>
+          </div>
+        </div>
+
+        <!-- STEP 2: Review + Check Numbers + Print -->
+        <div id="cp-step-2" style="flex:1;overflow-y:auto;display:none;flex-direction:column;">
+          <div style="padding:14px 20px;background:#f8fafc;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:12px;flex-shrink:0;">
+            <div style="font-size:12px;color:#374151;font-weight:600;">Starting Check No.</div>
+            <input type="text" id="cp-start-check-no" class="fi" style="width:120px;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;letter-spacing:2px;" oninput="cpUpdateCheckNumbers()" placeholder="e.g. 047257">
+            <div style="font-size:11px;color:#6b7280;">체크에 이미 인쇄된 첫번째 번호 입력 → 자동 증가</div>
+          </div>
+          <div id="cp-review-list" style="flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;"></div>
+          <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+            <button onclick="cpGoToStep(1)" style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;">← Back</button>
+            <div style="display:flex;gap:8px;">
+              <div style="font-size:13px;font-weight:700;color:#0f2744;align-self:center;" id="cp-review-total"></div>
+              <button onclick="cpPrintAll()" style="background:#0f2744;color:#fff;border:none;border-radius:6px;padding:8px 24px;font-size:13px;font-weight:700;cursor:pointer;">🖨️ Print All Checks</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 3: Journal Entry Confirmation -->
+        <div id="cp-step-3" style="flex:1;overflow-y:auto;display:none;flex-direction:column;">
+          <div style="padding:16px 20px;flex:1;overflow-y:auto;">
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:12px;color:#15803d;font-weight:600;">
+              ✅ Checks printed successfully! Review the journal entries below and confirm to post.
+            </div>
+            <div id="cp-je-preview" style="display:flex;flex-direction:column;gap:12px;"></div>
+          </div>
+          <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+            <div style="font-size:12px;color:#6b7280;">Journal entries will be posted to GL and AP payments recorded.</div>
+            <div style="display:flex;gap:8px;">
+              <button onclick="cpGoToStep(2)" style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;">← Back</button>
+              <button onclick="cpPostAndClose()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:8px 28px;font-size:13px;font-weight:700;cursor:pointer;">✓ Confirm & Post to GL</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <!-- ── END CHECK PRINTING 모달 ── -->
+
     <div id="ap-payment-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
       <div style="background:#fff;border-radius:12px;width:500px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
         <div style="background:#7f1d1d;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">
@@ -27670,6 +27785,578 @@ async function saveAPInvoice() {
 }
 
 // ── AP Payment 모달 ──
+// ═══════════════════════════════════════════════════════════
+// CHECK PRINTING MODULE
+// ═══════════════════════════════════════════════════════════
+let _cpQueue = [];         // [{vendorId, vendorName, vendorAddr, invoices:[{id,invoice_number,amount,payAmount}], checkNo}]
+let _cpPayDate = '';
+let _cpCashAcct = '';
+
+async function openCheckPrintingModal() {
+  _cpQueue = [];
+  _cpPayDate = new Date().toISOString().slice(0,10);
+
+  // Populate vendor dropdown
+  const sel = document.getElementById('cp-vendor-select');
+  sel.innerHTML = '<option value="">— Select Vendor —</option>';
+  (_apVendors||[]).sort((a,b)=>(a.name||'').localeCompare(b.name||'')).forEach(v => {
+    // Only vendors with open invoices
+    const hasOpen = (_apInvoices||[]).some(i => i.vendor_id === v.id && ['open','partial'].includes(i.status));
+    if (hasOpen) sel.innerHTML += `<option value="${v.id}">${v.name}</option>`;
+  });
+
+  document.getElementById('cp-pay-date').value = _cpPayDate;
+
+  // Auto-suggest next check number from ap_payments
+  try {
+    const { data } = await db.from('ap_payments')
+      .select('reference')
+      .eq('method','check')
+      .order('created_at', { ascending: false })
+      .limit(20);
+    let maxNo = 0;
+    (data||[]).forEach(p => {
+      const n = parseInt((p.reference||'').replace(/\D/g,''));
+      if (!isNaN(n) && n > maxNo) maxNo = n;
+    });
+    if (maxNo > 0) document.getElementById('cp-start-check-no').value = String(maxNo + 1);
+  } catch(e) {}
+
+  cpGoToStep(1);
+  document.getElementById('cp-vendor-invoices').innerHTML = '<div style="color:#9ca3af;text-align:center;padding:40px;font-size:13px;">벤더를 선택하면 오픈 인보이스가 표시됩니다.</div>';
+  cpRenderQueue();
+  document.getElementById('cp-modal').style.display = 'flex';
+}
+
+function closeCheckPrintingModal() {
+  document.getElementById('cp-modal').style.display = 'none';
+}
+
+function cpGoToStep(n) {
+  [1,2,3].forEach(i => {
+    document.getElementById(`cp-step-${i}`).style.display = i === n ? 'flex' : 'none';
+    const ind = document.getElementById(`cp-step-${i}-ind`);
+    if (ind) {
+      ind.style.color = i === n ? '#93c5fd' : (i < n ? '#4ade80' : 'rgba(255,255,255,0.4)');
+      const dot = ind.querySelector('span');
+      if (dot) dot.style.background = i === n ? '#1a56a0' : (i < n ? '#16a34a' : 'rgba(255,255,255,0.15)');
+    }
+  });
+}
+
+function cpLoadVendorInvoices() {
+  const vendorId = document.getElementById('cp-vendor-select').value;
+  if (!vendorId) {
+    document.getElementById('cp-vendor-invoices').innerHTML = '<div style="color:#9ca3af;text-align:center;padding:40px;font-size:13px;">벤더를 선택하면 오픈 인보이스가 표시됩니다.</div>';
+    return;
+  }
+  const vendor = (_apVendors||[]).find(v => v.id === vendorId);
+  const openInvoices = (_apInvoices||[]).filter(i => i.vendor_id === vendorId && ['open','partial'].includes(i.status));
+
+  if (openInvoices.length === 0) {
+    document.getElementById('cp-vendor-invoices').innerHTML = '<div style="color:#9ca3af;text-align:center;padding:40px;">이 벤더에 오픈 인보이스가 없습니다.</div>';
+    return;
+  }
+
+  const alreadyQueued = _cpQueue.find(q => q.vendorId === vendorId);
+
+  let rows = openInvoices.map(inv => {
+    const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+    const prevSelected = alreadyQueued?.invoices.find(i => i.id === inv.id);
+    const checked = prevSelected ? 'checked' : '';
+    const prevAmt = prevSelected ? prevSelected.payAmount.toFixed(2) : balance.toFixed(2);
+    const daysOverdue = inv.due_date ? Math.max(0, Math.floor((new Date()-new Date(inv.due_date))/(1000*60*60*24))) : 0;
+    const overdueHtml = daysOverdue > 0 ? `<span style="background:#fef2f2;color:#dc2626;font-size:10px;padding:1px 6px;border-radius:4px;font-weight:700;">${daysOverdue}d overdue</span>` : '';
+    return `<tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:9px 10px;text-align:center;">
+        <input type="checkbox" id="cp-inv-chk-${inv.id}" ${checked}
+          onchange="cpToggleInvoice('${inv.id}','${vendorId}')"
+          style="width:16px;height:16px;cursor:pointer;">
+      </td>
+      <td style="padding:9px 10px;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:#1a56a0;">${inv.invoice_number}</td>
+      <td style="padding:9px 10px;font-size:12px;">${inv.invoice_date||'—'}</td>
+      <td style="padding:9px 10px;font-size:12px;">${inv.due_date||'—'} ${overdueHtml}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;">$${(parseFloat(inv.total_amount)||0).toFixed(2)}</td>
+      <td style="padding:9px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#dc2626;">$${balance.toFixed(2)}</td>
+      <td style="padding:9px 10px;text-align:right;">
+        <input type="number" id="cp-inv-amt-${inv.id}" value="${prevAmt}" min="0.01" max="${balance.toFixed(2)}" step="0.01"
+          style="width:100px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;border:1px solid #d1d5db;border-radius:4px;padding:3px 6px;"
+          oninput="cpUpdatePayAmt('${inv.id}')">
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('cp-vendor-invoices').innerHTML = `
+    <div style="font-size:12px;font-weight:700;color:#0f2744;margin-bottom:10px;">
+      ${vendor?.name||''} — Open Invoices
+      <button onclick="cpSelectAll('${vendorId}')" style="margin-left:12px;background:#e8f0fb;color:#1a56a0;border:none;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">Select All</button>
+      <button onclick="cpDeselectAll('${vendorId}')" style="margin-left:4px;background:#f3f4f6;color:#374151;border:none;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">Deselect All</button>
+    </div>
+    <div style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f8fafc;border-bottom:2px solid #e5e7eb;">
+          <th style="padding:8px 10px;width:40px;"></th>
+          <th style="padding:8px 10px;text-align:left;">Invoice #</th>
+          <th style="padding:8px 10px;text-align:left;width:100px;">Inv Date</th>
+          <th style="padding:8px 10px;text-align:left;width:150px;">Due Date</th>
+          <th style="padding:8px 10px;text-align:right;width:110px;">Total</th>
+          <th style="padding:8px 10px;text-align:right;width:110px;color:#dc2626;">Balance</th>
+          <th style="padding:8px 10px;text-align:right;width:120px;color:#16a34a;">Pay Amount</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function cpToggleInvoice(invId, vendorId) {
+  // just visual — actual data captured on "Add to Queue"
+}
+
+function cpUpdatePayAmt(invId) {
+  // live update — captured on Add to Queue
+}
+
+function cpSelectAll(vendorId) {
+  const openInvoices = (_apInvoices||[]).filter(i => i.vendor_id === vendorId && ['open','partial'].includes(i.status));
+  openInvoices.forEach(inv => {
+    const chk = document.getElementById(`cp-inv-chk-${inv.id}`);
+    if (chk) chk.checked = true;
+  });
+}
+
+function cpDeselectAll(vendorId) {
+  const openInvoices = (_apInvoices||[]).filter(i => i.vendor_id === vendorId && ['open','partial'].includes(i.status));
+  openInvoices.forEach(inv => {
+    const chk = document.getElementById(`cp-inv-chk-${inv.id}`);
+    if (chk) chk.checked = false;
+  });
+}
+
+function cpAddVendorToQueue() {
+  const vendorId = document.getElementById('cp-vendor-select').value;
+  if (!vendorId) { showToast('❌ 벤더를 선택하세요.'); return; }
+
+  const vendor = (_apVendors||[]).find(v => v.id === vendorId);
+  const openInvoices = (_apInvoices||[]).filter(i => i.vendor_id === vendorId && ['open','partial'].includes(i.status));
+
+  const selected = [];
+  openInvoices.forEach(inv => {
+    const chk = document.getElementById(`cp-inv-chk-${inv.id}`);
+    const amtInput = document.getElementById(`cp-inv-amt-${inv.id}`);
+    if (chk && chk.checked) {
+      const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+      const payAmt = Math.min(parseFloat(amtInput?.value)||balance, balance);
+      selected.push({ id: inv.id, invoice_number: inv.invoice_number, balance, payAmount: payAmt });
+    }
+  });
+
+  if (selected.length === 0) { showToast('❌ 인보이스를 하나 이상 선택하세요.'); return; }
+
+  // Remove existing entry for this vendor if re-adding
+  _cpQueue = _cpQueue.filter(q => q.vendorId !== vendorId);
+
+  const vendorAddr1 = vendor?.address || '';
+  const vendorAddr2 = [vendor?.city, vendor?.state, vendor?.zip].filter(Boolean).join(', ');
+
+  _cpQueue.push({ vendorId, vendorName: vendor?.name||'', vendorAddr1, vendorAddr2, invoices: selected });
+  cpRenderQueue();
+
+  // Clear vendor selection for next entry
+  document.getElementById('cp-vendor-select').value = '';
+  document.getElementById('cp-vendor-invoices').innerHTML = '<div style="color:#9ca3af;text-align:center;padding:40px;font-size:13px;">벤더를 선택하면 오픈 인보이스가 표시됩니다.</div>';
+  showToast(`✅ ${vendor?.name||''} added to queue`);
+}
+
+function cpRenderQueue() {
+  const section = document.getElementById('cp-queue-section');
+  const list = document.getElementById('cp-queue-list');
+  const countBadge = document.getElementById('cp-check-count');
+  const nextBtn = document.getElementById('cp-next-btn');
+
+  if (_cpQueue.length === 0) {
+    section.style.display = 'none';
+    countBadge.textContent = '0 checks queued';
+    nextBtn.disabled = true;
+    nextBtn.style.opacity = '0.4';
+    return;
+  }
+
+  section.style.display = 'block';
+  countBadge.textContent = `${_cpQueue.length} check${_cpQueue.length>1?'s':''} queued`;
+  nextBtn.disabled = false;
+  nextBtn.style.opacity = '1';
+
+  let grandTotal = 0;
+  list.innerHTML = _cpQueue.map((q, idx) => {
+    const total = q.invoices.reduce((s,i) => s+i.payAmount, 0);
+    grandTotal += total;
+    const invList = q.invoices.map(i => `<span style="font-size:10px;background:#e8f0fb;color:#1a56a0;border-radius:3px;padding:1px 6px;font-family:'IBM Plex Mono',monospace;">${i.invoice_number} $${i.payAmount.toFixed(2)}</span>`).join(' ');
+    return `<div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:8px 12px;">
+      <div style="width:24px;height:24px;background:#0f2744;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:700;flex-shrink:0;">${idx+1}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:700;color:#0f2744;">${q.vendorName}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:3px;">${invList}</div>
+      </div>
+      <div style="font-size:13px;font-weight:800;color:#0f2744;font-family:'IBM Plex Mono',monospace;white-space:nowrap;">$${total.toFixed(2)}</div>
+      <button onclick="_cpQueue.splice(${idx},1);cpRenderQueue()" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:16px;padding:0 4px;" title="Remove">×</button>
+    </div>`;
+  }).join('');
+
+  document.getElementById('cp-queue-total').textContent = `Grand Total: $${grandTotal.toFixed(2)}`;
+}
+
+function cpGoToReview() {
+  if (_cpQueue.length === 0) { showToast('❌ 체크 큐가 비어있습니다.'); return; }
+  _cpPayDate = document.getElementById('cp-pay-date').value || new Date().toISOString().slice(0,10);
+  _cpCashAcct = document.getElementById('cp-cash-acct').value;
+
+  cpUpdateCheckNumbers();
+  cpGoToStep(2);
+}
+
+function cpUpdateCheckNumbers() {
+  const startNo = parseInt(document.getElementById('cp-start-check-no')?.value?.replace(/\D/g,'')) || 0;
+  _cpQueue.forEach((q, idx) => { q.checkNo = startNo > 0 ? String(startNo + idx) : ''; });
+  cpRenderReview();
+}
+
+function cpRenderReview() {
+  const fmtDate = v => { if(!v)return'—'; const [y,m,d]=v.split('-'); return `${m}/${d}/${y}`; };
+  let grandTotal = 0;
+  const html = _cpQueue.map((q, idx) => {
+    const total = q.invoices.reduce((s,i) => s+i.payAmount, 0);
+    grandTotal += total;
+    const invRows = q.invoices.map(i =>
+      `<tr style="border-bottom:1px solid #f0f4f8;">
+        <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a56a0;">${i.invoice_number}</td>
+        <td style="padding:5px 10px;text-align:right;font-size:11px;">$${i.balance.toFixed(2)}</td>
+        <td style="padding:5px 10px;text-align:right;font-size:11px;font-weight:700;color:#16a34a;">$${i.payAmount.toFixed(2)}</td>
+      </tr>`
+    ).join('');
+    return `<div style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <div style="background:#0f2744;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="background:#1a56a0;color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;">CHECK #${idx+1}</div>
+          <div style="color:#fff;font-size:13px;font-weight:700;">${q.vendorName}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div>
+            <span style="color:#93c5fd;font-size:10px;">Check No. </span>
+            <input type="text" value="${q.checkNo||''}" oninput="_cpQueue[${idx}].checkNo=this.value;cpRenderReview()"
+              style="width:90px;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;letter-spacing:2px;border:1px solid #1a56a0;border-radius:4px;padding:2px 6px;background:#1e3a5f;color:#fff;text-align:center;">
+          </div>
+          <div style="color:#fff;font-size:14px;font-weight:800;font-family:'IBM Plex Mono',monospace;">$${total.toFixed(2)}</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;">
+        <div style="padding:10px 16px;border-right:1px solid #e5e7eb;font-size:11px;">
+          <div style="color:#6b7280;margin-bottom:4px;">Pay to:</div>
+          <div style="font-weight:700;">${q.vendorName}</div>
+          ${q.vendorAddr1 ? `<div style="color:#374151;">${q.vendorAddr1}</div>` : ''}
+          ${q.vendorAddr2 ? `<div style="color:#374151;">${q.vendorAddr2}</div>` : ''}
+        </div>
+        <div style="padding:10px 16px;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead><tr style="border-bottom:1px solid #e5e7eb;">
+              <th style="padding:4px 10px;text-align:left;color:#6b7280;font-weight:600;font-size:10px;">Invoice #</th>
+              <th style="padding:4px 10px;text-align:right;color:#6b7280;font-weight:600;font-size:10px;">Balance</th>
+              <th style="padding:4px 10px;text-align:right;color:#16a34a;font-weight:600;font-size:10px;">Paying</th>
+            </tr></thead>
+            <tbody>${invRows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('cp-review-list').innerHTML = html;
+  document.getElementById('cp-review-total').textContent = `Total: $${grandTotal.toFixed(2)} for ${_cpQueue.length} check${_cpQueue.length>1?'s':''}`;
+}
+
+function cpPrintAll() {
+  const missingCheckNo = _cpQueue.some(q => !q.checkNo);
+  if (missingCheckNo) { showToast('❌ 모든 체크에 Check No.를 입력하세요.'); return; }
+
+  const fmtDate = v => { if(!v)return'—'; const[y,m,d]=v.split('-'); return `${m}/${d}/${y}`; };
+
+  function toWordsCP(n) {
+    const ones=['','ONE','TWO','THREE','FOUR','FIVE','SIX','SEVEN','EIGHT','NINE','TEN','ELEVEN','TWELVE','THIRTEEN','FOURTEEN','FIFTEEN','SIXTEEN','SEVENTEEN','EIGHTEEN','NINETEEN'];
+    const tens=['','','TWENTY','THIRTY','FORTY','FIFTY','SIXTY','SEVENTY','EIGHTY','NINETY'];
+    if(n===0)return'ZERO';if(n<20)return ones[n];if(n<100)return tens[Math.floor(n/10)]+(ones[n%10]?' '+ones[n%10]:'');
+    if(n<1000)return ones[Math.floor(n/100)]+' HUNDRED'+(n%100?' '+toWordsCP(n%100):'');
+    if(n<1000000)return toWordsCP(Math.floor(n/1000))+' THOUSAND'+(n%1000?' '+toWordsCP(n%1000):'');
+    return toWordsCP(Math.floor(n/1000000))+' MILLION'+(n%1000000?' '+toWordsCP(n%1000000):'');
+  }
+
+  const checkCSS = `
+    @page { margin: 0; size: 8.5in 11in; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 11px; color: #000; background: #fff; }
+    .page { width: 8.5in; padding: 0.3in; page-break-after: always; }
+    .page:last-child { page-break-after: auto; }
+    .stub { border-bottom: 1px dashed #888; padding-bottom: 10px; min-height: 3.2in; }
+    .stub-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:3px; }
+    .stub-company { font-size:11px; font-weight:bold; }
+    .stub-checkno { font-size:18px; font-weight:bold; letter-spacing:3px; }
+    .stub-refno { font-size:9px; color:#666; margin-bottom:5px; }
+    .stub-cols { display:flex; gap:24px; font-size:10px; margin:5px 0; }
+    .stub-divider { font-size:10px; color:#666; margin:5px 0 3px; }
+    .stub-detail { display:flex; justify-content:space-between; font-size:10px; }
+    .stub-invs { margin-top:8px; font-size:9px; color:#444; }
+    .check { border:1px solid #bbb; padding:12px 16px; }
+    .check-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
+    .logo-wrap { display:flex; align-items:flex-start; gap:10px; }
+    .logo { width:36px; height:36px; background:#000; border-radius:50% 0 0 50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .logo-inner { width:20px; height:20px; background:white; border-radius:50%; }
+    .co-name { font-size:11px; font-weight:bold; line-height:1.4; }
+    .co-addr { font-size:9px; line-height:1.5; color:#333; }
+    .bank-block { text-align:center; }
+    .bank-name { font-size:12px; font-weight:bold; font-style:italic; }
+    .bank-route { font-size:9px; color:#333; margin-top:2px; }
+    .chkno-small { font-size:9px; color:#555; margin-top:4px; }
+    .chkno-big { font-size:18px; font-weight:bold; letter-spacing:3px; text-align:right; }
+    .amount-words { font-size:11px; font-weight:bold; margin:5px 0; letter-spacing:0.5px; }
+    .check-fields { display:flex; justify-content:flex-end; gap:24px; margin:5px 0; }
+    .field-label { font-size:9px; color:#666; }
+    .field-val { font-size:12px; font-weight:bold; }
+    .check-bottom { display:flex; justify-content:space-between; align-items:flex-end; margin-top:10px; }
+    .pay-label { font-size:9px; color:#666; line-height:1.8; }
+    .payee-name { font-size:12px; font-weight:bold; }
+    .payee-addr { font-size:10px; }
+    .sig-block { text-align:right; }
+    .non-neg { font-size:14px; font-weight:bold; letter-spacing:2px; font-family:serif; border:1.5px solid #000; padding:3px 10px; }
+    .sig-label { font-size:8px; color:#666; text-align:center; margin-top:2px; }
+    .micr { text-align:center; font-family:monospace; font-size:13px; letter-spacing:2px; margin-top:8px; border-top:0.5px solid #ddd; padding-top:5px; color:#333; }
+    .non-neg-stamp { font-size:16px; font-weight:bold; letter-spacing:3px; font-family:serif; border:2px solid #000; padding:4px 12px; color:#000; }`;
+
+  const generateCheckPage = (q, isCopy) => {
+    const total = q.invoices.reduce((s,i) => s+i.payAmount, 0);
+    const dollars = Math.floor(total);
+    const cents = Math.round((total-dollars)*100);
+    const words = '*' + toWordsCP(dollars) + ' AND ' + String(cents).padStart(2,'0') + ' / 100';
+    const amtFmt = '****' + total.toFixed(2) + '*';
+    const invLine = q.invoices.map(i => `${i.invoice_number}: $${i.payAmount.toFixed(2)}`).join('  |  ');
+
+    return `<div class="page">
+      <!-- STUB -->
+      <div class="stub">
+        <div class="stub-top">
+          <div class="stub-company">PEACE TEXTILE AMERICA, INC.</div>
+          <div class="stub-checkno">${q.checkNo}</div>
+        </div>
+        <div class="stub-refno">Ref. No: G 090500581</div>
+        <div class="stub-cols">
+          <span>${fmtDate(_cpPayDate)}</span>
+          <span style="flex:1;text-align:right;">${total.toFixed(2)}</span>
+          <span>0.00</span>
+          <span>${total.toFixed(2)}</span>
+        </div>
+        <div class="stub-divider">00-0000817</div>
+        <div class="stub-detail">
+          <span>CHECK: ${q.checkNo} &nbsp; ${fmtDate(_cpPayDate)} &nbsp; ${q.vendorName}</span>
+          <span>${total.toFixed(2)}</span>
+        </div>
+        <div class="stub-invs">
+          ${q.invoices.map(i => `<div style="margin-top:3px;">Invoice ${i.invoice_number} — $${i.payAmount.toFixed(2)}</div>`).join('')}
+        </div>
+        ${isCopy ? '<div style="margin-top:16px;text-align:center;font-size:14px;font-weight:bold;color:#555;letter-spacing:2px;border:1px dashed #aaa;padding:4px;">OUR COPY</div>' : ''}
+      </div>
+      <!-- ACTUAL CHECK -->
+      <div class="check">
+        <div class="check-top">
+          <div class="logo-wrap">
+            <div class="logo"><div class="logo-inner"></div></div>
+            <div>
+              <div class="co-name">PEACE TEXTILE AMERICA, INC.</div>
+              <div class="co-addr">1605 S. GUIGNARD PARKWAY<br>P.O. BOX 1148<br>SUMTER, SC 29151</div>
+            </div>
+          </div>
+          <div class="bank-block">
+            <div class="bank-name">Bank of America.</div>
+            <div class="bank-route">67-448/539</div>
+            <div class="chkno-small">CHECK NO. ${q.checkNo}</div>
+          </div>
+          <div class="chkno-big">${q.checkNo}</div>
+        </div>
+        <div class="amount-words">${words}</div>
+        <div class="check-fields">
+          <div><div class="field-label">DATE</div><div class="field-val">${fmtDate(_cpPayDate)}</div></div>
+          <div><div class="field-label">AMOUNT</div><div class="field-val">${amtFmt}</div></div>
+        </div>
+        <div class="check-bottom">
+          <div>
+            <div style="display:flex;gap:8px;align-items:flex-start;">
+              <div class="pay-label">PAY<br>TO THE<br>ORDER<br>OF</div>
+              <div style="margin-left:4px;">
+                <div class="payee-name">${q.vendorName}</div>
+                ${q.vendorAddr1 ? `<div class="payee-addr">${q.vendorAddr1}</div>` : ''}
+                ${q.vendorAddr2 ? `<div class="payee-addr">${q.vendorAddr2}</div>` : ''}
+              </div>
+            </div>
+          </div>
+          <div class="sig-block">
+            ${isCopy
+              ? '<div class="non-neg-stamp">NON – NEGOTIABLE</div><div class="sig-label">AUTHORIZED SIGNATURE</div>'
+              : '<div style="border-top:1px solid #000;width:200px;margin-top:20px;"></div><div class="sig-label" style="margin-top:2px;">AUTHORIZED SIGNATURE</div>'
+            }
+          </div>
+        </div>
+        <div class="micr">⁰⁰${q.checkNo}⁰⁰ ⁰:053904483: 0007757552660⁰</div>
+      </div>
+    </div>`;
+  };
+
+  // Generate pages: for each check → vendor copy (with signature line) + our copy (NON-NEGOTIABLE)
+  const pages = _cpQueue.flatMap(q => [
+    generateCheckPage(q, false),  // 거래처용 (signature line)
+    generateCheckPage(q, true),   // 우리 카피 (NON-NEGOTIABLE)
+  ]).join('');
+
+  const win = window.open('', '_blank');
+  if (!win) { showToast('❌ 팝업 차단됨. 팝업 허용 후 재시도.'); return; }
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Check Printing — ${_cpQueue.length} checks</title><style>${checkCSS}</style></head><body>${pages}<scr`+`ipt>window.onload=function(){window.print();}<\/scr`+`ipt></body></html>`);
+  win.document.close();
+
+  // Move to JE confirmation step
+  cpBuildJEPreview();
+  cpGoToStep(3);
+}
+
+function cpBuildJEPreview() {
+  const cashAcctName = document.getElementById('cp-cash-acct')?.options[document.getElementById('cp-cash-acct')?.selectedIndex]?.text || _cpCashAcct;
+  const fmtDate = v => { if(!v)return'—'; const[y,m,d]=v.split('-'); return `${m}/${d}/${y}`; };
+  const fmt = n => '$' + parseFloat(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  const jeHtml = _cpQueue.map((q, idx) => {
+    const total = q.invoices.reduce((s,i) => s+i.payAmount, 0);
+    const jeNum = `JE-${new Date().getFullYear()}-PENDING-${idx+1}`;
+    const invRows = q.invoices.map(i =>
+      `<tr style="border-bottom:1px solid #f0f4f8;">
+        <td style="padding:4px 8px;color:#374151;font-size:11px;font-family:'IBM Plex Mono',monospace;">${i.invoice_number}</td>
+        <td style="padding:4px 8px;font-size:11px;text-align:right;">$${i.payAmount.toFixed(2)}</td>
+      </tr>`
+    ).join('');
+    return `<div style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <div style="background:#f8fafc;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e5e7eb;">
+        <div>
+          <span style="font-weight:700;color:#0f2744;">${q.vendorName}</span>
+          <span style="margin-left:10px;font-size:11px;color:#6b7280;">Check #${q.checkNo} · ${fmtDate(_cpPayDate)}</span>
+        </div>
+        <span style="font-size:13px;font-weight:800;color:#0f2744;font-family:'IBM Plex Mono',monospace;">${fmt(total)}</span>
+      </div>
+      <div style="padding:10px 14px;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">
+          <thead><tr style="border-bottom:1px solid #e5e7eb;">
+            <th style="padding:4px 8px;text-align:left;font-size:10px;color:#6b7280;font-weight:600;">Invoice</th>
+            <th style="padding:4px 8px;text-align:right;font-size:10px;color:#6b7280;font-weight:600;">Amount</th>
+          </tr></thead>
+          <tbody>${invRows}</tbody>
+        </table>
+        <!-- Journal Entry lines -->
+        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px;">
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">📒 Journal Entry</div>
+          <table style="width:100%;font-size:11px;border-collapse:collapse;">
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:4px 0;font-weight:700;color:#1a56a0;width:28px;">DR</td>
+              <td style="padding:4px 0;font-family:'IBM Plex Mono',monospace;font-size:10px;">200-001 — Accounts Payable</td>
+              <td style="padding:4px 0;text-align:right;font-family:'IBM Plex Mono',monospace;color:#1a56a0;font-weight:700;">${fmt(total)}</td>
+              <td style="width:80px;"></td>
+            </tr>
+            <tr>
+              <td style="padding:4px 0;font-weight:700;color:#dc2626;">CR</td>
+              <td style="padding:4px 0;font-family:'IBM Plex Mono',monospace;font-size:10px;">${_cpCashAcct} — ${cashAcctName.split('—')[1]?.trim()||''}</td>
+              <td style="padding:4px 0;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;font-weight:700;"></td>
+              <td style="padding:4px 0;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;font-weight:700;">${fmt(total)}</td>
+            </tr>
+            <tr style="border-top:1px solid #e5e7eb;background:#f0fdf4;">
+              <td colspan="2" style="padding:4px 0;font-size:10px;color:#16a34a;font-weight:700;">✓ Balanced</td>
+              <td colspan="2"></td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('cp-je-preview').innerHTML = jeHtml;
+}
+
+async function cpPostAndClose() {
+  const btn = document.querySelector('#cp-step-3 button[onclick="cpPostAndClose()"]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Posting...'; }
+
+  try {
+    const year = new Date().getFullYear();
+    const { data: lastJE } = await db.from('journal_entries')
+      .select('entry_number').like('entry_number', `JE-${year}-%`)
+      .not('entry_number', 'like', '%-PENDING-%')
+      .order('entry_number', { ascending: false }).limit(1);
+    let lastNum = lastJE?.[0] ? parseInt(lastJE[0].entry_number.split('-')[2]) || 0 : 0;
+
+    for (const q of _cpQueue) {
+      const total = q.invoices.reduce((s,i) => s+i.payAmount, 0);
+      lastNum++;
+      const jeNum = `JE-${year}-${String(lastNum).padStart(4,'0')}`;
+
+      // 1. Journal Entry
+      const { data: je } = await db.from('journal_entries').insert({
+        entry_number: jeNum,
+        entry_date: _cpPayDate,
+        description: `AP Check #${q.checkNo} — ${q.vendorName}`,
+        source: 'ap_payment',
+        status: 'posted',
+        created_by: _currentEmployee?.name || 'System',
+        created_at: new Date().toISOString()
+      }).select().single();
+
+      if (je) {
+        await db.from('journal_lines').insert([
+          { journal_entry_id: je.id, account_code: '200-001', description: `Check #${q.checkNo}: ${q.vendorName}`, debit: total, credit: 0 },
+          { journal_entry_id: je.id, account_code: _cpCashAcct, description: `Check #${q.checkNo}: ${q.vendorName}`, debit: 0, credit: total }
+        ]);
+      }
+
+      // 2. AP Payments per invoice
+      for (const inv of q.invoices) {
+        await db.from('ap_payments').insert({
+          ap_invoice_id: inv.id,
+          vendor_id: q.vendorId,
+          vendor_name: q.vendorName,
+          payment_date: _cpPayDate,
+          amount: inv.payAmount,
+          method: 'check',
+          reference: q.checkNo,
+          notes: `Check Printing batch`,
+          journal_entry_id: je?.id,
+          created_by: _currentEmployee?.name || 'System',
+          created_at: new Date().toISOString()
+        });
+
+        // 3. Update invoice balance
+        const invoiceData = _apInvoices.find(i => i.id === inv.id);
+        if (invoiceData) {
+          const newPaid = (parseFloat(invoiceData.paid_amount)||0) + inv.payAmount;
+          const newBalance = (parseFloat(invoiceData.total_amount)||0) - newPaid;
+          const newStatus = newBalance <= 0.01 ? 'paid' : 'partial';
+          await db.from('ap_invoices').update({
+            paid_amount: newPaid, status: newStatus, updated_at: new Date().toISOString()
+          }).eq('id', inv.id);
+        }
+      }
+    }
+
+    showToast(`✅ ${_cpQueue.length} checks posted to GL!`);
+    closeCheckPrintingModal();
+    await loadAP();
+
+  } catch(e) {
+    showToast('❌ 오류: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Confirm & Post to GL'; }
+  }
+}
+// ═══════════════════════════════════════════════════════════
+// END CHECK PRINTING MODULE
+// ═══════════════════════════════════════════════════════════
+
 function onAPPayMethodChange(method) {
   const wrap = document.getElementById('ap-pmt-check-wrap');
   if (wrap) wrap.style.display = method === 'check' ? 'block' : 'none';
