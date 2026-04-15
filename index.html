@@ -26894,11 +26894,65 @@ function renderAPPayments() {
           <td style="font-size:12px;font-weight:600;">${g.vendor_name||g.vendors?.name||'—'}</td>
           <td style="font-size:12px;">${invList}</td>
           <td style="font-size:12px;">${g.method||'—'}</td>
-          <td style="font-size:12px;color:#6b7280;font-family:'IBM Plex Mono',monospace;">${g.reference||'—'}</td>
+          <td style="font-size:12px;font-family:'IBM Plex Mono',monospace;">
+            ${g.method === 'check' && g.reference
+              ? '<span onclick="openCheckRecord(\'' + encodeURIComponent(JSON.stringify(g)) + '\')" style="color:#1e3a8a;font-weight:700;cursor:pointer;text-decoration:underline;text-underline-offset:2px;" title="클릭하여 Check Copy 보기">' + g.reference + '</span>'
+              : '<span style="color:#6b7280;">' + (g.reference||'—') + '</span>'
+            }
+          </td>
           <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#16a34a;">${fmt(g.totalAmt)}</td>
           <td style="text-align:center;">${actionBtns}</td>
         </tr>`;
       }).join('');
+}
+
+function openCheckRecord(encoded) {
+  try {
+    const g = JSON.parse(decodeURIComponent(encoded));
+    const fmt = n => '$' + parseFloat(n).toLocaleString('en-US', {minimumFractionDigits:2});
+
+    // scan URL 먼저 확인
+    const scanNote = g.invoices?.find(i => i.notes && i.notes.includes('scan_url'));
+    const scanUrl = scanNote ? (() => { try { return JSON.parse(scanNote.notes).scan_url; } catch(e) { return null; } })() : null;
+
+    if (scanUrl) {
+      window.open(scanUrl, '_blank');
+      return;
+    }
+
+    // check copy 데이터 확인
+    const copyNote = g.invoices?.find(i => i.notes && i.notes.startsWith('{'));
+    if (copyNote) {
+      viewCheckCopy(copyNote.notes);
+      return;
+    }
+
+    // 데이터 없으면 기본 정보 팝업
+    const invRows = (g.invoices||[]).map(i =>
+      `<tr><td style="padding:6px 12px;font-family:monospace;font-size:12px;">${i.ap_invoices?.invoice_number||'—'}</td>
+       <td style="padding:6px 12px;text-align:right;font-family:monospace;font-size:12px;">${fmt(i.amount)}</td></tr>`
+    ).join('');
+
+    const win = window.open('', '_blank', 'width=480,height=380');
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Check #${g.reference}</title>
+      <style>body{font-family:Arial,sans-serif;margin:0;padding:24px;color:#111;}
+      table{width:100%;border-collapse:collapse;}
+      th{background:#0f2744;color:#fff;padding:7px 12px;text-align:left;font-size:11px;}
+      td{padding:6px 12px;border-bottom:1px solid #f0f0f0;font-size:12px;}
+      .total{background:#f0fdf4;font-weight:800;color:#16a34a;}
+      .note{background:#fef9c3;border:1px solid #fde047;border-radius:6px;padding:10px 14px;font-size:11px;color:#713f12;margin-top:16px;}</style>
+    </head><body>
+      <div style="font-size:18px;font-weight:800;color:#0f2744;margin-bottom:4px;">Check #${g.reference}</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:16px;">${g.payment_date} · ${g.vendor_name||''}</div>
+      <table>
+        <thead><tr><th>Invoice #</th><th style="text-align:right;">Amount</th></tr></thead>
+        <tbody>${invRows}</tbody>
+        <tfoot><tr class="total"><td style="padding:8px 12px;">TOTAL</td><td style="padding:8px 12px;text-align:right;">${fmt(g.totalAmt)}</td></tr></tfoot>
+      </table>
+      <div class="note">📎 스캔본이 아직 없습니다. Payment History에서 📎 버튼으로 업로드하거나 일괄 스캔 업로드를 이용하세요.</div>
+    </body></html>`);
+    win.document.close();
+  } catch(e) { console.error('openCheckRecord error:', e); }
 }
 
 function viewCheckCopy(notesJson) {
@@ -26925,8 +26979,10 @@ function viewCheckCopy(notesJson) {
         </table>
       </div>`;
     // 간단한 팝업
-    const win = window.open('', '_blank', 'width=500,height=400');
-    win.document.write(`<!DOCTYPE html><html><body style="margin:0;">${html}<script>document.title='Check #${data.check_no}';<\/script></body></html>`);
+    const win = window.open('', '_blank', 'width=500,height=420');
+    win.document.title = 'Check #' + data.check_no;
+    win.document.body.style.margin = '0';
+    win.document.body.innerHTML = html;
     win.document.close();
   } catch(e) { showToast('Check copy 데이터를 읽을 수 없습니다.'); }
 }
