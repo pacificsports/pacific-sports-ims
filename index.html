@@ -2342,9 +2342,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             </div>
             <div>
               <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">METHOD</div>
-              <select id="ap-pmt-method" class="fi" style="width:100%;font-size:13px;">
-                <option value="wire">Wire Transfer</option>
+              <select id="ap-pmt-method" class="fi" style="width:100%;font-size:13px;" onchange="onAPPayMethodChange(this.value)">
                 <option value="check">Check</option>
+                <option value="wire">Wire Transfer</option>
                 <option value="ach">ACH</option>
                 <option value="credit_card">Credit Card</option>
               </select>
@@ -2352,6 +2352,30 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div>
               <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">REFERENCE #</div>
               <input type="text" id="ap-pmt-ref" class="fi" placeholder="Check #, Wire ref..." style="width:100%;font-size:13px;">
+            </div>
+            <!-- Check number field — shown only when method=check -->
+            <div id="ap-pmt-check-wrap" style="grid-column:1/-1;background:#f0f7ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <span style="font-size:14px;">🖨️</span>
+                <div style="font-size:11px;font-weight:700;color:#1a56a0;text-transform:uppercase;letter-spacing:0.5px;">Check Printing</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div>
+                  <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">CHECK NO. *</div>
+                  <input type="text" id="ap-pmt-check-no" class="fi" placeholder="e.g. 047257"
+                    style="width:100%;font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;letter-spacing:2px;border:1.5px solid #1a56a0;">
+                  <div style="font-size:10px;color:#6b7280;margin-top:3px;">체크에 이미 인쇄된 번호 입력</div>
+                </div>
+                <div style="display:flex;align-items:flex-end;">
+                  <button onclick="printAPCheck()" id="ap-check-print-btn"
+                    style="width:100%;background:#0f2744;color:#fff;border:none;border-radius:6px;padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+                    🖨️ Print Check Stub
+                  </button>
+                </div>
+              </div>
+              <div style="font-size:10px;color:#1a56a0;margin-top:8px;padding-top:8px;border-top:1px solid #bfdbfe;">
+                ℹ️ 체크 번호만 기록됩니다. 실제 금액/수신인은 stub에 프린트됩니다.
+              </div>
             </div>
             <div style="grid-column:1/-1;">
               <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">NOTES</div>
@@ -27646,6 +27670,182 @@ async function saveAPInvoice() {
 }
 
 // ── AP Payment 모달 ──
+function onAPPayMethodChange(method) {
+  const wrap = document.getElementById('ap-pmt-check-wrap');
+  if (wrap) wrap.style.display = method === 'check' ? 'block' : 'none';
+}
+
+function toWordsAP(n) {
+  const ones=['','ONE','TWO','THREE','FOUR','FIVE','SIX','SEVEN','EIGHT','NINE','TEN','ELEVEN','TWELVE','THIRTEEN','FOURTEEN','FIFTEEN','SIXTEEN','SEVENTEEN','EIGHTEEN','NINETEEN'];
+  const tens=['','','TWENTY','THIRTY','FORTY','FIFTY','SIXTY','SEVENTY','EIGHTY','NINETY'];
+  if(n===0)return'ZERO';
+  if(n<20)return ones[n];
+  if(n<100)return tens[Math.floor(n/10)]+(ones[n%10]?' '+ones[n%10]:'');
+  if(n<1000)return ones[Math.floor(n/100)]+' HUNDRED'+(n%100?' '+toWordsAP(n%100):'');
+  if(n<1000000)return toWordsAP(Math.floor(n/1000))+' THOUSAND'+(n%1000?' '+toWordsAP(n%1000):'');
+  return toWordsAP(Math.floor(n/1000000))+' MILLION'+(n%1000000?' '+toWordsAP(n%1000000):'');
+}
+
+function printAPCheck() {
+  const inv = _apInvoices.find(i => i.id === _apCurrentInvoiceId);
+  if (!inv) { showToast('❌ 인보이스를 찾을 수 없습니다.'); return; }
+
+  const checkNo = (document.getElementById('ap-pmt-check-no')?.value || '').trim();
+  if (!checkNo) { showToast('❌ Check No.를 입력하세요.'); return; }
+
+  const amount = parseFloat(document.getElementById('ap-pmt-amount')?.value) || 0;
+  const payDate = document.getElementById('ap-pmt-date')?.value || '';
+  const memo = document.getElementById('ap-pmt-notes')?.value || inv.description || inv.invoice_number;
+
+  // Format date MM/DD/YYYY
+  const fmtDate = v => { if(!v) return '—'; const [y,m,d]=v.split('-'); return `${m}/${d}/${y}`; };
+  const amtFmt = '****' + amount.toFixed(2) + '*';
+  const dollars = Math.floor(amount);
+  const cents = Math.round((amount - dollars)*100);
+  const words = '*' + toWordsAP(dollars) + ' AND ' + String(cents).padStart(2,'0') + ' / 100';
+
+  // Vendor address from vendor data
+  const vendor = (_apVendors||[]).find(v => v.id === inv.vendor_id) || {};
+  const vendorName = inv.vendor_name || '—';
+  const vendorAddr1 = vendor.address || '';
+  const vendorAddr2 = [vendor.city, vendor.state, vendor.zip].filter(Boolean).join(', ');
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Check #${checkNo}</title>
+  <style>
+    @page { margin: 0; size: 8.5in 11in; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 11px; color: #000; background: #fff; }
+    .page { width: 8.5in; padding: 0.3in; }
+
+    /* ── STUB ── */
+    .stub { border-bottom: 1px dashed #aaa; padding-bottom: 10px; margin-bottom: 0; min-height: 3.3in; }
+    .stub-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
+    .stub-company { font-size: 11px; font-weight: bold; }
+    .stub-refno { font-size: 9px; color: #666; margin-bottom: 6px; }
+    .stub-checkno { font-size: 18px; font-weight: bold; letter-spacing: 3px; }
+    .stub-cols { display: flex; gap: 20px; font-size: 10px; color: #333; margin: 6px 0; }
+    .stub-divider { font-size: 10px; color: #666; margin: 6px 0 4px; }
+    .stub-detail { display: flex; justify-content: space-between; font-size: 10px; }
+
+    /* ── ACTUAL CHECK ── */
+    .check { border: 1px solid #bbb; padding: 12px 16px; margin-top: 0; }
+    .check-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+    .logo-wrap { display: flex; align-items: flex-start; gap: 10px; }
+    .logo { width: 36px; height: 36px; background: #000; border-radius: 50% 0 0 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .logo-inner { width: 20px; height: 20px; background: white; border-radius: 50%; }
+    .co-name { font-size: 11px; font-weight: bold; line-height: 1.4; }
+    .co-addr { font-size: 9px; line-height: 1.5; color: #333; }
+    .bank-block { text-align: center; }
+    .bank-name { font-size: 12px; font-weight: bold; font-style: italic; }
+    .bank-route { font-size: 9px; color: #333; margin-top: 2px; }
+    .check-no-info { font-size: 9px; color: #555; margin-top: 4px; }
+    .check-no-big { font-size: 18px; font-weight: bold; letter-spacing: 3px; text-align: right; }
+    .amount-words { font-size: 11px; font-weight: bold; margin: 6px 0; letter-spacing: 0.5px; }
+    .check-fields { display: flex; justify-content: flex-end; gap: 24px; margin: 6px 0; }
+    .field-label { font-size: 9px; color: #666; }
+    .field-val { font-size: 12px; font-weight: bold; }
+    .check-bottom { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 10px; }
+    .pay-label { font-size: 9px; color: #666; line-height: 1.8; }
+    .payee-name { font-size: 12px; font-weight: bold; }
+    .payee-addr { font-size: 10px; }
+    .non-neg { font-size: 14px; font-weight: bold; letter-spacing: 2px; font-family: serif; border: 1.5px solid #000; padding: 3px 10px; }
+    .sig-label { font-size: 8px; color: #666; text-align: center; margin-top: 2px; }
+    .micr { text-align: center; font-family: monospace; font-size: 13px; letter-spacing: 2px; margin-top: 8px; border-top: 0.5px solid #eee; padding-top: 6px; color: #333; }
+  </style>
+</head>
+<body>
+<div class="page">
+  <!-- STUB (우리 사본) -->
+  <div class="stub">
+    <div class="stub-top">
+      <div class="stub-company">PEACE TEXTILE AMERICA, INC.</div>
+      <div class="stub-checkno">${checkNo}</div>
+    </div>
+    <div class="stub-refno">Ref. No: G 090500581</div>
+    <div class="stub-cols">
+      <span>${fmtDate(payDate)}</span>
+      <span style="flex:1;text-align:right;">${amount.toFixed(2)}</span>
+      <span>0.00</span>
+      <span>${amount.toFixed(2)}</span>
+    </div>
+    <div class="stub-divider">00-0000817</div>
+    <div class="stub-detail">
+      <span>CHECK: ${checkNo} &nbsp; ${fmtDate(payDate)} &nbsp; ${vendorName}</span>
+      <span>${amount.toFixed(2)}</span>
+    </div>
+    <div style="margin-top:8px;font-size:10px;color:#555;">Memo: ${memo}</div>
+    <div style="margin-top:4px;font-size:10px;color:#555;">Invoice: ${inv.invoice_number}</div>
+  </div>
+
+  <!-- ACTUAL CHECK -->
+  <div class="check">
+    <div class="check-top">
+      <div class="logo-wrap">
+        <div class="logo"><div class="logo-inner"></div></div>
+        <div>
+          <div class="co-name">PEACE TEXTILE AMERICA, INC.</div>
+          <div class="co-addr">
+            1605 S. GUIGNARD PARKWAY<br>
+            P.O. BOX 1148<br>
+            SUMTER, SC 29151
+          </div>
+        </div>
+      </div>
+      <div class="bank-block">
+        <div class="bank-name">Bank of America.</div>
+        <div class="bank-route">67-448/539</div>
+        <div class="check-no-info">CHECK NO. ${checkNo}</div>
+      </div>
+      <div class="check-no-big">${checkNo}</div>
+    </div>
+
+    <div class="amount-words">${words}</div>
+
+    <div class="check-fields">
+      <div>
+        <div class="field-label">DATE</div>
+        <div class="field-val">${fmtDate(payDate)}</div>
+      </div>
+      <div>
+        <div class="field-label">AMOUNT</div>
+        <div class="field-val">${amtFmt}</div>
+      </div>
+    </div>
+
+    <div class="check-bottom">
+      <div>
+        <div style="display:flex;gap:8px;align-items:flex-start;">
+          <div class="pay-label">PAY<br>TO THE<br>ORDER<br>OF</div>
+          <div style="margin-left:4px;">
+            <div class="payee-name">${vendorName}</div>
+            ${vendorAddr1 ? `<div class="payee-addr">${vendorAddr1}</div>` : ''}
+            ${vendorAddr2 ? `<div class="payee-addr">${vendorAddr2}</div>` : ''}
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="non-neg">NON – NEGOTIABLE</div>
+        <div class="sig-label">AUTHORIZED SIGNATURE</div>
+      </div>
+    </div>
+
+    <div class="micr">⁰⁰${checkNo}⁰⁰ ⁰:053904483: 0007757552660⁰</div>
+  </div>
+</div>
+<scr` + `ipt>window.onload=function(){window.print();}<\/scr` + `ipt>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank');
+  if (!win) { showToast('❌ 팝업이 차단되었습니다. 팝업 허용 후 다시 시도하세요.'); return; }
+  win.document.write(html);
+  win.document.close();
+}
+
 async function openAPPaymentModal(invoiceId) {
   // 모달 HTML 원복 (이전 success screen이 남아있을 경우)
   const modal = document.getElementById('ap-payment-modal');
@@ -27663,6 +27863,13 @@ async function openAPPaymentModal(invoiceId) {
   document.getElementById('ap-pmt-amount').value = balance.toFixed(2);
   document.getElementById('ap-pmt-ref').value = '';
   document.getElementById('ap-pmt-notes').value = '';
+  // Default to Check, show check section
+  const methodSel = document.getElementById('ap-pmt-method');
+  if (methodSel) { methodSel.value = 'check'; }
+  const checkWrap = document.getElementById('ap-pmt-check-wrap');
+  if (checkWrap) checkWrap.style.display = 'block';
+  const checkNoInput = document.getElementById('ap-pmt-check-no');
+  if (checkNoInput) checkNoInput.value = '';
   clearAPPaymentFile();
   document.getElementById('ap-payment-modal').style.display = 'flex';
 }
@@ -27689,7 +27896,9 @@ async function saveAPPayment() {
   const payDate = document.getElementById('ap-pmt-date').value;
   const amount = parseFloat(document.getElementById('ap-pmt-amount').value) || 0;
   const method = document.getElementById('ap-pmt-method').value;
-  const ref = document.getElementById('ap-pmt-ref').value.trim();
+  const checkNo = document.getElementById('ap-pmt-check-no')?.value?.trim() || '';
+  // If check method, auto-use check number as reference
+  const ref = method === 'check' && checkNo ? checkNo : (document.getElementById('ap-pmt-ref').value.trim());
   const notes = document.getElementById('ap-pmt-notes').value.trim();
   const cashAcct = document.getElementById('ap-pmt-cash-acct').value;
   const fileInput = document.getElementById('ap-pmt-file');
