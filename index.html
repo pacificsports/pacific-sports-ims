@@ -2141,7 +2141,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             As of <span id="ap-aging-date"></span>
           </div>
           <div style="display:flex;gap:8px;">
-            <button onclick="printAPAging()" style="background:#0f2744;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">🖨 Print Report</button>
+            <button onclick="printAPAging()" style="background:#0f2744;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">🖨 Print</button>
+            <button onclick="downloadAPAging()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">⬇ Download PDF</button>
           </div>
         </div>
 
@@ -26350,7 +26351,7 @@ function renderAPAging() {
   document.getElementById('ap-aging-tbody').innerHTML = rows || '<tr><td colspan="9" class="empty">No outstanding AP</td></tr>';
 }
 
-function printAPAging() {
+function generateAgingHTML() {
   const today = new Date();
   const dateStr = today.toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
   const open = _apInvoices.filter(i => ['open','partial'].includes(i.status));
@@ -26387,7 +26388,7 @@ function printAPAging() {
 
   const vendors = Object.values(vendorMap).sort((a,b) => b.total - a.total);
 
-  let vendorRows = vendors.map(v => {
+  const vendorRows = vendors.map(v => {
     const invRows = v.invoices.sort((a,b) => new Date(a.due_date||0) - new Date(b.due_date||0)).map(i => `
       <tr style="border-bottom:1px solid #f0f0f0;">
         <td style="padding:4px 8px 4px 24px;font-size:10px;color:#6b7280;font-style:italic;">${i.invoice_number}</td>
@@ -26414,25 +26415,20 @@ function printAPAging() {
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
   <title>AP Aging Report — ${dateStr}</title>
   <style>
-    body { font-family: Arial, sans-serif; font-size: 11px; color: #111; margin: 0; padding: 20px; }
-    h1 { font-size: 20px; margin: 0 0 4px; color: #0f2744; }
-    .sub { font-size: 12px; color: #6b7280; margin-bottom: 20px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    th { background: #0f2744; color: #fff; padding: 8px; text-align: right; font-size: 11px; }
-    th:first-child, th:nth-child(2) { text-align: left; }
-    .total-row td { background: #0f2744; color: #fff; padding: 10px 8px; font-weight: 800; font-size: 12px; text-align: right; }
-    .total-row td:first-child { text-align: left; }
-    @media print {
-      body { padding: 0; }
-      button { display: none; }
-    }
-  </style>
-  </head><body>
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+    body{font-family:Arial,sans-serif;font-size:11px;color:#111;margin:0;padding:24px;}
+    h1{font-size:20px;margin:0 0 4px;color:#0f2744;}
+    table{width:100%;border-collapse:collapse;margin-top:12px;}
+    th{background:#0f2744;color:#fff;padding:8px;text-align:right;font-size:11px;}
+    th:first-child,th:nth-child(2){text-align:left;}
+    .total-row td{background:#0f2744;color:#fff;padding:10px 8px;font-weight:800;font-size:12px;text-align:right;}
+    .total-row td:first-child,.total-row td:nth-child(2){text-align:left;}
+    @media print{button{display:none!important;}}
+  </style></head><body>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
     <div>
       <h1>PEACE TEXTILE AMERICA, INC.</h1>
-      <div style="font-size:13px;color:#6b7280;">d.b.a Pacific Sports</div>
-      <div style="margin-top:12px;font-size:16px;font-weight:700;color:#0f2744;">AP Aging Report</div>
+      <div style="font-size:12px;color:#6b7280;">d.b.a Pacific Sports</div>
+      <div style="margin-top:10px;font-size:16px;font-weight:700;color:#0f2744;">AP Aging Report</div>
       <div style="font-size:12px;color:#6b7280;">As of ${dateStr}</div>
     </div>
     <div style="text-align:right;">
@@ -26440,49 +26436,38 @@ function printAPAging() {
       <div style="font-size:28px;font-weight:900;color:#dc2626;font-family:monospace;">${fmtN(totals.total)}</div>
     </div>
   </div>
-
-  <!-- 요약 -->
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:16px 0;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
-    ${[['Current','#15803d','#f0fdf4',totals.current],['1–30 Days','#b45309','#fffbeb',totals.d30],['31–60 Days','#c2410c','#fff7ed',totals.d60],['61–90 Days','#dc2626','#fef2f2',totals.d90],['90+ Days','#991b1b','#fef2f2',totals.d90p]].map(([label,color,bg,val],i) => `
-      <div style="padding:10px;background:${bg};${i<4?'border-right:1px solid #e5e7eb;':''}">
-        <div style="font-size:9px;font-weight:700;color:${color};text-transform:uppercase;">${label}</div>
-        <div style="font-size:16px;font-weight:800;color:${color};font-family:monospace;">${fmt(val)}</div>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;margin-bottom:16px;">
+    ${[['Current','#15803d','#f0fdf4',totals.current],['1–30 Days','#b45309','#fffbeb',totals.d30],['31–60 Days','#c2410c','#fff7ed',totals.d60],['61–90 Days','#dc2626','#fef2f2',totals.d90],['90+ Days','#991b1b','#fef2f2',totals.d90p]].map(([label,color,bg,val],i) =>
+      `<div style="padding:10px 12px;background:${bg};${i<4?'border-right:1px solid #e5e7eb;':''}">
+        <div style="font-size:9px;font-weight:700;color:${color};text-transform:uppercase;margin-bottom:4px;">${label}</div>
+        <div style="font-size:15px;font-weight:800;color:${color};font-family:monospace;">${fmt(val)}</div>
       </div>`).join('')}
   </div>
-
   <table>
     <thead><tr>
       <th style="text-align:left;width:180px;">Vendor</th>
       <th style="text-align:left;width:100px;">Invoice #</th>
-      <th style="width:100px;color:#86efac;">Current</th>
-      <th style="width:100px;color:#fde68a;">1–30</th>
-      <th style="width:100px;color:#fed7aa;">31–60</th>
-      <th style="width:100px;color:#fca5a5;">61–90</th>
-      <th style="width:100px;color:#fca5a5;">90+</th>
+      <th style="width:100px;">Current</th>
+      <th style="width:100px;">1–30</th>
+      <th style="width:100px;">31–60</th>
+      <th style="width:100px;">61–90</th>
+      <th style="width:100px;">90+</th>
       <th style="width:110px;">Balance</th>
     </tr></thead>
     <tbody>${vendorRows}</tbody>
-    <tfoot>
-      <tr class="total-row">
-        <td colspan="2">TOTAL</td>
-        <td>${fmt(totals.current)}</td>
-        <td>${fmt(totals.d30)}</td>
-        <td>${fmt(totals.d60)}</td>
-        <td>${fmt(totals.d90)}</td>
-        <td>${fmt(totals.d90p)}</td>
-        <td>${fmtN(totals.total)}</td>
-      </tr>
-    </tfoot>
+    <tfoot><tr class="total-row">
+      <td colspan="2">TOTAL</td>
+      <td>${fmt(totals.current)}</td><td>${fmt(totals.d30)}</td>
+      <td>${fmt(totals.d60)}</td><td>${fmt(totals.d90)}</td>
+      <td>${fmt(totals.d90p)}</td><td>${fmtN(totals.total)}</td>
+    </tr></tfoot>
   </table>
-  <div style="margin-top:40px;font-size:9px;color:#9ca3af;text-align:center;">
-    Generated by Pacific Sports IMS — ${new Date().toLocaleString()}
+  <div style="margin-top:32px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:9px;color:#9ca3af;text-align:center;">
+    Pacific Sports IMS — Generated ${new Date().toLocaleString()}
   </div>
   </body></html>`;
 
-  const w = window.open('', '_blank', 'width=1000,height=700');
-  w.document.write(html);
-  w.document.close();
-  setTimeout(() => w.print(), 500);
+  return { html, dateStr };
 }
 
 function renderAPPayments() {
