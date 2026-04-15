@@ -27942,10 +27942,11 @@ async function selectVendorMgmt(vendorId) {
           <th style="padding:7px 10px;text-align:right;">Amount</th>
           <th style="padding:7px 10px;text-align:right;">Balance</th>
           <th style="padding:7px 10px;text-align:center;">Status</th>
-          <th style="padding:7px 10px;width:60px;"></th>
+          <th style="padding:7px 10px;text-align:left;color:#93c5fd;">Journal Entry</th>
+          <th style="padding:7px 10px;width:50px;"></th>
         </tr></thead>
         <tbody>
-          ${(invs||[]).length === 0 ? '<tr><td colspan="7" style="padding:16px;text-align:center;color:#9ca3af;">인보이스 없음</td></tr>' :
+          ${(invs||[]).length === 0 ? '<tr><td colspan="8" style="padding:16px;text-align:center;color:#9ca3af;">인보이스 없음</td></tr>' :
             (invs||[]).map(i => {
               const bal = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
               const isOverdue = i.due_date && new Date(i.due_date) < today && bal > 0;
@@ -27964,10 +27965,21 @@ async function selectVendorMgmt(vendorId) {
                 <td style="padding:6px 10px;text-align:center;">
                   <span style="background:${sc}20;color:${sc};border:1px solid ${sc}40;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;">${i.status}</span>
                 </td>
+                <td style="padding:6px 10px;">
+                  ${i.journal_entry_id
+                    ? `<span onclick="toggleVendorJE('inv-je-${i.id}')" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#1a56a0;cursor:pointer;font-weight:700;" id="inv-je-lbl-${i.id}">📒 보기 ▼</span>`
+                    : '<span style="font-size:10px;color:#9ca3af;">—</span>'}
+                </td>
                 <td style="padding:6px 10px;text-align:center;">
                   ${bal > 0 ? `<button onclick="openAPPaymentModal('${i.id}')" style="background:#16a34a;color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-weight:700;">Pay</button>` : ''}
                 </td>
-              </tr>`;
+              </tr>
+              ${i.journal_entry_id ? `
+              <tr id="inv-je-${i.id}" style="display:none;background:#f0f7ff;">
+                <td colspan="8" style="padding:0 10px 10px 28px;">
+                  <div id="inv-je-content-${i.id}" style="font-size:11px;">⏳ 로딩...</div>
+                </td>
+              </tr>` : ''}`;
             }).join('')}
         </tbody>
       </table>
@@ -27985,10 +27997,11 @@ async function selectVendorMgmt(vendorId) {
           <th style="padding:7px 10px;text-align:left;color:#374151;font-size:10px;">Reference</th>
           <th style="padding:7px 10px;text-align:left;color:#374151;font-size:10px;">Invoice</th>
           <th style="padding:7px 10px;text-align:right;color:#374151;font-size:10px;">Amount</th>
+          <th style="padding:7px 10px;text-align:left;color:#1a56a0;font-size:10px;">Journal Entry</th>
           <th style="padding:7px 10px;text-align:left;color:#374151;font-size:10px;">Notes</th>
         </tr></thead>
         <tbody>
-          ${(pmts||[]).length === 0 ? '<tr><td colspan="6" style="padding:16px;text-align:center;color:#9ca3af;">결제 내역 없음</td></tr>' :
+          ${(pmts||[]).length === 0 ? '<tr><td colspan="7" style="padding:16px;text-align:center;color:#9ca3af;">결제 내역 없음</td></tr>' :
             (pmts||[]).map(p => {
               const inv = (invs||[]).find(i => i.id === p.ap_invoice_id);
               return `<tr style="border-bottom:1px solid #f5f5f5;">
@@ -27997,13 +28010,253 @@ async function selectVendorMgmt(vendorId) {
                 <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7280;">${p.reference||'—'}</td>
                 <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a56a0;">${inv?.invoice_number||'—'}</td>
                 <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#16a34a;">${fmt(p.amount)}</td>
+                <td style="padding:5px 10px;">
+                  ${p.journal_entry_id
+                    ? `<span onclick="toggleVendorJE('pmt-je-${p.id}')" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#1a56a0;cursor:pointer;font-weight:700;" id="pmt-je-lbl-${p.id}">📒 보기 ▼</span>`
+                    : '<span style="font-size:10px;color:#9ca3af;">—</span>'}
+                </td>
                 <td style="padding:5px 10px;font-size:11px;color:#6b7280;">${p.notes||'—'}</td>
-              </tr>`;
+              </tr>
+              ${p.journal_entry_id ? `
+              <tr id="pmt-je-${p.id}" style="display:none;background:#f0fdf4;">
+                <td colspan="7" style="padding:0 10px 10px 20px;">
+                  <div id="pmt-je-content-${p.id}" style="font-size:11px;">⏳ 로딩...</div>
+                </td>
+              </tr>` : ''}`;
             }).join('')}
         </tbody>
       </table>
     </div>`;
 }
+
+// JE 토글 & 로드
+async function toggleVendorJE(rowId) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const isOpen = row.style.display !== 'none';
+
+  if (isOpen) {
+    row.style.display = 'none';
+    const lbl = document.getElementById(rowId.replace('je-','je-lbl-'));
+    if (lbl) lbl.textContent = '📒 보기 ▼';
+    return;
+  }
+
+  row.style.display = '';
+  const lbl = document.getElementById(rowId.replace('je-','je-lbl-'));
+  if (lbl) lbl.textContent = '📒 접기 ▲';
+
+  // 아직 로드 안 됐으면 로드
+  const contentId = rowId + '-content';
+  // rowId 형식: inv-je-{uuid} 또는 pmt-je-{uuid}
+  const parts = rowId.split('-'); // ['inv','je',uuid] or ['pmt','je',uuid]
+  const type = parts[0]; // inv or pmt
+  const entityId = parts.slice(2).join('-');
+
+  const contentEl = document.getElementById(contentId);
+  if (!contentEl || contentEl.textContent !== '⏳ 로딩...') return;
+
+  // 해당 엔티티의 journal_entry_id 찾기
+  let jeId = null;
+  if (type === 'inv') {
+    const { data } = await db.from('ap_invoices').select('journal_entry_id').eq('id', entityId).single();
+    jeId = data?.journal_entry_id;
+  } else {
+    const { data } = await db.from('ap_payments').select('journal_entry_id').eq('id', entityId).single();
+    jeId = data?.journal_entry_id;
+  }
+
+  if (!jeId) { contentEl.innerHTML = '<span style="color:#9ca3af;">분개 없음</span>'; return; }
+
+  const [{ data: je }, { data: lines }] = await Promise.all([
+    db.from('journal_entries').select('*').eq('id', jeId).single(),
+    db.from('journal_lines').select('*').eq('journal_entry_id', jeId).order('id')
+  ]);
+
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  contentEl.innerHTML = `
+    <div style="margin-top:6px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+      <div style="background:#0f2744;padding:6px 12px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:#93c5fd;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${je?.entry_number||jeId}</span>
+        <span style="color:#6b7280;font-size:10px;">${je?.entry_date||''}</span>
+        <button onclick="openJEEditModal('${jeId}')"
+          style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:2px 10px;font-size:10px;font-weight:700;cursor:pointer;">
+          ✏️ 수정
+        </button>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="background:#f8fafc;">
+          <th style="padding:5px 10px;text-align:left;font-size:10px;color:#6b7280;width:40px;"></th>
+          <th style="padding:5px 10px;text-align:left;font-size:10px;color:#6b7280;">Account</th>
+          <th style="padding:5px 10px;text-align:left;font-size:10px;color:#6b7280;">Description</th>
+          <th style="padding:5px 10px;text-align:right;font-size:10px;color:#1a56a0;">Debit</th>
+          <th style="padding:5px 10px;text-align:right;font-size:10px;color:#dc2626;">Credit</th>
+        </tr></thead>
+        <tbody>
+          ${(lines||[]).map(l => {
+            const acct = _glAccounts.find(a => a.code === l.account_code);
+            const isDR = (parseFloat(l.debit)||0) > 0;
+            return `<tr style="border-top:1px solid #f0f0f0;">
+              <td style="padding:4px 10px;font-weight:700;color:${isDR?'#1a56a0':'#dc2626'};font-size:10px;">${isDR?'DR':'CR'}</td>
+              <td style="padding:4px 10px;font-family:'IBM Plex Mono',monospace;font-size:10px;">
+                <span style="font-weight:700;color:${isDR?'#1a56a0':'#dc2626'};">${l.account_code}</span>
+                <span style="color:#6b7280;margin-left:4px;">${acct?.name||''}</span>
+              </td>
+              <td style="padding:4px 10px;font-size:10px;color:#6b7280;">${l.description||''}</td>
+              <td style="padding:4px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#1a56a0;">${isDR?fmt(l.debit):'—'}</td>
+              <td style="padding:4px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#dc2626;">${!isDR?fmt(l.credit):'—'}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+async function openJEEditModal(jeId) {
+  const [{ data: je }, { data: lines }] = await Promise.all([
+    db.from('journal_entries').select('*').eq('id', jeId).single(),
+    db.from('journal_lines').select('*').eq('journal_entry_id', jeId).order('id')
+  ]);
+  if (!je) return;
+
+  const fmt = n => (parseFloat(n)||0).toFixed(2);
+
+  // 기존 모달 있으면 제거
+  document.getElementById('je-edit-modal')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'je-edit-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999999;display:flex;align-items:center;justify-content:center;';
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:680px;max-width:96vw;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+      <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:13px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+        <span style="color:#fff;font-weight:800;font-size:14px;">📒 Journal Entry 수정 — ${je.entry_number}</span>
+        <button onclick="document.getElementById('je-edit-modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
+      </div>
+      <div style="overflow-y:auto;flex:1;padding:16px 20px;">
+        <div style="font-size:11px;color:#6b7280;margin-bottom:12px;">
+          ${je.entry_date} &nbsp;|&nbsp; ${je.description||''}
+          <span style="margin-left:8px;background:#f0fdf4;color:#16a34a;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">${je.status||'posted'}</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;" id="je-edit-lines">
+          <thead><tr style="background:#0f2744;color:#fff;">
+            <th style="padding:7px 10px;width:36px;"></th>
+            <th style="padding:7px 10px;text-align:left;">Account</th>
+            <th style="padding:7px 10px;text-align:left;">Description</th>
+            <th style="padding:7px 10px;text-align:right;width:120px;color:#93c5fd;">Debit</th>
+            <th style="padding:7px 10px;text-align:right;width:120px;color:#fca5a5;">Credit</th>
+          </tr></thead>
+          <tbody id="je-edit-tbody">
+            ${(lines||[]).map((l,idx) => {
+              const isDR = (parseFloat(l.debit)||0) > 0;
+              const acct = _glAccounts.find(a => a.code === l.account_code);
+              return `<tr style="border-bottom:1px solid #f0f0f0;" id="je-edit-row-${idx}">
+                <td style="padding:5px 8px;font-weight:800;color:${isDR?'#1a56a0':'#dc2626'};font-size:11px;">${isDR?'DR':'CR'}</td>
+                <td style="padding:5px 8px;">
+                  <div style="position:relative;">
+                    <input type="text" value="${l.account_code} — ${acct?.name||''}" data-code="${l.account_code}" data-line-id="${l.id}"
+                      style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:4px;padding:4px 6px;font-family:'IBM Plex Mono',monospace;"
+                      oninput="filterJEEditAcct(this,${idx})" onfocus="filterJEEditAcct(this,${idx})"
+                      onblur="setTimeout(()=>{const d=document.getElementById('je-acct-dd-${idx}');if(d)d.style.display='none'},250)">
+                    <div id="je-acct-dd-${idx}" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:160px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:0 0 4px 4px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.1);"></div>
+                  </div>
+                </td>
+                <td style="padding:5px 8px;">
+                  <input type="text" value="${l.description||''}" data-line-id="${l.id}"
+                    style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:4px;padding:4px 6px;"
+                    oninput="jeEditLines[${idx}].description=this.value">
+                </td>
+                <td style="padding:5px 8px;">
+                  <input type="number" step="0.01" value="${fmt(l.debit)}" data-line-id="${l.id}"
+                    style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:4px;padding:4px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#1a56a0;"
+                    oninput="jeEditLines[${idx}].debit=parseFloat(this.value)||0;updateJEEditBalance()">
+                </td>
+                <td style="padding:5px 8px;">
+                  <input type="number" step="0.01" value="${fmt(l.credit)}" data-line-id="${l.id}"
+                    style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:4px;padding:4px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;"
+                    oninput="jeEditLines[${idx}].credit=parseFloat(this.value)||0;updateJEEditBalance()">
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        <div id="je-edit-balance" style="margin-top:10px;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:700;"></div>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-shrink:0;">
+        <button class="btn" onclick="document.getElementById('je-edit-modal').remove()">Cancel</button>
+        <button class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;font-weight:700;" onclick="saveJEEdit('${jeId}')">💾 저장</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(modal);
+
+  // 라인 데이터 초기화
+  window.jeEditLines = (lines||[]).map(l => ({ ...l }));
+  window.jeEditId = jeId;
+  updateJEEditBalance();
+}
+
+function filterJEEditAcct(inp, idx) {
+  const q = inp.value.toLowerCase().replace(/\s*—\s*.*/, '').trim();
+  const dd = document.getElementById(`je-acct-dd-${idx}`);
+  if (!dd) return;
+  const filtered = _glAccounts.filter(a => !q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q)).slice(0, 20);
+  dd.innerHTML = filtered.map(a => `
+    <div onmousedown="event.preventDefault();
+      document.querySelectorAll('#je-edit-row-${idx} input')[0].value='${a.code} — ${a.name.replace(/'/g,"\\'")}';
+      document.querySelectorAll('#je-edit-row-${idx} input')[0].dataset.code='${a.code}';
+      window.jeEditLines[${idx}].account_code='${a.code}';
+      document.getElementById('je-acct-dd-${idx}').style.display='none';"
+      style="padding:6px 10px;cursor:pointer;font-size:11px;display:flex;gap:8px;border-bottom:1px solid #f5f5f5;"
+      onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background='#fff'">
+      <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;min-width:65px;">${a.code}</span>
+      <span>${a.name}</span>
+    </div>`).join('');
+  dd.style.display = filtered.length ? 'block' : 'none';
+}
+
+function updateJEEditBalance() {
+  const lines = window.jeEditLines || [];
+  const totalDR = lines.reduce((s,l) => s+(parseFloat(l.debit)||0), 0);
+  const totalCR = lines.reduce((s,l) => s+(parseFloat(l.credit)||0), 0);
+  const balanced = Math.abs(totalDR - totalCR) < 0.01;
+  const el = document.getElementById('je-edit-balance');
+  if (!el) return;
+  el.style.background = balanced ? '#f0fdf4' : '#fef2f2';
+  el.style.color = balanced ? '#16a34a' : '#dc2626';
+  el.innerHTML = balanced
+    ? `✓ Balanced — DR $${totalDR.toFixed(2)} = CR $${totalCR.toFixed(2)}`
+    : `⚠ Unbalanced — DR $${totalDR.toFixed(2)} ≠ CR $${totalCR.toFixed(2)}`;
+}
+
+async function saveJEEdit(jeId) {
+  const lines = window.jeEditLines || [];
+  const totalDR = lines.reduce((s,l) => s+(parseFloat(l.debit)||0), 0);
+  const totalCR = lines.reduce((s,l) => s+(parseFloat(l.credit)||0), 0);
+  if (Math.abs(totalDR - totalCR) > 0.01) {
+    showToast('❌ Debit과 Credit이 일치하지 않습니다.'); return;
+  }
+
+  try {
+    for (const l of lines) {
+      await db.from('journal_lines').update({
+        account_code: l.account_code,
+        description: l.description,
+        debit: parseFloat(l.debit)||0,
+        credit: parseFloat(l.credit)||0,
+      }).eq('id', l.id);
+    }
+    showToast('✅ Journal Entry 수정 완료!');
+    document.getElementById('je-edit-modal').remove();
+    // JE 내용 새로 로드하도록 content 초기화
+    document.querySelectorAll('[id$="-content"]').forEach(el => {
+      if (el.innerHTML.includes(jeId)) el.textContent = '⏳ 로딩...';
+    });
+  } catch(e) {
+    showToast('❌ 저장 실패: ' + e.message);
+  }
+}
+
 async function openVendorModal() {
   document.getElementById('vendor-modal').style.display = 'flex';
   document.getElementById('vendor-form').style.display = 'none';
