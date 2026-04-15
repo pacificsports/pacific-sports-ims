@@ -28852,7 +28852,7 @@ async function selectVendorMgmt(vendorId) {
             ? `<div style="font-size:11px;color:#9ca3af;margin-top:3px;">📍 ${[vendor.address,vendor.city,vendor.state,vendor.zip].filter(Boolean).join(', ')}</div>`
             : ''}
         </div>
-        <button onclick="editVendorInline('${vendor.id}');openVendorModal()" 
+        <button onclick="renderVendorEditForm('${vendor.id}')" 
           style="background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
           ✏️ Edit
         </button>
@@ -29917,6 +29917,187 @@ function selectVendorAccount(code, name) {
   document.getElementById('vendor-default-account-search').value = code + ' — ' + name;
   document.getElementById('vendor-acct-selected').textContent = '✓ ' + code + ' — ' + name;
   document.getElementById('vendor-acct-dropdown').style.display = 'none';
+}
+
+function renderVendorEditForm(vendorId) {
+  const vendor = _apVendors.find(v => v.id === vendorId);
+  if (!vendor) return;
+
+  const detail = document.getElementById('vendor-mgmt-detail');
+
+  // Terms options
+  const termsOpts = ['Net 10','Net 15','Net 30','Net 45','Net 60','Net 90','Due on Receipt']
+    .map(t => `<option value="${t}" ${(vendor.terms||'Net 30')===t?'selected':''}>${t}</option>`).join('');
+
+  // Account options for default expense account
+  const acctOpts = _glAccounts
+    .filter(a => ['expense','liability'].includes(a.type))
+    .map(a => `<option value="${a.code}|${a.name}" ${vendor.default_account_code===a.code?'selected':''}>${a.code} — ${a.name}</option>`).join('');
+
+  detail.innerHTML = `
+    <div style="padding:20px;">
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:14px;border-bottom:2px solid #e5e7eb;">
+        <div>
+          <div style="font-size:16px;font-weight:800;color:#0f2744;">✏️ Edit Vendor</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px;">${vendor.name}</div>
+        </div>
+        <button onclick="selectVendorMgmt('${vendorId}')"
+          style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:5px 14px;font-size:12px;cursor:pointer;">
+          ✕ Cancel
+        </button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+
+        <!-- Vendor Name -->
+        <div style="grid-column:1/-1;">
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Vendor Name *</div>
+          <input type="text" id="vef-name" value="${(vendor.name||'').replace(/"/g,'&quot;')}"
+            style="width:100%;font-size:14px;font-weight:700;padding:8px 10px;border:1.5px solid #1a56a0;border-radius:6px;font-family:'IBM Plex Sans',sans-serif;">
+        </div>
+
+        <!-- Contact / Terms -->
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Contact Person</div>
+          <input type="text" id="vef-contact" value="${(vendor.contact||'').replace(/"/g,'&quot;')}"
+            class="fi" style="width:100%;font-size:13px;" placeholder="Contact name">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Terms</div>
+          <select id="vef-terms" class="fi" style="width:100%;font-size:13px;">${termsOpts}</select>
+        </div>
+
+        <!-- Email / Phone -->
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Email</div>
+          <input type="email" id="vef-email" value="${(vendor.email||'').replace(/"/g,'&quot;')}"
+            class="fi" style="width:100%;font-size:13px;" placeholder="billing@vendor.com">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Phone</div>
+          <input type="text" id="vef-phone" value="${(vendor.phone||'').replace(/"/g,'&quot;')}"
+            class="fi" style="width:100%;font-size:13px;" placeholder="(803) 555-0100">
+        </div>
+
+        <!-- Address -->
+        <div style="grid-column:1/-1;">
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Address</div>
+          <input type="text" id="vef-address" value="${(vendor.address||'').replace(/"/g,'&quot;')}"
+            class="fi" style="width:100%;font-size:13px;" placeholder="123 Main St">
+        </div>
+
+        <!-- City / State / Zip -->
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">City</div>
+          <input type="text" id="vef-city" value="${(vendor.city||'').replace(/"/g,'&quot;')}"
+            class="fi" style="width:100%;font-size:13px;">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">State</div>
+            <input type="text" id="vef-state" value="${(vendor.state||'').replace(/"/g,'&quot;')}"
+              class="fi" maxlength="2" style="width:100%;font-size:13px;text-transform:uppercase;" placeholder="SC">
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Zip</div>
+            <input type="text" id="vef-zip" value="${(vendor.zip||'').replace(/"/g,'&quot;')}"
+              class="fi" style="width:100%;font-size:13px;" placeholder="29150">
+          </div>
+        </div>
+
+        <!-- Default Expense Account -->
+        <div style="grid-column:1/-1;">
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">
+            Default Expense Account
+            <span style="font-weight:400;color:#9ca3af;text-transform:none;"> — AP Invoice 입력 시 자동 채워짐</span>
+          </div>
+          <select id="vef-acct" class="fi" style="width:100%;font-size:12px;font-family:'IBM Plex Mono',monospace;">
+            <option value="">— 선택 안 함 —</option>
+            ${acctOpts}
+          </select>
+        </div>
+
+        <!-- Payment Info / Notes -->
+        <div style="grid-column:1/-1;">
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Payment Info / Notes</div>
+          <textarea id="vef-notes" class="fi" rows="2"
+            style="width:100%;font-size:12px;resize:vertical;"
+            placeholder="Bank account, ACH routing, wire instructions, etc...">${vendor.notes||''}</textarea>
+        </div>
+
+        <!-- W9 / Tax ID -->
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Tax ID / EIN</div>
+          <input type="text" id="vef-taxid" value="${(vendor.tax_id||'').replace(/"/g,'&quot;')}"
+            class="fi" style="width:100%;font-size:13px;font-family:'IBM Plex Mono',monospace;" placeholder="XX-XXXXXXX">
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">Website</div>
+          <input type="text" id="vef-website" value="${(vendor.website||'').replace(/"/g,'&quot;')}"
+            class="fi" style="width:100%;font-size:13px;" placeholder="www.vendor.com">
+        </div>
+
+      </div>
+
+      <!-- Save / Cancel buttons -->
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;padding-top:14px;border-top:1px solid #e5e7eb;">
+        <button onclick="selectVendorMgmt('${vendorId}')"
+          style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;">
+          Cancel
+        </button>
+        <button onclick="saveVendorInline('${vendorId}')"
+          style="background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:8px 24px;font-size:13px;font-weight:700;cursor:pointer;">
+          💾 Save Changes
+        </button>
+      </div>
+    </div>`;
+}
+
+async function saveVendorInline(vendorId) {
+  const name = document.getElementById('vef-name')?.value.trim();
+  if (!name) { showToast('❌ Vendor name을 입력하세요.'); return; }
+
+  const acctRaw = document.getElementById('vef-acct')?.value || '';
+  const [acctCode, ...acctNameParts] = acctRaw.split('|');
+  const acctName = acctNameParts.join('|');
+
+  const payload = {
+    name,
+    contact:  document.getElementById('vef-contact')?.value.trim() || null,
+    email:    document.getElementById('vef-email')?.value.trim() || null,
+    phone:    document.getElementById('vef-phone')?.value.trim() || null,
+    terms:    document.getElementById('vef-terms')?.value || 'Net 30',
+    address:  document.getElementById('vef-address')?.value.trim() || null,
+    city:     document.getElementById('vef-city')?.value.trim() || null,
+    state:    (document.getElementById('vef-state')?.value.trim() || '').toUpperCase() || null,
+    zip:      document.getElementById('vef-zip')?.value.trim() || null,
+    notes:    document.getElementById('vef-notes')?.value.trim() || null,
+    tax_id:   document.getElementById('vef-taxid')?.value.trim() || null,
+    website:  document.getElementById('vef-website')?.value.trim() || null,
+    default_account_code: acctCode || null,
+    default_account_name: acctName || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const btn = document.querySelector(`button[onclick="saveVendorInline('${vendorId}')"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Saving...'; }
+
+  try {
+    const { error } = await db.from('vendors').update(payload).eq('id', vendorId);
+    if (error) throw error;
+
+    // Update local cache
+    const idx = _apVendors.findIndex(v => v.id === vendorId);
+    if (idx >= 0) _apVendors[idx] = { ..._apVendors[idx], ...payload };
+
+    showToast('✅ Vendor updated!');
+    renderVendorMgmtList();
+    await selectVendorMgmt(vendorId);
+  } catch(e) {
+    showToast('❌ 저장 실패: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '💾 Save Changes'; }
+  }
 }
 
 function showVendorForm(vendorId = null) {
