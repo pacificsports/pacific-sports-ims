@@ -29929,10 +29929,11 @@ function renderVendorEditForm(vendorId) {
   const termsOpts = ['Net 10','Net 15','Net 30','Net 45','Net 60','Net 90','Due on Receipt']
     .map(t => `<option value="${t}" ${(vendor.terms||'Net 30')===t?'selected':''}>${t}</option>`).join('');
 
-  // Account options for default expense account
-  const acctOpts = _glAccounts
-    .filter(a => ['expense','liability'].includes(a.type))
-    .map(a => `<option value="${a.code}|${a.name}" ${vendor.default_account_code===a.code?'selected':''}>${a.code} — ${a.name}</option>`).join('');
+  // Account options for default expense account (for custom searchable dropdown)
+  const acctList = _glAccounts
+    .filter(a => ['expense','liability'].includes(a.type));
+  const currentAcct = acctList.find(a => a.code === vendor.default_account_code);
+  const currentAcctDisplay = currentAcct ? `${currentAcct.code} — ${currentAcct.name}` : '';
 
   detail.innerHTML = `
     <div style="padding:20px;">
@@ -30006,16 +30007,31 @@ function renderVendorEditForm(vendorId) {
           </div>
         </div>
 
-        <!-- Default Expense Account -->
+        <!-- Default Expense Account — searchable + keyboard nav -->
         <div style="grid-column:1/-1;">
           <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px;">
             Default Expense Account
             <span style="font-weight:400;color:#9ca3af;text-transform:none;"> — AP Invoice 입력 시 자동 채워짐</span>
           </div>
-          <select id="vef-acct" class="fi" style="width:100%;font-size:12px;font-family:'IBM Plex Mono',monospace;">
-            <option value="">— 선택 안 함 —</option>
-            ${acctOpts}
-          </select>
+          <div style="position:relative;" id="vef-acct-wrap">
+            <input type="text" id="vef-acct-search"
+              value="${currentAcctDisplay.replace(/"/g,'&quot;')}"
+              placeholder="계정 검색... (코드 또는 이름)"
+              autocomplete="off"
+              class="fi" style="width:100%;font-size:12px;font-family:'IBM Plex Mono',monospace;"
+              oninput="vefFilterAccounts(this.value)"
+              onkeydown="vefAcctKeyNav(event)"
+              onfocus="vefFilterAccounts(this.value)"
+              onblur="setTimeout(()=>{ const d=document.getElementById('vef-acct-dd'); if(d) d.style.display='none'; },200)">
+            <input type="hidden" id="vef-acct-code" value="${vendor.default_account_code||''}">
+            <input type="hidden" id="vef-acct-name" value="${(vendor.default_account_name||'').replace(/"/g,'&quot;')}">
+            <div id="vef-acct-dd" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:220px;overflow-y:auto;background:#fff;border:1px solid #1a56a0;border-top:none;border-radius:0 0 6px 6px;z-index:9999;box-shadow:0 6px 16px rgba(0,0,0,0.12);">
+              <div id="vef-acct-list"></div>
+            </div>
+          </div>
+          <div id="vef-acct-badge" style="margin-top:4px;font-size:11px;color:#1a56a0;font-family:'IBM Plex Mono',monospace;min-height:16px;">
+            ${currentAcct ? '✓ ' + currentAcct.code + ' — ' + currentAcct.name : ''}
+          </div>
         </div>
 
         <!-- Payment Info / Notes -->
@@ -30054,13 +30070,123 @@ function renderVendorEditForm(vendorId) {
     </div>`;
 }
 
+let _vefAcctHighlight = -1;
+
+function vefFilterAccounts(query) {
+  const dd = document.getElementById('vef-acct-dd');
+  const list = document.getElementById('vef-acct-list');
+  if (!dd || !list) return;
+
+  const q = (query || '').toLowerCase().trim();
+  const filtered = _glAccounts
+    .filter(a => ['expense','liability'].includes(a.type))
+    .filter(a => !q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
+    .slice(0, 60);
+
+  _vefAcctHighlight = -1;
+
+  if (!filtered.length) {
+    list.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#9ca3af;">검색 결과 없음</div>';
+    dd.style.display = 'block';
+    return;
+  }
+
+  // Clear button at top
+  const clearHtml = `<div id="vef-acct-item--1"
+    onmousedown="event.preventDefault();vefSelectAcct('','','')"
+    style="padding:8px 12px;cursor:pointer;font-size:12px;color:#6b7280;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px;"
+    onmouseenter="vefHoverItem(-1)" onmouseleave="vefUnhoverItem(-1)">
+    <span style="color:#dc2626;font-size:14px;">✕</span> 선택 안 함
+  </div>`;
+
+  list.innerHTML = clearHtml + filtered.map((a, idx) => `
+    <div id="vef-acct-item-${idx}"
+      onmousedown="event.preventDefault();vefSelectAcct('${a.code}','${a.name.replace(/'/g,"\\'")}','${a.code} — ${a.name.replace(/'/g,"\\'")}')"
+      style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #f5f5f5;display:flex;gap:10px;align-items:center;"
+      onmouseenter="vefHoverItem(${idx})" onmouseleave="vefUnhoverItem(${idx})">
+      <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;min-width:72px;font-size:11px;">${a.code}</span>
+      <span style="color:#374151;">${a.name}</span>
+    </div>`).join('');
+
+  dd.style.display = 'block';
+}
+
+function vefHoverItem(idx) {
+  const el = document.getElementById(`vef-acct-item-${idx}`);
+  if (el) el.style.background = '#eff6ff';
+}
+function vefUnhoverItem(idx) {
+  if (idx === _vefAcctHighlight) return;
+  const el = document.getElementById(`vef-acct-item-${idx}`);
+  if (el) el.style.background = '';
+}
+
+function vefAcctKeyNav(e) {
+  const dd = document.getElementById('vef-acct-dd');
+  const list = document.getElementById('vef-acct-list');
+  if (!dd || dd.style.display === 'none') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      vefFilterAccounts(document.getElementById('vef-acct-search')?.value || '');
+      return;
+    }
+  }
+
+  const items = list?.querySelectorAll('div[id^="vef-acct-item-"]') || [];
+  const count = items.length;
+  if (!count) return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    // Unhighlight previous
+    if (_vefAcctHighlight >= -1 && _vefAcctHighlight < count) {
+      const prev = document.getElementById(`vef-acct-item-${_vefAcctHighlight}`);
+      if (prev) prev.style.background = '';
+    }
+    _vefAcctHighlight = Math.min(_vefAcctHighlight + 1, count - 1);
+    const cur = items[_vefAcctHighlight];
+    if (cur) { cur.style.background = '#eff6ff'; cur.scrollIntoView({ block: 'nearest' }); }
+
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (_vefAcctHighlight >= 0) {
+      const prev = items[_vefAcctHighlight];
+      if (prev) prev.style.background = '';
+    }
+    _vefAcctHighlight = Math.max(_vefAcctHighlight - 1, -1);
+    if (_vefAcctHighlight >= 0) {
+      const cur = items[_vefAcctHighlight];
+      if (cur) { cur.style.background = '#eff6ff'; cur.scrollIntoView({ block: 'nearest' }); }
+    }
+
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_vefAcctHighlight >= 0 && _vefAcctHighlight < count) {
+      items[_vefAcctHighlight].dispatchEvent(new MouseEvent('mousedown'));
+    }
+
+  } else if (e.key === 'Escape') {
+    dd.style.display = 'none';
+    _vefAcctHighlight = -1;
+  }
+}
+
+function vefSelectAcct(code, name, display) {
+  document.getElementById('vef-acct-code').value = code;
+  document.getElementById('vef-acct-name').value = name;
+  document.getElementById('vef-acct-search').value = display;
+  document.getElementById('vef-acct-badge').innerHTML = display
+    ? `<span style="color:#1a56a0;">✓ ${display}</span>`
+    : '<span style="color:#9ca3af;">선택 안 함</span>';
+  document.getElementById('vef-acct-dd').style.display = 'none';
+  _vefAcctHighlight = -1;
+}
+
 async function saveVendorInline(vendorId) {
   const name = document.getElementById('vef-name')?.value.trim();
   if (!name) { showToast('❌ Vendor name을 입력하세요.'); return; }
 
-  const acctRaw = document.getElementById('vef-acct')?.value || '';
-  const [acctCode, ...acctNameParts] = acctRaw.split('|');
-  const acctName = acctNameParts.join('|');
+  const acctCode = document.getElementById('vef-acct-code')?.value || '';
+  const acctName = document.getElementById('vef-acct-name')?.value || '';
 
   const payload = {
     name,
