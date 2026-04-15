@@ -2063,6 +2063,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button id="ap-tab-calendar" onclick="apSetTab('calendar')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📅 Payment Calendar</button>
         <button id="ap-tab-aging" onclick="apSetTab('aging')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📊 AP Aging</button>
         <button id="ap-tab-payments" onclick="apSetTab('payments')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">💵 Payment History</button>
+        <button id="ap-tab-vendors" onclick="apSetTab('vendors')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">🏢 Vendor Management</button>
       </div>
 
       <!-- Open Invoices Tab -->
@@ -2211,6 +2212,31 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             </tr></thead>
             <tbody id="ap-payments-tbody"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- Vendor Management Tab -->
+      <div id="ap-pane-vendors" style="display:none;">
+        <div style="display:flex;gap:12px;height:calc(100vh - 320px);min-height:500px;">
+          <!-- 왼쪽: 벤더 리스트 -->
+          <div style="width:260px;flex-shrink:0;background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;">
+            <div style="padding:10px 12px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
+              <input type="text" id="vendor-mgmt-search" placeholder="벤더 검색..." class="fi"
+                style="width:100%;font-size:12px;" oninput="renderVendorMgmtList()">
+            </div>
+            <div id="vendor-mgmt-list" style="overflow-y:auto;flex:1;"></div>
+            <div style="padding:8px 12px;border-top:1px solid #e5e7eb;">
+              <button onclick="openVendorModal()" style="width:100%;background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer;">+ New Vendor</button>
+            </div>
+          </div>
+
+          <!-- 오른쪽: 벤더 상세 -->
+          <div id="vendor-mgmt-detail" style="flex:1;overflow-y:auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;">
+            <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af;flex-direction:column;gap:8px;">
+              <div style="font-size:40px;">🏢</div>
+              <div style="font-size:14px;font-weight:600;">벤더를 선택하세요</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -25942,7 +25968,7 @@ let _apCalYear = new Date().getFullYear();
 let _apCalMonth = new Date().getMonth(); // 0-indexed
 
 function apSetTab(tab) {
-  ['invoices','calendar','aging','payments'].forEach(t => {
+  ['invoices','calendar','aging','payments','vendors'].forEach(t => {
     const btn = document.getElementById('ap-tab-' + t);
     const pane = document.getElementById('ap-pane-' + t);
     if (!btn || !pane) return;
@@ -25954,6 +25980,7 @@ function apSetTab(tab) {
   if (tab === 'aging') renderAPAging();
   if (tab === 'payments') renderAPPayments();
   if (tab === 'calendar') renderAPCalendar();
+  if (tab === 'vendors') renderVendorMgmtList();
 }
 
 function apCalPrevMonth() {
@@ -27790,7 +27817,193 @@ async function saveAPPayment() {
   }
 }
 
-// ── Vendor 관리 ──
+// ── Vendor Management Tab ──
+let _selectedVendorId = null;
+
+function renderVendorMgmtList() {
+  const q = (document.getElementById('vendor-mgmt-search')?.value || '').toLowerCase();
+  const vendors = _apVendors.filter(v => !q || v.name.toLowerCase().includes(q));
+  const list = document.getElementById('vendor-mgmt-list');
+  if (!list) return;
+
+  if (!vendors.length) {
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:12px;">벤더 없음</div>';
+    return;
+  }
+
+  // 벤더별 outstanding 계산
+  const vendorBalances = {};
+  _apInvoices.filter(i => ['open','partial'].includes(i.status)).forEach(i => {
+    const vid = i.vendor_id;
+    if (!vendorBalances[vid]) vendorBalances[vid] = 0;
+    vendorBalances[vid] += (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+  });
+
+  list.innerHTML = vendors.map(v => {
+    const bal = vendorBalances[v.id] || 0;
+    const isSelected = v.id === _selectedVendorId;
+    return `<div onclick="selectVendorMgmt('${v.id}')"
+      style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;
+        background:${isSelected?'#eff6ff':'#fff'};
+        border-left:3px solid ${isSelected?'#1a56a0':'transparent'};"
+      onmouseenter="if('${v.id}'!=='${_selectedVendorId}')this.style.background='#f8fafc'"
+      onmouseleave="if('${v.id}'!=='${_selectedVendorId}')this.style.background='#fff'">
+      <div style="font-size:12px;font-weight:700;color:#0f2744;">${v.name}</div>
+      <div style="display:flex;justify-content:space-between;margin-top:3px;">
+        <span style="font-size:10px;color:#6b7280;">${v.terms||'Net 30'}</span>
+        ${bal > 0
+          ? `<span style="font-size:10px;font-weight:700;color:#dc2626;">$${bal.toLocaleString('en-US',{minimumFractionDigits:2})}</span>`
+          : `<span style="font-size:10px;color:#16a34a;font-weight:600;">✓ Clear</span>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function selectVendorMgmt(vendorId) {
+  _selectedVendorId = vendorId;
+  renderVendorMgmtList();
+
+  const vendor = _apVendors.find(v => v.id === vendorId);
+  if (!vendor) return;
+
+  const detail = document.getElementById('vendor-mgmt-detail');
+  detail.innerHTML = `<div style="padding:20px;text-align:center;color:#6b7280;font-size:12px;">⏳ 로딩 중...</div>`;
+
+  // 해당 벤더 인보이스, 페이먼트 로드
+  const [{ data: invs }, { data: pmts }] = await Promise.all([
+    db.from('ap_invoices').select('*').eq('vendor_id', vendorId).order('invoice_date', { ascending: false }),
+    db.from('ap_payments').select('*').eq('vendor_id', vendorId).order('payment_date', { ascending: false })
+  ]);
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  const totalOutstanding = (invs||[]).filter(i => ['open','partial'].includes(i.status))
+    .reduce((s,i) => s + ((parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0)), 0);
+  const totalPaid = (pmts||[]).reduce((s,p) => s + (parseFloat(p.amount)||0), 0);
+
+  // 가장 오래된 overdue
+  const overdueInvs = (invs||[]).filter(i => ['open','partial'].includes(i.status) && i.due_date && new Date(i.due_date) < today);
+  const oldestDays = overdueInvs.length ? Math.max(...overdueInvs.map(i => Math.floor((today - new Date(i.due_date)) / 86400000))) : 0;
+
+  detail.innerHTML = `
+    <!-- 벤더 헤더 -->
+    <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:18px;font-weight:800;color:#0f2744;">${vendor.name}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:4px;display:flex;gap:16px;flex-wrap:wrap;">
+            ${vendor.email ? `<span>✉ ${vendor.email}</span>` : ''}
+            ${vendor.phone ? `<span>📞 ${vendor.phone}</span>` : ''}
+            ${vendor.contact ? `<span>👤 ${vendor.contact}</span>` : ''}
+            <span>📋 ${vendor.terms||'Net 30'}</span>
+            ${vendor.default_account_code ? `<span>🏷 ${vendor.default_account_code} — ${vendor.default_account_name||''}</span>` : ''}
+          </div>
+          ${[vendor.address, vendor.city, vendor.state, vendor.zip].filter(Boolean).length
+            ? `<div style="font-size:11px;color:#9ca3af;margin-top:3px;">📍 ${[vendor.address,vendor.city,vendor.state,vendor.zip].filter(Boolean).join(', ')}</div>`
+            : ''}
+        </div>
+        <button onclick="editVendorInline('${vendor.id}');openVendorModal()" 
+          style="background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          ✏️ Edit
+        </button>
+      </div>
+
+      <!-- 요약 카드 -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px;">
+        <div style="background:${totalOutstanding>0?'#fef2f2':'#f0fdf4'};border-radius:8px;padding:10px 12px;border:1px solid ${totalOutstanding>0?'#fecaca':'#bbf7d0'};">
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Outstanding</div>
+          <div style="font-size:16px;font-weight:800;color:${totalOutstanding>0?'#dc2626':'#16a34a'};font-family:'IBM Plex Mono',monospace;">${fmt(totalOutstanding)}</div>
+        </div>
+        <div style="background:#f0fdf4;border-radius:8px;padding:10px 12px;border:1px solid #bbf7d0;">
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Paid YTD</div>
+          <div style="font-size:16px;font-weight:800;color:#16a34a;font-family:'IBM Plex Mono',monospace;">${fmt(totalPaid)}</div>
+        </div>
+        <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;border:1px solid #e5e7eb;">
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Invoices</div>
+          <div style="font-size:16px;font-weight:800;color:#0f2744;">${(invs||[]).length}</div>
+        </div>
+        <div style="background:${oldestDays>0?'#fef2f2':'#f8fafc'};border-radius:8px;padding:10px 12px;border:1px solid ${oldestDays>0?'#fecaca':'#e5e7eb'};">
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">Oldest Overdue</div>
+          <div style="font-size:16px;font-weight:800;color:${oldestDays>0?'#dc2626':'#16a34a'};">${oldestDays > 0 ? oldestDays+'d' : '—'}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 인보이스 -->
+    <div style="padding:14px 20px;">
+      <div style="font-size:11px;font-weight:800;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">
+        🧾 Invoices (${(invs||[]).length})
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#0f2744;color:#fff;">
+          <th style="padding:7px 10px;text-align:left;">Invoice #</th>
+          <th style="padding:7px 10px;text-align:left;">Date</th>
+          <th style="padding:7px 10px;text-align:left;">Due</th>
+          <th style="padding:7px 10px;text-align:right;">Amount</th>
+          <th style="padding:7px 10px;text-align:right;">Balance</th>
+          <th style="padding:7px 10px;text-align:center;">Status</th>
+          <th style="padding:7px 10px;width:60px;"></th>
+        </tr></thead>
+        <tbody>
+          ${(invs||[]).length === 0 ? '<tr><td colspan="7" style="padding:16px;text-align:center;color:#9ca3af;">인보이스 없음</td></tr>' :
+            (invs||[]).map(i => {
+              const bal = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+              const isOverdue = i.due_date && new Date(i.due_date) < today && bal > 0;
+              const days = isOverdue ? Math.floor((today - new Date(i.due_date)) / 86400000) : 0;
+              const statusColors = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a', void:'#9ca3af' };
+              const sc = statusColors[i.status] || '#6b7280';
+              return `<tr style="border-bottom:1px solid #f0f0f0;background:${isOverdue?'#fff8f8':'#fff'};">
+                <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;cursor:pointer;" onclick="viewAPInvoice('${i.id}')">${i.invoice_number}</td>
+                <td style="padding:6px 10px;">${i.invoice_date||'—'}</td>
+                <td style="padding:6px 10px;color:${isOverdue?'#dc2626':'#374151'};font-weight:${isOverdue?'700':'400'};">
+                  ${i.due_date||'—'}
+                  ${days > 0 ? `<span style="margin-left:4px;background:#fef2f2;color:#dc2626;border-radius:8px;padding:1px 5px;font-size:9px;font-weight:700;">${days}d</span>` : ''}
+                </td>
+                <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;">${fmt(i.total_amount)}</td>
+                <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${bal>0?'#dc2626':'#16a34a'};">${fmt(bal)}</td>
+                <td style="padding:6px 10px;text-align:center;">
+                  <span style="background:${sc}20;color:${sc};border:1px solid ${sc}40;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;">${i.status}</span>
+                </td>
+                <td style="padding:6px 10px;text-align:center;">
+                  ${bal > 0 ? `<button onclick="openAPPaymentModal('${i.id}')" style="background:#16a34a;color:#fff;border:none;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-weight:700;">Pay</button>` : ''}
+                </td>
+              </tr>`;
+            }).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 페이먼트 히스토리 -->
+    <div style="padding:0 20px 20px;">
+      <div style="font-size:11px;font-weight:800;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">
+        💵 Payment History (${(pmts||[]).length})
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#f0f4f8;">
+          <th style="padding:7px 10px;text-align:left;color:#374151;font-size:10px;">Date</th>
+          <th style="padding:7px 10px;text-align:left;color:#374151;font-size:10px;">Method</th>
+          <th style="padding:7px 10px;text-align:left;color:#374151;font-size:10px;">Reference</th>
+          <th style="padding:7px 10px;text-align:left;color:#374151;font-size:10px;">Invoice</th>
+          <th style="padding:7px 10px;text-align:right;color:#374151;font-size:10px;">Amount</th>
+          <th style="padding:7px 10px;text-align:left;color:#374151;font-size:10px;">Notes</th>
+        </tr></thead>
+        <tbody>
+          ${(pmts||[]).length === 0 ? '<tr><td colspan="6" style="padding:16px;text-align:center;color:#9ca3af;">결제 내역 없음</td></tr>' :
+            (pmts||[]).map(p => {
+              const inv = (invs||[]).find(i => i.id === p.ap_invoice_id);
+              return `<tr style="border-bottom:1px solid #f5f5f5;">
+                <td style="padding:5px 10px;">${p.payment_date}</td>
+                <td style="padding:5px 10px;text-transform:capitalize;">${p.method||'—'}</td>
+                <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7280;">${p.reference||'—'}</td>
+                <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a56a0;">${inv?.invoice_number||'—'}</td>
+                <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#16a34a;">${fmt(p.amount)}</td>
+                <td style="padding:5px 10px;font-size:11px;color:#6b7280;">${p.notes||'—'}</td>
+              </tr>`;
+            }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
 async function openVendorModal() {
   document.getElementById('vendor-modal').style.display = 'flex';
   document.getElementById('vendor-form').style.display = 'none';
