@@ -30091,11 +30091,10 @@ function vefFilterAccounts(query) {
     return;
   }
 
-  // Clear button at top
   const clearHtml = `<div id="vef-acct-item--1"
     onmousedown="event.preventDefault();vefSelectAcct('','','')"
     style="padding:8px 12px;cursor:pointer;font-size:12px;color:#6b7280;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px;"
-    onmouseenter="vefHoverItem(-1)" onmouseleave="vefUnhoverItem(-1)">
+    onmouseenter="vefSetHighlight(-1)" onmouseleave="">
     <span style="color:#dc2626;font-size:14px;">✕</span> 선택 안 함
   </div>`;
 
@@ -30103,7 +30102,7 @@ function vefFilterAccounts(query) {
     <div id="vef-acct-item-${idx}"
       onmousedown="event.preventDefault();vefSelectAcct('${a.code}','${a.name.replace(/'/g,"\\'")}','${a.code} — ${a.name.replace(/'/g,"\\'")}')"
       style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #f5f5f5;display:flex;gap:10px;align-items:center;"
-      onmouseenter="vefHoverItem(${idx})" onmouseleave="vefUnhoverItem(${idx})">
+      onmouseenter="vefSetHighlight(${idx})">
       <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;min-width:72px;font-size:11px;">${a.code}</span>
       <span style="color:#374151;">${a.name}</span>
     </div>`).join('');
@@ -30111,19 +30110,23 @@ function vefFilterAccounts(query) {
   dd.style.display = 'block';
 }
 
-function vefHoverItem(idx) {
-  const el = document.getElementById(`vef-acct-item-${idx}`);
-  if (el) el.style.background = '#eff6ff';
-}
-function vefUnhoverItem(idx) {
-  if (idx === _vefAcctHighlight) return;
-  const el = document.getElementById(`vef-acct-item-${idx}`);
-  if (el) el.style.background = '';
+function vefSetHighlight(idx) {
+  // Remove highlight from all items
+  const list = document.getElementById('vef-acct-list');
+  if (!list) return;
+  list.querySelectorAll('div[id^="vef-acct-item-"]').forEach(el => {
+    el.style.background = '';
+  });
+  // Apply highlight to target
+  _vefAcctHighlight = idx;
+  const target = document.getElementById(`vef-acct-item-${idx}`);
+  if (target) target.style.background = '#eff6ff';
 }
 
 function vefAcctKeyNav(e) {
   const dd = document.getElementById('vef-acct-dd');
   const list = document.getElementById('vef-acct-list');
+
   if (!dd || dd.style.display === 'none') {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       vefFilterAccounts(document.getElementById('vef-acct-search')?.value || '');
@@ -30137,32 +30140,25 @@ function vefAcctKeyNav(e) {
 
   if (e.key === 'ArrowDown') {
     e.preventDefault();
-    // Unhighlight previous
-    if (_vefAcctHighlight >= -1 && _vefAcctHighlight < count) {
-      const prev = document.getElementById(`vef-acct-item-${_vefAcctHighlight}`);
-      if (prev) prev.style.background = '';
-    }
-    _vefAcctHighlight = Math.min(_vefAcctHighlight + 1, count - 1);
-    const cur = items[_vefAcctHighlight];
-    if (cur) { cur.style.background = '#eff6ff'; cur.scrollIntoView({ block: 'nearest' }); }
+    // Map item index: item-0 is clearBtn (id=-1), item-1..N are idx 0..N-1
+    // We track by the actual items array index
+    const nextIdx = Math.min(_vefAcctHighlight + 1, count - 1);
+    const nextItemId = items[nextIdx]?.id?.replace('vef-acct-item-', '');
+    vefSetHighlight(parseInt(nextItemId));
+    items[nextIdx]?.scrollIntoView({ block: 'nearest' });
 
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
-    if (_vefAcctHighlight >= 0) {
-      const prev = items[_vefAcctHighlight];
-      if (prev) prev.style.background = '';
-    }
-    _vefAcctHighlight = Math.max(_vefAcctHighlight - 1, -1);
-    if (_vefAcctHighlight >= 0) {
-      const cur = items[_vefAcctHighlight];
-      if (cur) { cur.style.background = '#eff6ff'; cur.scrollIntoView({ block: 'nearest' }); }
-    }
+    const prevIdx = Math.max(_vefAcctHighlight === -1 ? count - 1 : 
+      Array.from(items).findIndex(el => el.id === `vef-acct-item-${_vefAcctHighlight}`) - 1, 0);
+    const prevItemId = items[prevIdx]?.id?.replace('vef-acct-item-', '');
+    vefSetHighlight(parseInt(prevItemId));
+    items[prevIdx]?.scrollIntoView({ block: 'nearest' });
 
   } else if (e.key === 'Enter') {
     e.preventDefault();
-    if (_vefAcctHighlight >= 0 && _vefAcctHighlight < count) {
-      items[_vefAcctHighlight].dispatchEvent(new MouseEvent('mousedown'));
-    }
+    const highlighted = list?.querySelector(`#vef-acct-item-${_vefAcctHighlight}`);
+    if (highlighted) highlighted.dispatchEvent(new MouseEvent('mousedown'));
 
   } else if (e.key === 'Escape') {
     dd.style.display = 'none';
