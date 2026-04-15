@@ -2141,6 +2141,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             As of <span id="ap-aging-date"></span>
           </div>
           <div style="display:flex;gap:8px;">
+            <button onclick="toggleAllAgingVendors(true)" style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;color:#374151;">▼ 전체 펼치기</button>
+            <button onclick="toggleAllAgingVendors(false)" style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;color:#374151;">▶ 전체 닫기</button>
             <button onclick="printAPAging()" style="background:#0f2744;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">🖨 Print</button>
             <button onclick="downloadAPAging()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">⬇ Download PDF</button>
           </div>
@@ -2181,6 +2183,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <th style="text-align:left;padding:9px 12px;">Vendor</th>
               <th style="text-align:left;padding:9px 12px;width:120px;">Invoice #</th>
               <th style="text-align:left;padding:9px 12px;width:90px;">Due Date</th>
+              <th class="num" style="width:80px;color:#fbbf24;font-weight:800;">Past Due</th>
               <th class="num" style="width:110px;color:#4ade80;font-weight:800;">Current</th>
               <th class="num" style="width:110px;color:#fbbf24;font-weight:800;">1–30</th>
               <th class="num" style="width:110px;color:#fb923c;font-weight:800;">31–60</th>
@@ -2188,7 +2191,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <th class="num" style="width:110px;color:#fca5a5;font-weight:800;">90+</th>
               <th class="num" style="width:120px;color:#fff;font-weight:800;">Balance</th>
             </tr></thead>
-            <tbody id="ap-aging-tbody"><tr><td colspan="9" class="empty">Loading...</td></tr></tbody>
+            <tbody id="ap-aging-tbody"><tr><td colspan="10" class="empty">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -26311,6 +26314,7 @@ function renderAPAging() {
     const vid = `aging-v-${vendorIdx++}`;
 
     // 벤더 소계 행 — 클릭하면 접기/펼치기
+    const vPastDue = v.d30 + v.d60 + v.d90 + v.d90p;
     rows += `<tr style="background:#f0f4f8;border-top:2px solid #e5e7eb;cursor:pointer;" onclick="toggleAgingVendor('${vid}')">
       <td style="font-weight:800;font-size:12px;padding:8px 12px;display:flex;align-items:center;gap:8px;">
         <span id="${vid}-icon" style="font-size:11px;color:#6b7280;transition:transform 0.15s;display:inline-block;">▶</span>
@@ -26318,6 +26322,7 @@ function renderAPAging() {
       </td>
       <td></td>
       <td></td>
+      <td class="num" style="font-weight:700;">${vPastDue > 0 ? `<span style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;">${fmtN(vPastDue)}</span>` : '—'}</td>
       <td class="num" style="color:#15803d;font-weight:700;">${fmt(v.current)}</td>
       <td class="num" style="color:#b45309;font-weight:700;">${fmt(v.d30)}</td>
       <td class="num" style="color:#c2410c;font-weight:700;">${fmt(v.d60)}</td>
@@ -26329,10 +26334,15 @@ function renderAPAging() {
     // 인보이스별 상세 행 — 기본 숨김
     v.invoices.sort((a,b) => new Date(a.due_date||0) - new Date(b.due_date||0)).forEach(inv => {
       const col = bucketCol[inv.bucket] || '#374151';
+      const daysPast = inv.bucket !== 'current' ? Math.floor((today - new Date(inv.due_date)) / 86400000) : 0;
+      const pastDueCell = inv.bucket !== 'current' && daysPast > 0
+        ? `<span style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:700;">${daysPast}d</span>`
+        : '—';
       rows += `<tr class="${vid}-detail" style="display:none;border-bottom:1px solid #f5f5f5;background:#fff;">
         <td style="padding:5px 12px 5px 32px;font-size:11px;color:#6b7280;"></td>
         <td style="padding:5px 12px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#1a56a0;cursor:pointer;" onclick="event.stopPropagation();viewAPInvoice('${inv.id}')">${inv.invoice_number}</td>
         <td style="padding:5px 12px;font-size:11px;color:${col};font-weight:${inv.bucket!=='current'?'700':'400'};">${inv.due_date||'—'}</td>
+        <td class="num" style="font-size:11px;">${pastDueCell}</td>
         <td class="num" style="font-size:11px;">${inv.bucket==='current'?fmtN(inv.balance):'—'}</td>
         <td class="num" style="font-size:11px;">${inv.bucket==='d30'?fmtN(inv.balance):'—'}</td>
         <td class="num" style="font-size:11px;">${inv.bucket==='d60'?fmtN(inv.balance):'—'}</td>
@@ -26344,18 +26354,31 @@ function renderAPAging() {
   });
 
   // 합계 행
+  const totalPastDue = totals.d30 + totals.d60 + totals.d90 + totals.d90p;
   rows += `<tr style="background:#0f2744;color:#fff;border-top:3px solid #1a56a0;">
     <td style="padding:10px 12px;font-weight:800;font-size:13px;" colspan="2">TOTAL</td>
     <td></td>
-    <td class="num" style="font-weight:800;color:#86efac;">${fmt(totals.current)}</td>
-    <td class="num" style="font-weight:800;color:#fde68a;">${fmt(totals.d30)}</td>
-    <td class="num" style="font-weight:800;color:#fed7aa;">${fmt(totals.d60)}</td>
-    <td class="num" style="font-weight:800;color:#fca5a5;">${fmt(totals.d90)}</td>
+    <td class="num" style="font-weight:800;color:#f9a8d4;">${totalPastDue > 0 ? fmtN(totalPastDue) : '—'}</td>
+    <td class="num" style="font-weight:800;color:#4ade80;">${fmt(totals.current)}</td>
+    <td class="num" style="font-weight:800;color:#fbbf24;">${fmt(totals.d30)}</td>
+    <td class="num" style="font-weight:800;color:#fb923c;">${fmt(totals.d60)}</td>
+    <td class="num" style="font-weight:800;color:#f87171;">${fmt(totals.d90)}</td>
     <td class="num" style="font-weight:800;color:#fca5a5;">${fmt(totals.d90p)}</td>
     <td class="num" style="font-weight:900;font-size:14px;color:#fff;">${fmtN(totals.total)}</td>
   </tr>`;
 
-  document.getElementById('ap-aging-tbody').innerHTML = rows || '<tr><td colspan="9" class="empty">No outstanding AP</td></tr>';
+  document.getElementById('ap-aging-tbody').innerHTML = rows || '<tr><td colspan="10" class="empty">No outstanding AP</td></tr>';
+}
+
+function toggleAllAgingVendors(open) {
+  const tbody = document.getElementById('ap-aging-tbody');
+  if (!tbody) return;
+  // 모든 detail 행 찾기
+  const allDetails = tbody.querySelectorAll('tr[class*="-detail"]');
+  allDetails.forEach(r => r.style.display = open ? '' : 'none');
+  // 모든 아이콘 업데이트
+  const allIcons = tbody.querySelectorAll('[id$="-icon"]');
+  allIcons.forEach(icon => icon.textContent = open ? '▼' : '▶');
 }
 
 function toggleAgingVendor(vid) {
