@@ -26139,6 +26139,7 @@ let _apCalYear = new Date().getFullYear();
 let _apCalMonth = new Date().getMonth(); // 0-indexed
 
 function apSetTab(tab) {
+  localStorage.setItem('apActiveTab', tab);
   ['invoices','calendar','aging','payments','vendors'].forEach(t => {
     const btn = document.getElementById('ap-tab-' + t);
     const pane = document.getElementById('ap-pane-' + t);
@@ -26281,14 +26282,8 @@ function renderAPCalendar() {
 }
 
 async function loadAP() {
-  // 현재 탭 기억
-  const activeTab = (() => {
-    const tabs = ['invoices','calendar','aging','payments','vendors'];
-    return tabs.find(t => {
-      const pane = document.getElementById('ap-pane-' + t);
-      return pane && pane.style.display !== 'none';
-    }) || 'invoices';
-  })();
+  // 현재 탭 기억 (localStorage 우선)
+  const activeTab = localStorage.getItem('apActiveTab') || 'invoices';
 
   // 벤더 로드
   const { data: vendors } = await db.from('vendors').select('*').eq('is_active', true).order('name');
@@ -28196,12 +28191,9 @@ function cpRenderCalibration() {
   const txt = (xIn, yIn, val, color, bold=true) =>
     `<div style="position:absolute;${p(xIn,yIn)}font-size:${fs}px;font-family:Arial,sans-serif;font-weight:${bold?700:400};color:${color};background:rgba(255,255,255,0.82);padding:0 2px;white-space:nowrap;z-index:5;line-height:1.4;">${val}</div>`;
 
-  const invCount = q.invoices.length;
-  const totalY_c = 0.91 + invCount * 0.18 + 0.10;
-
   const invTxt = q.invoices.map((inv,i) =>
-    txt(0.33, 0.91+i*0.18, `Invoice ${inv.invoice_number}`, STUB_COLOR) +
-    txt(7.50, 0.91+i*0.18, `$${inv.payAmount.toFixed(2)}`, STUB_COLOR)
+    txt(0.33, 0.97+i*0.18, `Invoice ${inv.invoice_number}`, STUB_COLOR) +
+    txt(7.50, 0.97+i*0.18, `$${inv.payAmount.toFixed(2)}`, STUB_COLOR)
   ).join('');
 
   overlay.innerHTML = rulers +
@@ -28209,15 +28201,16 @@ function cpRenderCalibration() {
     txt(0.33, 0.55, dateStr, STUB_COLOR) +
     txt(0.33, 0.72, q.vendorName, STUB_COLOR) +
     invTxt +
-    txt(7.50, totalY_c, `$${total.toFixed(2)}`, STUB_COLOR) +
+    txt(6.50, 3.30, 'TOTAL', STUB_COLOR) +
+    txt(7.50, 3.30, `$${total.toFixed(2)}`, STUB_COLOR) +
     // CHECK (3.5~7")
     txt(6.90, 4.24, q.checkNo,    CHK_COLOR) +
-    txt(0.20, 4.95, words,        '#166534') +
-    txt(5.53, 5.15, dateStr,      CHK_COLOR) +
-    txt(7.00, 5.15, `$${total.toFixed(2)}`, CHK_COLOR) +
-    txt(0.85, 5.48, q.vendorName, '#7f1d1d') +
-    (q.vendorAddr1 ? txt(0.85, 5.66, q.vendorAddr1, '#7f1d1d', false) : '') +
-    (q.vendorAddr2 ? txt(0.85, 5.81, q.vendorAddr2, '#7f1d1d', false) : '');
+    txt(0.20, 4.60, words,        '#166534') +
+    txt(5.53, 5.12, dateStr,      CHK_COLOR) +
+    txt(7.31, 5.12, `$${total.toFixed(2)}`, CHK_COLOR) +
+    txt(0.85, 5.36, q.vendorName, '#7f1d1d') +
+    (q.vendorAddr1 ? txt(0.85, 5.54, q.vendorAddr1, '#7f1d1d', false) : '') +
+    (q.vendorAddr2 ? txt(0.85, 5.69, q.vendorAddr2, '#7f1d1d', false) : '');
 }
 
 function cpUpdateCheckNumbers() {
@@ -28359,13 +28352,12 @@ function cpPrintAll() {
 
     const invLines = q.invoices.map((inv, i) => {
       const invAmt = inv.payAmount.toFixed(2);
-      return `<div class="abs f10" style="${pos(0.33, 0.91 + i*0.18)}">Invoice ${inv.invoice_number}</div>` +
-             `<div class="abs f10" style="${pos(7.50, 0.91 + i*0.18)}">$${invAmt}</div>`;
+      return `<div class="abs f10" style="${pos(0.33, 0.97 + i*0.18)}">Invoice ${inv.invoice_number}</div>` +
+             `<div class="abs f10" style="${pos(7.50, 0.97 + i*0.18)}">$${invAmt}</div>`;
     }).join('');
 
-    // Total 위치: 인보이스 목록 바로 아래
-    const invCount = q.invoices.length;
-    const totalY = 0.75 + invCount * 0.18 + 0.10;
+    // Total은 stub 맨 아래 (3.3" 고정)
+    const TOTAL_Y = 3.30;
 
     return `<div class="pg">
 
@@ -28373,33 +28365,34 @@ function cpPrintAll() {
 
       <!-- 날짜 -->
       <div class="abs f10" style="${pos(0.33, 0.55)}">${dateStr}</div>
-      <!-- 거래처명 -->
+      <!-- 거래처명 (날짜 아래, 약간 간격) -->
       <div class="abs f10" style="${pos(0.33, 0.72)}">${q.vendorName}</div>
 
-      <!-- 인보이스 목록: Invoice # 왼쪽, 금액 오른쪽 -->
+      <!-- 인보이스 목록: 거래처와 0.15" 간격 두고 시작 -->
       ${invLines}
 
-      <!-- Total (인보이스 목록 바로 아래) -->
-      <div class="abs f10 bold" style="${pos(7.50, totalY)}">$${totalStr}</div>
+      <!-- Total: stub 오른쪽 맨 아래 고정 -->
+      <div class="abs f10 bold" style="${pos(6.50, TOTAL_Y)}">TOTAL</div>
+      <div class="abs f10 bold" style="${pos(7.50, TOTAL_Y)}">$${totalStr}</div>
 
-    <!-- ══ CHECK (3.5" ~ 7") ══════════════════════════════════════════ -->
+      <!-- ══ CHECK (3.5" ~ 7") ══════════════════════════════════════════ -->
 
       <!-- CHECK NO. 옆에 체크번호 -->
       <div class="abs f10 bold mono" style="${pos(6.90, 4.24)}">${q.checkNo}</div>
 
-      <!-- Amount in words (로고 아래 ~ PAY TO 위) -->
-      <div class="abs f10 bold" style="${pos(0.20, 4.95)} max-width:5.5in; white-space:normal; line-height:1.25;">${words}</div>
+      <!-- Amount in words (회사주소 아래 ~ DATE 라벨 위) -->
+      <div class="abs f10 bold" style="${pos(0.20, 4.60)} max-width:5.2in; white-space:normal; line-height:1.25;">${words}</div>
 
-      <!-- DATE 값 (DATE 라벨 바로 아래) -->
-      <div class="abs f10 bold" style="${pos(5.53, 5.15)}">${dateStr}</div>
+      <!-- DATE 값: DATE 라벨(y=4.98) 바로 아래, x 라벨과 정렬 -->
+      <div class="abs f10 bold" style="${pos(5.53, 5.12)}">${dateStr}</div>
 
-      <!-- AMOUNT 값 (AMOUNT 라벨 바로 아래, **** 없이) -->
-      <div class="abs f10 bold mono" style="${pos(7.00, 5.15)}">$${totalStr}</div>
+      <!-- AMOUNT 값: AMOUNT 라벨(y=4.99) 바로 아래, x 라벨과 정렬 -->
+      <div class="abs f10 bold mono" style="${pos(7.31, 5.12)}">$${totalStr}</div>
 
-      <!-- Payee 이름 + 주소 (간격 충분히) -->
-      <div class="abs f11 bold" style="${pos(0.85, 5.48)}">${q.vendorName}</div>
-      ${q.vendorAddr1 ? `<div class="abs f10" style="${pos(0.85, 5.66)}">${q.vendorAddr1}</div>` : ''}
-      ${q.vendorAddr2 ? `<div class="abs f10" style="${pos(0.85, 5.81)}">${q.vendorAddr2}</div>` : ''}
+      <!-- Payee: PAY TO 라벨 시작(y=5.36)과 정렬 -->
+      <div class="abs f11 bold" style="${pos(0.85, 5.36)}">${q.vendorName}</div>
+      ${q.vendorAddr1 ? `<div class="abs f10" style="${pos(0.85, 5.54)}">${q.vendorAddr1}</div>` : ''}
+      ${q.vendorAddr2 ? `<div class="abs f10" style="${pos(0.85, 5.69)}">${q.vendorAddr2}</div>` : ''}
 
     </div>`;
   };
