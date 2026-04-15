@@ -26993,12 +26993,7 @@ async function bulkScanUpload(input) {
   if (!files.length) return;
   input.value = '';
 
-  const total = files.length;
-  let totalMatched = 0, totalFailed = 0;
-
-  showToast(`📎 ${total}개 파일 AI 분석 중...`);
-
-  // 현재 payments에서 체크번호 맵 (reference → [paymentId, ...])
+  // 현재 payments에서 체크번호 맵
   const checkMap = {};
   _apPayments.forEach(p => {
     if (p.method === 'check' && p.reference) {
@@ -27006,71 +27001,87 @@ async function bulkScanUpload(input) {
       checkMap[p.reference].push(p.id);
     }
   });
-  const knownCheckNos = Object.keys(checkMap);
+  const knownCheckNos = Object.keys(checkMap).sort();
 
-  for (let fi = 0; fi < files.length; fi++) {
-    const file = files[fi];
-    showToast(`📎 분석 중 (${fi+1}/${total}): ${file.name}`);
+  // 파일별로 체크번호 매칭 UI 표시
+  showBulkScanModal(files, checkMap, knownCheckNos);
+}
+
+function showBulkScanModal(files, checkMap, knownCheckNos) {
+  // 기존 모달 제거
+  document.getElementById('bulk-scan-modal')?.remove();
+
+  const fileRows = files.map((f, i) => `
+    <tr style="border-bottom:1px solid #f0f0f0;">
+      <td style="padding:8px 10px;font-size:12px;color:#374151;">📄 ${f.name}</td>
+      <td style="padding:8px 10px;">
+        <select id="bulk-check-sel-${i}" multiple style="width:100%;min-height:36px;border:1px solid #d1d5db;border-radius:5px;padding:3px 6px;font-size:12px;font-family:'IBM Plex Mono',monospace;">
+          ${knownCheckNos.map(no => {
+            const pmt = _apPayments.find(p => p.reference === no);
+            return `<option value="${no}">${no} — ${pmt?.vendor_name||''}</option>`;
+          }).join('')}
+        </select>
+        <div style="font-size:10px;color:#9ca3af;margin-top:2px;">Ctrl+클릭으로 여러 개 선택</div>
+      </td>
+    </tr>`).join('');
+
+  const modal = document.createElement('div');
+  modal.id = 'bulk-scan-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:600px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:15px;font-weight:700;color:#0f2744;">📎 스캔 업로드 — 체크 매칭</div>
+        <button onclick="document.getElementById('bulk-scan-modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#9ca3af;">✕</button>
+      </div>
+      <div style="padding:12px 20px;background:#eff6ff;border-bottom:1px solid #bfdbfe;font-size:12px;color:#1e40af;">
+        💡 각 파일에 해당하는 체크번호를 선택하세요. 한 파일에 여러 체크가 있으면 Ctrl+클릭으로 모두 선택.
+      </div>
+      <div style="overflow-y:auto;flex:1;padding:8px 20px;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="background:#f8fafc;">
+            <th style="padding:8px 10px;text-align:left;font-size:11px;color:#6b7280;font-weight:600;">파일</th>
+            <th style="padding:8px 10px;text-align:left;font-size:11px;color:#6b7280;font-weight:600;">매칭할 체크번호</th>
+          </tr></thead>
+          <tbody>${fileRows}</tbody>
+        </table>
+      </div>
+      <div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;">
+        <button onclick="document.getElementById('bulk-scan-modal').remove()" style="padding:8px 16px;border:1px solid #e5e7eb;border-radius:6px;background:#f8fafc;font-size:13px;cursor:pointer;">취소</button>
+        <button onclick="confirmBulkScan()" style="padding:8px 20px;background:#0f2744;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">✅ 업로드 & 매칭</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  // files 참조 저장
+  window._bulkScanFiles = files;
+  window._bulkScanCheckMap = checkMap;
+}
+
+async function confirmBulkScan() {
+  const files = window._bulkScanFiles || [];
+  const checkMap = window._bulkScanCheckMap || {};
+  let matched = 0, failed = 0;
+
+  document.getElementById('bulk-scan-modal')?.remove();
+  showToast(`📎 ${files.length}개 파일 업로드 중...`);
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const sel = document.getElementById(`bulk-check-sel-${i}`);
+    const selectedNos = sel ? Array.from(sel.selectedOptions).map(o => o.value) : [];
+
+    if (!selectedNos.length) { failed++; continue; }
 
     try {
-      // base64 변환
-      const base64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result.split(',')[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      const mediaType = file.type || 'application/pdf';
-
-      // Worker를 통해 Claude AI 호출 (CORS 우회)
-      const aiResp = await fetch('https://po-confirm-email.hjbae.workers.dev/parse-ap-invoice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          file_base64: base64,
-          media_type: mediaType,
-          vendors: [],
-          accounts: [],
-          custom_prompt: `This is a scanned bank check or multi-page PDF containing one or more checks issued by Peace Textile America, Inc. Extract ALL unique check numbers found in this document. Known check numbers in our system: ${knownCheckNos.join(', ')}. A check number is typically a 5-digit number printed prominently on the check (e.g. 47699, 47700, 47701). Reply with ONLY a JSON object: {"check_numbers": ["47699","47700"]}. If none found, reply {"check_numbers": []}.`
-        })
-      });
-      const aiData = await aiResp.json();
-
-      // Worker 응답에서 체크번호 파싱
-      let foundNos = [];
-      try {
-        // custom_prompt 응답은 raw_text 또는 data 필드에 있을 수 있음
-        const rawText = aiData.raw_text || aiData.text || JSON.stringify(aiData);
-        const match = rawText.match(/\{"check_numbers":\s*(\[.*?\])\}/);
-        if (match) {
-          foundNos = JSON.parse(match[1]).map(s => String(s).replace(/\D/g,'').trim()).filter(Boolean);
-        } else {
-          // fallback: 5자리 숫자 직접 추출
-          const nums = rawText.match(/\b4\d{4}\b/g) || [];
-          foundNos = [...new Set(nums)];
-        }
-      } catch(e) {
-        // fallback: known check numbers가 텍스트에 있는지 확인
-        const rawText = JSON.stringify(aiData);
-        foundNos = knownCheckNos.filter(no => rawText.includes(no));
-      }
-
-      if (!foundNos.length) {
-        totalFailed++;
-        console.warn(`[bulk scan] No check numbers found in: ${file.name}`);
-        continue;
-      }
-
-      // Supabase Storage에 파일 1번만 업로드
       const ext = file.name.split('.').pop();
-      const fileName = `check_scans/batch_${foundNos.join('_')}_${Date.now()}.${ext}`;
+      const fileName = `check_scans/batch_${selectedNos.join('_')}_${Date.now()}.${ext}`;
       const { error: upErr } = await db.storage.from('documents').upload(fileName, file, { upsert: true });
       if (upErr) throw upErr;
       const { data: urlData } = db.storage.from('documents').getPublicUrl(fileName);
       const scanUrl = urlData.publicUrl;
 
-      // 발견된 체크번호별로 매칭
-      for (const checkNo of foundNos) {
+      for (const checkNo of selectedNos) {
         const paymentIds = checkMap[checkNo];
         if (paymentIds?.length) {
           for (const pid of paymentIds) {
@@ -27080,26 +27091,17 @@ async function bulkScanUpload(input) {
             notesObj.scan_url = scanUrl;
             await db.from('ap_payments').update({ notes: JSON.stringify(notesObj) }).eq('id', pid);
           }
-          totalMatched++;
-        } else {
-          console.warn(`[bulk scan] Check #${checkNo} not found in system`);
-          totalFailed++;
+          matched++;
         }
       }
     } catch(e) {
-      totalFailed++;
+      failed++;
       console.error('[bulk scan] error:', file.name, e);
     }
   }
 
   await loadAP();
-
-  // 결과 표시
-  const msg = totalFailed === 0
-    ? `✅ 스캔 업로드 완료!\n${totalMatched}개 체크 자동 매칭됐습니다.`
-    : `✅ 완료: ${totalMatched}개 매칭 성공\n⚠️ ${totalFailed}개는 매칭 실패 (콘솔 확인)`;
-  showToast(msg.replace('\n', ' · '));
-  console.log(`[bulk scan] 결과: matched=${totalMatched}, failed=${totalFailed}`);
+  showToast(`✅ ${matched}개 체크 매칭 완료${failed ? ` · ${failed}개 실패` : ''}`);
 }
 
 async function uploadCheckScan(input, paymentIds) {
