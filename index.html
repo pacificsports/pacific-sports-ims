@@ -2181,12 +2181,12 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <th style="text-align:left;padding:9px 12px;">Vendor</th>
               <th style="text-align:left;padding:9px 12px;width:120px;">Invoice #</th>
               <th style="text-align:left;padding:9px 12px;width:90px;">Due Date</th>
-              <th class="num" style="width:110px;color:#86efac;">Current</th>
-              <th class="num" style="width:110px;color:#fde68a;">1–30</th>
-              <th class="num" style="width:110px;color:#fed7aa;">31–60</th>
-              <th class="num" style="width:110px;color:#fca5a5;">61–90</th>
-              <th class="num" style="width:110px;color:#fca5a5;">90+</th>
-              <th class="num" style="width:120px;color:#fff;">Balance</th>
+              <th class="num" style="width:110px;color:#4ade80;font-weight:800;">Current</th>
+              <th class="num" style="width:110px;color:#fbbf24;font-weight:800;">1–30</th>
+              <th class="num" style="width:110px;color:#fb923c;font-weight:800;">31–60</th>
+              <th class="num" style="width:110px;color:#f87171;font-weight:800;">61–90</th>
+              <th class="num" style="width:110px;color:#fca5a5;font-weight:800;">90+</th>
+              <th class="num" style="width:120px;color:#fff;font-weight:800;">Balance</th>
             </tr></thead>
             <tbody id="ap-aging-tbody"><tr><td colspan="9" class="empty">Loading...</td></tr></tbody>
           </table>
@@ -26306,10 +26306,17 @@ function renderAPAging() {
   const vendors = Object.values(vendorMap).sort((a,b) => b.total - a.total);
 
   let rows = '';
+  let vendorIdx = 0;
   vendors.forEach(v => {
-    // 벤더 소계 행
-    rows += `<tr style="background:#f0f4f8;border-top:2px solid #e5e7eb;">
-      <td style="font-weight:800;font-size:12px;padding:8px 12px;" colspan="2">${v.name}</td>
+    const vid = `aging-v-${vendorIdx++}`;
+
+    // 벤더 소계 행 — 클릭하면 접기/펼치기
+    rows += `<tr style="background:#f0f4f8;border-top:2px solid #e5e7eb;cursor:pointer;" onclick="toggleAgingVendor('${vid}')">
+      <td style="font-weight:800;font-size:12px;padding:8px 12px;display:flex;align-items:center;gap:8px;">
+        <span id="${vid}-icon" style="font-size:11px;color:#6b7280;transition:transform 0.15s;display:inline-block;">▶</span>
+        ${v.name}
+      </td>
+      <td></td>
       <td></td>
       <td class="num" style="color:#15803d;font-weight:700;">${fmt(v.current)}</td>
       <td class="num" style="color:#b45309;font-weight:700;">${fmt(v.d30)}</td>
@@ -26319,19 +26326,19 @@ function renderAPAging() {
       <td class="num" style="font-weight:800;color:#0f2744;">${fmtN(v.total)}</td>
     </tr>`;
 
-    // 인보이스별 상세 행
-    v.invoices.sort((a,b) => new Date(a.due_date||0) - new Date(b.due_date||0)).forEach(i => {
-      const col = bucketCol[i.bucket] || '#374151';
-      rows += `<tr style="border-bottom:1px solid #f5f5f5;background:#fff;">
-        <td style="padding:5px 12px 5px 24px;font-size:11px;color:#6b7280;"></td>
-        <td style="padding:5px 12px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#1a56a0;cursor:pointer;" onclick="viewAPInvoice('${i.id}')">${i.invoice_number}</td>
-        <td style="padding:5px 12px;font-size:11px;color:${col};font-weight:${i.bucket!=='current'?'700':'400'};">${i.due_date||'—'}</td>
-        <td class="num" style="font-size:11px;">${i.bucket==='current'?fmtN(i.balance):'—'}</td>
-        <td class="num" style="font-size:11px;">${i.bucket==='d30'?fmtN(i.balance):'—'}</td>
-        <td class="num" style="font-size:11px;">${i.bucket==='d60'?fmtN(i.balance):'—'}</td>
-        <td class="num" style="font-size:11px;">${i.bucket==='d90'?fmtN(i.balance):'—'}</td>
-        <td class="num" style="font-size:11px;">${i.bucket==='d90p'?fmtN(i.balance):'—'}</td>
-        <td class="num" style="font-size:11px;font-weight:700;color:${col};">${fmtN(i.balance)}</td>
+    // 인보이스별 상세 행 — 기본 숨김
+    v.invoices.sort((a,b) => new Date(a.due_date||0) - new Date(b.due_date||0)).forEach(inv => {
+      const col = bucketCol[inv.bucket] || '#374151';
+      rows += `<tr class="${vid}-detail" style="display:none;border-bottom:1px solid #f5f5f5;background:#fff;">
+        <td style="padding:5px 12px 5px 32px;font-size:11px;color:#6b7280;"></td>
+        <td style="padding:5px 12px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#1a56a0;cursor:pointer;" onclick="event.stopPropagation();viewAPInvoice('${inv.id}')">${inv.invoice_number}</td>
+        <td style="padding:5px 12px;font-size:11px;color:${col};font-weight:${inv.bucket!=='current'?'700':'400'};">${inv.due_date||'—'}</td>
+        <td class="num" style="font-size:11px;">${inv.bucket==='current'?fmtN(inv.balance):'—'}</td>
+        <td class="num" style="font-size:11px;">${inv.bucket==='d30'?fmtN(inv.balance):'—'}</td>
+        <td class="num" style="font-size:11px;">${inv.bucket==='d60'?fmtN(inv.balance):'—'}</td>
+        <td class="num" style="font-size:11px;">${inv.bucket==='d90'?fmtN(inv.balance):'—'}</td>
+        <td class="num" style="font-size:11px;">${inv.bucket==='d90p'?fmtN(inv.balance):'—'}</td>
+        <td class="num" style="font-size:11px;font-weight:700;color:${col};">${fmtN(inv.balance)}</td>
       </tr>`;
     });
   });
@@ -26349,6 +26356,14 @@ function renderAPAging() {
   </tr>`;
 
   document.getElementById('ap-aging-tbody').innerHTML = rows || '<tr><td colspan="9" class="empty">No outstanding AP</td></tr>';
+}
+
+function toggleAgingVendor(vid) {
+  const rows = document.querySelectorAll(`.${vid}-detail`);
+  const icon = document.getElementById(`${vid}-icon`);
+  const isOpen = rows.length > 0 && rows[0].style.display !== 'none';
+  rows.forEach(r => r.style.display = isOpen ? 'none' : '');
+  if (icon) icon.textContent = isOpen ? '▶' : '▼';
 }
 
 function generateAgingHTML() {
