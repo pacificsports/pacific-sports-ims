@@ -26281,6 +26281,15 @@ function renderAPCalendar() {
 }
 
 async function loadAP() {
+  // 현재 탭 기억
+  const activeTab = (() => {
+    const tabs = ['invoices','calendar','aging','payments','vendors'];
+    return tabs.find(t => {
+      const pane = document.getElementById('ap-pane-' + t);
+      return pane && pane.style.display !== 'none';
+    }) || 'invoices';
+  })();
+
   // 벤더 로드
   const { data: vendors } = await db.from('vendors').select('*').eq('is_active', true).order('name');
   _apVendors = vendors || [];
@@ -26303,6 +26312,9 @@ async function loadAP() {
   _renderAPKpis();
   renderAPInvoices();
   populateAPVendorFilter();
+
+  // 이전 탭으로 복원
+  apSetTab(activeTab);
 }
 
 function _renderAPKpis() {
@@ -26592,6 +26604,74 @@ function renderAPAging() {
   </tr>`;
 
   document.getElementById('ap-aging-tbody').innerHTML = rows || '<tr><td colspan="10" class="empty">No outstanding AP</td></tr>';
+}
+
+function printAPAging() {
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const tbody = document.getElementById('ap-aging-tbody');
+  if (!tbody) return;
+
+  // 현재 렌더된 테이블 헤더+바디 가져오기
+  const table = tbody.closest('table');
+  const tableHTML = table ? table.outerHTML : '<p>No data</p>';
+
+  const win = window.open('', '_blank');
+  if (!win) { showToast('❌ 팝업 차단됨'); return; }
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>AP Aging Report — ${dateStr}</title>
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 11px; color: #000; margin: 20px; }
+      h2 { font-size: 16px; margin: 0 0 4px; }
+      .sub { color: #666; font-size: 11px; margin-bottom: 16px; }
+      table { width: 100%; border-collapse: collapse; }
+      th { background: #0f2744; color: #fff; padding: 6px 8px; text-align: left; font-size: 10px; }
+      td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; font-size: 10px; }
+      tr:nth-child(even) td { background: #f9fafb; }
+      .num { text-align: right; }
+      @media print { body { margin: 10px; } }
+    </style>
+  </head><body>
+    <h2>PEACE TEXTILE AMERICA, INC.</h2>
+    <div class="sub">AP Aging Report &nbsp;·&nbsp; As of ${dateStr}</div>
+    ${tableHTML}
+    <script>window.onload = function(){ window.print(); }<\/script>
+  </body></html>`);
+  win.document.close();
+}
+
+function downloadAPAging() {
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+  const tbody = document.getElementById('ap-aging-tbody');
+  if (!tbody) return;
+  const table = tbody.closest('table');
+  const tableHTML = table ? table.outerHTML : '<p>No data</p>';
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>AP Aging Report — ${dateStr}</title>
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 11px; color: #000; margin: 20px; }
+      h2 { font-size: 16px; margin: 0 0 4px; }
+      .sub { color: #666; font-size: 11px; margin-bottom: 16px; }
+      table { width: 100%; border-collapse: collapse; }
+      th { background: #0f2744; color: #fff; padding: 6px 8px; text-align: left; font-size: 10px; }
+      td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; font-size: 10px; }
+      .num { text-align: right; }
+    </style>
+  </head><body>
+    <h2>PEACE TEXTILE AMERICA, INC.</h2>
+    <div class="sub">AP Aging Report &nbsp;·&nbsp; As of ${dateStr}</div>
+    ${tableHTML}
+  </body></html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `AP_Aging_${today.toISOString().slice(0,10)}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function toggleAllAgingVendors(open) {
