@@ -2209,6 +2209,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='#e5e7eb'">
           <button onclick="document.getElementById('ap-payments-search').value='';renderAPPayments();"
             style="padding:7px 12px;border:1px solid #e5e7eb;border-radius:6px;background:#f8fafc;font-size:12px;cursor:pointer;color:#6b7280;">✕ Clear</button>
+          <!-- 일괄 스캔 업로드 -->
+          <label style="padding:7px 14px;background:#0f2744;color:#fff;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px;">
+            📎 스캔 일괄 업로드
+            <input type="file" accept="image/*,.pdf" multiple style="display:none;" onchange="bulkScanUpload(this)">
+          </label>
         </div>
         <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
           <table class="tbl">
@@ -26867,13 +26872,23 @@ function renderAPPayments() {
     ? '<tr><td colspan="7" class="empty">No payments found</td></tr>'
     : filtered.map(g => {
         const invList = g.invoices.map(i =>
-          `<span style="display:inline-block;background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:4px;padding:1px 6px;font-size:10px;font-family:'IBM Plex Mono',monospace;margin:1px;">${i.ap_invoices?.invoice_number || '—'}</span>`
+          `<span onclick="event.stopPropagation();viewAPInvoice('${i.ap_invoice_id||i.id}')" style="display:inline-block;background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:4px;padding:1px 6px;font-size:10px;font-family:'IBM Plex Mono',monospace;margin:1px;cursor:pointer;" title="클릭하여 인보이스 상세 보기">${i.ap_invoices?.invoice_number || '—'}</span>`
         ).join(' ');
         const hasCheckCopy = g.invoices.some(i => i.notes && i.notes.startsWith('{'));
+        // 스캔 파일 있는지 확인 (notes에 scan_url 포함)
+        const scanNote = g.invoices.find(i => i.notes && i.notes.includes('scan_url'));
+        const scanUrl = scanNote ? (() => { try { return JSON.parse(scanNote.notes).scan_url; } catch(e) { return null; } })() : null;
+
         const checkCopyBtn = hasCheckCopy
-          ? `<button onclick="viewCheckCopy(${JSON.stringify(g.invoices[0].notes).replace(/'/g,"\\'").replace(/"/g,'&quot;')})" 
-              style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;white-space:nowrap;">🖨 Check Copy</button>`
+          ? `<button onclick="viewCheckCopy(${JSON.stringify(g.invoices[0].notes).replace(/"/g,'&quot;')})"
+              style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">🖨 Copy</button>`
           : '';
+        const scanBtn = scanUrl
+          ? `<a href="${scanUrl}" target="_blank" style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;white-space:nowrap;text-decoration:none;">📄 Scan</a>`
+          : `<label title="스캔 파일 업로드" style="background:#f8fafc;color:#6b7280;border:1px solid #e5e7eb;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">
+               📎<input type="file" accept="image/*,.pdf" style="display:none;" onchange="uploadCheckScan(this,'${g.invoices.map(i=>i.id).join(',')}')">
+             </label>`;
+        const actionBtns = `<div style="display:flex;gap:3px;justify-content:center;">${checkCopyBtn}${scanBtn}</div>`;
         return `<tr style="border-bottom:1px solid #f0f0f0;">
           <td style="font-size:12px;white-space:nowrap;">${g.payment_date}</td>
           <td style="font-size:12px;font-weight:600;">${g.vendor_name||g.vendors?.name||'—'}</td>
@@ -26881,7 +26896,7 @@ function renderAPPayments() {
           <td style="font-size:12px;">${g.method||'—'}</td>
           <td style="font-size:12px;color:#6b7280;font-family:'IBM Plex Mono',monospace;">${g.reference||'—'}</td>
           <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#16a34a;">${fmt(g.totalAmt)}</td>
-          <td style="text-align:center;">${checkCopyBtn}</td>
+          <td style="text-align:center;">${actionBtns}</td>
         </tr>`;
       }).join('');
 }
@@ -26917,7 +26932,137 @@ function viewCheckCopy(notesJson) {
 }
 
 
-// ── AP Invoice 일괄 파싱 ──
+async function bulkScanUpload(input) {
+  const files = Array.from(input.files);
+  if (!files.length) return;
+  input.value = '';
+
+  const total = files.length;
+  let totalMatched = 0, totalFailed = 0;
+
+  showToast(`📎 ${total}개 파일 AI 분석 중...`);
+
+  // 현재 payments에서 체크번호 맵 (reference → [paymentId, ...])
+  const checkMap = {};
+  _apPayments.forEach(p => {
+    if (p.method === 'check' && p.reference) {
+      if (!checkMap[p.reference]) checkMap[p.reference] = [];
+      checkMap[p.reference].push(p.id);
+    }
+  });
+  const knownCheckNos = Object.keys(checkMap);
+
+  for (let fi = 0; fi < files.length; fi++) {
+    const file = files[fi];
+    showToast(`📎 분석 중 (${fi+1}/${total}): ${file.name}`);
+
+    try {
+      // base64 변환
+      const base64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result.split(',')[1]);
+        r.onerror = rej;
+        r.readAsDataURL(file);
+      });
+      const mediaType = file.type || 'application/pdf';
+
+      // Claude AI — 파일 내 모든 체크번호 추출 (멀티페이지 지원)
+      const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 300,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'document', source: { type: 'base64', media_type: mediaType, data: base64 } },
+              { type: 'text', text: `This is a scanned bank check or multi-page PDF containing one or more checks. Extract ALL check numbers found in this document. Known check numbers in our system: ${knownCheckNos.join(', ')}. Reply with ONLY the check numbers as a comma-separated list (e.g. "47697,47700,47701"). If none found, reply "NONE".` }
+            ]
+          }]
+        })
+      });
+      const aiData = await aiResp.json();
+      const rawText = (aiData.content?.[0]?.text || '').trim();
+
+      // 체크번호 파싱 (쉼표 구분)
+      const foundNos = rawText === 'NONE' ? [] :
+        rawText.split(/[,\s]+/).map(s => s.replace(/\D/g,'')).filter(Boolean);
+
+      if (!foundNos.length) {
+        totalFailed++;
+        console.warn(`[bulk scan] No check numbers found in: ${file.name}`);
+        continue;
+      }
+
+      // Supabase Storage에 파일 1번만 업로드
+      const ext = file.name.split('.').pop();
+      const fileName = `check_scans/batch_${foundNos.join('_')}_${Date.now()}.${ext}`;
+      const { error: upErr } = await db.storage.from('documents').upload(fileName, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: urlData } = db.storage.from('documents').getPublicUrl(fileName);
+      const scanUrl = urlData.publicUrl;
+
+      // 발견된 체크번호별로 매칭
+      for (const checkNo of foundNos) {
+        const paymentIds = checkMap[checkNo];
+        if (paymentIds?.length) {
+          for (const pid of paymentIds) {
+            const { data: pmt } = await db.from('ap_payments').select('notes').eq('id', pid).single();
+            let notesObj = {};
+            try { notesObj = JSON.parse(pmt?.notes || '{}'); } catch(e) {}
+            notesObj.scan_url = scanUrl;
+            await db.from('ap_payments').update({ notes: JSON.stringify(notesObj) }).eq('id', pid);
+          }
+          totalMatched++;
+        } else {
+          console.warn(`[bulk scan] Check #${checkNo} not found in system`);
+          totalFailed++;
+        }
+      }
+    } catch(e) {
+      totalFailed++;
+      console.error('[bulk scan] error:', file.name, e);
+    }
+  }
+
+  await loadAP();
+
+  // 결과 표시
+  const msg = totalFailed === 0
+    ? `✅ 스캔 업로드 완료!\n${totalMatched}개 체크 자동 매칭됐습니다.`
+    : `✅ 완료: ${totalMatched}개 매칭 성공\n⚠️ ${totalFailed}개는 매칭 실패 (콘솔 확인)`;
+  showToast(msg.replace('\n', ' · '));
+  console.log(`[bulk scan] 결과: matched=${totalMatched}, failed=${totalFailed}`);
+}
+
+async function uploadCheckScan(input, paymentIds) {
+  const file = input.files[0];
+  if (!file) return;
+  showToast('📎 업로드 중...');
+  try {
+    const ext = file.name.split('.').pop();
+    const fileName = `check_scans/${paymentIds.split(',')[0]}_${Date.now()}.${ext}`;
+    const { data, error } = await db.storage.from('documents').upload(fileName, file, { upsert: true });
+    if (error) throw error;
+    const { data: urlData } = db.storage.from('documents').getPublicUrl(fileName);
+    const scanUrl = urlData.publicUrl;
+    // 모든 관련 payment에 scan_url 업데이트
+    const ids = paymentIds.split(',');
+    for (const id of ids) {
+      const { data: pmt } = await db.from('ap_payments').select('notes').eq('id', id).single();
+      let notesObj = {};
+      try { notesObj = JSON.parse(pmt?.notes || '{}'); } catch(e) {}
+      notesObj.scan_url = scanUrl;
+      await db.from('ap_payments').update({ notes: JSON.stringify(notesObj) }).eq('id', id);
+    }
+    showToast('✅ 스캔 업로드 완료');
+    await loadAP();
+  } catch(e) {
+    showToast('❌ 업로드 실패: ' + e.message);
+  }
+}
+
 let _apBatchItems = []; // 파싱된 인보이스 배열
 
 async function parseAPInvoicesBatch(input) {
