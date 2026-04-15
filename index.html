@@ -2201,6 +2201,15 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
       <!-- Payment History Tab -->
       <div id="ap-pane-payments" style="display:none;">
+        <!-- 검색 바 -->
+        <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
+          <input id="ap-payments-search" type="text" placeholder="🔍  Check #, Vendor, Invoice # 검색..."
+            oninput="renderAPPayments()"
+            style="flex:1;padding:7px 12px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;outline:none;"
+            onfocus="this.style.borderColor='#3b82f6'" onblur="this.style.borderColor='#e5e7eb'">
+          <button onclick="document.getElementById('ap-payments-search').value='';renderAPPayments();"
+            style="padding:7px 12px;border:1px solid #e5e7eb;border-radius:6px;background:#f8fafc;font-size:12px;cursor:pointer;color:#6b7280;">✕ Clear</button>
+        </div>
         <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
           <table class="tbl">
             <thead><tr>
@@ -26832,18 +26841,81 @@ function generateAgingHTML() {
 
 function renderAPPayments() {
   const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
-  document.getElementById('ap-payments-tbody').innerHTML = _apPayments.length === 0
+
+  // 같은 reference(체크번호)로 묶기
+  const grouped = {};
+  _apPayments.forEach(p => {
+    const key = (p.method === 'check' && p.reference) ? `check-${p.reference}` : `pmt-${p.id}`;
+    if (!grouped[key]) grouped[key] = { ...p, invoices: [], totalAmt: 0 };
+    grouped[key].invoices.push(p);
+    grouped[key].totalAmt += parseFloat(p.amount) || 0;
+  });
+
+  const rows = Object.values(grouped);
+  // 날짜 최신순
+  rows.sort((a,b) => (b.payment_date||'').localeCompare(a.payment_date||''));
+
+  // 검색 필터
+  const q = (document.getElementById('ap-payments-search')?.value || '').toLowerCase().trim();
+  const filtered = q ? rows.filter(g =>
+    (g.reference||'').toLowerCase().includes(q) ||
+    (g.vendor_name||'').toLowerCase().includes(q) ||
+    g.invoices.some(i => (i.ap_invoices?.invoice_number||'').toLowerCase().includes(q))
+  ) : rows;
+
+  document.getElementById('ap-payments-tbody').innerHTML = filtered.length === 0
     ? '<tr><td colspan="7" class="empty">No payments found</td></tr>'
-    : _apPayments.map(p => `<tr style="border-bottom:1px solid #f0f0f0;">
-        <td style="font-size:12px;">${p.payment_date}</td>
-        <td style="font-size:12px;font-weight:600;">${p.vendor_name||p.vendors?.name||'—'}</td>
-        <td style="font-size:12px;font-family:'IBM Plex Mono',monospace;">${p.ap_invoices?.invoice_number||'—'}</td>
-        <td style="font-size:12px;">${p.method||'—'}</td>
-        <td style="font-size:12px;color:#6b7280;">${p.reference||'—'}</td>
-        <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#16a34a;">${fmt(p.amount)}</td>
-        <td></td>
-      </tr>`).join('');
+    : filtered.map(g => {
+        const invList = g.invoices.map(i =>
+          `<span style="display:inline-block;background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:4px;padding:1px 6px;font-size:10px;font-family:'IBM Plex Mono',monospace;margin:1px;">${i.ap_invoices?.invoice_number || '—'}</span>`
+        ).join(' ');
+        const hasCheckCopy = g.invoices.some(i => i.notes && i.notes.startsWith('{'));
+        const checkCopyBtn = hasCheckCopy
+          ? `<button onclick="viewCheckCopy(${JSON.stringify(g.invoices[0].notes).replace(/'/g,"\\'").replace(/"/g,'&quot;')})" 
+              style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;white-space:nowrap;">🖨 Check Copy</button>`
+          : '';
+        return `<tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="font-size:12px;white-space:nowrap;">${g.payment_date}</td>
+          <td style="font-size:12px;font-weight:600;">${g.vendor_name||g.vendors?.name||'—'}</td>
+          <td style="font-size:12px;">${invList}</td>
+          <td style="font-size:12px;">${g.method||'—'}</td>
+          <td style="font-size:12px;color:#6b7280;font-family:'IBM Plex Mono',monospace;">${g.reference||'—'}</td>
+          <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#16a34a;">${fmt(g.totalAmt)}</td>
+          <td style="text-align:center;">${checkCopyBtn}</td>
+        </tr>`;
+      }).join('');
 }
+
+function viewCheckCopy(notesJson) {
+  try {
+    const data = JSON.parse(notesJson);
+    const fmt = n => '$' + parseFloat(n).toLocaleString('en-US', {minimumFractionDigits:2});
+    const invRows = (data.invoices||[]).map(i =>
+      `<tr><td style="padding:6px 12px;font-family:monospace;">${i.invoice_number||'—'}</td><td style="padding:6px 12px;text-align:right;font-family:monospace;">${fmt(i.amount)}</td></tr>`
+    ).join('');
+    const html = `
+      <div style="font-family:Arial,sans-serif;padding:24px;max-width:480px;">
+        <div style="font-size:16px;font-weight:800;color:#0f2744;margin-bottom:16px;">🖨 Check Copy</div>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+          <tr><td style="padding:4px 0;color:#6b7280;font-size:12px;">Check No.</td><td style="font-weight:700;font-family:monospace;">${data.check_no}</td></tr>
+          <tr><td style="padding:4px 0;color:#6b7280;font-size:12px;">Vendor</td><td style="font-weight:700;">${data.vendor}</td></tr>
+          <tr><td style="padding:4px 0;color:#6b7280;font-size:12px;">Date</td><td>${data.date}</td></tr>
+          <tr><td style="padding:4px 0;color:#6b7280;font-size:12px;">Total</td><td style="font-weight:800;color:#16a34a;font-size:16px;">${fmt(data.total)}</td></tr>
+        </table>
+        <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:6px;text-transform:uppercase;">Invoices Paid</div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <thead><tr style="background:#f8fafc;"><th style="padding:6px 12px;text-align:left;font-size:11px;">Invoice #</th><th style="padding:6px 12px;text-align:right;font-size:11px;">Amount</th></tr></thead>
+          <tbody>${invRows}</tbody>
+          <tfoot><tr style="background:#f0fdf4;border-top:2px solid #86efac;"><td style="padding:8px 12px;font-weight:700;">TOTAL</td><td style="padding:8px 12px;text-align:right;font-weight:800;color:#16a34a;">${fmt(data.total)}</td></tr></tfoot>
+        </table>
+      </div>`;
+    // 간단한 팝업
+    const win = window.open('', '_blank', 'width=500,height=400');
+    win.document.write(`<!DOCTYPE html><html><body style="margin:0;">${html}<script>document.title='Check #${data.check_no}';<\/script></body></html>`);
+    win.document.close();
+  } catch(e) { showToast('Check copy 데이터를 읽을 수 없습니다.'); }
+}
+
 
 // ── AP Invoice 일괄 파싱 ──
 let _apBatchItems = []; // 파싱된 인보이스 배열
@@ -28511,6 +28583,16 @@ async function cpPostAndClose() {
       lastNum++;
       const jeNum = `JE-${year}-${String(lastNum).padStart(4,'0')}`;
 
+      // Check copy HTML 생성 (저장용 — 간단한 텍스트 요약)
+      const fmtD = v => { if(!v) return '—'; const[y,m,d]=v.split('-'); return `${m}/${d}/${y}`; };
+      const checkCopyHtml = JSON.stringify({
+        check_no: q.checkNo,
+        vendor: q.vendorName,
+        date: _cpPayDate,
+        total: total,
+        invoices: q.invoices.map(i => ({ id: i.id, invoice_number: i.invoice_number, amount: i.payAmount }))
+      });
+
       // 1. Journal Entry
       const { data: je } = await db.from('journal_entries').insert({
         entry_number: jeNum,
@@ -28539,7 +28621,7 @@ async function cpPostAndClose() {
           amount: inv.payAmount,
           method: 'check',
           reference: q.checkNo,
-          notes: `Check Printing batch`,
+          notes: checkCopyHtml,
           journal_entry_id: je?.id,
           created_by: _currentEmployee?.name || 'System',
           created_at: new Date().toISOString()
