@@ -26876,20 +26876,16 @@ function renderAPPayments() {
           `<span onclick="event.stopPropagation();viewAPInvoice('${i.ap_invoice_id||i.id}')" style="display:inline-block;background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:4px;padding:1px 6px;font-size:10px;font-family:'IBM Plex Mono',monospace;margin:1px;cursor:pointer;" title="클릭하여 인보이스 상세 보기">${i.ap_invoices?.invoice_number || '—'}</span>`
         ).join(' ');
         const hasCheckCopy = g.invoices.some(i => i.notes && i.notes.startsWith('{'));
-        // 스캔 파일 있는지 확인 (notes에 scan_url 포함)
-        const scanNote = g.invoices.find(i => i.notes && i.notes.includes('scan_url'));
-        const scanUrl = scanNote ? (() => { try { return JSON.parse(scanNote.notes).scan_url; } catch(e) { return null; } })() : null;
 
-        const checkCopyBtn = hasCheckCopy
-          ? `<button onclick="viewCheckCopy(${JSON.stringify(g.invoices[0].notes).replace(/"/g,'&quot;')})"
-              style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">🖨 Copy</button>`
-          : '';
-        const scanBtn = scanUrl
-          ? `<a href="${scanUrl}" target="_blank" style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;white-space:nowrap;text-decoration:none;">📄 Scan</a>`
-          : `<label title="스캔 파일 업로드" style="background:#f8fafc;color:#6b7280;border:1px solid #e5e7eb;border-radius:4px;padding:2px 7px;font-size:10px;cursor:pointer;white-space:nowrap;">
-               📎<input type="file" accept="image/*,.pdf" style="display:none;" onchange="uploadCheckScan(this,'${g.invoices.map(i=>i.id).join(',')}')">
-             </label>`;
-        const actionBtns = `<div style="display:flex;gap:3px;justify-content:center;">${checkCopyBtn}${scanBtn}</div>`;
+        // 스캔 URL 확인
+        const actionBtns = scanUrl
+          ? `<div style="display:flex;gap:3px;justify-content:center;">
+               <button onclick="viewCheckScan('${scanUrl}', '${g.reference||''}')"
+                 style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;white-space:nowrap;">👁 View</button>
+               <a href="${scanUrl}" download
+                 style="background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;white-space:nowrap;text-decoration:none;">⬇ Download</a>
+             </div>`
+          : `<span style="font-size:10px;color:#d1d5db;">—</span>`;
         return `<tr style="border-bottom:1px solid #f0f0f0;">
           <td style="font-size:12px;white-space:nowrap;">${g.payment_date}</td>
           <td style="font-size:12px;font-weight:600;">${g.vendor_name||g.vendors?.name||'—'}</td>
@@ -26920,24 +26916,7 @@ function openCheckRecord(encoded) {
       // 페이지 번호 가져오기
       const scanPage = scanNote ? (() => { try { return JSON.parse(scanNote.notes).scan_page || 1; } catch(e) { return 1; } })() : 1;
       const pageUrl = scanUrl + '#page=' + scanPage;
-
-      document.getElementById('check-scan-viewer')?.remove();
-      const viewer = document.createElement('div');
-      viewer.id = 'check-scan-viewer';
-      viewer.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;display:flex;align-items:center;justify-content:center;';
-      viewer.innerHTML = `
-        <div style="background:#fff;border-radius:12px;width:90vw;height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
-          <div style="padding:12px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
-            <div style="font-size:14px;font-weight:700;color:#0f2744;">📄 Check #${g.reference} — ${g.vendor_name||''} <span style="font-size:11px;color:#6b7280;font-weight:400;">(p.${scanPage})</span></div>
-            <div style="display:flex;gap:8px;align-items:center;">
-              <a href="${pageUrl}" target="_blank" style="font-size:12px;color:#1e3a8a;text-decoration:none;border:1px solid #bfdbfe;border-radius:5px;padding:4px 10px;">↗ 새 탭</a>
-              <button onclick="document.getElementById('check-scan-viewer').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af;line-height:1;">✕</button>
-            </div>
-          </div>
-          <iframe src="${pageUrl}" style="flex:1;border:none;border-radius:0 0 12px 12px;"></iframe>
-        </div>`;
-      viewer.onclick = e => { if (e.target === viewer) viewer.remove(); };
-      document.body.appendChild(viewer);
+      viewCheckScan(pageUrl, g.reference);
       return;
     }
 
@@ -26974,6 +26953,27 @@ function openCheckRecord(encoded) {
     </body></html>`);
     win.document.close();
   } catch(e) { console.error('openCheckRecord error:', e); }
+}
+
+function viewCheckScan(scanUrl, checkNo) {
+  document.getElementById('check-scan-viewer')?.remove();
+  const viewer = document.createElement('div');
+  viewer.id = 'check-scan-viewer';
+  viewer.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;display:flex;align-items:center;justify-content:center;';
+  viewer.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:90vw;height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+      <div style="padding:12px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+        <div style="font-size:14px;font-weight:700;color:#0f2744;">📄 Check Scan${checkNo ? ' — #' + checkNo : ''}</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <a href="${scanUrl}" download style="font-size:12px;color:#166534;text-decoration:none;border:1px solid #86efac;border-radius:5px;padding:4px 10px;background:#f0fdf4;">⬇ Download</a>
+          <a href="${scanUrl}" target="_blank" style="font-size:12px;color:#1e3a8a;text-decoration:none;border:1px solid #bfdbfe;border-radius:5px;padding:4px 10px;">↗ 새 탭</a>
+          <button onclick="document.getElementById('check-scan-viewer').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af;line-height:1;">✕</button>
+        </div>
+      </div>
+      <iframe src="${scanUrl}" style="flex:1;border:none;border-radius:0 0 12px 12px;"></iframe>
+    </div>`;
+  viewer.onclick = e => { if (e.target === viewer) viewer.remove(); };
+  document.body.appendChild(viewer);
 }
 
 function viewCheckCopy(notesJson) {
