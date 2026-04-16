@@ -2282,7 +2282,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           </div>
           <div>
             <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">INVOICE # *</div>
-            <input type="text" id="ap-inv-number" class="fi" placeholder="INV-2026-001" style="width:150px;font-size:13px;">
+            <input type="text" id="ap-inv-number" class="fi" placeholder="INV-2026-001" style="width:150px;font-size:13px;text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
           </div>
           <div>
             <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">INVOICE DATE *</div>
@@ -28347,13 +28347,51 @@ let _bulkRowId = 0;
 function applyVendorToAll() {
   const vendorId = document.getElementById('bulk-vendor-all')?.value;
   if (!vendorId) { showToast('❌ 적용할 거래처를 선택하세요.'); return; }
+  const vendor = (_apVendors||[]).find(v => v.id === vendorId);
   const rows = document.querySelectorAll('#bulk-entry-tbody tr');
   rows.forEach(row => {
     const vendorSel = row.querySelector('select');
     if (vendorSel) vendorSel.value = vendorId;
+    // default account 적용 (빈 경우만)
+    if (vendor?.default_account_code) {
+      const rowId = row.id?.replace('bulk-row-', '');
+      const acctEl = document.getElementById(`bulk-acct-${rowId}`);
+      if (acctEl && !acctEl.value) acctEl.value = vendor.default_account_code;
+    }
   });
   updateBulkSummary();
   showToast(`✅ 모든 행에 거래처 적용됨`);
+}
+
+function applyVendorAccount(vendorSel, rowId) {
+  const vendorId = vendorSel.value;
+  if (!vendorId) return;
+  const vendor = (_apVendors||[]).find(v => v.id === vendorId);
+  if (!vendor?.default_account_code) return;
+  const acctEl = document.getElementById(`bulk-acct-${rowId}`);
+  if (acctEl && !acctEl.value) {
+    acctEl.value = vendor.default_account_code;
+  }
+}
+
+function autoBulkDueDate(invDateEl, rowId) {
+  const invDate = invDateEl?.value;
+  if (!invDate) return;
+  const dueEl = document.getElementById(`bulk-due-${rowId}`);
+  if (!dueEl) return;
+  const termsEl = document.getElementById(`bulk-terms-${rowId}`);
+  const terms = termsEl?.value || 'Net 30';
+
+  const d = new Date(invDate + 'T00:00:00');
+  let days = 30;
+  if (terms === 'Net 15') days = 15;
+  else if (terms === 'Net 30') days = 30;
+  else if (terms === 'Net 60') days = 60;
+  else if (terms === 'Net 90') days = 90;
+  else if (terms === 'Due on Receipt') days = 0;
+
+  d.setDate(d.getDate() + days);
+  dueEl.value = d.toISOString().split('T')[0];
 }
 
 function applyBulkVendor(selectEl) {
@@ -28387,26 +28425,26 @@ function addBulkEntryRow(data = {}) {
   tr.style.borderBottom = '1px solid #f0f0f0';
   tr.innerHTML = `
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <select style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="applyBulkVendor(this);updateBulkSummary()">
+      <select style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="applyBulkVendor(this);applyVendorAccount(this,${id});updateBulkSummary()">
         <option value="">-- 선택 --</option>${vendorOptions}
       </select>
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="text" value="${data.invoice_no||''}" placeholder="Invoice #" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;font-family:'IBM Plex Mono',monospace;">
+      <input type="text" value="${data.invoice_no||''}" placeholder="Invoice #" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="date" value="${data.inv_date||''}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="autoBulkDueDate(this, ${id})">
+      <input type="date" id="bulk-invdate-${id}" value="${data.inv_date||''}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" oninput="autoBulkDueDate(this, ${id})" onchange="autoBulkDueDate(this, ${id})">
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
       <input type="date" id="bulk-due-${id}" value="${data.due_date||''}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;">
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <select style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;">
+      <select id="bulk-terms-${id}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="autoBulkDueDate(document.getElementById('bulk-invdate-${id}'), ${id})">
         ${termsOptions}
       </select>
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <select style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="updateBulkSummary()">
+      <select id="bulk-acct-${id}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="updateBulkSummary()">
         <option value="">-- 계정 선택 --</option>${acctOptions}
       </select>
     </td>
@@ -30634,7 +30672,7 @@ function editAPInvoice(invoiceId, inv, lines) {
           </div>
           <div>
             <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:4px;">INVOICE #</label>
-            <input id="aedit-inv-no" type="text" value="${inv.invoice_number||''}"
+            <input id="aedit-inv-no" type="text" value="${inv.invoice_number||''}" oninput="this.value=this.value.toUpperCase()"
               style="width:100%;padding:7px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;box-sizing:border-box;">
           </div>
           <div>
