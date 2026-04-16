@@ -2051,7 +2051,12 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
 
       <!-- AP KPI Cards -->
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px;">
+        <div class="kpi" id="ap-kpi-gl-card" style="border:2px solid #e5e7eb;">
+          <div class="kpi-label">GL Balance (200-001)</div>
+          <div class="kpi-val" id="ap-kpi-gl">—</div>
+          <div class="kpi-sub" id="ap-kpi-gl-diff" style="font-size:10px;">Accounts Payable</div>
+        </div>
         <div class="kpi"><div class="kpi-label">Total AP Outstanding</div><div class="kpi-val" id="ap-kpi-total">—</div><div class="kpi-sub">all open invoices</div></div>
         <div class="kpi r"><div class="kpi-label">Overdue</div><div class="kpi-val" id="ap-kpi-overdue">—</div><div class="kpi-sub" id="ap-kpi-overdue-ct">—</div></div>
         <div class="kpi o"><div class="kpi-label">Due This Month</div><div class="kpi-val" id="ap-kpi-due-month">—</div><div class="kpi-sub" id="ap-kpi-due-month-ct">—</div></div>
@@ -26408,6 +26413,27 @@ function _renderAPKpis() {
   document.getElementById('ap-kpi-due-month-ct').textContent = dueMonth.length + ' invoices';
   document.getElementById('ap-kpi-paid').textContent = fmt(paidMTD);
   document.getElementById('ap-kpi-vendors').textContent = _apVendors.length;
+
+  // GL Balance (200-001) 조회 및 비교
+  const { data: glLines } = await db.from('journal_lines')
+    .select('debit, credit').eq('account_code', '200-001');
+  const glBalance = (glLines||[]).reduce((s,l) => s + (parseFloat(l.credit)||0) - (parseFloat(l.debit)||0), 0);
+  const diff = Math.abs(glBalance - totalAP);
+  const glEl = document.getElementById('ap-kpi-gl');
+  const glDiffEl = document.getElementById('ap-kpi-gl-diff');
+  const glCard = document.getElementById('ap-kpi-gl-card');
+  if (glEl) glEl.textContent = fmt(glBalance);
+  if (diff < 0.01) {
+    // 일치
+    if (glCard) glCard.style.borderColor = '#16a34a';
+    if (glEl) glEl.style.color = '#16a34a';
+    if (glDiffEl) glDiffEl.innerHTML = '<span style="color:#16a34a;font-weight:700;">✓ AP와 일치</span>';
+  } else {
+    // 불일치
+    if (glCard) glCard.style.borderColor = '#dc2626';
+    if (glEl) glEl.style.color = '#dc2626';
+    if (glDiffEl) glDiffEl.innerHTML = `<span style="color:#dc2626;font-weight:700;">⚠ 차이: ${fmt(diff)}</span>`;
+  }
 }
 
 function populateAPVendorFilter() {
