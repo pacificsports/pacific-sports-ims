@@ -28384,12 +28384,88 @@ function applyVendorToAll() {
     // default account 적용 (빈 경우만)
     if (vendor?.default_account_code) {
       const rowId = row.id?.replace('bulk-row-', '');
-      const acctEl = document.getElementById(`bulk-acct-${rowId}`);
-      if (acctEl && !acctEl.value) acctEl.value = vendor.default_account_code;
+      const hiddenEl = document.getElementById(`bulk-acct-${rowId}`);
+      const searchEl = document.getElementById(`bulk-acct-search-${rowId}`);
+      if (hiddenEl && !hiddenEl.value) {
+        hiddenEl.value = vendor.default_account_code;
+        const acct = (_glAccounts||[]).find(a => a.code === vendor.default_account_code);
+        if (searchEl && acct) searchEl.value = `${acct.code} — ${acct.name}`;
+      }
     }
   });
   updateBulkSummary();
   showToast(`✅ 모든 행에 거래처 적용됨`);
+}
+
+function bulkAcctSearch(inputEl, rowId) {
+  const q = inputEl.value.toLowerCase().trim();
+  const dd = document.getElementById(`bulk-acct-dd-${rowId}`);
+  if (!dd) return;
+
+  const accounts = (_glAccounts||[]).filter(a => a.is_active !== false);
+  const filtered = q
+    ? accounts.filter(a => a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
+    : accounts;
+
+  if (!filtered.length) { dd.style.display = 'none'; return; }
+
+  dd.innerHTML = filtered.slice(0, 50).map((a, i) => `
+    <div data-code="${a.code}" data-idx="${i}"
+      style="padding:5px 8px;font-size:11px;cursor:pointer;border-bottom:1px solid #f0f0f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+      onmousedown="bulkAcctSelect('${a.code}','${a.code} — ${a.name.replace(/'/g,"\\'")}',${rowId})"
+      onmouseover="bulkAcctHighlight(this,${rowId})"
+    ><span style="font-family:'IBM Plex Mono',monospace;color:#1a56a0;font-weight:700;">${a.code}</span>
+     <span style="color:#374151;"> — ${a.name}</span></div>`).join('');
+  dd.style.display = 'block';
+  dd.dataset.selected = '-1';
+}
+
+function bulkAcctKeyNav(e, rowId) {
+  const dd = document.getElementById(`bulk-acct-dd-${rowId}`);
+  if (!dd || dd.style.display === 'none') return;
+  const items = dd.querySelectorAll('div[data-code]');
+  let idx = parseInt(dd.dataset.selected ?? '-1');
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    idx = Math.min(idx + 1, items.length - 1);
+    dd.dataset.selected = idx;
+    items.forEach((el, i) => el.style.background = i === idx ? '#eff6ff' : '');
+    items[idx]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    idx = Math.max(idx - 1, 0);
+    dd.dataset.selected = idx;
+    items.forEach((el, i) => el.style.background = i === idx ? '#eff6ff' : '');
+    items[idx]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (idx >= 0 && items[idx]) {
+      const code = items[idx].dataset.code;
+      const label = items[idx].textContent.trim();
+      bulkAcctSelect(code, label, rowId);
+      if (e.key === 'Enter') e.preventDefault();
+    }
+  } else if (e.key === 'Escape') {
+    dd.style.display = 'none';
+  }
+}
+
+function bulkAcctHighlight(el, rowId) {
+  const dd = document.getElementById(`bulk-acct-dd-${rowId}`);
+  if (!dd) return;
+  dd.querySelectorAll('div[data-code]').forEach(d => d.style.background = '');
+  el.style.background = '#eff6ff';
+  dd.dataset.selected = el.dataset.idx;
+}
+
+function bulkAcctSelect(code, label, rowId) {
+  const hiddenEl = document.getElementById(`bulk-acct-${rowId}`);
+  const searchEl = document.getElementById(`bulk-acct-search-${rowId}`);
+  const dd = document.getElementById(`bulk-acct-dd-${rowId}`);
+  if (hiddenEl) hiddenEl.value = code;
+  if (searchEl) searchEl.value = label;
+  if (dd) dd.style.display = 'none';
+  updateBulkSummary();
 }
 
 function applyVendorAccount(vendorSel, rowId) {
@@ -28397,9 +28473,12 @@ function applyVendorAccount(vendorSel, rowId) {
   if (!vendorId) return;
   const vendor = (_apVendors||[]).find(v => v.id === vendorId);
   if (!vendor?.default_account_code) return;
-  const acctEl = document.getElementById(`bulk-acct-${rowId}`);
-  if (acctEl && !acctEl.value) {
-    acctEl.value = vendor.default_account_code;
+  const hiddenEl = document.getElementById(`bulk-acct-${rowId}`);
+  const searchEl = document.getElementById(`bulk-acct-search-${rowId}`);
+  if (hiddenEl && !hiddenEl.value) {
+    hiddenEl.value = vendor.default_account_code;
+    const acct = (_glAccounts||[]).find(a => a.code === vendor.default_account_code);
+    if (searchEl && acct) searchEl.value = `${acct.code} — ${acct.name}`;
   }
 }
 
@@ -28473,9 +28552,17 @@ function addBulkEntryRow(data = {}) {
       </select>
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <select id="bulk-acct-${id}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="updateBulkSummary()">
-        <option value="">-- 계정 선택 --</option>${acctOptions}
-      </select>
+      <div style="position:relative;" id="bulk-acct-wrap-${id}">
+        <input type="text" id="bulk-acct-search-${id}" placeholder="계정 검색..." autocomplete="off"
+          style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;box-sizing:border-box;"
+          value="${data.account_code ? ((_glAccounts||[]).find(a=>a.code===data.account_code)?.code+' — '+((_glAccounts||[]).find(a=>a.code===data.account_code)?.name||'')) : ''}"
+          oninput="bulkAcctSearch(this, ${id})"
+          onkeydown="bulkAcctKeyNav(event, ${id})"
+          onfocus="bulkAcctSearch(this, ${id})"
+          onblur="setTimeout(()=>{ const d=document.getElementById('bulk-acct-dd-${id}'); if(d) d.style.display='none'; }, 200)">
+        <input type="hidden" id="bulk-acct-${id}" value="${data.account_code||''}">
+        <div id="bulk-acct-dd-${id}" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #bfdbfe;border-radius:4px;max-height:180px;overflow-y:auto;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
+      </div>
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
       <input type="text" id="bulk-desc-${id}" value="${data.description||''}" placeholder="설명" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;">
@@ -30179,13 +30266,13 @@ async function selectVendorMgmt(vendorId) {
             ? `<div style="font-size:11px;color:#9ca3af;margin-top:3px;">📍 ${[vendor.address,vendor.city,vendor.state,vendor.zip].filter(Boolean).join(', ')}</div>`
             : ''}
         </div>
-        <button onclick="renderVendorEditForm('${vendor.id}')" 
-          style="background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
-          ✏️ Edit
-        </button>
         <button onclick="openVendorStatement('${vendor.id}','${vendor.name.replace(/'/g,"\\'")}')"
           style="background:#7c3aed;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
           📄 Statement
+        </button>
+        <button onclick="renderVendorEditForm('${vendor.id}')" 
+          style="background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          ✏️ Edit
         </button>
       </div>
 
