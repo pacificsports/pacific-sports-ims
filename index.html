@@ -29353,6 +29353,32 @@ async function selectVendorMgmt(vendorId) {
   const overdueInvs = (invs||[]).filter(i => ['open','partial'].includes(i.status) && i.due_date && new Date(i.due_date) < today);
   const oldestDays = overdueInvs.length ? Math.max(...overdueInvs.map(i => Math.floor((today - new Date(i.due_date)) / 86400000))) : 0;
 
+  // Aging 버킷 계산
+  const openInvs = (invs||[]).filter(i => ['open','partial'].includes(i.status));
+  const aging = { current: 0, d30: 0, d60: 0, d90: 0, d90p: 0 };
+  openInvs.forEach(i => {
+    const bal = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+    if (!i.due_date) { aging.current += bal; return; }
+    const days = Math.floor((today - new Date(i.due_date)) / 86400000);
+    if (days <= 0) aging.current += bal;
+    else if (days <= 30) aging.d30 += bal;
+    else if (days <= 60) aging.d60 += bal;
+    else if (days <= 90) aging.d90 += bal;
+    else aging.d90p += bal;
+  });
+  const hasAging = (aging.d30 + aging.d60 + aging.d90 + aging.d90p) > 0;
+
+  // Aging 바 비율
+  const agingTotal = Object.values(aging).reduce((s,v) => s+v, 0);
+  const agingBar = agingTotal > 0 ? `
+    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-top:6px;">
+      ${aging.current > 0 ? `<div style="flex:${aging.current/agingTotal};background:#16a34a;" title="Current"></div>` : ''}
+      ${aging.d30 > 0 ? `<div style="flex:${aging.d30/agingTotal};background:#f59e0b;" title="1-30d"></div>` : ''}
+      ${aging.d60 > 0 ? `<div style="flex:${aging.d60/agingTotal};background:#f97316;" title="31-60d"></div>` : ''}
+      ${aging.d90 > 0 ? `<div style="flex:${aging.d90/agingTotal};background:#ef4444;" title="61-90d"></div>` : ''}
+      ${aging.d90p > 0 ? `<div style="flex:${aging.d90p/agingTotal};background:#991b1b;" title="90d+"></div>` : ''}
+    </div>` : '';
+
   detail.innerHTML = `
     <!-- 벤더 헤더 -->
     <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
@@ -29395,6 +29421,35 @@ async function selectVendorMgmt(vendorId) {
           <div style="font-size:16px;font-weight:800;color:${oldestDays>0?'#dc2626':'#16a34a'};">${oldestDays > 0 ? oldestDays+'d' : '—'}</div>
         </div>
       </div>
+
+      <!-- Aging Breakdown -->
+      ${agingTotal > 0 ? `
+      <div style="margin-top:12px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;">
+        <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:8px;">AP Aging Breakdown</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;text-align:center;">
+          <div>
+            <div style="font-size:9px;color:#16a34a;font-weight:700;">Current</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#16a34a;">${aging.current > 0 ? fmt(aging.current) : '—'}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#f59e0b;font-weight:700;">1–30 Days</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#f59e0b;">${aging.d30 > 0 ? fmt(aging.d30) : '—'}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#f97316;font-weight:700;">31–60 Days</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#f97316;">${aging.d60 > 0 ? fmt(aging.d60) : '—'}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#ef4444;font-weight:700;">61–90 Days</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#ef4444;">${aging.d90 > 0 ? fmt(aging.d90) : '—'}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#991b1b;font-weight:700;">90+ Days</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#991b1b;">${aging.d90p > 0 ? fmt(aging.d90p) : '—'}</div>
+          </div>
+        </div>
+        ${agingBar}
+      </div>` : ''}
     </div>
 
     <!-- 인보이스 -->
