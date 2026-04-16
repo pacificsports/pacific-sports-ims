@@ -26633,13 +26633,12 @@ function renderAPAging() {
       </td>
       <td></td>
       <td></td>
-      <td class="num" style="font-weight:700;">${vPastDue > 0 ? `<span style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;">${fmtN(vPastDue)}</span>` : '—'}</td>
+      <td class="num" style="font-weight:800;color:#0f2744;">${fmtN(v.total)}</td>
       <td class="num" style="color:#15803d;font-weight:700;">${fmt(v.current)}</td>
       <td class="num" style="color:#b45309;font-weight:700;">${fmt(v.d30)}</td>
       <td class="num" style="color:#c2410c;font-weight:700;">${fmt(v.d60)}</td>
       <td class="num" style="color:#dc2626;font-weight:700;">${fmt(v.d90)}</td>
       <td class="num" style="color:#991b1b;font-weight:700;">${fmt(v.d90p)}</td>
-      <td class="num" style="font-weight:800;color:#0f2744;">${fmtN(v.total)}</td>
     </tr>`;
 
     // 인보이스별 상세 행 — 기본 숨김
@@ -26654,12 +26653,12 @@ function renderAPAging() {
         <td style="padding:5px 12px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#1a56a0;cursor:pointer;" onclick="event.stopPropagation();viewAPInvoice('${inv.id}')">${inv.invoice_number}</td>
         <td style="padding:5px 12px;font-size:11px;color:${col};font-weight:${inv.bucket!=='current'?'700':'400'};">${inv.due_date||'—'}</td>
         <td class="num" style="font-size:11px;">${pastDueCell}</td>
+        <td class="num" style="font-size:11px;font-weight:700;color:${col};">${fmtN(inv.balance)}</td>
         <td class="num" style="font-size:11px;">${inv.bucket==='current'?fmtN(inv.balance):'—'}</td>
         <td class="num" style="font-size:11px;">${inv.bucket==='d30'?fmtN(inv.balance):'—'}</td>
         <td class="num" style="font-size:11px;">${inv.bucket==='d60'?fmtN(inv.balance):'—'}</td>
         <td class="num" style="font-size:11px;">${inv.bucket==='d90'?fmtN(inv.balance):'—'}</td>
         <td class="num" style="font-size:11px;">${inv.bucket==='d90p'?fmtN(inv.balance):'—'}</td>
-        <td class="num" style="font-size:11px;font-weight:700;color:${col};">${fmtN(inv.balance)}</td>
       </tr>`;
     });
   });
@@ -26670,12 +26669,12 @@ function renderAPAging() {
     <td style="padding:10px 12px;font-weight:800;font-size:13px;" colspan="2">TOTAL</td>
     <td></td>
     <td class="num" style="font-weight:800;color:#f9a8d4;">${totalPastDue > 0 ? fmtN(totalPastDue) : '—'}</td>
+    <td class="num" style="font-weight:900;font-size:14px;color:#fff;">${fmtN(totals.total)}</td>
     <td class="num" style="font-weight:800;color:#4ade80;">${fmt(totals.current)}</td>
     <td class="num" style="font-weight:800;color:#fbbf24;">${fmt(totals.d30)}</td>
     <td class="num" style="font-weight:800;color:#fb923c;">${fmt(totals.d60)}</td>
     <td class="num" style="font-weight:800;color:#f87171;">${fmt(totals.d90)}</td>
     <td class="num" style="font-weight:800;color:#fca5a5;">${fmt(totals.d90p)}</td>
-    <td class="num" style="font-weight:900;font-size:14px;color:#fff;">${fmtN(totals.total)}</td>
   </tr>`;
 
   document.getElementById('ap-aging-tbody').innerHTML = rows || '<tr><td colspan="10" class="empty">No outstanding AP</td></tr>';
@@ -26867,19 +26866,19 @@ function generateAgingHTML() {
     <thead><tr>
       <th style="text-align:left;width:180px;">Vendor</th>
       <th style="text-align:left;width:100px;">Invoice #</th>
+      <th style="width:100px;">Total</th>
       <th style="width:100px;">Current</th>
       <th style="width:100px;">1–30</th>
       <th style="width:100px;">31–60</th>
       <th style="width:100px;">61–90</th>
       <th style="width:100px;">90+</th>
-      <th style="width:110px;">Balance</th>
     </tr></thead>
     <tbody>${vendorRows}</tbody>
     <tfoot><tr class="total-row">
       <td colspan="2">TOTAL</td>
-      <td>${fmt(totals.current)}</td><td>${fmt(totals.d30)}</td>
+      <td>${fmtN(totals.total)}</td><td>${fmt(totals.current)}</td><td>${fmt(totals.d30)}</td>
       <td>${fmt(totals.d60)}</td><td>${fmt(totals.d90)}</td>
-      <td>${fmt(totals.d90p)}</td><td>${fmtN(totals.total)}</td>
+      <td>${fmt(totals.d90p)}</td>
     </tr></tfoot>
   </table>
   <div style="margin-top:32px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:9px;color:#9ca3af;text-align:center;">
@@ -27307,10 +27306,12 @@ async function parseAPInvoicesBatch(input) {
           };
         });
 
-        // 중복 체크 — 이미 DB에 있는 invoice_number인지 확인
+        // 중복 체크 — 이미 DB에 있는 invoice_number인지 확인 (vendor_id 포함)
         if (d.invoice_number) {
           const existing = _apInvoices.find(i =>
-            i.invoice_number === d.invoice_number && i.status !== 'void'
+            i.invoice_number === d.invoice_number &&
+            i.status !== 'void' &&
+            (!matched || i.vendor_id === matched.id)
           );
           if (existing) {
             targetItem.isDuplicate = true;
@@ -27484,8 +27485,7 @@ async function loadBatchExistingInvoices(itemId, vendorId) {
     .select('id, invoice_number, invoice_date, due_date, total_amount, paid_amount, status')
     .eq('vendor_id', vendorId)
     .neq('status', 'void')
-    .order('invoice_date', { ascending: false })
-    .limit(10);
+    .order('invoice_date', { ascending: false });
 
   // 중복 체크 — 플래그만 업데이트 (renderBatchCard 호출 없이)
   const dupInv = currentInvNo && invs?.length ? invs.find(i => i.invoice_number === currentInvNo) : null;
@@ -27716,8 +27716,8 @@ function renderBatchCard(item) {
 
       <!-- 기존 인보이스 목록 -->
       <div id="batch-existing-invs-${item.id}" style="display:none;background:#fffbeb;border-bottom:1px solid #fde68a;padding:8px 12px;">
-        <div style="font-size:10px;font-weight:700;color:#92400e;margin-bottom:6px;">📋 이 벤더의 기존 인보이스 (최근 10개)</div>
-        <div id="batch-existing-invs-list-${item.id}"></div>
+        <div style="font-size:10px;font-weight:700;color:#92400e;margin-bottom:6px;">📋 이 벤더의 기존 인보이스</div>
+        <div id="batch-existing-invs-list-${item.id}" style="max-height:160px;overflow-y:auto;"></div>
       </div>
 
       <!-- 2줄: Invoice# / 날짜 / Due / Terms / 계정일괄 / 라인합치기 / Total -->
@@ -28072,6 +28072,17 @@ async function parseAPInvoice(input) {
         description: l.description || '',
         amount: parseFloat(l.amount) || 0,
       }));
+
+      // 중복 체크
+      if (d.invoice_number) {
+        const existing = _apInvoices.find(i =>
+          i.invoice_number === d.invoice_number &&
+          i.status !== 'void' &&
+          (!matched || i.vendor_id === matched.id)
+        );
+        item.isDuplicate = !!existing;
+        item.duplicateInfo = existing ? `${existing.invoice_number} — ${existing.vendor_name} (${existing.status})` : null;
+      }
     };
 
     if (invoices.length === 0) throw new Error('인보이스를 찾을 수 없습니다');
