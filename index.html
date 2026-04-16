@@ -27524,6 +27524,37 @@ async function loadBatchExistingInvoices(itemId, vendorId) {
   listElFinal.innerHTML = buildExistingInvTable(invs, currentInvNo);
 }
 
+function apDupForceOverride(itemId) {
+  const pinEl = document.getElementById(`dup-pin-${itemId}`);
+  const pin = pinEl?.value?.trim();
+  if (!pin) { pinEl?.focus(); showToast('❌ Manager PIN을 입력하세요.'); return; }
+
+  const emp = (_pinEmployees||[]).find(e => e.pin === pin);
+  if (!emp) {
+    pinEl.value = '';
+    pinEl.style.borderColor = '#dc2626';
+    pinEl.placeholder = '❌ 잘못된 PIN';
+    showToast('❌ PIN이 올바르지 않습니다.');
+    return;
+  }
+  if (!['manager','supervisor','admin'].includes(emp.role)) {
+    pinEl.value = '';
+    pinEl.style.borderColor = '#dc2626';
+    pinEl.placeholder = '❌ 권한 없음';
+    showToast(`❌ ${emp.name}은 Manager 권한이 없습니다.`);
+    return;
+  }
+
+  // 승인 — override 설정
+  const item = _apBatchItems[itemId];
+  if (!item) return;
+  item.dupOverride = true;
+  item.dupOverrideBy = emp.name;
+  showToast(`✅ ${emp.name} 승인 — 강제 저장 허용`);
+  renderBatchCard(item);
+  updateBatchSummary();
+}
+
 function buildExistingInvTable(invs, currentInvNo) {
   const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
   const statusColor = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a' };
@@ -27660,7 +27691,10 @@ function renderBatchCard(item) {
         <span id="batch-dup-badge-${item.id}">
         ${isDup && !item.skip && !item.dupOverride ? `
           <span style="background:#dc2626;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;white-space:nowrap;" title="${item.duplicateInfo||''}">🚫 중복 — 저장 차단</span>
-          <button onclick="_apBatchItems[${item.id}].dupOverride=true;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary()"
+          <input id="dup-pin-${item.id}" type="password" inputmode="numeric" maxlength="4" placeholder="Manager PIN"
+            style="width:90px;font-size:11px;padding:3px 7px;border:1px solid #fca5a5;border-radius:4px;font-family:'IBM Plex Mono',monospace;letter-spacing:2px;text-align:center;"
+            onkeydown="if(event.key==='Enter')apDupForceOverride(${item.id})">
+          <button onclick="apDupForceOverride(${item.id})"
             style="font-size:10px;color:#dc2626;background:#fff;border:1px solid #fca5a5;border-radius:4px;padding:2px 8px;cursor:pointer;white-space:nowrap;flex-shrink:0;">
             강제 저장
           </button>` : ''}
@@ -27759,16 +27793,9 @@ function renderBatchCard(item) {
       </div>
     </div>`;
 
-  // 벤더가 선택된 경우 기존 인보이스 자동 로드 (setTimeout으로 현재 렌더 완료 후 실행)
+  // 벤더가 선택된 경우 기존 인보이스 자동 로드
   if (item.vendorId) {
-    setTimeout(() => {
-      const w = document.getElementById(`batch-existing-invs-${item.id}`);
-      const l = document.getElementById(`batch-existing-invs-list-${item.id}`);
-      // 이미 로드된 경우 스킵 (⏳ 로딩... 또는 테이블이 있는 경우)
-      if (w && l && l.innerHTML.includes('⏳')) return;
-      if (w && l && l.innerHTML.trim() === '') loadBatchExistingInvoices(item.id, item.vendorId);
-      else if (w && !l?.innerHTML) loadBatchExistingInvoices(item.id, item.vendorId);
-    }, 50);
+    setTimeout(() => loadBatchExistingInvoices(item.id, item.vendorId), 100);
   }
 }
 
@@ -27883,10 +27910,13 @@ async function saveAPBatch() {
 
       if (existingInv && existingInv.length > 0 && !item.dupOverride) {
         // override 없으면 저장 차단
-        showToast(`🚫 중복 차단: ${item.invoiceNumber} — 강제저장 버튼을 눌러야 저장됩니다.`);
+        showToast(`🚫 중복 차단: ${item.invoiceNumber} — Manager PIN으로 강제저장 하세요.`);
         errors++;
         continue;
       }
+
+      // override된 경우 description에 기록
+      const overrideNote = item.dupOverride ? ` [중복강제저장 by ${item.dupOverrideBy||'Manager'}]` : '';
       let pdfPath = null;
       try {
         const base64 = await new Promise((res, rej) => {
