@@ -27495,23 +27495,38 @@ async function loadBatchExistingInvoices(itemId, vendorId) {
   // 중복 체크 — invoice number 일치 여부
   const dupInv = currentInvNo ? invs.find(i => i.invoice_number === currentInvNo) : null;
   if (item) {
+    const wasDup = item.isDuplicate;
     item.isDuplicate = !!dupInv;
     item.duplicateInfo = dupInv ? `${dupInv.invoice_number} — (${dupInv.status})` : null;
-    if (!dupInv) item.dupOverride = false; // 중복 아니면 override 초기화
+    if (!dupInv) item.dupOverride = false;
+    // 중복 상태가 바뀐 경우에만 카드 재렌더링 (무한루프 방지: loadBatchExistingInvoices 재호출 없이)
+    if (wasDup !== item.isDuplicate) {
+      const el = document.getElementById('ap-batch-card-' + item.id);
+      if (el) {
+        renderBatchCard(item);
+        updateBatchSummary();
+        // 카드 재렌더 후 목록 다시 그리기
+        const listEl3 = document.getElementById(`batch-existing-invs-list-${itemId}`);
+        const wrap3 = document.getElementById(`batch-existing-invs-${itemId}`);
+        if (wrap3) wrap3.style.display = 'block';
+        if (listEl3) listEl3.innerHTML = buildExistingInvTable(invs, currentInvNo);
+        return;
+      }
+    }
   }
-  renderBatchCard(item);
   updateBatchSummary();
 
+  // 목록 렌더링
+  const listElFinal = document.getElementById(`batch-existing-invs-list-${itemId}`);
+  const wrapFinal = document.getElementById(`batch-existing-invs-${itemId}`);
+  if (wrapFinal) wrapFinal.style.display = 'block';
+  if (listElFinal) listElFinal.innerHTML = buildExistingInvTable(invs, currentInvNo);
+}
+
+function buildExistingInvTable(invs, currentInvNo) {
   const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
   const statusColor = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a' };
-
-  // 리스트 다시 찾아야 함 (renderBatchCard가 DOM 재생성하므로)
-  const listEl2 = document.getElementById(`batch-existing-invs-list-${itemId}`);
-  const wrap2 = document.getElementById(`batch-existing-invs-${itemId}`);
-  if (!listEl2 || !wrap2) return;
-  wrap2.style.display = 'block';
-
-  listEl2.innerHTML = `
+  return `
     <table style="width:100%;border-collapse:collapse;font-size:10px;">
       <thead><tr style="background:#fde68a;">
         <th style="padding:3px 8px;text-align:left;font-weight:700;color:#92400e;">Invoice #</th>
@@ -27740,11 +27755,6 @@ function renderBatchCard(item) {
         </div>
       </div>
     </div>`;
-
-  // 벤더가 선택된 경우 기존 인보이스 자동 로드
-  if (item.vendorId) {
-    setTimeout(() => loadBatchExistingInvoices(item.id, item.vendorId), 0);
-  }
 }
 
 async function retryBatchItem(id) {
