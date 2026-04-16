@@ -27485,13 +27485,33 @@ async function loadBatchExistingInvoices(itemId, vendorId) {
 
   if (!invs || invs.length === 0) {
     listEl.innerHTML = '<div style="font-size:10px;color:#16a34a;">✓ 이 벤더의 기존 인보이스 없음</div>';
+    // 중복 아님으로 업데이트
+    if (item) { item.isDuplicate = false; item.duplicateInfo = null; item.dupOverride = false; }
+    renderBatchCard(item);
+    updateBatchSummary();
     return;
   }
+
+  // 중복 체크 — invoice number 일치 여부
+  const dupInv = currentInvNo ? invs.find(i => i.invoice_number === currentInvNo) : null;
+  if (item) {
+    item.isDuplicate = !!dupInv;
+    item.duplicateInfo = dupInv ? `${dupInv.invoice_number} — (${dupInv.status})` : null;
+    if (!dupInv) item.dupOverride = false; // 중복 아니면 override 초기화
+  }
+  renderBatchCard(item);
+  updateBatchSummary();
 
   const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
   const statusColor = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a' };
 
-  listEl.innerHTML = `
+  // 리스트 다시 찾아야 함 (renderBatchCard가 DOM 재생성하므로)
+  const listEl2 = document.getElementById(`batch-existing-invs-list-${itemId}`);
+  const wrap2 = document.getElementById(`batch-existing-invs-${itemId}`);
+  if (!listEl2 || !wrap2) return;
+  wrap2.style.display = 'block';
+
+  listEl2.innerHTML = `
     <table style="width:100%;border-collapse:collapse;font-size:10px;">
       <thead><tr style="background:#fde68a;">
         <th style="padding:3px 8px;text-align:left;font-weight:700;color:#92400e;">Invoice #</th>
