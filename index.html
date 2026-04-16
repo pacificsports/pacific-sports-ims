@@ -30011,6 +30011,17 @@ async function downloadVendorStatement(vendorId, vendorName) {
   await printVendorStatement(vendorId, vendorName);
 }
 
+function toggleVendorAgingDetail(vendorId) {
+  const detail = document.getElementById(`vendor-aging-detail-${vendorId}`);
+  const toggle = document.getElementById(`vendor-aging-toggle-${vendorId}`);
+  const summary = document.getElementById(`vendor-aging-summary-${vendorId}`);
+  if (!detail) return;
+  const isOpen = detail.style.display !== 'none';
+  detail.style.display = isOpen ? 'none' : 'block';
+  if (toggle) toggle.textContent = isOpen ? '▼ 상세 보기' : '▲ 접기';
+  if (summary) summary.style.borderBottom = isOpen ? '1px solid transparent' : '1px solid #e5e7eb';
+}
+
 function renderVendorMgmtList() {
   const q = (document.getElementById('vendor-mgmt-search')?.value || '').toLowerCase();
   const vendors = _apVendors.filter(v => !q || v.name.toLowerCase().includes(q));
@@ -30167,60 +30178,93 @@ async function selectVendorMgmt(vendorId) {
       <!-- Aging Breakdown Table -->
       ${agingTotal > 0 ? `
       <div style="margin-top:12px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
-        <table style="width:100%;border-collapse:collapse;font-size:11px;">
-          <thead>
-            <tr style="background:#0f2744;color:#fff;">
-              <th style="padding:7px 10px;text-align:left;">Invoice #</th>
-              <th style="padding:7px 10px;text-align:left;">Due Date</th>
-              <th style="padding:7px 10px;text-align:center;color:#fbbf24;">Past Due</th>
-              <th style="padding:7px 10px;text-align:right;color:#93c5fd;">Total</th>
-              <th style="padding:7px 10px;text-align:right;color:#4ade80;">Current</th>
-              <th style="padding:7px 10px;text-align:right;color:#fbbf24;">1–30</th>
-              <th style="padding:7px 10px;text-align:right;color:#fb923c;">31–60</th>
-              <th style="padding:7px 10px;text-align:right;color:#f87171;">61–90</th>
-              <th style="padding:7px 10px;text-align:right;color:#fca5a5;">90+</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${openInvs.sort((a,b) => new Date(a.due_date||0) - new Date(b.due_date||0)).map(i => {
-              const bal = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
-              if (bal <= 0) return '';
-              const dueDate = i.due_date ? new Date(i.due_date + 'T00:00:00') : null;
-              const days = dueDate ? Math.floor((today - dueDate) / 86400000) : 0;
-              let bucket = 'current';
-              if (days > 90) bucket = 'd90p';
-              else if (days > 60) bucket = 'd90';
-              else if (days > 30) bucket = 'd60';
-              else if (days > 0) bucket = 'd30';
-              const bucketColor = {current:'#15803d',d30:'#b45309',d60:'#c2410c',d90:'#dc2626',d90p:'#991b1b'}[bucket];
-              const pastDueCell = days > 0
-                ? `<span style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:1px 5px;border-radius:8px;font-size:10px;font-weight:700;">${days}d</span>`
-                : '—';
-              return `<tr style="border-bottom:1px solid #f5f5f5;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
-                <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;cursor:pointer;" onclick="viewAPInvoice('${i.id}')">${i.invoice_number}</td>
-                <td style="padding:5px 10px;color:${days>0?'#dc2626':'#374151'};font-weight:${days>0?'700':'400'};">${i.due_date||'—'}</td>
-                <td style="padding:5px 10px;text-align:center;">${pastDueCell}</td>
-                <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${bucketColor};">${fmt(bal)}</td>
-                <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#15803d;">${bucket==='current'?fmt(bal):'—'}</td>
-                <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#b45309;">${bucket==='d30'?fmt(bal):'—'}</td>
-                <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#c2410c;">${bucket==='d60'?fmt(bal):'—'}</td>
-                <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;">${bucket==='d90'?fmt(bal):'—'}</td>
-                <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#991b1b;">${bucket==='d90p'?fmt(bal):'—'}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-          <tfoot>
-            <tr style="background:#f0f4f8;border-top:2px solid #e5e7eb;font-weight:800;">
-              <td colspan="3" style="padding:7px 10px;font-size:11px;">TOTAL</td>
-              <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#0f2744;">${fmt(agingTotal)}</td>
-              <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#15803d;">${aging.current>0?fmt(aging.current):'—'}</td>
-              <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#b45309;">${aging.d30>0?fmt(aging.d30):'—'}</td>
-              <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#c2410c;">${aging.d60>0?fmt(aging.d60):'—'}</td>
-              <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;">${aging.d90>0?fmt(aging.d90):'—'}</td>
-              <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#991b1b;">${aging.d90p>0?fmt(aging.d90p):'—'}</td>
-            </tr>
-          </tfoot>
-        </table>
+        <!-- 요약 헤더 - 항상 표시 -->
+        <div onclick="toggleVendorAgingDetail('${vendor.id}')" style="cursor:pointer;padding:10px 14px;display:grid;grid-template-columns:repeat(6,1fr);gap:6px;text-align:center;border-bottom:1px solid transparent;" id="vendor-aging-summary-${vendor.id}">
+          <div>
+            <div style="font-size:9px;color:#0f2744;font-weight:700;">Total</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#0f2744;">${fmt(agingTotal)}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#16a34a;font-weight:700;">Current</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#16a34a;">${aging.current>0?fmt(aging.current):'—'}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#f59e0b;font-weight:700;">1–30 Days</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#f59e0b;">${aging.d30>0?fmt(aging.d30):'—'}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#f97316;font-weight:700;">31–60 Days</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#f97316;">${aging.d60>0?fmt(aging.d60):'—'}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#ef4444;font-weight:700;">61–90 Days</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#ef4444;">${aging.d90>0?fmt(aging.d90):'—'}</div>
+          </div>
+          <div>
+            <div style="font-size:9px;color:#991b1b;font-weight:700;">90+ Days</div>
+            <div style="font-size:13px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:#991b1b;">${aging.d90p>0?fmt(aging.d90p):'—'}</div>
+          </div>
+        </div>
+        <div style="text-align:center;padding:3px;background:#f8fafc;border-top:1px solid #e5e7eb;font-size:10px;color:#6b7280;cursor:pointer;" onclick="toggleVendorAgingDetail('${vendor.id}')">
+          <span id="vendor-aging-toggle-${vendor.id}">▼ 상세 보기</span>
+        </div>
+        <!-- 디테일 테이블 - 기본 숨김 -->
+        <div id="vendor-aging-detail-${vendor.id}" style="display:none;">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead>
+              <tr style="background:#0f2744;color:#fff;">
+                <th style="padding:7px 10px;text-align:left;">Invoice #</th>
+                <th style="padding:7px 10px;text-align:left;">Due Date</th>
+                <th style="padding:7px 10px;text-align:center;color:#fbbf24;">Past Due</th>
+                <th style="padding:7px 10px;text-align:right;color:#93c5fd;">Total</th>
+                <th style="padding:7px 10px;text-align:right;color:#4ade80;">Current</th>
+                <th style="padding:7px 10px;text-align:right;color:#fbbf24;">1–30</th>
+                <th style="padding:7px 10px;text-align:right;color:#fb923c;">31–60</th>
+                <th style="padding:7px 10px;text-align:right;color:#f87171;">61–90</th>
+                <th style="padding:7px 10px;text-align:right;color:#fca5a5;">90+</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${openInvs.sort((a,b) => new Date(a.due_date||0) - new Date(b.due_date||0)).map(i => {
+                const bal = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+                if (bal <= 0) return '';
+                const dueDate = i.due_date ? new Date(i.due_date + 'T00:00:00') : null;
+                const days = dueDate ? Math.floor((today - dueDate) / 86400000) : 0;
+                let bucket = 'current';
+                if (days > 90) bucket = 'd90p';
+                else if (days > 60) bucket = 'd90';
+                else if (days > 30) bucket = 'd60';
+                else if (days > 0) bucket = 'd30';
+                const bucketColor = {current:'#15803d',d30:'#b45309',d60:'#c2410c',d90:'#dc2626',d90p:'#991b1b'}[bucket];
+                const pastDueCell = days > 0
+                  ? `<span style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:1px 5px;border-radius:8px;font-size:10px;font-weight:700;">${days}d</span>`
+                  : '—';
+                return `<tr style="border-bottom:1px solid #f5f5f5;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+                  <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1a56a0;cursor:pointer;" onclick="viewAPInvoice('${i.id}')">${i.invoice_number}</td>
+                  <td style="padding:5px 10px;color:${days>0?'#dc2626':'#374151'};font-weight:${days>0?'700':'400'};">${i.due_date||'—'}</td>
+                  <td style="padding:5px 10px;text-align:center;">${pastDueCell}</td>
+                  <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${bucketColor};">${fmt(bal)}</td>
+                  <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#15803d;">${bucket==='current'?fmt(bal):'—'}</td>
+                  <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#b45309;">${bucket==='d30'?fmt(bal):'—'}</td>
+                  <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#c2410c;">${bucket==='d60'?fmt(bal):'—'}</td>
+                  <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;">${bucket==='d90'?fmt(bal):'—'}</td>
+                  <td style="padding:5px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#991b1b;">${bucket==='d90p'?fmt(bal):'—'}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+            <tfoot>
+              <tr style="background:#f0f4f8;border-top:2px solid #e5e7eb;font-weight:800;">
+                <td colspan="3" style="padding:7px 10px;font-size:11px;">TOTAL</td>
+                <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#0f2744;">${fmt(agingTotal)}</td>
+                <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#15803d;">${aging.current>0?fmt(aging.current):'—'}</td>
+                <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#b45309;">${aging.d30>0?fmt(aging.d30):'—'}</td>
+                <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#c2410c;">${aging.d60>0?fmt(aging.d60):'—'}</td>
+                <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#dc2626;">${aging.d90>0?fmt(aging.d90):'—'}</td>
+                <td style="padding:7px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#991b1b;">${aging.d90p>0?fmt(aging.d90p):'—'}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       </div>` : ''}
     </div>
 
