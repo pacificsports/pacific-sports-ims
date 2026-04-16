@@ -26916,7 +26916,10 @@ function openCheckRecord(encoded) {
     const scanUrl = scanNote ? (() => { try { return JSON.parse(scanNote.notes).scan_url; } catch(e) { return null; } })() : null;
 
     if (scanUrl) {
-      // 모달 안에서 PDF 뷰어로 표시
+      // 페이지 번호 가져오기
+      const scanPage = scanNote ? (() => { try { return JSON.parse(scanNote.notes).scan_page || 1; } catch(e) { return 1; } })() : 1;
+      const pageUrl = scanUrl + '#page=' + scanPage;
+
       document.getElementById('check-scan-viewer')?.remove();
       const viewer = document.createElement('div');
       viewer.id = 'check-scan-viewer';
@@ -26924,13 +26927,13 @@ function openCheckRecord(encoded) {
       viewer.innerHTML = `
         <div style="background:#fff;border-radius:12px;width:90vw;height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
           <div style="padding:12px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
-            <div style="font-size:14px;font-weight:700;color:#0f2744;">📄 Check #${g.reference} — ${g.vendor_name||''}</div>
+            <div style="font-size:14px;font-weight:700;color:#0f2744;">📄 Check #${g.reference} — ${g.vendor_name||''} <span style="font-size:11px;color:#6b7280;font-weight:400;">(p.${scanPage})</span></div>
             <div style="display:flex;gap:8px;align-items:center;">
-              <a href="${scanUrl}" target="_blank" style="font-size:12px;color:#1e3a8a;text-decoration:none;border:1px solid #bfdbfe;border-radius:5px;padding:4px 10px;">↗ 새 탭</a>
+              <a href="${pageUrl}" target="_blank" style="font-size:12px;color:#1e3a8a;text-decoration:none;border:1px solid #bfdbfe;border-radius:5px;padding:4px 10px;">↗ 새 탭</a>
               <button onclick="document.getElementById('check-scan-viewer').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#9ca3af;line-height:1;">✕</button>
             </div>
           </div>
-          <iframe src="${scanUrl}" style="flex:1;border:none;border-radius:0 0 12px 12px;"></iframe>
+          <iframe src="${pageUrl}" style="flex:1;border:none;border-radius:0 0 12px 12px;"></iframe>
         </div>`;
       viewer.onclick = e => { if (e.target === viewer) viewer.remove(); };
       document.body.appendChild(viewer);
@@ -27106,7 +27109,10 @@ async function confirmBulkScan() {
       const { data: urlData } = db.storage.from('ap-invoices').getPublicUrl(fileName);
       const scanUrl = urlData.publicUrl;
 
-      for (const checkNo of selectedNos) {
+      // 체크번호 순서 = 페이지 번호 (1부터 시작, 체크당 1페이지)
+      for (let ci = 0; ci < selectedNos.length; ci++) {
+        const checkNo = selectedNos[ci];
+        const pageNum = ci + 1;
         const paymentIds = checkMap[checkNo];
         if (paymentIds?.length) {
           for (const pid of paymentIds) {
@@ -27114,6 +27120,7 @@ async function confirmBulkScan() {
             let notesObj = {};
             try { notesObj = JSON.parse(pmt?.notes || '{}'); } catch(e) {}
             notesObj.scan_url = scanUrl;
+            notesObj.scan_page = pageNum;  // 페이지 번호 저장
             await db.from('ap_payments').update({ notes: JSON.stringify(notesObj) }).eq('id', pid);
           }
           matched++;
@@ -29553,7 +29560,7 @@ async function toggleVendorJE(rowId) {
           <th style="padding:5px 10px;text-align:right;font-size:10px;color:#dc2626;">Credit</th>
         </tr></thead>
         <tbody>
-          ${(lines||[]).map(l => {
+          ${(lines||[]).slice().sort((a,b) => (parseFloat(b.debit)||0) - (parseFloat(a.debit)||0)).map(l => {
             const acct = _glAccounts.find(a => a.code === l.account_code);
             const isDR = (parseFloat(l.debit)||0) > 0;
             return `<tr style="border-top:1px solid #f0f0f0;">
@@ -29949,7 +29956,7 @@ async function viewAPInvoice(invoiceId) {
             <th style="padding:5px 8px;text-align:right;color:#fca5a5;width:90px;">Credit</th>
           </tr></thead>
           <tbody>
-            ${jeLines.map(l => {
+            ${jeLines.slice().sort((a,b) => (parseFloat(b.debit)||0) - (parseFloat(a.debit)||0)).map(l => {
               const acct = _glAccounts.find(a => a.code === l.account_code);
               const isDR = (parseFloat(l.debit)||0) > 0;
               return `<tr style="border-bottom:1px solid #f0f0f0;">
