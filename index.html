@@ -26380,7 +26380,7 @@ async function loadAP() {
   _apPayments = payments || [];
 
   // KPI
-  _renderAPKpis();
+  await _renderAPKpis();
   renderAPInvoices();
   populateAPVendorFilter();
 
@@ -26388,7 +26388,7 @@ async function loadAP() {
   apSetTab(activeTab);
 }
 
-function _renderAPKpis() {
+async function _renderAPKpis() {
   const open = _apInvoices.filter(i => ['open','partial'].includes(i.status));
   const totalAP = open.reduce((s,i) => s + (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0), 0);
   const today = new Date(); today.setHours(0,0,0,0);
@@ -26415,24 +26415,26 @@ function _renderAPKpis() {
   document.getElementById('ap-kpi-vendors').textContent = _apVendors.length;
 
   // GL Balance (200-001) 조회 및 비교
-  const { data: glLines } = await db.from('journal_lines')
-    .select('debit, credit').eq('account_code', '200-001');
-  const glBalance = (glLines||[]).reduce((s,l) => s + (parseFloat(l.credit)||0) - (parseFloat(l.debit)||0), 0);
-  const diff = Math.abs(glBalance - totalAP);
-  const glEl = document.getElementById('ap-kpi-gl');
-  const glDiffEl = document.getElementById('ap-kpi-gl-diff');
-  const glCard = document.getElementById('ap-kpi-gl-card');
-  if (glEl) glEl.textContent = fmt(glBalance);
-  if (diff < 0.01) {
-    // 일치
-    if (glCard) glCard.style.borderColor = '#16a34a';
-    if (glEl) glEl.style.color = '#16a34a';
-    if (glDiffEl) glDiffEl.innerHTML = '<span style="color:#16a34a;font-weight:700;">✓ AP와 일치</span>';
-  } else {
-    // 불일치
-    if (glCard) glCard.style.borderColor = '#dc2626';
-    if (glEl) glEl.style.color = '#dc2626';
-    if (glDiffEl) glDiffEl.innerHTML = `<span style="color:#dc2626;font-weight:700;">⚠ 차이: ${fmt(diff)}</span>`;
+  try {
+    const { data: glLines } = await db.from('journal_lines')
+      .select('debit, credit').eq('account_code', '200-001');
+    const glBalance = (glLines||[]).reduce((s,l) => s + (parseFloat(l.credit)||0) - (parseFloat(l.debit)||0), 0);
+    const diff = Math.abs(glBalance - totalAP);
+    const glEl = document.getElementById('ap-kpi-gl');
+    const glDiffEl = document.getElementById('ap-kpi-gl-diff');
+    const glCard = document.getElementById('ap-kpi-gl-card');
+    if (glEl) glEl.textContent = fmt(glBalance);
+    if (diff < 0.01) {
+      if (glCard) glCard.style.borderColor = '#16a34a';
+      if (glEl) glEl.style.color = '#16a34a';
+      if (glDiffEl) glDiffEl.innerHTML = '<span style="color:#16a34a;font-weight:700;">✓ AP와 일치</span>';
+    } else {
+      if (glCard) glCard.style.borderColor = '#dc2626';
+      if (glEl) glEl.style.color = '#dc2626';
+      if (glDiffEl) glDiffEl.innerHTML = `<span style="color:#dc2626;font-weight:700;">⚠ 차이: ${fmt(diff)}</span>`;
+    }
+  } catch(e) {
+    console.warn('GL Balance 조회 실패:', e);
   }
 }
 
