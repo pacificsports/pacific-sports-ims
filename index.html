@@ -28579,6 +28579,8 @@ async function saveAPBulkEntry() {
           { journal_entry_id: je.id, account_code: acctCode, description: `AP: ${invNo}`, debit: drAmt, credit: crAmt },
           { journal_entry_id: je.id, account_code: '200-001', description: `AP: ${invNo} — ${vendor?.name||''}`, debit: crAmt, credit: drAmt }
         ]);
+        // invoice에 journal_entry_id 연결
+        await db.from('ap_invoices').update({ journal_entry_id: je.id }).eq('id', inv.id);
       }
 
       saved++;
@@ -28599,11 +28601,15 @@ async function saveAPBulkEntry() {
     <small style="color:#bbf7d0;">
       ${saved}개 저장 · ${skipped > 0 ? skipped+'개 중복 건너뜀 · ' : ''}${errors > 0 ? errors+'개 실패' : ''}
     </small>`;
-  setTimeout(() => statusEl.remove(), 4000);
+  setTimeout(() => statusEl.remove(), 3000);
 
   if (saved > 0) {
     await loadAP();
     updateBulkSummary();
+    // 에러 없으면 2초 후 자동 닫기
+    if (errors === 0) {
+      setTimeout(() => document.getElementById('ap-bulk-entry-modal')?.remove(), 2000);
+    }
   }
 }
 
