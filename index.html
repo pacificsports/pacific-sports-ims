@@ -27462,6 +27462,68 @@ function renderBatchList() {
   _apBatchItems.forEach(item => renderBatchCard(item));
 }
 
+async function loadBatchExistingInvoices(itemId, vendorId) {
+  const wrap = document.getElementById(`batch-existing-invs-${itemId}`);
+  const listEl = document.getElementById(`batch-existing-invs-list-${itemId}`);
+  if (!wrap || !listEl) return;
+
+  if (!vendorId) { wrap.style.display = 'none'; return; }
+
+  // 현재 파싱 중인 invoice number
+  const item = _apBatchItems[itemId];
+  const currentInvNo = item?.invoiceNumber || '';
+
+  listEl.innerHTML = '<div style="font-size:10px;color:#6b7280;">⏳ 로딩...</div>';
+  wrap.style.display = 'block';
+
+  const { data: invs } = await db.from('ap_invoices')
+    .select('id, invoice_number, invoice_date, due_date, total_amount, paid_amount, status')
+    .eq('vendor_id', vendorId)
+    .neq('status', 'void')
+    .order('invoice_date', { ascending: false })
+    .limit(10);
+
+  if (!invs || invs.length === 0) {
+    listEl.innerHTML = '<div style="font-size:10px;color:#16a34a;">✓ 이 벤더의 기존 인보이스 없음</div>';
+    return;
+  }
+
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  const statusColor = { open:'#1a56a0', partial:'#d97706', paid:'#16a34a' };
+
+  listEl.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:10px;">
+      <thead><tr style="background:#fde68a;">
+        <th style="padding:3px 8px;text-align:left;font-weight:700;color:#92400e;">Invoice #</th>
+        <th style="padding:3px 8px;text-align:left;font-weight:700;color:#92400e;">Date</th>
+        <th style="padding:3px 8px;text-align:left;font-weight:700;color:#92400e;">Due</th>
+        <th style="padding:3px 8px;text-align:right;font-weight:700;color:#92400e;">Amount</th>
+        <th style="padding:3px 8px;text-align:right;font-weight:700;color:#92400e;">Balance</th>
+        <th style="padding:3px 8px;text-align:center;font-weight:700;color:#92400e;">Status</th>
+      </tr></thead>
+      <tbody>
+        ${invs.map(i => {
+          const bal = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+          const isDup = currentInvNo && i.invoice_number === currentInvNo;
+          const sc = statusColor[i.status] || '#6b7280';
+          return `<tr style="border-bottom:1px solid #fde68a;background:${isDup?'#fee2e2':'#fff'};">
+            <td style="padding:3px 8px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${isDup?'#dc2626':'#0f2744'};">
+              ${isDup ? '🚫 ' : ''}${i.invoice_number}
+              ${isDup ? '<span style="font-size:9px;background:#dc2626;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;">중복!</span>' : ''}
+            </td>
+            <td style="padding:3px 8px;color:#374151;">${i.invoice_date||'—'}</td>
+            <td style="padding:3px 8px;color:#374151;">${i.due_date||'—'}</td>
+            <td style="padding:3px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;">${fmt(i.total_amount)}</td>
+            <td style="padding:3px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;color:${bal>0?'#dc2626':'#16a34a'};font-weight:700;">${fmt(bal)}</td>
+            <td style="padding:3px 8px;text-align:center;">
+              <span style="background:${sc}20;color:${sc};border:1px solid ${sc}40;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:700;text-transform:uppercase;">${i.status}</span>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
 function renderBatchCard(item) {
   const el = document.getElementById('ap-batch-card-' + item.id);
   if (!el) return;
@@ -27564,7 +27626,7 @@ function renderBatchCard(item) {
         ${!hasIssue && !isDup && !item.skip ? '<span style="background:#16a34a;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;white-space:nowrap;">✓ Ready</span>' : ''}
         <!-- 벤더 선택 (넓게) -->
         <select style="flex:1;font-size:12px;border:1px solid ${!item.vendorId?'#f59e0b':'#d1d5db'};border-radius:4px;padding:4px 8px;font-weight:600;min-width:0;"
-          onchange="_apBatchItems[${item.id}].vendorId=this.value;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary()">
+          onchange="_apBatchItems[${item.id}].vendorId=this.value;renderBatchCard(_apBatchItems[${item.id}]);updateBatchSummary();loadBatchExistingInvoices(${item.id},this.value)">
           <option value="">-- 벤더 선택 * --</option>${vendorOptions}
         </select>
         <!-- 새 벤더 등록 버튼 -->
@@ -27572,6 +27634,12 @@ function renderBatchCard(item) {
           style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;flex-shrink:0;">
           + 새 벤더
         </button>
+      </div>
+
+      <!-- 기존 인보이스 목록 -->
+      <div id="batch-existing-invs-${item.id}" style="display:none;background:#fffbeb;border-bottom:1px solid #fde68a;padding:8px 12px;">
+        <div style="font-size:10px;font-weight:700;color:#92400e;margin-bottom:6px;">📋 이 벤더의 기존 인보이스 (최근 10개)</div>
+        <div id="batch-existing-invs-list-${item.id}"></div>
       </div>
 
       <!-- 2줄: Invoice# / 날짜 / Due / Terms / 계정일괄 / 라인합치기 / Total -->
@@ -27646,6 +27714,11 @@ function renderBatchCard(item) {
         </div>
       </div>
     </div>`;
+
+  // 벤더가 선택된 경우 기존 인보이스 자동 로드
+  if (item.vendorId) {
+    setTimeout(() => loadBatchExistingInvoices(item.id, item.vendorId), 0);
+  }
 }
 
 async function retryBatchItem(id) {
