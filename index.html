@@ -2139,9 +2139,15 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <!-- AP Aging Tab -->
       <div id="ap-pane-aging" style="display:none;">
         <!-- 헤더 + 프린트 버튼 -->
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <div style="font-size:13px;font-weight:700;color:#374151;">
-            As of <span id="ap-aging-date"></span>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="font-size:13px;font-weight:700;color:#374151;">
+              As of <span id="ap-aging-date"></span>
+            </div>
+            <input type="date" id="ap-aging-as-of" style="padding:4px 8px;border:1px solid #e5e7eb;border-radius:6px;font-size:12px;"
+              onchange="renderAPAging()">
+            <button onclick="document.getElementById('ap-aging-as-of').value='';renderAPAging()"
+              style="font-size:11px;color:#6b7280;background:none;border:1px solid #e5e7eb;border-radius:5px;padding:3px 8px;cursor:pointer;">Today</button>
           </div>
           <div style="display:flex;gap:8px;">
             <button onclick="toggleAllAgingVendors(true)" style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;color:#374151;">▼ 전체 펼치기</button>
@@ -2537,6 +2543,35 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               </div>
               <div style="font-size:10px;color:#1a56a0;margin-top:8px;padding-top:8px;border-top:1px solid #bfdbfe;">
                 ℹ️ 체크 번호만 기록됩니다. 실제 금액/수신인은 stub에 프린트됩니다.
+              </div>
+            </div>
+            <!-- ACH/Wire field — shown only when method=ach or wire -->
+            <div id="ap-pmt-ach-wrap" style="display:none;grid-column:1/-1;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 14px;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                <span style="font-size:14px;">🏦</span>
+                <div style="font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:0.5px;">ACH / Wire Transfer Info</div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div>
+                  <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">BANK NAME</div>
+                  <input type="text" id="ap-pmt-bank-name" class="fi" placeholder="e.g. Bank of America"
+                    style="width:100%;font-size:12px;">
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">ROUTING #</div>
+                  <input type="text" id="ap-pmt-routing" class="fi" placeholder="9-digit routing number"
+                    style="width:100%;font-size:12px;font-family:'IBM Plex Mono',monospace;">
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">ACCOUNT #</div>
+                  <input type="text" id="ap-pmt-account-no" class="fi" placeholder="Account number"
+                    style="width:100%;font-size:12px;font-family:'IBM Plex Mono',monospace;">
+                </div>
+                <div>
+                  <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">CONFIRMATION #</div>
+                  <input type="text" id="ap-pmt-confirm-no" class="fi" placeholder="Transaction confirmation"
+                    style="width:100%;font-size:12px;font-family:'IBM Plex Mono',monospace;">
+                </div>
               </div>
             </div>
             <div style="grid-column:1/-1;">
@@ -26525,17 +26560,27 @@ function renderAPInvoices() {
 }
 
 function renderAPAging() {
-  const today = new Date(); today.setHours(0,0,0,0);
+  const asOfInput = document.getElementById('ap-aging-as-of')?.value;
+  const today = asOfInput ? new Date(asOfInput + 'T00:00:00') : new Date();
+  today.setHours(0,0,0,0);
   const dateStr = today.toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
   const el = document.getElementById('ap-aging-date');
   if (el) el.textContent = dateStr;
 
-  const open = _apInvoices.filter(i => ['open','partial'].includes(i.status));
+  // As-of 날짜 기준 — 해당 날짜에 open/partial이었던 인보이스만
+  const open = _apInvoices.filter(i => {
+    if (!['open','partial','paid'].includes(i.status)) return false;
+    const invDate = i.invoice_date ? new Date(i.invoice_date + 'T00:00:00') : null;
+    if (invDate && invDate > today) return false; // 아직 생성 안 된 인보이스 제외
+    const balance = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+    if (i.status === 'paid' && balance <= 0) return false;
+    return ['open','partial'].includes(i.status) || balance > 0;
+  });
   const fmt = n => n === 0 ? '—' : '$' + n.toLocaleString('en-US', {minimumFractionDigits:2});
   const fmtN = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:2});
 
   const getBucket = (inv) => {
-    const due = inv.due_date ? new Date(inv.due_date) : today;
+    const due = inv.due_date ? new Date(inv.due_date + 'T00:00:00') : today;
     const days = Math.floor((today - due) / 86400000);
     if (days > 90) return 'd90p';
     if (days > 60) return 'd90';
@@ -27703,18 +27748,19 @@ async function saveAPBatch() {
       const lines = item.lines.filter(l => l.amount > 0);
       const totalAmount = lines.reduce((s,l) => s+l.amount, 0);
 
-      // ── 중복 인보이스 체크 ──
-      const { data: existingInv } = await db.from('ap_invoices')
+      // ── 중복 인보이스 체크 (vendor + invoice # 동시 체크) ──
+      const dupQuery = db.from('ap_invoices')
         .select('id, invoice_number, vendor_name, status')
         .eq('invoice_number', item.invoiceNumber)
         .neq('status', 'void')
         .limit(1);
+      if (vendorId) dupQuery.eq('vendor_id', vendorId);
+      const { data: existingInv } = await dupQuery;
 
       if (existingInv && existingInv.length > 0) {
         const ex = existingInv[0];
-        showToast(`⚠ 중복 인보이스! ${item.invoiceNumber} (${ex.vendor_name}) 이미 존재합니다. 건너뜁니다.`);
-        errors++;
-        continue;
+        const go = confirm(`⚠️ 중복 인보이스!\n\nVendor: ${ex.vendor_name}\nInvoice #: ${item.invoiceNumber}\nStatus: ${ex.status}\n\n이미 존재합니다. 그래도 저장하시겠습니까?`);
+        if (!go) { errors++; continue; }
       }
       let pdfPath = null;
       try {
@@ -28170,6 +28216,19 @@ async function saveAPInvoice() {
 
   if (!lines.length) { showToast('❌ 라인을 입력하세요.'); return; }
   const totalAmount = lines.reduce((s,l) => s+l.amount, 0);
+
+  // ── 중복 체크 ──
+  const { data: dupCheck } = await db.from('ap_invoices')
+    .select('id, vendor_name, status')
+    .eq('vendor_id', vendorId)
+    .eq('invoice_number', invNumber)
+    .neq('status', 'void')
+    .limit(1);
+  if (dupCheck && dupCheck.length > 0) {
+    const dup = dupCheck[0];
+    const go = confirm(`⚠️ 중복 인보이스!\n\nVendor: ${dup.vendor_name}\nInvoice #: ${invNumber}\nStatus: ${dup.status}\n\n이미 존재합니다. 그래도 저장하시겠습니까?`);
+    if (!go) return;
+  }
 
   try {
     // 1. AP Invoice 저장
@@ -28902,6 +28961,8 @@ async function cpPostAndClose() {
 function onAPPayMethodChange(method) {
   const wrap = document.getElementById('ap-pmt-check-wrap');
   if (wrap) wrap.style.display = method === 'check' ? 'block' : 'none';
+  const achWrap = document.getElementById('ap-pmt-ach-wrap');
+  if (achWrap) achWrap.style.display = ['ach','wire'].includes(method) ? 'block' : 'none';
 }
 
 function toWordsAP(n) {
@@ -29134,6 +29195,20 @@ async function saveAPPayment() {
   const fileInput = document.getElementById('ap-pmt-file');
   const file = fileInput?.files?.[0] || null;
 
+  // ACH/Wire 은행 정보 수집
+  let notesObj = notes ? { text: notes } : {};
+  if (['ach','wire'].includes(method)) {
+    const bankName = document.getElementById('ap-pmt-bank-name')?.value?.trim();
+    const routing = document.getElementById('ap-pmt-routing')?.value?.trim();
+    const accountNo = document.getElementById('ap-pmt-account-no')?.value?.trim();
+    const confirmNo = document.getElementById('ap-pmt-confirm-no')?.value?.trim();
+    if (bankName) notesObj.bank_name = bankName;
+    if (routing) notesObj.routing = routing;
+    if (accountNo) notesObj.account_no = accountNo;
+    if (confirmNo) notesObj.confirm_no = confirmNo;
+  }
+  const notesJson = Object.keys(notesObj).length > 0 ? JSON.stringify(notesObj) : notes;
+
   if (!payDate || amount <= 0) { showToast('❌ 날짜와 금액을 입력하세요.'); return; }
 
   const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
@@ -29180,7 +29255,7 @@ async function saveAPPayment() {
       vendor_id: inv.vendor_id,
       vendor_name: inv.vendor_name,
       payment_date: payDate,
-      amount, method, reference: ref, notes,
+      amount, method, reference: ref, notes: notesJson,
       journal_entry_id: je?.id,
       confirmation_path: confirmationPath,
       created_by: _currentEmployee?.name || 'System',
@@ -29288,6 +29363,156 @@ async function saveAPPayment() {
 // ── Vendor Management Tab ──
 let _selectedVendorId = null;
 
+function openVendorStatement(vendorId, vendorName) {
+  document.getElementById('vendor-statement-modal')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'vendor-statement-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999999;display:flex;align-items:center;justify-content:center;';
+
+  const today = new Date().toISOString().split('T')[0];
+  const firstOfYear = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:440px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+      <div style="background:#7c3aed;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:#fff;font-weight:800;font-size:14px;">📄 Vendor Statement — ${vendorName}</span>
+        <button onclick="document.getElementById('vendor-statement-modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#ddd6fe;">✕</button>
+      </div>
+      <div style="padding:20px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:4px;">FROM DATE</label>
+            <input type="date" id="stmt-from" value="${firstOfYear}" style="width:100%;padding:7px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:4px;">TO DATE</label>
+            <input type="date" id="stmt-to" value="${today}" style="width:100%;padding:7px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;box-sizing:border-box;">
+          </div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="font-size:11px;font-weight:700;color:#6b7280;display:block;margin-bottom:4px;">MESSAGE (선택)</label>
+          <textarea id="stmt-message" rows="2" placeholder="Please review the following account statement..."
+            style="width:100%;padding:7px;border:1px solid #e5e7eb;border-radius:6px;font-size:12px;box-sizing:border-box;resize:vertical;">Please review the following account statement and contact us with any questions.</textarea>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button onclick="document.getElementById('vendor-statement-modal').remove()"
+            style="padding:8px 16px;border:1px solid #e5e7eb;border-radius:6px;background:#f8fafc;font-size:13px;cursor:pointer;">취소</button>
+          <button onclick="printVendorStatement('${vendorId}','${vendorName.replace(/'/g,"\\'")}')"
+            style="padding:8px 16px;background:#0f2744;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">🖨 Print</button>
+          <button onclick="downloadVendorStatement('${vendorId}','${vendorName.replace(/'/g,"\\'")}')"
+            style="padding:8px 16px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;">⬇ PDF</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function printVendorStatement(vendorId, vendorName) {
+  const fromDate = document.getElementById('stmt-from')?.value;
+  const toDate = document.getElementById('stmt-to')?.value;
+  const message = document.getElementById('stmt-message')?.value || '';
+
+  const [{ data: invs }, { data: pmts }] = await Promise.all([
+    db.from('ap_invoices').select('*').eq('vendor_id', vendorId)
+      .gte('invoice_date', fromDate).lte('invoice_date', toDate).order('invoice_date'),
+    db.from('ap_payments').select('*').eq('vendor_id', vendorId)
+      .gte('payment_date', fromDate).lte('payment_date', toDate).order('payment_date')
+  ]);
+
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  const fmtDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('en-US') : '—';
+  const totalInvoiced = (invs||[]).reduce((s,i) => s+(parseFloat(i.total_amount)||0), 0);
+  const totalPaid = (pmts||[]).reduce((s,p) => s+(parseFloat(p.amount)||0), 0);
+  const balance = totalInvoiced - totalPaid;
+
+  const vendor = _apVendors.find(v => v.id === vendorId) || {};
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>Statement — ${vendorName}</title>
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 12px; color: #111; margin: 0; padding: 30px; }
+      h1 { font-size: 20px; color: #0f2744; margin: 0 0 4px; }
+      .header { display: flex; justify-content: space-between; margin-bottom: 24px; border-bottom: 2px solid #0f2744; padding-bottom: 14px; }
+      .label { font-size: 9px; font-weight: 700; color: #6b7280; text-transform: uppercase; }
+      table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+      th { background: #0f2744; color: #fff; padding: 7px 10px; text-align: left; font-size: 11px; }
+      td { padding: 6px 10px; border-bottom: 1px solid #f0f0f0; }
+      .total-row { background: #f8fafc; font-weight: 700; }
+      .balance-box { margin-top: 20px; padding: 14px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
+      .money { font-family: monospace; font-weight: 700; }
+      @media print { body { padding: 0; } }
+    </style></head><body>
+    <div class="header">
+      <div>
+        <h1>Account Statement</h1>
+        <div style="color:#6b7280;font-size:11px;">Peace Textile America Inc.</div>
+        <div style="color:#6b7280;font-size:11px;">Period: ${fmtDate(fromDate)} — ${fmtDate(toDate)}</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="label">Vendor</div>
+        <div style="font-size:15px;font-weight:800;color:#0f2744;">${vendorName}</div>
+        ${vendor.address ? `<div style="font-size:11px;color:#6b7280;">${vendor.address}</div>` : ''}
+        ${[vendor.city,vendor.state,vendor.zip].filter(Boolean).length ? `<div style="font-size:11px;color:#6b7280;">${[vendor.city,vendor.state,vendor.zip].filter(Boolean).join(', ')}</div>` : ''}
+      </div>
+    </div>
+    ${message ? `<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#374151;">${message}</div>` : ''}
+    <div class="label" style="margin-bottom:4px;">Invoices</div>
+    <table>
+      <thead><tr>
+        <th>Invoice #</th><th>Date</th><th>Due Date</th><th>Status</th><th style="text-align:right;">Amount</th><th style="text-align:right;">Balance</th>
+      </tr></thead>
+      <tbody>
+        ${(invs||[]).map(i => {
+          const bal = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+          return `<tr>
+            <td style="font-family:monospace;font-weight:700;">${i.invoice_number}</td>
+            <td>${fmtDate(i.invoice_date)}</td>
+            <td>${fmtDate(i.due_date)}</td>
+            <td style="text-transform:uppercase;font-size:10px;">${i.status}</td>
+            <td style="text-align:right;" class="money">${fmt(i.total_amount)}</td>
+            <td style="text-align:right;color:${bal>0?'#dc2626':'#16a34a'};" class="money">${fmt(bal)}</td>
+          </tr>`;
+        }).join('')}
+        <tr class="total-row">
+          <td colspan="4">Total Invoiced</td>
+          <td style="text-align:right;" class="money">${fmt(totalInvoiced)}</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="label" style="margin-top:16px;margin-bottom:4px;">Payments</div>
+    <table>
+      <thead><tr><th>Date</th><th>Method</th><th>Reference</th><th style="text-align:right;">Amount</th></tr></thead>
+      <tbody>
+        ${(pmts||[]).map(p => `<tr>
+          <td>${fmtDate(p.payment_date)}</td>
+          <td style="text-transform:capitalize;">${p.method||'—'}</td>
+          <td style="font-family:monospace;">${p.reference||'—'}</td>
+          <td style="text-align:right;" class="money">${fmt(p.amount)}</td>
+        </tr>`).join('')}
+        <tr class="total-row">
+          <td colspan="3">Total Paid</td>
+          <td style="text-align:right;" class="money">${fmt(totalPaid)}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="balance-box">
+      <div style="font-size:13px;font-weight:700;color:#0f2744;">Balance Due</div>
+      <div style="font-size:22px;font-weight:800;color:${balance>0?'#dc2626':'#16a34a'};font-family:monospace;">${fmt(balance)}</div>
+    </div>
+    <div style="margin-top:20px;font-size:10px;color:#9ca3af;text-align:center;">Generated ${new Date().toLocaleDateString('en-US')} · Pacific Sports IMS</div>
+    <script>window.onload=()=>window.print();<\/script>
+  </body></html>`;
+
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
+async function downloadVendorStatement(vendorId, vendorName) {
+  await printVendorStatement(vendorId, vendorName);
+}
+
 function renderVendorMgmtList() {
   const q = (document.getElementById('vendor-mgmt-search')?.value || '').toLowerCase();
   const vendors = _apVendors.filter(v => !q || v.name.toLowerCase().includes(q));
@@ -29307,8 +29532,20 @@ function renderVendorMgmtList() {
     vendorBalances[vid] += (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
   });
 
+  // 1099: 올해 지급 합계 $600 이상 vendor
+  const thisYear = new Date().getFullYear();
+  const vendor1099 = {};
+  _apPayments?.forEach(p => {
+    if (!p.payment_date) return;
+    if (new Date(p.payment_date).getFullYear() !== thisYear) return;
+    if (!vendor1099[p.vendor_id]) vendor1099[p.vendor_id] = 0;
+    vendor1099[p.vendor_id] += parseFloat(p.amount) || 0;
+  });
+
   list.innerHTML = vendors.map(v => {
     const bal = vendorBalances[v.id] || 0;
+    const paid1099 = vendor1099[v.id] || 0;
+    const needs1099 = paid1099 >= 600;
     const isSelected = v.id === _selectedVendorId;
     return `<div onclick="selectVendorMgmt('${v.id}')"
       style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;
@@ -29316,7 +29553,10 @@ function renderVendorMgmtList() {
         border-left:3px solid ${isSelected?'#1a56a0':'transparent'};"
       onmouseenter="if('${v.id}'!=='${_selectedVendorId}')this.style.background='#f8fafc'"
       onmouseleave="if('${v.id}'!=='${_selectedVendorId}')this.style.background='#fff'">
-      <div style="font-size:12px;font-weight:700;color:#0f2744;">${v.name}</div>
+      <div style="display:flex;align-items:center;gap:5px;">
+        <span style="font-size:12px;font-weight:700;color:#0f2744;">${v.name}</span>
+        ${needs1099 ? `<span style="font-size:9px;font-weight:700;color:#7c3aed;background:#f3e8ff;border:1px solid #c4b5fd;border-radius:4px;padding:1px 5px;">1099</span>` : ''}
+      </div>
       <div style="display:flex;justify-content:space-between;margin-top:3px;">
         <span style="font-size:10px;color:#6b7280;">${v.terms||'Net 30'}</span>
         ${bal > 0
@@ -29399,6 +29639,10 @@ async function selectVendorMgmt(vendorId) {
         <button onclick="renderVendorEditForm('${vendor.id}')" 
           style="background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
           ✏️ Edit
+        </button>
+        <button onclick="openVendorStatement('${vendor.id}','${vendor.name.replace(/'/g,"\\'")}')"
+          style="background:#7c3aed;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          📄 Statement
         </button>
       </div>
 
