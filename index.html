@@ -28425,12 +28425,12 @@ function addBulkEntryRow(data = {}) {
   tr.style.borderBottom = '1px solid #f0f0f0';
   tr.innerHTML = `
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <select style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="applyBulkVendor(this);applyVendorAccount(this,${id});updateBulkSummary()">
+      <select id="bulk-vendor-${id}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="applyBulkVendor(this);applyVendorAccount(this,${id});updateBulkSummary()">
         <option value="">-- 선택 --</option>${vendorOptions}
       </select>
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="text" value="${data.invoice_no||''}" placeholder="Invoice #" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
+      <input type="text" id="bulk-invno-${id}" value="${data.invoice_no||''}" placeholder="Invoice #" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
       <input type="date" id="bulk-invdate-${id}" value="${data.inv_date||''}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" oninput="autoBulkDueDate(this, ${id})" onchange="autoBulkDueDate(this, ${id})">
@@ -28449,27 +28449,16 @@ function addBulkEntryRow(data = {}) {
       </select>
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="text" value="${data.description||''}" placeholder="설명" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;">
+      <input type="text" id="bulk-desc-${id}" value="${data.description||''}" placeholder="설명" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;">
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="number" value="${data.amount||''}" step="0.01" placeholder="0.00" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;text-align:right;font-family:'IBM Plex Mono',monospace;" oninput="updateBulkSummary()">
+      <input type="number" id="bulk-amt-${id}" value="${data.amount||''}" step="0.01" placeholder="0.00" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;text-align:right;font-family:'IBM Plex Mono',monospace;" oninput="updateBulkSummary()">
     </td>
     <td style="padding:3px 4px;border:1px solid #e5e7eb;text-align:center;">
       <button onclick="document.getElementById('bulk-row-${id}').remove();updateBulkSummary()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;padding:2px;">×</button>
     </td>`;
   tbody.appendChild(tr);
   updateBulkSummary();
-}
-
-function autoBulkDueDate(invDateEl, rowId) {
-  const invDate = invDateEl.value;
-  if (!invDate) return;
-  const dueEl = document.getElementById(`bulk-due-${rowId}`);
-  if (!dueEl || dueEl.value) return; // 이미 입력된 경우 덮어쓰지 않음
-  // 기본 Net 30 적용
-  const d = new Date(invDate + 'T00:00:00');
-  d.setDate(d.getDate() + 30);
-  dueEl.value = d.toISOString().split('T')[0];
 }
 
 function updateBulkSummary() {
@@ -28488,8 +28477,27 @@ function updateBulkSummary() {
 }
 
 async function saveAPBulkEntry() {
-  const rows = document.querySelectorAll('#bulk-entry-tbody tr');
-  let saved = 0, errors = 0;
+  const rows = Array.from(document.querySelectorAll('#bulk-entry-tbody tr'));
+  
+  // 유효한 행만 필터
+  const validRows = rows.filter(row => {
+    const rowId = row.id?.replace('bulk-row-', '');
+    const vendorId = document.getElementById(`bulk-vendor-${rowId}`)?.value;
+    const invNo = document.getElementById(`bulk-invno-${rowId}`)?.value?.trim();
+    const acctCode = document.getElementById(`bulk-acct-${rowId}`)?.value;
+    const amount = parseFloat(document.getElementById(`bulk-amt-${rowId}`)?.value) || 0;
+    return vendorId && invNo && acctCode && amount !== 0;
+  });
+
+  if (validRows.length === 0) { showToast('❌ 저장할 인보이스가 없습니다.'); return; }
+
+  // 진행 상황 표시
+  const statusEl = document.createElement('div');
+  statusEl.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#0f2744;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:9999999;min-width:220px;box-shadow:0 4px 20px rgba(0,0,0,0.3);';
+  statusEl.id = 'bulk-save-status';
+  document.body.appendChild(statusEl);
+
+  let saved = 0, errors = 0, skipped = 0;
   const year = new Date().getFullYear();
 
   const { data: lastJE } = await db.from('journal_entries')
@@ -28497,19 +28505,20 @@ async function saveAPBulkEntry() {
     .order('entry_number', { ascending: false }).limit(1);
   let lastNum = lastJE?.[0] ? parseInt(lastJE[0].entry_number.split('-')[2]) || 0 : 0;
 
-  for (const row of rows) {
-    const cells = row.querySelectorAll('select, input');
-    const vendorId = row.querySelectorAll('select')[0]?.value;
-    const invNo = row.querySelectorAll('input')[0]?.value?.trim();
-    const invDate = row.querySelectorAll('input[type="date"]')[0]?.value;
-    const dueDate = row.querySelectorAll('input[type="date"]')[1]?.value;
-    const terms = row.querySelectorAll('select')[1]?.value || 'Net 30';
-    const acctCode = row.querySelectorAll('select')[2]?.value;
-    const desc = row.querySelectorAll('input[type="text"]')[1]?.value || '';
-    const amount = parseFloat(row.querySelector('input[type="number"]')?.value) || 0;
+  for (let i = 0; i < validRows.length; i++) {
+    const row = validRows[i];
+    statusEl.innerHTML = `⏳ 저장 중... ${i+1} / ${validRows.length}<br><small style="color:#93c5fd;">✅ ${saved}개 완료 · ⚠ ${skipped}개 중복 · ❌ ${errors}개 실패</small>`;
 
-    if (!vendorId || !invNo || !invDate || !acctCode || amount === 0) continue;
-
+    // row id에서 rowId 추출
+    const rowId = row.id?.replace('bulk-row-', '');
+    const vendorId = document.getElementById(`bulk-vendor-${rowId}`)?.value || row.querySelector('select')?.value;
+    const invNo = document.getElementById(`bulk-invno-${rowId}`)?.value?.trim();
+    const invDate = document.getElementById(`bulk-invdate-${rowId}`)?.value;
+    const dueDate = document.getElementById(`bulk-due-${rowId}`)?.value;
+    const terms = document.getElementById(`bulk-terms-${rowId}`)?.value || 'Net 30';
+    const acctCode = document.getElementById(`bulk-acct-${rowId}`)?.value;
+    const desc = document.getElementById(`bulk-desc-${rowId}`)?.value || '';
+    const amount = parseFloat(document.getElementById(`bulk-amt-${rowId}`)?.value) || 0;
     const vendor = (_apVendors||[]).find(v => v.id === vendorId);
 
     try {
@@ -28517,8 +28526,9 @@ async function saveAPBulkEntry() {
       const { data: dup } = await db.from('ap_invoices')
         .select('id').eq('vendor_id', vendorId).eq('invoice_number', invNo).neq('status', 'void').limit(1);
       if (dup && dup.length > 0) {
-        showToast(`⚠ 중복 건너뜀: ${invNo}`);
-        errors++;
+        row.style.background = '#fffbeb';
+        row.title = '중복 - 건너뜀';
+        skipped++;
         continue;
       }
 
@@ -28539,7 +28549,7 @@ async function saveAPBulkEntry() {
       }).select().single();
       if (error) throw error;
 
-      // Invoice Line 저장
+      // Invoice Line
       await db.from('ap_invoice_lines').insert({
         ap_invoice_id: inv.id,
         account_code: acctCode,
@@ -28547,7 +28557,7 @@ async function saveAPBulkEntry() {
         amount
       });
 
-      // Journal Entry 생성
+      // Journal Entry
       lastNum++;
       const jeNum = `JE-${year}-${String(lastNum).padStart(4,'0')}`;
       const { data: je } = await db.from('journal_entries').insert({
@@ -28571,18 +28581,25 @@ async function saveAPBulkEntry() {
       }
 
       saved++;
-      // 저장된 행 초록색으로 표시
       row.style.background = '#f0fdf4';
-      row.style.opacity = '0.6';
+      row.style.opacity = '0.7';
 
     } catch(e) {
       console.error('bulk entry error:', invNo, e);
       row.style.background = '#fef2f2';
+      row.title = '저장 실패: ' + e.message;
       errors++;
     }
   }
 
-  showToast(`✅ ${saved}개 저장 완료${errors > 0 ? ` · ${errors}개 실패/중복` : ''}`);
+  // 완료 메시지
+  statusEl.style.background = errors > 0 ? '#7f1d1d' : '#15803d';
+  statusEl.innerHTML = `✅ 저장 완료!<br>
+    <small style="color:#bbf7d0;">
+      ${saved}개 저장 · ${skipped > 0 ? skipped+'개 중복 건너뜀 · ' : ''}${errors > 0 ? errors+'개 실패' : ''}
+    </small>`;
+  setTimeout(() => statusEl.remove(), 4000);
+
   if (saved > 0) {
     await loadAP();
     updateBulkSummary();
