@@ -28341,9 +28341,7 @@ function openAPBulkEntryModal() {
               <th style="padding:7px 8px;text-align:left;border:1px solid #e5e7eb;width:110px;">Invoice Date *</th>
               <th style="padding:7px 8px;text-align:left;border:1px solid #e5e7eb;width:110px;">Due Date</th>
               <th style="padding:7px 8px;text-align:left;border:1px solid #e5e7eb;width:90px;">Terms</th>
-              <th style="padding:7px 8px;text-align:left;border:1px solid #e5e7eb;width:200px;">Account *</th>
-              <th style="padding:7px 8px;text-align:left;border:1px solid #e5e7eb;width:200px;">Description</th>
-              <th style="padding:7px 8px;text-align:right;border:1px solid #e5e7eb;width:100px;">Amount *</th>
+              <th style="padding:7px 8px;text-align:left;border:1px solid #e5e7eb;">Account / Description / Amount *</th>
               <th style="padding:7px 8px;width:30px;border:1px solid #e5e7eb;"></th>
             </tr>
           </thead>
@@ -28375,19 +28373,24 @@ function applyVendorToAll() {
   const vendorId = document.getElementById('bulk-vendor-all')?.value;
   if (!vendorId) { showToast('❌ 적용할 거래처를 선택하세요.'); return; }
   const vendor = (_apVendors||[]).find(v => v.id === vendorId);
-  const rows = document.querySelectorAll('#bulk-entry-tbody tr');
+  const rows = document.querySelectorAll('#bulk-entry-tbody tr[id^="bulk-row-"]');
   rows.forEach(row => {
-    const vendorSel = row.querySelector('select');
+    const rowId = row.id.replace('bulk-row-','');
+    const vendorSel = document.getElementById(`bulk-vendor-${rowId}`);
     if (vendorSel) vendorSel.value = vendorId;
-    // default account 적용 (빈 경우만)
+    // default account 적용 (첫 번째 라인 빈 경우만)
     if (vendor?.default_account_code) {
-      const rowId = row.id?.replace('bulk-row-', '');
-      const hiddenEl = document.getElementById(`bulk-acct-${rowId}`);
-      const searchEl = document.getElementById(`bulk-acct-search-${rowId}`);
-      if (hiddenEl && !hiddenEl.value) {
-        hiddenEl.value = vendor.default_account_code;
-        const acct = (_glAccounts||[]).find(a => a.code === vendor.default_account_code);
-        if (searchEl && acct) searchEl.value = `${acct.code} — ${acct.name}`;
+      const container = document.getElementById(`bulk-lines-${rowId}`);
+      const firstLine = container?.querySelector('div[id^="bulk-line-"]');
+      if (firstLine) {
+        const lid = firstLine.id.replace('bulk-line-','');
+        const hiddenEl = document.getElementById(`bulk-lc-${lid}`);
+        const searchEl = document.getElementById(`bulk-ls-${lid}`);
+        if (hiddenEl && !hiddenEl.value) {
+          hiddenEl.value = vendor.default_account_code;
+          const acct = (_glAccounts||[]).find(a => a.code === vendor.default_account_code);
+          if (searchEl && acct) searchEl.value = `${acct.code} — ${acct.name}`;
+        }
       }
     }
   });
@@ -28471,8 +28474,14 @@ function applyVendorAccount(vendorSel, rowId) {
   if (!vendorId) return;
   const vendor = (_apVendors||[]).find(v => v.id === vendorId);
   if (!vendor?.default_account_code) return;
-  const hiddenEl = document.getElementById(`bulk-acct-${rowId}`);
-  const searchEl = document.getElementById(`bulk-acct-search-${rowId}`);
+  // 첫 번째 라인의 account가 비어있으면 자동 적용
+  const container = document.getElementById(`bulk-lines-${rowId}`);
+  if (!container) return;
+  const firstLine = container.querySelector('div[id^="bulk-line-"]');
+  if (!firstLine) return;
+  const lid = firstLine.id.replace('bulk-line-','');
+  const hiddenEl = document.getElementById(`bulk-lc-${lid}`);
+  const searchEl = document.getElementById(`bulk-ls-${lid}`);
   if (hiddenEl && !hiddenEl.value) {
     hiddenEl.value = vendor.default_account_code;
     const acct = (_glAccounts||[]).find(a => a.code === vendor.default_account_code);
@@ -28518,9 +28527,7 @@ function applyBulkVendor(selectEl) {
 function addBulkEntryRow(data = {}) {
   const id = _bulkRowId++;
   const vendors = _apVendors || [];
-  const accounts = (_glAccounts || []).filter(a => ['expense','liability','asset'].includes(a.type) && a.is_active !== false);
   const vendorOptions = vendors.map(v => `<option value="${v.id}" ${data.vendor_id === v.id ? 'selected' : ''}>${v.name}</option>`).join('');
-  const acctOptions = accounts.map(a => `<option value="${a.code}" ${data.account_code === a.code ? 'selected' : ''}>${a.code} — ${a.name}</option>`).join('');
   const termsList = ['Net 30','Net 15','Net 60','Net 90','Due on Receipt'];
   const termsOptions = termsList.map(t => `<option ${(data.terms||'Net 30') === t ? 'selected' : ''}>${t}</option>`).join('');
 
@@ -28528,61 +28535,137 @@ function addBulkEntryRow(data = {}) {
   if (!tbody) return;
   const tr = document.createElement('tr');
   tr.id = `bulk-row-${id}`;
-  tr.style.borderBottom = '1px solid #f0f0f0';
+  tr.style.cssText = 'border-bottom:2px solid #e5e7eb;vertical-align:top;';
   tr.innerHTML = `
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;">
+    <td style="padding:4px;border:1px solid #e5e7eb;min-width:160px;">
       <select id="bulk-vendor-${id}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="applyBulkVendor(this);applyVendorAccount(this,${id});updateBulkSummary()">
         <option value="">-- 선택 --</option>${vendorOptions}
       </select>
     </td>
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="text" id="bulk-invno-${id}" value="${data.invoice_no||''}" placeholder="Invoice #" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
+    <td style="padding:4px;border:1px solid #e5e7eb;min-width:110px;">
+      <input type="text" id="bulk-invno-${id}" value="${data.invoice_no||''}" placeholder="Invoice #"
+        style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
     </td>
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="date" id="bulk-invdate-${id}" value="${data.inv_date||''}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" oninput="autoBulkDueDate(this, ${id})" onchange="autoBulkDueDate(this, ${id})">
+    <td style="padding:4px;border:1px solid #e5e7eb;min-width:105px;">
+      <input type="date" id="bulk-invdate-${id}" value="${data.inv_date||''}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" oninput="autoBulkDueDate(this,${id})" onchange="autoBulkDueDate(this,${id})">
     </td>
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;">
+    <td style="padding:4px;border:1px solid #e5e7eb;min-width:105px;">
       <input type="date" id="bulk-due-${id}" value="${data.due_date||''}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;">
     </td>
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <select id="bulk-terms-${id}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="autoBulkDueDate(document.getElementById('bulk-invdate-${id}'), ${id})">
+    <td style="padding:4px;border:1px solid #e5e7eb;min-width:85px;">
+      <select id="bulk-terms-${id}" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;" onchange="autoBulkDueDate(document.getElementById('bulk-invdate-${id}'),${id})">
         ${termsOptions}
       </select>
     </td>
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <div style="position:relative;" id="bulk-acct-wrap-${id}">
-        <input type="text" id="bulk-acct-search-${id}" placeholder="계정 검색..." autocomplete="off"
-          style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;box-sizing:border-box;"
-          value="${data.account_code ? ((_glAccounts||[]).find(a=>a.code===data.account_code)?.code+' — '+((_glAccounts||[]).find(a=>a.code===data.account_code)?.name||'')) : ''}"
-          oninput="bulkAcctSearch(this, ${id})"
-          onkeydown="bulkAcctKeyNav(event, ${id})"
-          onfocus="bulkAcctSearch(this, ${id})"
-          onblur="setTimeout(()=>{ const d=document.getElementById('bulk-acct-dd-${id}'); if(d) d.style.display='none'; }, 200)">
-        <input type="hidden" id="bulk-acct-${id}" value="${data.account_code||''}">
-        <div id="bulk-acct-dd-${id}" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #bfdbfe;border-radius:4px;max-height:180px;overflow-y:auto;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
+    <td style="padding:4px;border:1px solid #e5e7eb;">
+      <div id="bulk-lines-${id}"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:3px;">
+        <button onclick="addBulkLine(${id})" style="font-size:10px;color:#1a56a0;background:#f0f7ff;border:1px dashed #bfdbfe;border-radius:3px;padding:2px 8px;cursor:pointer;">+ 라인 추가</button>
+        <span style="font-size:11px;font-weight:700;color:#0f2744;font-family:'IBM Plex Mono',monospace;" id="bulk-total-${id}">$0.00</span>
       </div>
     </td>
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="text" id="bulk-desc-${id}" value="${data.description||''}" placeholder="설명" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;">
-    </td>
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;">
-      <input type="number" id="bulk-amt-${id}" value="${data.amount||''}" step="0.01" placeholder="0.00" style="width:100%;font-size:11px;padding:4px;border:1px solid #e5e7eb;border-radius:3px;text-align:right;font-family:'IBM Plex Mono',monospace;" oninput="updateBulkSummary()">
-    </td>
-    <td style="padding:3px 4px;border:1px solid #e5e7eb;text-align:center;">
-      <button onclick="document.getElementById('bulk-row-${id}').remove();updateBulkSummary()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;padding:2px;">×</button>
+    <td style="padding:4px;border:1px solid #e5e7eb;text-align:center;vertical-align:middle;">
+      <button onclick="document.getElementById('bulk-row-${id}').remove();updateBulkSummary()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;">×</button>
     </td>`;
   tbody.appendChild(tr);
+  // 기본 라인 1개 추가
+  addBulkLine(id, { account_code: data.account_code, description: data.description, amount: data.amount });
   updateBulkSummary();
 }
 
+let _bulkLineId = 0;
+function addBulkLine(rowId, data = {}) {
+  const lid = _bulkLineId++;
+  const container = document.getElementById(`bulk-lines-${rowId}`);
+  if (!container) return;
+  const div = document.createElement('div');
+  div.id = `bulk-line-${lid}`;
+  div.style.cssText = 'display:grid;grid-template-columns:1fr 1fr 80px 20px;gap:3px;margin-bottom:3px;align-items:center;';
+  div.innerHTML = `
+    <div style="position:relative;">
+      <input type="text" id="bulk-ls-${lid}" placeholder="계정 검색..." autocomplete="off"
+        style="width:100%;font-size:11px;padding:3px 5px;border:1px solid #e5e7eb;border-radius:3px;box-sizing:border-box;"
+        value="${data.account_code ? ((_glAccounts||[]).find(a=>a.code===data.account_code)?.code||'')+' — '+((_glAccounts||[]).find(a=>a.code===data.account_code)?.name||'') : ''}"
+        oninput="bulkLineAcctSearch(this,${lid})"
+        onkeydown="bulkLineAcctKeyNav(event,${lid})"
+        onfocus="bulkLineAcctSearch(this,${lid})"
+        onblur="setTimeout(()=>{const d=document.getElementById('bulk-ldd-${lid}');if(d)d.style.display='none'},200)">
+      <input type="hidden" id="bulk-lc-${lid}" value="${data.account_code||''}">
+      <div id="bulk-ldd-${lid}" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #bfdbfe;border-radius:4px;max-height:160px;overflow-y:auto;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.15);min-width:250px;"></div>
+    </div>
+    <input type="text" id="bulk-ld-${lid}" value="${data.description||''}" placeholder="설명"
+      style="font-size:11px;padding:3px 5px;border:1px solid #e5e7eb;border-radius:3px;width:100%;box-sizing:border-box;">
+    <input type="number" id="bulk-la-${lid}" value="${data.amount||''}" step="0.01" placeholder="0.00"
+      data-row="${rowId}"
+      style="font-size:11px;padding:3px 5px;border:1px solid #e5e7eb;border-radius:3px;text-align:right;width:100%;box-sizing:border-box;font-family:'IBM Plex Mono',monospace;"
+      oninput="updateBulkRowTotal(${rowId});updateBulkSummary()">
+    <button onclick="document.getElementById('bulk-line-${lid}').remove();updateBulkRowTotal(${rowId});updateBulkSummary()"
+      style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:14px;padding:0;">×</button>`;
+  container.appendChild(div);
+}
+
+function updateBulkRowTotal(rowId) {
+  const container = document.getElementById(`bulk-lines-${rowId}`);
+  if (!container) return;
+  const amounts = container.querySelectorAll('input[type="number"]');
+  const total = Array.from(amounts).reduce((s,el) => s + (parseFloat(el.value)||0), 0);
+  const totalEl = document.getElementById(`bulk-total-${rowId}`);
+  if (totalEl) totalEl.textContent = '$' + total.toLocaleString('en-US', {minimumFractionDigits:2});
+}
+
+function bulkLineAcctSearch(inputEl, lid) {
+  const q = inputEl.value.toLowerCase().trim();
+  const dd = document.getElementById(`bulk-ldd-${lid}`);
+  if (!dd) return;
+  const filtered = (_glAccounts||[]).filter(a => a.is_active !== false).filter(a =>
+    !q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q));
+  dd.innerHTML = filtered.map((a,i) => `
+    <div data-code="${a.code}" data-idx="${i}"
+      style="padding:5px 8px;font-size:11px;cursor:pointer;border-bottom:1px solid #f0f0f0;white-space:nowrap;"
+      onmousedown="bulkLineAcctSelect('${a.code}','${a.code} — ${a.name.replace(/'/g,"\'")}',${lid})"
+      onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background=''">
+      <span style="font-family:'IBM Plex Mono',monospace;color:#1a56a0;font-weight:700;">${a.code}</span>
+      <span style="color:#374151;"> — ${a.name}</span>
+    </div>`).join('');
+  dd.style.display = filtered.length ? 'block' : 'none';
+  dd.dataset.selected = '-1';
+}
+
+function bulkLineAcctKeyNav(e, lid) {
+  const dd = document.getElementById(`bulk-ldd-${lid}`);
+  if (!dd || dd.style.display === 'none') return;
+  const items = dd.querySelectorAll('div[data-code]');
+  let idx = parseInt(dd.dataset.selected ?? '-1');
+  if (e.key === 'ArrowDown') { e.preventDefault(); idx = Math.min(idx+1,items.length-1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); idx = Math.max(idx-1,0); }
+  else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (idx >= 0 && items[idx]) { bulkLineAcctSelect(items[idx].dataset.code, items[idx].textContent.trim(), lid); if(e.key==='Enter') e.preventDefault(); }
+    return;
+  } else if (e.key === 'Escape') { dd.style.display='none'; return; }
+  dd.dataset.selected = idx;
+  items.forEach((el,i) => el.style.background = i===idx ? '#eff6ff' : '');
+  items[idx]?.scrollIntoView({block:'nearest'});
+}
+
+function bulkLineAcctSelect(code, label, lid) {
+  const h = document.getElementById(`bulk-lc-${lid}`);
+  const s = document.getElementById(`bulk-ls-${lid}`);
+  const dd = document.getElementById(`bulk-ldd-${lid}`);
+  if (h) h.value = code;
+  if (s) s.value = label;
+  if (dd) dd.style.display = 'none';
+}
+
 function updateBulkSummary() {
-  const rows = document.querySelectorAll('#bulk-entry-tbody tr');
+  const rows = document.querySelectorAll('#bulk-entry-tbody tr[id^="bulk-row-"]');
   let count = 0, total = 0;
   rows.forEach(row => {
-    const vendor = row.querySelector('select')?.value;
-    const invNo = row.querySelectorAll('input')[0]?.value?.trim();
-    const amt = parseFloat(row.querySelectorAll('input[type="number"]')[0]?.value) || 0;
-    if (vendor && invNo && amt !== 0) { count++; total += amt; }
+    const rowId = row.id.replace('bulk-row-','');
+    const vendor = document.getElementById(`bulk-vendor-${rowId}`)?.value;
+    const invNo = document.getElementById(`bulk-invno-${rowId}`)?.value?.trim();
+    const container = document.getElementById(`bulk-lines-${rowId}`);
+    const rowTotal = container ? Array.from(container.querySelectorAll('input[type="number"]')).reduce((s,el) => s+(parseFloat(el.value)||0),0) : 0;
+    if (vendor && invNo && rowTotal !== 0) { count++; total += rowTotal; }
   });
   const countEl = document.getElementById('bulk-entry-count');
   const totalEl = document.getElementById('bulk-entry-total');
@@ -28591,21 +28674,20 @@ function updateBulkSummary() {
 }
 
 async function saveAPBulkEntry() {
-  const rows = Array.from(document.querySelectorAll('#bulk-entry-tbody tr'));
-  
-  // 유효한 행만 필터
+  const rows = Array.from(document.querySelectorAll('#bulk-entry-tbody tr[id^="bulk-row-"]'));
+
+  // 유효한 행 수집
   const validRows = rows.filter(row => {
-    const rowId = row.id?.replace('bulk-row-', '');
+    const rowId = row.id.replace('bulk-row-','');
     const vendorId = document.getElementById(`bulk-vendor-${rowId}`)?.value;
     const invNo = document.getElementById(`bulk-invno-${rowId}`)?.value?.trim();
-    const acctCode = document.getElementById(`bulk-acct-${rowId}`)?.value;
-    const amount = parseFloat(document.getElementById(`bulk-amt-${rowId}`)?.value) || 0;
-    return vendorId && invNo && acctCode && amount !== 0;
+    const container = document.getElementById(`bulk-lines-${rowId}`);
+    const rowTotal = container ? Array.from(container.querySelectorAll('input[type="number"]')).reduce((s,el)=>s+(parseFloat(el.value)||0),0) : 0;
+    return vendorId && invNo && rowTotal !== 0;
   });
 
   if (validRows.length === 0) { showToast('❌ 저장할 인보이스가 없습니다.'); return; }
 
-  // 진행 상황 표시
   const statusEl = document.createElement('div');
   statusEl.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#0f2744;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:9999999;min-width:220px;box-shadow:0 4px 20px rgba(0,0,0,0.3);';
   statusEl.id = 'bulk-save-status';
@@ -28613,7 +28695,6 @@ async function saveAPBulkEntry() {
 
   let saved = 0, errors = 0, skipped = 0;
   const year = new Date().getFullYear();
-
   const { data: lastJE } = await db.from('journal_entries')
     .select('entry_number').like('entry_number', `JE-${year}-%`)
     .order('entry_number', { ascending: false }).limit(1);
@@ -28623,22 +28704,33 @@ async function saveAPBulkEntry() {
     const row = validRows[i];
     statusEl.innerHTML = `⏳ 저장 중... ${i+1} / ${validRows.length}<br><small style="color:#93c5fd;">✅ ${saved}개 완료 · ⚠ ${skipped}개 중복 · ❌ ${errors}개 실패</small>`;
 
-    // row id에서 rowId 추출
-    const rowId = row.id?.replace('bulk-row-', '');
-    const vendorId = document.getElementById(`bulk-vendor-${rowId}`)?.value || row.querySelector('select')?.value;
+    const rowId = row.id.replace('bulk-row-','');
+    const vendorId = document.getElementById(`bulk-vendor-${rowId}`)?.value;
     const invNo = document.getElementById(`bulk-invno-${rowId}`)?.value?.trim();
     const invDate = document.getElementById(`bulk-invdate-${rowId}`)?.value;
     const dueDate = document.getElementById(`bulk-due-${rowId}`)?.value;
     const terms = document.getElementById(`bulk-terms-${rowId}`)?.value || 'Net 30';
-    const acctCode = document.getElementById(`bulk-acct-${rowId}`)?.value;
-    const desc = document.getElementById(`bulk-desc-${rowId}`)?.value || '';
-    const amount = parseFloat(document.getElementById(`bulk-amt-${rowId}`)?.value) || 0;
     const vendor = (_apVendors||[]).find(v => v.id === vendorId);
+
+    // 라인 수집
+    const container = document.getElementById(`bulk-lines-${rowId}`);
+    const lineDivs = container ? Array.from(container.querySelectorAll('div[id^="bulk-line-"]')) : [];
+    const lines = lineDivs.map(ld => {
+      const lid = ld.id.replace('bulk-line-','');
+      return {
+        account_code: document.getElementById(`bulk-lc-${lid}`)?.value || '',
+        description: document.getElementById(`bulk-ld-${lid}`)?.value || '',
+        amount: parseFloat(document.getElementById(`bulk-la-${lid}`)?.value) || 0
+      };
+    }).filter(l => l.account_code && l.amount !== 0);
+
+    if (!lines.length) continue;
+    const totalAmount = lines.reduce((s,l) => s+l.amount, 0);
 
     try {
       // 중복 체크
       const { data: dup } = await db.from('ap_invoices')
-        .select('id').eq('vendor_id', vendorId).eq('invoice_number', invNo).neq('status', 'void').limit(1);
+        .select('id').eq('vendor_id', vendorId).eq('invoice_number', invNo).neq('status','void').limit(1);
       if (dup && dup.length > 0) {
         row.style.background = '#fffbeb';
         row.title = '중복 - 건너뜀';
@@ -28654,22 +28746,19 @@ async function saveAPBulkEntry() {
         invoice_date: invDate,
         due_date: dueDate || null,
         terms,
-        total_amount: amount,
+        total_amount: totalAmount,
         paid_amount: 0,
         status: 'open',
-        description: desc,
+        description: lines[0].description,
         created_by: _currentEmployee?.name || 'System',
         created_at: new Date().toISOString()
       }).select().single();
       if (error) throw error;
 
-      // Invoice Line
-      await db.from('ap_invoice_lines').insert({
-        ap_invoice_id: inv.id,
-        account_code: acctCode,
-        description: desc,
-        amount
-      });
+      // Invoice Lines 저장
+      await db.from('ap_invoice_lines').insert(
+        lines.map(l => ({ ap_invoice_id: inv.id, account_code: l.account_code, description: l.description, amount: l.amount }))
+      );
 
       // Journal Entry
       lastNum++;
@@ -28686,13 +28775,22 @@ async function saveAPBulkEntry() {
       }).select().single();
 
       if (je) {
-        const drAmt = amount > 0 ? amount : 0;
-        const crAmt = amount > 0 ? 0 : Math.abs(amount);
-        await db.from('journal_lines').insert([
-          { journal_entry_id: je.id, account_code: acctCode, description: `AP: ${invNo}`, debit: drAmt, credit: crAmt },
-          { journal_entry_id: je.id, account_code: '200-001', description: `AP: ${invNo} — ${vendor?.name||''}`, debit: crAmt, credit: drAmt }
-        ]);
-        // invoice에 journal_entry_id 연결
+        const jeLines = lines.map(l => ({
+          journal_entry_id: je.id,
+          account_code: l.account_code,
+          description: `AP: ${invNo} — ${l.description}`,
+          debit: l.amount > 0 ? l.amount : 0,
+          credit: l.amount < 0 ? Math.abs(l.amount) : 0
+        }));
+        const apAmt = Math.abs(totalAmount);
+        jeLines.push({
+          journal_entry_id: je.id,
+          account_code: '200-001',
+          description: `AP: ${invNo} — ${vendor?.name||''}`,
+          debit: totalAmount < 0 ? apAmt : 0,
+          credit: totalAmount > 0 ? apAmt : 0
+        });
+        await db.from('journal_lines').insert(jeLines);
         await db.from('ap_invoices').update({ journal_entry_id: je.id }).eq('id', inv.id);
       }
 
@@ -28708,18 +28806,13 @@ async function saveAPBulkEntry() {
     }
   }
 
-  // 완료 메시지
   statusEl.style.background = errors > 0 ? '#7f1d1d' : '#15803d';
-  statusEl.innerHTML = `✅ 저장 완료!<br>
-    <small style="color:#bbf7d0;">
-      ${saved}개 저장 · ${skipped > 0 ? skipped+'개 중복 건너뜀 · ' : ''}${errors > 0 ? errors+'개 실패' : ''}
-    </small>`;
+  statusEl.innerHTML = `✅ 저장 완료!<br><small style="color:#bbf7d0;">${saved}개 저장 · ${skipped>0?skipped+'개 중복 건너뜀 · ':''}${errors>0?errors+'개 실패':''}</small>`;
   setTimeout(() => statusEl.remove(), 3000);
 
   if (saved > 0) {
     await loadAP();
     updateBulkSummary();
-    // 에러 없으면 2초 후 자동 닫기
     if (errors === 0) {
       setTimeout(() => document.getElementById('ap-bulk-entry-modal')?.remove(), 2000);
     }
