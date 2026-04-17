@@ -31077,6 +31077,92 @@ function apEditAddLine() {
   document.getElementById('aedit-lines-body').appendChild(tr);
 }
 
+// ── JE 재동기화 (기존 불일치 데이터 수정용) ──
+async function resyncAPJournalEntry(invoiceId) {
+  if (!confirm('Journal Entry를 인보이스 데이터와 동기화하시겠습니까?\n\n기존 JE 라인이 삭제되고 재생성됩니다.')) return;
+
+  try {
+    showToast('🔄 JE 동기화 중...');
+
+    // 인보이스와 라인 로드
+    const { data: inv } = await db.from('ap_invoices').select('*').eq('id', invoiceId).single();
+    const { data: lines } = await db.from('ap_invoice_lines').select('*').eq('ap_invoice_id', invoiceId).order('id');
+    if (!inv) { showToast('❌ 인보이스를 찾을 수 없음'); return; }
+    if (!lines || lines.length === 0) { showToast('❌ 인보이스 라인이 없음'); return; }
+
+    const totalAmount = lines.reduce((s,l) => s + (parseFloat(l.amount)||0), 0);
+    const paidAmt = parseFloat(inv.paid_amount) || 0;
+
+    if (totalAmount < paidAmt) {
+      showToast(`❌ 인보이스 총액($${totalAmount.toFixed(2)})이 지급액($${paidAmt.toFixed(2)})보다 적음 — 동기화 불가`);
+      return;
+    }
+
+    let jeId = inv.journal_entry_id;
+
+    // JE가 없으면 새로 생성
+    if (!jeId) {
+      const year = (inv.invoice_date || new Date().toISOString().slice(0,10)).slice(0,4);
+      const { data: lastJE } = await db.from('journal_entries')
+        .select('entry_number').like('entry_number', `JE-${year}-%`)
+        .order('entry_number', { ascending: false }).limit(1);
+      const lastNum = lastJE?.[0] ? parseInt(lastJE[0].entry_number.split('-')[2]) || 0 : 0;
+      const jeNum = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+
+      const { data: newJE, error: jeErr } = await db.from('journal_entries').insert({
+        entry_number: jeNum,
+        entry_date: inv.invoice_date,
+        description: `AP: ${inv.invoice_number} — ${inv.vendor_name}`,
+        source: 'ap_invoice',
+        source_id: inv.id,
+        status: 'posted',
+        created_by: _currentEmployee?.name || 'System',
+        created_at: new Date().toISOString()
+      }).select().single();
+
+      if (jeErr || !newJE) { showToast('❌ JE 생성 실패: ' + (jeErr?.message||'')); return; }
+      jeId = newJE.id;
+      await db.from('ap_invoices').update({ journal_entry_id: jeId }).eq('id', invoiceId);
+    } else {
+      // JE 헤더 업데이트
+      await db.from('journal_entries').update({
+        entry_date: inv.invoice_date,
+        description: `AP: ${inv.invoice_number} — ${inv.vendor_name}`,
+        updated_at: new Date().toISOString()
+      }).eq('id', jeId);
+    }
+
+    // 기존 JE 라인 전체 삭제 후 재삽입 (중복 방지)
+    await db.from('journal_lines').delete().eq('journal_entry_id', jeId);
+
+    const { error: insErr } = await db.from('journal_lines').insert([
+      ...lines.map(l => ({
+        journal_entry_id: jeId,
+        account_code: l.account_code || '665-000',
+        description: l.description,
+        debit: parseFloat(l.amount)||0,
+        credit: 0
+      })),
+      {
+        journal_entry_id: jeId,
+        account_code: '200-001',
+        description: `AP: ${inv.invoice_number}`,
+        debit: 0,
+        credit: totalAmount
+      }
+    ]);
+
+    if (insErr) { showToast('❌ JE 라인 삽입 실패: ' + insErr.message); return; }
+
+    showToast('✅ JE 동기화 완료!');
+    await loadAP();
+    viewAPInvoice(invoiceId);
+  } catch(e) {
+    showToast('❌ 동기화 실패: ' + e.message);
+    console.error(e);
+  }
+}
+
 async function saveAPInvoiceEdit(invoiceId, origLineCount) {
   const vendorSel = document.getElementById('aedit-vendor');
   const vendorId = vendorSel?.value;
@@ -31137,6 +31223,15 @@ async function saveAPInvoiceEdit(invoiceId, origLineCount) {
       .select('journal_entry_id, paid_amount, status')
       .eq('id', invoiceId).single();
 
+    console.log('[AP Edit] JE sync check:', {
+      invoiceId,
+      journal_entry_id: invAfter?.journal_entry_id,
+      paid_amount: invAfter?.paid_amount,
+      status: invAfter?.status,
+      totalAmount,
+      newLinesCount: newLines.length
+    });
+
     if (invAfter?.journal_entry_id && newLines.length > 0) {
       const paidAmt = parseFloat(invAfter.paid_amount) || 0;
 
@@ -31144,16 +31239,22 @@ async function saveAPInvoiceEdit(invoiceId, origLineCount) {
       if (totalAmount < paidAmt) {
         showToast(`⚠️ 주의: 수정 금액($${totalAmount.toFixed(2)})이 이미 지급된 금액($${paidAmt.toFixed(2)})보다 적습니다. JE는 업데이트되지 않았습니다.`);
       } else {
+        console.log('[AP Edit] Updating JE:', invAfter.journal_entry_id);
+
         // JE 헤더 업데이트 (날짜, 설명)
-        await db.from('journal_entries').update({
+        const { error: jeHeadErr } = await db.from('journal_entries').update({
           entry_date: invoiceDate || null,
           description: `AP: ${invoiceNumber} — ${vendorName}`,
           updated_at: new Date().toISOString()
         }).eq('id', invAfter.journal_entry_id);
 
+        if (jeHeadErr) console.error('[AP Edit] JE header update error:', jeHeadErr);
+
         // 기존 JE 라인 삭제 후 새로 삽입
-        await db.from('journal_lines').delete().eq('journal_entry_id', invAfter.journal_entry_id);
-        await db.from('journal_lines').insert([
+        const { error: delErr } = await db.from('journal_lines').delete().eq('journal_entry_id', invAfter.journal_entry_id);
+        if (delErr) console.error('[AP Edit] JE lines delete error:', delErr);
+
+        const { error: insErr } = await db.from('journal_lines').insert([
           ...newLines.map(l => ({
             journal_entry_id: invAfter.journal_entry_id,
             account_code: l.account_code || '665-000',
@@ -31169,7 +31270,11 @@ async function saveAPInvoiceEdit(invoiceId, origLineCount) {
             credit: totalAmount
           }
         ]);
+        if (insErr) console.error('[AP Edit] JE lines insert error:', insErr);
+        else console.log('[AP Edit] JE lines updated successfully');
       }
+    } else if (!invAfter?.journal_entry_id) {
+      console.warn('[AP Edit] Invoice has no journal_entry_id — JE not updated');
     }
 
     showToast('✅ Invoice 수정 완료!');
@@ -31327,7 +31432,20 @@ async function viewAPInvoice(invoiceId) {
       const fmtJ = n => n > 0 ? '$' + parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:2}) : '—';
       const totalDR = jeLines.reduce((s,l) => s+(parseFloat(l.debit)||0), 0);
       const totalCR = jeLines.reduce((s,l) => s+(parseFloat(l.credit)||0), 0);
-      jeContent.innerHTML = `
+      const invTotal = parseFloat(inv.total_amount) || 0;
+      const jeMismatch = Math.abs(totalCR - invTotal) >= 0.01;
+
+      const mismatchBanner = jeMismatch
+        ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:11px;color:#991b1b;">
+              ⚠️ <strong>JE 총액 불일치</strong> — Invoice: $${invTotal.toFixed(2)} vs JE CR: $${totalCR.toFixed(2)}
+            </div>
+            <button onclick="resyncAPJournalEntry('${invoiceId}')"
+              style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;">🔄 JE 재동기화</button>
+          </div>`
+        : '';
+
+      jeContent.innerHTML = mismatchBanner + `
         <table style="width:100%;border-collapse:collapse;font-size:11px;">
           <thead><tr style="background:#0f2744;color:#fff;">
             <th style="padding:5px 8px;width:32px;"></th>
@@ -31365,7 +31483,11 @@ async function viewAPInvoice(invoiceId) {
     }
   } else {
     if (jeNumEl) jeNumEl.textContent = '';
-    if (jeContent) jeContent.innerHTML = '<div style="color:#9ca3af;text-align:center;padding:16px;font-size:11px;">분개 정보 없음</div>';
+    if (jeContent) jeContent.innerHTML = `<div style="color:#9ca3af;text-align:center;padding:16px;font-size:11px;">
+      분개 정보 없음
+      <div style="margin-top:8px;"><button onclick="resyncAPJournalEntry('${invoiceId}')"
+        style="background:#0f2744;color:#fff;border:none;border-radius:4px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;">➕ JE 생성</button></div>
+    </div>`;
   }
 
   // PDF 뷰어
