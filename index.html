@@ -31132,6 +31132,46 @@ async function saveAPInvoiceEdit(invoiceId, origLineCount) {
       );
     }
 
+    // 3. Journal Entry 업데이트 (기존 JE가 있는 경우)
+    const { data: invAfter } = await db.from('ap_invoices')
+      .select('journal_entry_id, paid_amount, status')
+      .eq('id', invoiceId).single();
+
+    if (invAfter?.journal_entry_id && newLines.length > 0) {
+      const paidAmt = parseFloat(invAfter.paid_amount) || 0;
+
+      // 결제된 금액보다 적게 수정하면 안됨 (무결성 보호)
+      if (totalAmount < paidAmt) {
+        showToast(`⚠️ 주의: 수정 금액($${totalAmount.toFixed(2)})이 이미 지급된 금액($${paidAmt.toFixed(2)})보다 적습니다. JE는 업데이트되지 않았습니다.`);
+      } else {
+        // JE 헤더 업데이트 (날짜, 설명)
+        await db.from('journal_entries').update({
+          entry_date: invoiceDate || null,
+          description: `AP: ${invoiceNumber} — ${vendorName}`,
+          updated_at: new Date().toISOString()
+        }).eq('id', invAfter.journal_entry_id);
+
+        // 기존 JE 라인 삭제 후 새로 삽입
+        await db.from('journal_lines').delete().eq('journal_entry_id', invAfter.journal_entry_id);
+        await db.from('journal_lines').insert([
+          ...newLines.map(l => ({
+            journal_entry_id: invAfter.journal_entry_id,
+            account_code: l.account_code || '665-000',
+            description: l.description,
+            debit: l.amount,
+            credit: 0
+          })),
+          {
+            journal_entry_id: invAfter.journal_entry_id,
+            account_code: '200-001',
+            description: `AP: ${invoiceNumber}`,
+            debit: 0,
+            credit: totalAmount
+          }
+        ]);
+      }
+    }
+
     showToast('✅ Invoice 수정 완료!');
     document.getElementById('ap-inv-edit-modal')?.remove();
 
