@@ -2048,6 +2048,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button class="btn" style="background:#7f1d1d;color:#fff;border-color:#7f1d1d;font-weight:700;" onclick="document.getElementById('ap-parse-input').click()">📎 Parse Invoices</button>
         <input type="file" id="ap-parse-input" accept=".pdf,.png,.jpg,.jpeg" multiple style="display:none;" onchange="parseAPInvoicesBatch(this)">
         <button class="btn" onclick="openVendorModal()">🏢 Vendors</button>
+        <button class="btn" style="background:#166534;color:#fff;border-color:#166534;font-weight:700;" onclick="exportAPInvoicesCSV()">📥 Export CSV</button>
         <button class="btn" onclick="loadAP()">🔄 Refresh</button>
       </div>
 
@@ -3656,9 +3657,45 @@ async function startAppWithEmployee(emp) {
     const hash = window.location.hash.slice(1);
     const [panel, subview] = hash ? hash.split('/') : [localStorage.getItem('last_panel') || allowedPanels[0], null];
     const targetPanel = allowedPanels.includes(panel) ? panel : allowedPanels[0];
-    const tabEl = document.querySelector(`.ntab[onclick*="${targetPanel}"]`);
+    const tabEl = getNavTabForPanel(targetPanel);
     showPanel(targetPanel, tabEl, subview);
   }, 50);
+}
+
+// panel 이름 → 상위 네비게이션 탭 매핑 (드롭다운 하위 패널 포함)
+const PANEL_TO_TAB = {
+  // 단독 탭
+  dashboard: '.ntab[onclick*="showPanel(\'dashboard\'"]',
+  customerpos: '.ntab[onclick*="showPanel(\'customerpos\'"]',
+  orderstatus: '.ntab[onclick*="showPanel(\'orderstatus\'"]',
+  backorders: '.ntab[onclick*="showPanel(\'backorders\'"]',
+  customers: '.ntab[onclick*="showPanel(\'customers\'"]',
+  settings: '.ntab[onclick*="showPanel(\'settings\'"]',
+  // Order Documents 드롭다운
+  picktickets: '#ntab-orderproc',
+  packinglists: '#ntab-orderproc',
+  invoice: '#ntab-orderproc',
+  // Inventory 드롭다운
+  inventory: '#ntab-inventory',
+  pcroom: '#ntab-inventory',
+  receiving: '#ntab-inventory',
+  intransit: '#ntab-inventory',
+  styles: '#ntab-inventory',
+  // Accounting 드롭다운
+  ar: '#ntab-accounting',
+  ap: '#ntab-accounting',
+  pl: '#ntab-accounting',
+  bs: '#ntab-accounting',
+  gl: '#ntab-accounting',
+  coa: '#ntab-accounting',
+  // 기타
+  completed: '#ntab-orderproc'
+};
+
+function getNavTabForPanel(panelName) {
+  const selector = PANEL_TO_TAB[panelName];
+  if (!selector) return null;
+  return document.querySelector(selector);
 }
 
 function applyRoleAccess(role) {
@@ -3676,7 +3713,7 @@ function applyRoleAccess(role) {
 window.addEventListener('popstate', () => {
   const hash = window.location.hash.slice(1);
   const [panel, subview] = hash ? hash.split('/') : ['dashboard', null];
-  const tabEl = document.querySelector(`.ntab[onclick*="${panel}"]`);
+  const tabEl = getNavTabForPanel(panel);
   showPanel(panel, tabEl, subview, true);
 });
 
@@ -31481,6 +31518,142 @@ async function deleteAPPayment(paymentId, invoiceId) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// AP INVOICE EXPORT — CSV 다운로드 (백업/이관용)
+// ══════════════════════════════════════════════════════════════
+async function exportAPInvoicesCSV() {
+  try {
+    showToast('📥 데이터 수집 중...');
+
+    // 모든 AP 인보이스 + 라인 + 지급 로드
+    const { data: invoices } = await db.from('ap_invoices').select('*').order('invoice_date', { ascending: true });
+    const { data: lines } = await db.from('ap_invoice_lines').select('*');
+    const { data: payments } = await db.from('ap_payments').select('*');
+
+    if (!invoices || invoices.length === 0) {
+      showToast('❌ Export 할 인보이스가 없습니다.');
+      return;
+    }
+
+    // invoice별 라인/지급 인덱싱
+    const linesByInv = {};
+    (lines||[]).forEach(l => {
+      if (!linesByInv[l.ap_invoice_id]) linesByInv[l.ap_invoice_id] = [];
+      linesByInv[l.ap_invoice_id].push(l);
+    });
+    const pmtsByInv = {};
+    (payments||[]).forEach(p => {
+      if (!pmtsByInv[p.ap_invoice_id]) pmtsByInv[p.ap_invoice_id] = [];
+      pmtsByInv[p.ap_invoice_id].push(p);
+    });
+
+    // CSV 필드 escape 함수
+    const csvEsc = v => {
+      if (v === null || v === undefined) return '';
+      const s = String(v);
+      if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+      return s;
+    };
+
+    // ── Sheet 1: Invoices (메인) ──
+    // 1 row per invoice line (multi-line invoice은 여러 행으로 펼침)
+    const invHeader = [
+      'invoice_id','invoice_number','vendor_id','vendor_name',
+      'invoice_date','due_date','terms','description',
+      'total_amount','paid_amount','status',
+      'line_account_code','line_description','line_amount',
+      'journal_entry_id','created_at'
+    ];
+    let invCSV = invHeader.join(',') + '\r\n';
+
+    invoices.forEach(inv => {
+      const invLines = linesByInv[inv.id] || [];
+      if (invLines.length === 0) {
+        // 라인 없는 인보이스도 한 줄 출력
+        invCSV += [
+          inv.id, inv.invoice_number, inv.vendor_id, inv.vendor_name,
+          inv.invoice_date, inv.due_date, inv.terms, inv.description,
+          inv.total_amount, inv.paid_amount, inv.status,
+          '', '', '',
+          inv.journal_entry_id, inv.created_at
+        ].map(csvEsc).join(',') + '\r\n';
+      } else {
+        invLines.forEach(l => {
+          invCSV += [
+            inv.id, inv.invoice_number, inv.vendor_id, inv.vendor_name,
+            inv.invoice_date, inv.due_date, inv.terms, inv.description,
+            inv.total_amount, inv.paid_amount, inv.status,
+            l.account_code, l.description, l.amount,
+            inv.journal_entry_id, inv.created_at
+          ].map(csvEsc).join(',') + '\r\n';
+        });
+      }
+    });
+
+    // ── Sheet 2: Payments ──
+    const pmtHeader = [
+      'payment_id','ap_invoice_id','invoice_number','vendor_id','vendor_name',
+      'payment_date','amount','method','reference','notes',
+      'journal_entry_id','created_at'
+    ];
+    let pmtCSV = pmtHeader.join(',') + '\r\n';
+    const invById = {};
+    invoices.forEach(i => { invById[i.id] = i; });
+    (payments||[]).forEach(p => {
+      const inv = invById[p.ap_invoice_id];
+      pmtCSV += [
+        p.id, p.ap_invoice_id, inv?.invoice_number||'', p.vendor_id, p.vendor_name,
+        p.payment_date, p.amount, p.method, p.reference, p.notes,
+        p.journal_entry_id, p.created_at
+      ].map(csvEsc).join(',') + '\r\n';
+    });
+
+    // ── Sheet 3: Summary (인보이스 요약, 라인 pivot) ──
+    const sumHeader = [
+      'invoice_number','vendor_name','invoice_date','due_date','terms','status',
+      'total_amount','paid_amount','balance','line_count','payment_count','notes'
+    ];
+    let sumCSV = sumHeader.join(',') + '\r\n';
+    invoices.forEach(inv => {
+      const invLines = linesByInv[inv.id] || [];
+      const invPmts = pmtsByInv[inv.id] || [];
+      const total = parseFloat(inv.total_amount)||0;
+      const paid = parseFloat(inv.paid_amount)||0;
+      const lineSummary = invLines.map(l => `${l.account_code}:$${parseFloat(l.amount)||0}`).join(' | ');
+      sumCSV += [
+        inv.invoice_number, inv.vendor_name, inv.invoice_date, inv.due_date,
+        inv.terms, inv.status, total, paid, total - paid,
+        invLines.length, invPmts.length, lineSummary
+      ].map(csvEsc).join(',') + '\r\n';
+    });
+
+    // 3개 파일 다운로드
+    const today = new Date().toISOString().slice(0,10);
+    downloadCSV(`AP_Invoices_Detail_${today}.csv`, invCSV);
+    downloadCSV(`AP_Payments_${today}.csv`, pmtCSV);
+    downloadCSV(`AP_Invoices_Summary_${today}.csv`, sumCSV);
+
+    showToast(`✅ Export 완료! (인보이스 ${invoices.length}건, 지급 ${(payments||[]).length}건)`);
+  } catch(e) {
+    showToast('❌ Export 실패: ' + e.message);
+    console.error(e);
+  }
+}
+
+function downloadCSV(filename, csvContent) {
+  // UTF-8 BOM 추가 (Excel에서 한글 깨짐 방지)
+  const bom = '\uFEFF';
+  const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function resyncAPJournalEntry(invoiceId) {
   if (!confirm('Journal Entry를 인보이스 데이터와 동기화하시겠습니까?\n\n기존 JE 라인이 삭제되고 재생성됩니다.')) return;
 
@@ -33000,14 +33173,28 @@ async function saveJE() {
   try {
     let jeId;
     if (_jeEditId) {
+      console.log('[saveJE] Edit mode, _jeEditId:', _jeEditId, 'new date:', date, 'new desc:', desc);
+
       // 수정 — 기존 라인 삭제 후 재입력
-      await db.from('journal_lines').delete().eq('journal_entry_id', _jeEditId);
-      await db.from('journal_entries').update({
+      const { error: delErr } = await db.from('journal_lines').delete().eq('journal_entry_id', _jeEditId);
+      if (delErr) {
+        console.error('[saveJE] Line delete error:', delErr);
+        throw delErr;
+      }
+
+      const { data: updData, error: updErr } = await db.from('journal_entries').update({
         entry_date: date, description: desc, source, status,
         updated_at: new Date().toISOString()
-      }).eq('id', _jeEditId);
+      }).eq('id', _jeEditId).select();
+
+      if (updErr) {
+        console.error('[saveJE] JE update error:', updErr);
+        throw updErr;
+      }
+      console.log('[saveJE] JE updated:', updData);
       jeId = _jeEditId;
     } else {
+      console.log('[saveJE] New mode');
       // 신규
       const { data: je, error } = await db.from('journal_entries').insert({
         entry_number: entryNumber,
@@ -33037,6 +33224,7 @@ async function saveJE() {
     }
 
   } catch(e) {
+    console.error('[saveJE] Exception:', e);
     showToast('❌ 저장 실패: ' + e.message);
   } finally {
     btn.disabled = false;
