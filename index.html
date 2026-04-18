@@ -2052,10 +2052,10 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
       <!-- AP KPI Cards -->
       <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px;">
-        <div class="kpi" id="ap-kpi-gl-card" style="border:2px solid #e5e7eb;">
-          <div class="kpi-label">GL Balance (200-001)</div>
+        <div class="kpi" id="ap-kpi-gl-card" style="border:2px solid #e5e7eb;cursor:pointer;" onclick="openAccountDetailLedger('200-001')" title="클릭하여 계정 원장 상세 보기">
+          <div class="kpi-label">GL Balance (200-001) 🔍</div>
           <div class="kpi-val" id="ap-kpi-gl">—</div>
-          <div class="kpi-sub" id="ap-kpi-gl-diff" style="font-size:10px;">Accounts Payable</div>
+          <div class="kpi-sub" id="ap-kpi-gl-diff" style="font-size:10px;">Accounts Payable · 클릭 → 원장</div>
         </div>
         <div class="kpi"><div class="kpi-label">Total AP Outstanding</div><div class="kpi-val" id="ap-kpi-total">—</div><div class="kpi-sub">all open invoices</div></div>
         <div class="kpi r"><div class="kpi-label">Overdue</div><div class="kpi-val" id="ap-kpi-overdue">—</div><div class="kpi-sub" id="ap-kpi-overdue-ct">—</div></div>
@@ -33184,8 +33184,8 @@ function renderGLAccounts() {
     }
 
     const hasActivity = b.debit > 0 || b.credit > 0;
-    rows += `<tr style="background:${hasActivity?'#fff':'#fafafa'};border-bottom:1px solid #f0f0f0;${!hasActivity?'color:#9ca3af;':''}">
-      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;">${a.code}</td>
+    rows += `<tr style="background:${hasActivity?'#fff':'#fafafa'};border-bottom:1px solid #f0f0f0;${!hasActivity?'color:#9ca3af;':''}cursor:pointer;" onmouseover="if(this.style.background !== 'rgb(239, 246, 255)') this.dataset.origBg=this.style.background;this.style.background='#eff6ff'" onmouseout="this.style.background=this.dataset.origBg||''" onclick="openAccountDetailLedger('${a.code}')">
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:#1a56a0;text-decoration:underline;text-underline-offset:2px;">${a.code}</td>
       <td style="font-size:12px;">${a.name}</td>
       <td style="font-size:10px;color:#6b7280;">${a.subtype||''}</td>
       <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${b.debit>0?'#1a56a0':'#9ca3af'};">${fmt(b.debit)}</td>
@@ -33201,6 +33201,429 @@ function renderGLAccounts() {
   const diffEl = document.getElementById('gl-total-balance');
   diffEl.textContent = diff === 0 ? '✓ Balanced' : '$' + Math.abs(diff).toLocaleString('en-US', {minimumFractionDigits:2});
   diffEl.style.color = diff === 0 ? '#16a34a' : '#dc2626';
+}
+
+// ══════════════════════════════════════════════════════════════
+// ACCOUNT DETAIL LEDGER — 계정별 시간순 원장 (Beginning Balance → Running Balance)
+// ══════════════════════════════════════════════════════════════
+let _acctDetailState = {
+  code: null,
+  fromDate: null,
+  toDate: null,
+  entries: [],      // 기간 내 JE 라인
+  beginningBalance: 0
+};
+
+async function openAccountDetailLedger(accountCode, fromDate, toDate) {
+  const acct = _glAccounts.find(a => a.code === accountCode);
+  if (!acct) { showToast('❌ 계정을 찾을 수 없음'); return; }
+
+  // 기본 기간: 올해 1/1 ~ 오늘
+  const now = new Date();
+  const defaultFrom = fromDate || `${now.getFullYear()}-01-01`;
+  const defaultTo = toDate || now.toISOString().slice(0,10);
+
+  _acctDetailState.code = accountCode;
+  _acctDetailState.fromDate = defaultFrom;
+  _acctDetailState.toDate = defaultTo;
+
+  // 기존 모달 제거 후 새로 생성
+  document.getElementById('acct-detail-modal')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'acct-detail-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999999;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:98vw;max-width:1400px;height:94vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+      <!-- 헤더 -->
+      <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">📒 Account Detail — ${acct.code}</span>
+          <span style="color:#93c5fd;font-size:13px;">${acct.name}</span>
+          <span style="background:${ {asset:'#1e40af',liability:'#7f1d1d',equity:'#6b21a8',revenue:'#15803d',expense:'#b45309'}[acct.type] || '#374151' };color:#fff;padding:2px 10px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;">${acct.type}</span>
+        </div>
+        <button onclick="document.getElementById('acct-detail-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#93c5fd;">✕</button>
+      </div>
+
+      <!-- 필터 바 -->
+      <div style="padding:12px 20px;border-bottom:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:11px;font-weight:700;color:#374151;">기간:</label>
+        <input type="date" id="acct-ledger-from" value="${defaultFrom}" class="fi" style="width:140px;font-size:12px;">
+        <span style="color:#6b7280;">~</span>
+        <input type="date" id="acct-ledger-to" value="${defaultTo}" class="fi" style="width:140px;font-size:12px;">
+        <button onclick="reloadAccountDetailLedger()" style="background:#0f2744;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;">🔍 조회</button>
+
+        <div style="display:flex;gap:4px;margin-left:8px;">
+          <button onclick="acctLedgerQuickRange('ytd')" style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:4px 10px;font-size:10px;cursor:pointer;">YTD</button>
+          <button onclick="acctLedgerQuickRange('mtd')" style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:4px 10px;font-size:10px;cursor:pointer;">MTD</button>
+          <button onclick="acctLedgerQuickRange('qtd')" style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:4px 10px;font-size:10px;cursor:pointer;">QTD</button>
+          <button onclick="acctLedgerQuickRange('last30')" style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:4px 10px;font-size:10px;cursor:pointer;">30일</button>
+          <button onclick="acctLedgerQuickRange('all')" style="background:#f0f4f8;border:1px solid #d1d5db;border-radius:4px;padding:4px 10px;font-size:10px;cursor:pointer;">전체</button>
+        </div>
+
+        <div style="flex:1;"></div>
+
+        <input type="text" id="acct-ledger-search" placeholder="🔍 설명/JE# 검색..." oninput="renderAccountDetailLedger()"
+          style="width:180px;padding:5px 10px;border:1px solid #e5e7eb;border-radius:4px;font-size:11px;">
+
+        <button onclick="printAccountDetailLedger()" style="background:#166534;color:#fff;border:none;border-radius:4px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;">🖨 Print</button>
+      </div>
+
+      <!-- 요약 바 -->
+      <div id="acct-ledger-summary" style="padding:10px 20px;background:#fffbeb;border-bottom:1px solid #fde68a;display:grid;grid-template-columns:repeat(5,1fr);gap:12px;flex-shrink:0;">
+        <div><div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;">Beginning Balance</div><div id="acct-beg-bal" style="font-size:14px;font-weight:800;color:#0f2744;font-family:'IBM Plex Mono',monospace;margin-top:2px;">—</div></div>
+        <div><div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;">Period Debits</div><div id="acct-period-dr" style="font-size:14px;font-weight:800;color:#1a56a0;font-family:'IBM Plex Mono',monospace;margin-top:2px;">—</div></div>
+        <div><div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;">Period Credits</div><div id="acct-period-cr" style="font-size:14px;font-weight:800;color:#dc2626;font-family:'IBM Plex Mono',monospace;margin-top:2px;">—</div></div>
+        <div><div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;">Ending Balance</div><div id="acct-end-bal" style="font-size:16px;font-weight:900;color:#15803d;font-family:'IBM Plex Mono',monospace;margin-top:2px;">—</div></div>
+        <div><div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;">Transactions</div><div id="acct-txn-count" style="font-size:14px;font-weight:800;color:#374151;font-family:'IBM Plex Mono',monospace;margin-top:2px;">—</div></div>
+      </div>
+
+      <!-- 거래 테이블 -->
+      <div style="flex:1;overflow:auto;">
+        <table class="tbl" id="acct-ledger-table" style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="background:#0f2744;color:#fff;position:sticky;top:0;z-index:10;">
+              <th style="padding:8px 10px;text-align:left;width:95px;">Date</th>
+              <th style="padding:8px 10px;text-align:left;width:110px;">JE #</th>
+              <th style="padding:8px 10px;text-align:left;">Description</th>
+              <th style="padding:8px 10px;text-align:left;width:110px;">Source</th>
+              <th style="padding:8px 10px;text-align:right;width:110px;color:#93c5fd;">Debit</th>
+              <th style="padding:8px 10px;text-align:right;width:110px;color:#fca5a5;">Credit</th>
+              <th style="padding:8px 10px;text-align:right;width:130px;color:#fde68a;">Running Balance</th>
+              <th style="padding:8px 10px;width:80px;text-align:center;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="acct-ledger-tbody"><tr><td colspan="8" class="empty" style="padding:40px;">Loading...</td></tr></tbody>
+        </table>
+      </div>
+
+      <!-- 푸터 -->
+      <div style="padding:10px 20px;border-top:1px solid #e5e7eb;background:#f8fafc;border-radius:0 0 12px 12px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+        <div style="font-size:11px;color:#6b7280;">
+          💡 <strong>행 클릭</strong> → JE 상세 / <strong>Edit</strong> → 분개 수정 / <strong>✕</strong> → JE 전체 삭제
+        </div>
+        <button onclick="document.getElementById('acct-detail-modal').remove()" style="padding:7px 20px;border:1px solid #d1d5db;border-radius:5px;background:#fff;font-size:12px;cursor:pointer;">닫기</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  await reloadAccountDetailLedger();
+}
+
+async function reloadAccountDetailLedger() {
+  const code = _acctDetailState.code;
+  if (!code) return;
+  const fromEl = document.getElementById('acct-ledger-from');
+  const toEl = document.getElementById('acct-ledger-to');
+  _acctDetailState.fromDate = fromEl?.value || _acctDetailState.fromDate;
+  _acctDetailState.toDate = toEl?.value || _acctDetailState.toDate;
+
+  const tbody = document.getElementById('acct-ledger-tbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty" style="padding:40px;">Loading...</td></tr>';
+
+  // 1. Beginning Balance 계산: fromDate 이전의 모든 JE 라인 합산
+  // (posted 상태만 — void는 제외)
+  const { data: priorLines } = await db.from('journal_lines')
+    .select('debit, credit, journal_entries!inner(entry_date, status)')
+    .eq('account_code', code)
+    .lt('journal_entries.entry_date', _acctDetailState.fromDate)
+    .neq('journal_entries.status', 'void');
+
+  let begBal = 0;
+  (priorLines||[]).forEach(l => {
+    begBal += (parseFloat(l.debit)||0) - (parseFloat(l.credit)||0);
+  });
+  _acctDetailState.beginningBalance = begBal;
+
+  // 2. 기간 내 JE 라인 (void 제외)
+  const { data: lines } = await db.from('journal_lines')
+    .select('id, journal_entry_id, account_code, debit, credit, description, journal_entries!inner(id, entry_number, entry_date, description, source, source_id, status)')
+    .eq('account_code', code)
+    .gte('journal_entries.entry_date', _acctDetailState.fromDate)
+    .lte('journal_entries.entry_date', _acctDetailState.toDate)
+    .neq('journal_entries.status', 'void')
+    .order('journal_entries(entry_date)', { ascending: true })
+    .order('journal_entries(entry_number)', { ascending: true });
+
+  _acctDetailState.entries = lines || [];
+
+  renderAccountDetailLedger();
+}
+
+function renderAccountDetailLedger() {
+  const tbody = document.getElementById('acct-ledger-tbody');
+  if (!tbody) return;
+
+  const fmt = n => (n === 0 || isNaN(n)) ? '—' : '$' + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const fmtSigned = n => {
+    if (n === 0 || isNaN(n)) return '$0.00';
+    const sign = n < 0 ? '-' : '';
+    return sign + '$' + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits:2});
+  };
+
+  const acct = _glAccounts.find(a => a.code === _acctDetailState.code);
+  const q = (document.getElementById('acct-ledger-search')?.value || '').toLowerCase().trim();
+
+  let running = _acctDetailState.beginningBalance;
+  let periodDR = 0, periodCR = 0;
+
+  // 검색 필터 적용 전 전체 running balance를 먼저 계산하기 위해 모든 행에 running을 미리 계산
+  const allRows = _acctDetailState.entries.map(l => {
+    const dr = parseFloat(l.debit)||0;
+    const cr = parseFloat(l.credit)||0;
+    running += dr - cr;
+    periodDR += dr;
+    periodCR += cr;
+    return { ...l, _running: running };
+  });
+
+  // 검색 필터 적용
+  const visibleRows = q ? allRows.filter(l => {
+    const je = l.journal_entries || {};
+    return (je.entry_number||'').toLowerCase().includes(q)
+      || (je.description||'').toLowerCase().includes(q)
+      || (l.description||'').toLowerCase().includes(q)
+      || (je.source||'').toLowerCase().includes(q);
+  }) : allRows;
+
+  // 요약 업데이트
+  document.getElementById('acct-beg-bal').textContent = fmtSigned(_acctDetailState.beginningBalance);
+  document.getElementById('acct-period-dr').textContent = fmt(periodDR);
+  document.getElementById('acct-period-cr').textContent = fmt(periodCR);
+  document.getElementById('acct-end-bal').textContent = fmtSigned(running);
+  document.getElementById('acct-txn-count').textContent = allRows.length + (q && visibleRows.length !== allRows.length ? ` (필터: ${visibleRows.length})` : '');
+
+  if (visibleRows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty" style="padding:40px;">${q ? '검색 결과 없음' : '해당 기간에 거래 없음'}</td></tr>`;
+    // Beginning balance row only
+    if (!q) {
+      tbody.innerHTML = `<tr style="background:#fef3c7;border-bottom:2px solid #fbbf24;font-weight:700;">
+        <td style="padding:8px 10px;font-size:11px;color:#92400e;">${_acctDetailState.fromDate}</td>
+        <td style="padding:8px 10px;color:#92400e;font-size:10px;">—</td>
+        <td style="padding:8px 10px;color:#92400e;font-style:italic;">Beginning Balance</td>
+        <td style="padding:8px 10px;"></td>
+        <td style="padding:8px 10px;text-align:right;color:#92400e;">—</td>
+        <td style="padding:8px 10px;text-align:right;color:#92400e;">—</td>
+        <td style="padding:8px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#92400e;font-weight:800;">${fmtSigned(_acctDetailState.beginningBalance)}</td>
+        <td></td>
+      </tr>
+      <tr><td colspan="8" class="empty" style="padding:40px;">해당 기간에 거래 없음</td></tr>`;
+    }
+    return;
+  }
+
+  const sourceColors = {
+    'ap_invoice': {bg:'#fef2f2', fg:'#991b1b', label:'AP INV'},
+    'ap_payment': {bg:'#f0fdf4', fg:'#166534', label:'AP PAY'},
+    'ar_invoice': {bg:'#eff6ff', fg:'#1e40af', label:'AR INV'},
+    'ar_payment': {bg:'#f0fdf4', fg:'#166534', label:'AR PAY'},
+    'manual':     {bg:'#f8fafc', fg:'#374151', label:'MANUAL'},
+  };
+
+  let html = '';
+
+  // Beginning Balance 행
+  if (!q) {
+    html += `<tr style="background:#fef3c7;border-bottom:2px solid #fbbf24;font-weight:700;">
+      <td style="padding:8px 10px;font-size:11px;color:#92400e;">${_acctDetailState.fromDate}</td>
+      <td style="padding:8px 10px;color:#92400e;font-size:10px;">—</td>
+      <td style="padding:8px 10px;color:#92400e;font-style:italic;">Beginning Balance as of ${_acctDetailState.fromDate}</td>
+      <td style="padding:8px 10px;"></td>
+      <td style="padding:8px 10px;text-align:right;color:#92400e;">—</td>
+      <td style="padding:8px 10px;text-align:right;color:#92400e;">—</td>
+      <td style="padding:8px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#92400e;font-weight:800;font-size:12px;">${fmtSigned(_acctDetailState.beginningBalance)}</td>
+      <td></td>
+    </tr>`;
+  }
+
+  // 거래 행
+  visibleRows.forEach(l => {
+    const je = l.journal_entries || {};
+    const dr = parseFloat(l.debit)||0;
+    const cr = parseFloat(l.credit)||0;
+    const src = sourceColors[je.source] || {bg:'#f8fafc', fg:'#374151', label:(je.source||'—').toUpperCase()};
+
+    html += `<tr style="border-bottom:1px solid #f0f0f0;cursor:pointer;" onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background=''" onclick="openJEFromLedger('${je.id}','${je.source||''}','${je.source_id||''}')">
+      <td style="padding:6px 10px;font-size:11px;white-space:nowrap;">${je.entry_date||''}</td>
+      <td style="padding:6px 10px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#1a56a0;font-weight:700;">${je.entry_number||'—'}</td>
+      <td style="padding:6px 10px;font-size:11px;">
+        <div style="color:#111;">${je.description||''}</div>
+        ${l.description ? `<div style="color:#6b7280;font-size:10px;margin-top:1px;">${l.description}</div>` : ''}
+      </td>
+      <td style="padding:6px 10px;"><span style="background:${src.bg};color:${src.fg};border:1px solid ${src.fg}33;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:0.3px;">${src.label}</span></td>
+      <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${dr>0?'#1a56a0':'#d1d5db'};font-weight:${dr>0?700:400};">${fmt(dr)}</td>
+      <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${cr>0?'#dc2626':'#d1d5db'};font-weight:${cr>0?700:400};">${fmt(cr)}</td>
+      <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:${l._running>=0?'#0f2744':'#dc2626'};">${fmtSigned(l._running)}</td>
+      <td style="padding:6px 6px;text-align:center;">
+        <button onclick="event.stopPropagation();editJEFromLedger('${je.id}')" title="JE 편집" style="background:#fff7ed;color:#c2410c;border:1px solid #fdba74;border-radius:3px;padding:2px 6px;font-size:10px;cursor:pointer;margin-right:2px;">✏</button>
+        <button onclick="event.stopPropagation();deleteJEFromLedger('${je.id}','${(je.entry_number||'').replace(/'/g,'')}')" title="JE 삭제" style="background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:3px;padding:2px 6px;font-size:10px;cursor:pointer;">✕</button>
+      </td>
+    </tr>`;
+  });
+
+  // Ending Balance 행
+  if (!q) {
+    html += `<tr style="background:#dcfce7;border-top:2px solid #16a34a;font-weight:700;">
+      <td style="padding:8px 10px;font-size:11px;color:#14532d;">${_acctDetailState.toDate}</td>
+      <td style="padding:8px 10px;"></td>
+      <td style="padding:8px 10px;color:#14532d;font-style:italic;">Ending Balance as of ${_acctDetailState.toDate}</td>
+      <td></td>
+      <td style="padding:8px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#166534;">${fmt(periodDR)}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#166534;">${fmt(periodCR)}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#14532d;font-weight:900;font-size:13px;">${fmtSigned(running)}</td>
+      <td></td>
+    </tr>`;
+  }
+
+  tbody.innerHTML = html;
+}
+
+function acctLedgerQuickRange(range) {
+  const now = new Date();
+  const toEl = document.getElementById('acct-ledger-to');
+  const fromEl = document.getElementById('acct-ledger-from');
+  if (!toEl || !fromEl) return;
+
+  const iso = d => d.toISOString().slice(0,10);
+
+  if (range === 'ytd') {
+    fromEl.value = `${now.getFullYear()}-01-01`;
+    toEl.value = iso(now);
+  } else if (range === 'mtd') {
+    fromEl.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+    toEl.value = iso(now);
+  } else if (range === 'qtd') {
+    const q = Math.floor(now.getMonth() / 3);
+    const qStartMonth = q * 3;
+    fromEl.value = `${now.getFullYear()}-${String(qStartMonth+1).padStart(2,'0')}-01`;
+    toEl.value = iso(now);
+  } else if (range === 'last30') {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 30);
+    fromEl.value = iso(d);
+    toEl.value = iso(now);
+  } else if (range === 'all') {
+    fromEl.value = '2000-01-01';
+    toEl.value = iso(now);
+  }
+  reloadAccountDetailLedger();
+}
+
+async function openJEFromLedger(jeId, source, sourceId) {
+  // 소스 타입에 따라 해당 모듈의 상세로 연결
+  if (source === 'ap_invoice' && sourceId) {
+    document.getElementById('acct-detail-modal')?.remove();
+    viewAPInvoice(sourceId);
+    return;
+  }
+  // 그 외에는 JE 보기 모달
+  if (typeof viewJE === 'function') viewJE(jeId);
+  else if (typeof openJEModal === 'function') openJEModal(jeId);
+}
+
+async function editJEFromLedger(jeId) {
+  // JE 직접 편집 모달 열기 (기존 openJEModal은 편집 모드 지원 여부 확인)
+  if (typeof openJEModal === 'function') {
+    openJEModal(jeId);
+  } else {
+    showToast('JE 편집 기능을 호출할 수 없음');
+  }
+}
+
+async function deleteJEFromLedger(jeId, entryNumber) {
+  if (!confirm(`⚠️ Journal Entry "${entryNumber}"를 삭제하시겠습니까?\n\n• 모든 JE 라인이 삭제됩니다\n• 관련 원본 거래(AP Invoice/Payment 등)의 journal_entry_id는 무효화됩니다\n\n계속하시겠습니까?`)) return;
+
+  try {
+    showToast('🗑 삭제 중...');
+
+    // 연결된 AP/AR 레코드에서 journal_entry_id 클리어
+    await db.from('ap_invoices').update({ journal_entry_id: null }).eq('journal_entry_id', jeId);
+    await db.from('ap_payments').update({ journal_entry_id: null }).eq('journal_entry_id', jeId);
+
+    // JE 라인 삭제
+    await db.from('journal_lines').delete().eq('journal_entry_id', jeId);
+    // JE 삭제
+    await db.from('journal_entries').delete().eq('id', jeId);
+
+    showToast('✅ JE 삭제 완료');
+    await loadGL();
+    await reloadAccountDetailLedger();
+  } catch(e) {
+    showToast('❌ 삭제 실패: ' + e.message);
+    console.error(e);
+  }
+}
+
+function printAccountDetailLedger() {
+  const acct = _glAccounts.find(a => a.code === _acctDetailState.code);
+  if (!acct) return;
+
+  const fmt = n => (n === 0 || isNaN(n)) ? '—' : '$' + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits:2});
+  const fmtSigned = n => (n<0?'-':'') + '$' + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits:2});
+
+  let running = _acctDetailState.beginningBalance;
+  let periodDR = 0, periodCR = 0;
+  const rowsHTML = _acctDetailState.entries.map(l => {
+    const je = l.journal_entries || {};
+    const dr = parseFloat(l.debit)||0;
+    const cr = parseFloat(l.credit)||0;
+    running += dr - cr;
+    periodDR += dr;
+    periodCR += cr;
+    return `<tr>
+      <td>${je.entry_date||''}</td>
+      <td>${je.entry_number||''}</td>
+      <td>${(je.description||'').replace(/</g,'&lt;')}</td>
+      <td>${je.source||''}</td>
+      <td class="num">${fmt(dr)}</td>
+      <td class="num">${fmt(cr)}</td>
+      <td class="num"><strong>${fmtSigned(running)}</strong></td>
+    </tr>`;
+  }).join('');
+
+  const win = window.open('', '_blank');
+  if (!win) { showToast('❌ 팝업 차단됨'); return; }
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>Account Detail — ${acct.code}</title>
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 10px; color: #000; margin: 20px; }
+      h2 { font-size: 14px; margin: 0 0 4px; }
+      .sub { color: #666; font-size: 10px; margin-bottom: 12px; }
+      .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; border: 1px solid #ccc; padding: 8px; background: #f9f9f9; }
+      .summary > div { font-size: 9px; }
+      .summary strong { font-size: 12px; display: block; margin-top: 2px; }
+      table { width: 100%; border-collapse: collapse; }
+      th { background: #0f2744; color: #fff; padding: 5px 6px; text-align: left; font-size: 9px; }
+      td { padding: 4px 6px; border-bottom: 1px solid #eee; font-size: 9px; }
+      .num { text-align: right; font-family: monospace; }
+      .beg { background: #fef3c7; font-weight: 700; }
+      .end { background: #dcfce7; font-weight: 700; }
+      @media print { body { margin: 10px; } }
+    </style></head><body>
+    <h2>PEACE TEXTILE AMERICA, INC. — Account Detail Ledger</h2>
+    <div class="sub"><strong>${acct.code} — ${acct.name}</strong> (${acct.type}) &nbsp;·&nbsp; ${_acctDetailState.fromDate} to ${_acctDetailState.toDate}</div>
+    <div class="summary">
+      <div>Beginning Balance<strong>${fmtSigned(_acctDetailState.beginningBalance)}</strong></div>
+      <div>Period Debits<strong>${fmt(periodDR)}</strong></div>
+      <div>Period Credits<strong>${fmt(periodCR)}</strong></div>
+      <div>Ending Balance<strong>${fmtSigned(running)}</strong></div>
+    </div>
+    <table>
+      <thead><tr>
+        <th style="width:70px;">Date</th><th style="width:90px;">JE #</th>
+        <th>Description</th><th style="width:70px;">Source</th>
+        <th class="num" style="width:80px;">Debit</th><th class="num" style="width:80px;">Credit</th>
+        <th class="num" style="width:100px;">Balance</th>
+      </tr></thead>
+      <tbody>
+        <tr class="beg"><td>${_acctDetailState.fromDate}</td><td>—</td><td><em>Beginning Balance</em></td><td></td><td class="num">—</td><td class="num">—</td><td class="num">${fmtSigned(_acctDetailState.beginningBalance)}</td></tr>
+        ${rowsHTML}
+        <tr class="end"><td>${_acctDetailState.toDate}</td><td></td><td><em>Ending Balance</em></td><td></td><td class="num">${fmt(periodDR)}</td><td class="num">${fmt(periodCR)}</td><td class="num">${fmtSigned(running)}</td></tr>
+      </tbody>
+    </table>
+    <script>window.onload=function(){window.print();}<\/script>
+  </body></html>`);
+  win.document.close();
 }
 
 // ══════════════════════════════════════════════════════════════
