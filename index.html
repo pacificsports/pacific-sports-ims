@@ -1919,7 +1919,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     </div>
 
     <!-- ── JE 상세보기 모달 ── -->
-    <div id="je-view-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+    <div id="je-view-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000001;align-items:center;justify-content:center;">
       <div style="background:#fff;border-radius:12px;width:700px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
         <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
           <span style="color:#fff;font-weight:800;font-size:15px;">📝 Journal Entry Detail</span>
@@ -33300,7 +33300,7 @@ async function openAccountDetailLedger(accountCode, fromDate, toDate) {
       <!-- 푸터 -->
       <div style="padding:10px 20px;border-top:1px solid #e5e7eb;background:#f8fafc;border-radius:0 0 12px 12px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
         <div style="font-size:11px;color:#6b7280;">
-          💡 <strong>행 클릭</strong> → JE 상세 / <strong>Edit</strong> → 분개 수정 / <strong>✕</strong> → JE 전체 삭제
+          💡 <strong>행 클릭</strong> → JE 상세 / <strong>📋</strong> → 원본 거래 / <strong>✏</strong> → 분개 수정 / <strong>✕</strong> → JE 전체 삭제
         </div>
         <button onclick="document.getElementById('acct-detail-modal').remove()" style="padding:7px 20px;border:1px solid #d1d5db;border-radius:5px;background:#fff;font-size:12px;cursor:pointer;">닫기</button>
       </div>
@@ -33454,7 +33454,8 @@ function renderAccountDetailLedger() {
       <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${dr>0?'#1a56a0':'#d1d5db'};font-weight:${dr>0?700:400};">${fmt(dr)}</td>
       <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${cr>0?'#dc2626':'#d1d5db'};font-weight:${cr>0?700:400};">${fmt(cr)}</td>
       <td style="padding:6px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:${l._running>=0?'#0f2744':'#dc2626'};">${fmtSigned(l._running)}</td>
-      <td style="padding:6px 6px;text-align:center;">
+      <td style="padding:6px 6px;text-align:center;white-space:nowrap;">
+        ${je.source_id ? `<button onclick="event.stopPropagation();openSourceFromLedger('${je.source||''}','${je.source_id||''}')" title="원본 거래 보기" style="background:#f0f7ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:2px 6px;font-size:10px;cursor:pointer;margin-right:2px;">📋</button>` : ''}
         <button onclick="event.stopPropagation();editJEFromLedger('${je.id}')" title="JE 편집" style="background:#fff7ed;color:#c2410c;border:1px solid #fdba74;border-radius:3px;padding:2px 6px;font-size:10px;cursor:pointer;margin-right:2px;">✏</button>
         <button onclick="event.stopPropagation();deleteJEFromLedger('${je.id}','${(je.entry_number||'').replace(/'/g,'')}')" title="JE 삭제" style="background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;border-radius:3px;padding:2px 6px;font-size:10px;cursor:pointer;">✕</button>
       </td>
@@ -33510,15 +33511,31 @@ function acctLedgerQuickRange(range) {
 }
 
 async function openJEFromLedger(jeId, source, sourceId) {
-  // 소스 타입에 따라 해당 모듈의 상세로 연결
+  // 기본 동작: JE 자체를 먼저 보여주기 (entry_date 확인 가능)
+  if (typeof viewJE === 'function') {
+    await viewJE(jeId);
+  } else {
+    showToast('JE 뷰어를 찾을 수 없음');
+  }
+}
+
+async function openSourceFromLedger(source, sourceId) {
+  // 원본 거래(AP Invoice 등)로 이동
   if (source === 'ap_invoice' && sourceId) {
     document.getElementById('acct-detail-modal')?.remove();
     viewAPInvoice(sourceId);
     return;
   }
-  // 그 외에는 JE 보기 모달
-  if (typeof viewJE === 'function') viewJE(jeId);
-  else if (typeof openJEModal === 'function') openJEModal(jeId);
+  if (source === 'ap_payment' && sourceId) {
+    // ap_payment의 source_id는 ap_invoice_id일 수 있음 — ap_payments 조회
+    const { data: pmt } = await db.from('ap_payments').select('ap_invoice_id').eq('id', sourceId).single();
+    if (pmt?.ap_invoice_id) {
+      document.getElementById('acct-detail-modal')?.remove();
+      viewAPInvoice(pmt.ap_invoice_id);
+      return;
+    }
+  }
+  showToast('원본 거래로 이동 불가');
 }
 
 async function editJEFromLedger(jeId) {
