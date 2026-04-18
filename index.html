@@ -2048,7 +2048,33 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button class="btn" style="background:#7f1d1d;color:#fff;border-color:#7f1d1d;font-weight:700;" onclick="document.getElementById('ap-parse-input').click()">📎 Parse Invoices</button>
         <input type="file" id="ap-parse-input" accept=".pdf,.png,.jpg,.jpeg" multiple style="display:none;" onchange="parseAPInvoicesBatch(this)">
         <button class="btn" onclick="openVendorModal()">🏢 Vendors</button>
-        <button class="btn" style="background:#166534;color:#fff;border-color:#166534;font-weight:700;" onclick="exportAPInvoicesCSV()">📥 Export CSV</button>
+        <div style="position:relative;display:inline-block;" id="ap-export-wrapper">
+          <button class="btn" style="background:#166534;color:#fff;border-color:#166534;font-weight:700;" onclick="toggleAPExportMenu(event)">📥 Export ▾</button>
+          <div id="ap-export-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.15);min-width:280px;z-index:1000;overflow:hidden;">
+            <div style="padding:8px 12px;background:#f0fdf4;border-bottom:1px solid #e5e7eb;font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:0.5px;">📊 데이터 이관용 (Migration)</div>
+            <div onclick="document.getElementById('ap-export-menu').style.display='none';exportAPInvoicesCSV()"
+              style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+              <div style="font-size:12px;font-weight:700;color:#166534;">📄 CSV 다운로드 (3개 파일)</div>
+              <div style="font-size:10px;color:#6b7280;margin-top:2px;">Excel/Google Sheets에서 열림 · 대부분의 ERP import 지원</div>
+            </div>
+            <div onclick="document.getElementById('ap-export-menu').style.display='none';exportAPInvoicesXLSX()"
+              style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+              <div style="font-size:12px;font-weight:700;color:#166534;">📊 Excel 다운로드 (.xlsx, 여러 시트)</div>
+              <div style="font-size:10px;color:#6b7280;margin-top:2px;">한 파일에 Invoices/Payments/Summary 시트 정리</div>
+            </div>
+            <div onclick="document.getElementById('ap-export-menu').style.display='none';exportAPInvoicesJSON()"
+              style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #e5e7eb;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+              <div style="font-size:12px;font-weight:700;color:#166534;">🔄 JSON 백업</div>
+              <div style="font-size:10px;color:#6b7280;margin-top:2px;">시스템 간 이관 · 개발자용 완전 백업</div>
+            </div>
+            <div style="padding:8px 12px;background:#fffbeb;border-bottom:1px solid #e5e7eb;font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.5px;">🖨 인쇄/감사용</div>
+            <div onclick="document.getElementById('ap-export-menu').style.display='none';exportAllAPInvoicesPDFZip()"
+              style="padding:10px 14px;cursor:pointer;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+              <div style="font-size:12px;font-weight:700;color:#92400e;">📦 모든 Invoice PDF (ZIP)</div>
+              <div style="font-size:10px;color:#6b7280;margin-top:2px;">인보이스마다 PDF 한 장씩 · ZIP으로 묶어 다운로드</div>
+            </div>
+          </div>
+        </div>
         <button class="btn" onclick="loadAP()">🔄 Refresh</button>
       </div>
 
@@ -2668,6 +2694,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div style="background:#7f1d1d;border-radius:12px 12px 0 0;padding:13px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
           <span style="color:#fff;font-weight:800;font-size:15px;">🧾 AP Invoice 상세</span>
           <div style="display:flex;gap:8px;align-items:center;">
+            <button id="ap-inv-pdf-btn" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">📄 PDF</button>
             <button id="ap-inv-edit-btn" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">✏️ Edit</button>
             <button id="ap-inv-void-btn" style="background:rgba(220,38,38,0.2);border:1px solid rgba(220,38,38,0.4);color:#fca5a5;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">🚫 Void</button>
             <button onclick="document.getElementById('ap-inv-detail-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fca5a5;">✕</button>
@@ -31654,6 +31681,520 @@ function downloadCSV(filename, csvContent) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function toggleAPExportMenu(e) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('ap-export-menu');
+  if (!menu) return;
+  const willShow = menu.style.display === 'none';
+  menu.style.display = willShow ? 'block' : 'none';
+  if (willShow) {
+    // 메뉴 바깥 클릭 시 닫기
+    setTimeout(() => {
+      const closeMenu = (ev) => {
+        if (!document.getElementById('ap-export-wrapper')?.contains(ev.target)) {
+          menu.style.display = 'none';
+          document.removeEventListener('click', closeMenu);
+        }
+      };
+      document.addEventListener('click', closeMenu);
+    }, 10);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// AP EXPORT — Excel (.xlsx) 형식
+// ══════════════════════════════════════════════════════════════
+async function exportAPInvoicesXLSX() {
+  try {
+    showToast('📊 Excel 파일 생성 중...');
+
+    // SheetJS 동적 import
+    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs');
+
+    const { data: invoices } = await db.from('ap_invoices').select('*').order('invoice_date', { ascending: true });
+    const { data: lines } = await db.from('ap_invoice_lines').select('*');
+    const { data: payments } = await db.from('ap_payments').select('*');
+    const { data: vendors } = await db.from('vendors').select('*');
+
+    if (!invoices || invoices.length === 0) {
+      showToast('❌ Export 할 인보이스가 없습니다.');
+      return;
+    }
+
+    // 인덱싱
+    const linesByInv = {};
+    (lines||[]).forEach(l => {
+      if (!linesByInv[l.ap_invoice_id]) linesByInv[l.ap_invoice_id] = [];
+      linesByInv[l.ap_invoice_id].push(l);
+    });
+    const pmtsByInv = {};
+    (payments||[]).forEach(p => {
+      if (!pmtsByInv[p.ap_invoice_id]) pmtsByInv[p.ap_invoice_id] = [];
+      pmtsByInv[p.ap_invoice_id].push(p);
+    });
+    const invById = {};
+    invoices.forEach(i => { invById[i.id] = i; });
+
+    const wb = XLSX.utils.book_new();
+
+    // ── Sheet 1: Summary ──
+    const summaryRows = invoices.map(inv => {
+      const total = parseFloat(inv.total_amount)||0;
+      const paid = parseFloat(inv.paid_amount)||0;
+      return {
+        'Invoice #': inv.invoice_number,
+        'Vendor': inv.vendor_name,
+        'Invoice Date': inv.invoice_date,
+        'Due Date': inv.due_date,
+        'Terms': inv.terms,
+        'Status': inv.status,
+        'Total Amount': total,
+        'Paid Amount': paid,
+        'Balance': total - paid,
+        'Line Count': (linesByInv[inv.id]||[]).length,
+        'Payment Count': (pmtsByInv[inv.id]||[]).length,
+        'Description': inv.description||'',
+        'Invoice ID': inv.id,
+        'JE ID': inv.journal_entry_id||''
+      };
+    });
+    const ws1 = XLSX.utils.json_to_sheet(summaryRows);
+    ws1['!cols'] = [
+      {wch:18},{wch:32},{wch:12},{wch:12},{wch:10},{wch:10},
+      {wch:14},{wch:14},{wch:14},{wch:8},{wch:8},{wch:30},{wch:36},{wch:36}
+    ];
+    XLSX.utils.book_append_sheet(wb, ws1, 'Summary');
+
+    // ── Sheet 2: Invoice Lines (상세) ──
+    const lineRows = [];
+    invoices.forEach(inv => {
+      const invLines = linesByInv[inv.id] || [];
+      if (invLines.length === 0) {
+        lineRows.push({
+          'Invoice #': inv.invoice_number,
+          'Vendor': inv.vendor_name,
+          'Invoice Date': inv.invoice_date,
+          'Due Date': inv.due_date,
+          'Line Account': '',
+          'Line Description': '',
+          'Line Amount': 0,
+          'Invoice Total': parseFloat(inv.total_amount)||0,
+          'Status': inv.status
+        });
+      } else {
+        invLines.forEach(l => {
+          lineRows.push({
+            'Invoice #': inv.invoice_number,
+            'Vendor': inv.vendor_name,
+            'Invoice Date': inv.invoice_date,
+            'Due Date': inv.due_date,
+            'Line Account': l.account_code,
+            'Line Description': l.description||'',
+            'Line Amount': parseFloat(l.amount)||0,
+            'Invoice Total': parseFloat(inv.total_amount)||0,
+            'Status': inv.status
+          });
+        });
+      }
+    });
+    const ws2 = XLSX.utils.json_to_sheet(lineRows);
+    ws2['!cols'] = [{wch:18},{wch:32},{wch:12},{wch:12},{wch:14},{wch:30},{wch:14},{wch:14},{wch:10}];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Invoice Lines');
+
+    // ── Sheet 3: Payments ──
+    const pmtRows = (payments||[]).map(p => {
+      const inv = invById[p.ap_invoice_id];
+      return {
+        'Payment Date': p.payment_date,
+        'Invoice #': inv?.invoice_number||'',
+        'Vendor': p.vendor_name,
+        'Method': p.method,
+        'Reference': p.reference||'',
+        'Amount': parseFloat(p.amount)||0,
+        'Payment ID': p.id,
+        'JE ID': p.journal_entry_id||'',
+        'Created At': p.created_at
+      };
+    });
+    const ws3 = XLSX.utils.json_to_sheet(pmtRows);
+    ws3['!cols'] = [{wch:12},{wch:18},{wch:32},{wch:12},{wch:16},{wch:14},{wch:36},{wch:36},{wch:20}];
+    XLSX.utils.book_append_sheet(wb, ws3, 'Payments');
+
+    // ── Sheet 4: Vendors ──
+    if (vendors && vendors.length) {
+      const vendorRows = vendors.map(v => ({
+        'Vendor Name': v.name,
+        'Default Account': v.default_account_code||'',
+        'Address': v.address||'',
+        'City': v.city||'',
+        'State': v.state||'',
+        'Zip': v.zip||'',
+        'Phone': v.phone||'',
+        'Email': v.email||'',
+        'Vendor ID': v.id
+      }));
+      const ws4 = XLSX.utils.json_to_sheet(vendorRows);
+      ws4['!cols'] = [{wch:32},{wch:14},{wch:40},{wch:16},{wch:6},{wch:10},{wch:16},{wch:28},{wch:36}];
+      XLSX.utils.book_append_sheet(wb, ws4, 'Vendors');
+    }
+
+    const today = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `AP_Full_Export_${today}.xlsx`);
+
+    showToast(`✅ Excel Export 완료! (${invoices.length}건 인보이스)`);
+  } catch(e) {
+    showToast('❌ Excel Export 실패: ' + e.message);
+    console.error(e);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// AP EXPORT — JSON 백업
+// ══════════════════════════════════════════════════════════════
+async function exportAPInvoicesJSON() {
+  try {
+    showToast('🔄 JSON 백업 생성 중...');
+
+    const [invRes, lineRes, pmtRes, vendorRes] = await Promise.all([
+      db.from('ap_invoices').select('*').order('invoice_date', { ascending: true }),
+      db.from('ap_invoice_lines').select('*'),
+      db.from('ap_payments').select('*'),
+      db.from('vendors').select('*')
+    ]);
+
+    const invoices = invRes.data || [];
+    const lines = lineRes.data || [];
+    const payments = pmtRes.data || [];
+    const vendors = vendorRes.data || [];
+
+    // 관련 JE 로드 (invoice에 연결된 것만)
+    const jeIds = [
+      ...invoices.map(i => i.journal_entry_id),
+      ...payments.map(p => p.journal_entry_id)
+    ].filter(Boolean);
+    const uniqueJeIds = [...new Set(jeIds)];
+
+    let journalEntries = [];
+    let journalLines = [];
+    if (uniqueJeIds.length) {
+      const { data: jes } = await db.from('journal_entries').select('*').in('id', uniqueJeIds);
+      const { data: jls } = await db.from('journal_lines').select('*').in('journal_entry_id', uniqueJeIds);
+      journalEntries = jes || [];
+      journalLines = jls || [];
+    }
+
+    const backup = {
+      metadata: {
+        export_date: new Date().toISOString(),
+        export_version: '1.0',
+        source_system: 'Pacific Sports IMS',
+        invoice_count: invoices.length,
+        payment_count: payments.length,
+        vendor_count: vendors.length,
+        je_count: journalEntries.length,
+        description: 'Complete AP module backup — all AP invoices, lines, payments, vendors, and related journal entries'
+      },
+      ap_invoices: invoices,
+      ap_invoice_lines: lines,
+      ap_payments: payments,
+      vendors: vendors,
+      journal_entries: journalEntries,
+      journal_lines: journalLines
+    };
+
+    const json = JSON.stringify(backup, null, 2);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `AP_Full_Backup_${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    showToast(`✅ JSON 백업 완료! (${invoices.length}건 인보이스, ${journalEntries.length}건 JE 포함)`);
+  } catch(e) {
+    showToast('❌ JSON Export 실패: ' + e.message);
+    console.error(e);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 개별 AP Invoice PDF 다운로드
+// ══════════════════════════════════════════════════════════════
+function buildAPInvoicePDFHtml(inv, invLines, invPmts) {
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  const total = parseFloat(inv.total_amount)||0;
+  const paid = parseFloat(inv.paid_amount)||0;
+  const balance = total - paid;
+
+  const linesHTML = (invLines||[]).map(l => `
+    <tr>
+      <td style="padding:8px 10px;font-family:monospace;font-size:11px;border-bottom:1px solid #eee;">${l.account_code||''}</td>
+      <td style="padding:8px 10px;font-size:11px;border-bottom:1px solid #eee;">${(l.description||'').replace(/</g,'&lt;')}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:monospace;font-size:11px;border-bottom:1px solid #eee;font-weight:700;">${fmt(l.amount)}</td>
+    </tr>`).join('') || `<tr><td colspan="3" style="padding:10px;text-align:center;color:#999;font-size:11px;">라인 정보 없음</td></tr>`;
+
+  const pmtHTML = (invPmts||[]).length > 0 ? `
+    <div style="margin-top:20px;">
+      <div style="font-size:10px;font-weight:700;color:#333;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Payment History</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead><tr style="background:#f0fdf4;">
+          <th style="padding:6px 10px;text-align:left;color:#166534;border:1px solid #d1fae5;">Date</th>
+          <th style="padding:6px 10px;text-align:left;color:#166534;border:1px solid #d1fae5;">Method</th>
+          <th style="padding:6px 10px;text-align:left;color:#166534;border:1px solid #d1fae5;">Reference</th>
+          <th style="padding:6px 10px;text-align:right;color:#166534;border:1px solid #d1fae5;">Amount</th>
+        </tr></thead>
+        <tbody>
+          ${invPmts.map(p => `<tr>
+            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:10px;">${p.payment_date||''}</td>
+            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-size:10px;text-transform:capitalize;">${p.method||''}</td>
+            <td style="padding:6px 10px;border:1px solid #e5e7eb;font-family:monospace;font-size:10px;">${p.reference||'—'}</td>
+            <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:right;font-family:monospace;font-size:10px;font-weight:700;color:#16a34a;">${fmt(p.amount)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : '';
+
+  const statusColor = {paid:'#16a34a', partial:'#d97706', open:'#1a56a0', void:'#9ca3af'}[inv.status]||'#374151';
+
+  return `
+    <div style="font-family:Arial,sans-serif;padding:32px;color:#111;max-width:780px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0f2744;padding-bottom:12px;margin-bottom:20px;">
+        <div>
+          <div style="font-size:20px;font-weight:800;color:#0f2744;">PEACE TEXTILE AMERICA, INC.</div>
+          <div style="font-size:10px;color:#666;margin-top:3px;">Accounts Payable — Vendor Invoice</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:14px;font-weight:800;color:#0f2744;">INVOICE</div>
+          <div style="font-size:18px;font-weight:800;color:#7f1d1d;font-family:monospace;margin-top:4px;">${inv.invoice_number}</div>
+          <div style="display:inline-block;background:${statusColor}20;color:${statusColor};border:1px solid ${statusColor}40;padding:2px 10px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;margin-top:6px;">${inv.status||'—'}</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
+        <div>
+          <div style="font-size:9px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Vendor</div>
+          <div style="font-size:13px;font-weight:700;">${inv.vendor_name||'—'}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="display:grid;grid-template-columns:auto auto;gap:4px 10px;font-size:11px;justify-content:end;">
+            <span style="color:#666;">Invoice Date:</span><strong>${inv.invoice_date||'—'}</strong>
+            <span style="color:#666;">Due Date:</span><strong style="color:#7f1d1d;">${inv.due_date||'—'}</strong>
+            <span style="color:#666;">Terms:</span><strong>${inv.terms||'—'}</strong>
+          </div>
+        </div>
+      </div>
+
+      ${inv.description ? `<div style="background:#f9fafb;border-left:3px solid #d1d5db;padding:8px 12px;margin-bottom:14px;font-size:11px;color:#374151;">${inv.description}</div>` : ''}
+
+      <div style="font-size:10px;font-weight:700;color:#333;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Invoice Lines</div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:14px;">
+        <thead><tr style="background:#0f2744;color:#fff;">
+          <th style="padding:8px 10px;text-align:left;">Account</th>
+          <th style="padding:8px 10px;text-align:left;">Description</th>
+          <th style="padding:8px 10px;text-align:right;">Amount</th>
+        </tr></thead>
+        <tbody>${linesHTML}</tbody>
+        <tfoot>
+          <tr style="background:#f0f4f8;font-weight:800;">
+            <td colspan="2" style="padding:10px;border-top:2px solid #0f2744;">TOTAL</td>
+            <td style="padding:10px;text-align:right;font-family:monospace;border-top:2px solid #0f2744;color:#7f1d1d;font-size:13px;">${fmt(total)}</td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:16px;">
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;">
+          <div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:1px;">Total</div>
+          <div style="font-size:14px;font-weight:800;font-family:monospace;color:#0f2744;margin-top:3px;">${fmt(total)}</div>
+        </div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px;">
+          <div style="font-size:9px;color:#166534;text-transform:uppercase;letter-spacing:1px;">Paid</div>
+          <div style="font-size:14px;font-weight:800;font-family:monospace;color:#16a34a;margin-top:3px;">${fmt(paid)}</div>
+        </div>
+        <div style="background:${balance>0?'#fef2f2':'#f0fdf4'};border:1px solid ${balance>0?'#fecaca':'#bbf7d0'};border-radius:6px;padding:10px;">
+          <div style="font-size:9px;color:${balance>0?'#991b1b':'#166534'};text-transform:uppercase;letter-spacing:1px;">Balance Due</div>
+          <div style="font-size:14px;font-weight:800;font-family:monospace;color:${balance>0?'#dc2626':'#16a34a'};margin-top:3px;">${fmt(balance)}</div>
+        </div>
+      </div>
+
+      ${pmtHTML}
+
+      <div style="margin-top:30px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:9px;color:#999;text-align:center;">
+        Generated on ${new Date().toLocaleString('ko-KR')} · Pacific Sports IMS · Invoice ID: ${inv.id}
+      </div>
+    </div>`;
+}
+
+async function downloadAPInvoicePDF(invoiceId) {
+  try {
+    showToast('📄 PDF 생성 중...');
+
+    const { data: inv } = await db.from('ap_invoices').select('*').eq('id', invoiceId).single();
+    const { data: lines } = await db.from('ap_invoice_lines').select('*').eq('ap_invoice_id', invoiceId).order('id');
+    const { data: payments } = await db.from('ap_payments').select('*').eq('ap_invoice_id', invoiceId).order('payment_date');
+
+    if (!inv) { showToast('❌ 인보이스 없음'); return; }
+
+    // 임시 렌더링 컨테이너
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed;left:-9999px;top:0;background:#fff;width:820px;';
+    container.innerHTML = buildAPInvoicePDFHtml(inv, lines||[], payments||[]);
+    document.body.appendChild(container);
+
+    const { jsPDF } = window.jspdf;
+    const canvas = await html2canvas(container, { scale: 2, backgroundColor: '#fff', logging: false });
+    document.body.removeChild(container);
+
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgW = pageW - 20;
+    const imgH = (canvas.height * imgW) / canvas.width;
+
+    if (imgH <= pageH - 20) {
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 10, imgW, imgH);
+    } else {
+      // 여러 페이지로 분할
+      let position = 0;
+      const pxPerPt = canvas.width / imgW;
+      const pageHpx = (pageH - 20) * pxPerPt;
+      while (position < canvas.height) {
+        const slice = document.createElement('canvas');
+        slice.width = canvas.width;
+        slice.height = Math.min(pageHpx, canvas.height - position);
+        const ctx = slice.getContext('2d');
+        ctx.drawImage(canvas, 0, position, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
+        if (position > 0) pdf.addPage();
+        pdf.addImage(slice.toDataURL('image/png'), 'PNG', 10, 10, imgW, (slice.height * imgW) / canvas.width);
+        position += pageHpx;
+      }
+    }
+
+    const safeInvNo = (inv.invoice_number||'invoice').replace(/[^a-zA-Z0-9_-]/g, '_');
+    pdf.save(`AP_Invoice_${safeInvNo}_${inv.vendor_name?.substring(0,20).replace(/[^a-zA-Z0-9]/g,'_')||'vendor'}.pdf`);
+
+    showToast('✅ PDF 다운로드 완료!');
+  } catch(e) {
+    showToast('❌ PDF 생성 실패: ' + e.message);
+    console.error(e);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 전체 AP Invoice PDF 일괄 다운로드 (ZIP)
+// ══════════════════════════════════════════════════════════════
+async function exportAllAPInvoicesPDFZip() {
+  try {
+    // JSZip 로드
+    if (!window.JSZip) {
+      showToast('📦 JSZip 라이브러리 로딩...');
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+        script.onload = resolve;
+        script.onerror = () => reject(new Error('JSZip 로드 실패'));
+        document.head.appendChild(script);
+      });
+    }
+
+    const { data: invoices } = await db.from('ap_invoices').select('*').order('invoice_date', { ascending: true });
+    if (!invoices || invoices.length === 0) { showToast('❌ Export 할 인보이스 없음'); return; }
+
+    if (invoices.length > 50) {
+      if (!confirm(`⚠️ ${invoices.length}개의 인보이스를 PDF로 생성하는데 시간이 걸립니다 (약 ${Math.ceil(invoices.length * 2 / 60)}분).\n\n계속하시겠습니까?`)) return;
+    }
+
+    const { data: allLines } = await db.from('ap_invoice_lines').select('*');
+    const { data: allPmts } = await db.from('ap_payments').select('*');
+    const linesByInv = {};
+    (allLines||[]).forEach(l => {
+      if (!linesByInv[l.ap_invoice_id]) linesByInv[l.ap_invoice_id] = [];
+      linesByInv[l.ap_invoice_id].push(l);
+    });
+    const pmtsByInv = {};
+    (allPmts||[]).forEach(p => {
+      if (!pmtsByInv[p.ap_invoice_id]) pmtsByInv[p.ap_invoice_id] = [];
+      pmtsByInv[p.ap_invoice_id].push(p);
+    });
+
+    const zip = new window.JSZip();
+    const { jsPDF } = window.jspdf;
+
+    showToast(`📦 PDF 생성 시작 (0/${invoices.length})...`);
+
+    for (let i = 0; i < invoices.length; i++) {
+      const inv = invoices[i];
+      try {
+        const container = document.createElement('div');
+        container.style.cssText = 'position:fixed;left:-9999px;top:0;background:#fff;width:820px;';
+        container.innerHTML = buildAPInvoicePDFHtml(inv, linesByInv[inv.id]||[], pmtsByInv[inv.id]||[]);
+        document.body.appendChild(container);
+
+        const canvas = await html2canvas(container, { scale: 2, backgroundColor: '#fff', logging: false });
+        document.body.removeChild(container);
+
+        const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+        const pageW = pdf.internal.pageSize.getWidth();
+        const pageH = pdf.internal.pageSize.getHeight();
+        const imgW = pageW - 20;
+        const imgH = (canvas.height * imgW) / canvas.width;
+
+        if (imgH <= pageH - 20) {
+          pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 10, imgW, imgH);
+        } else {
+          let position = 0;
+          const pxPerPt = canvas.width / imgW;
+          const pageHpx = (pageH - 20) * pxPerPt;
+          while (position < canvas.height) {
+            const slice = document.createElement('canvas');
+            slice.width = canvas.width;
+            slice.height = Math.min(pageHpx, canvas.height - position);
+            const ctx = slice.getContext('2d');
+            ctx.drawImage(canvas, 0, position, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
+            if (position > 0) pdf.addPage();
+            pdf.addImage(slice.toDataURL('image/png'), 'PNG', 10, 10, imgW, (slice.height * imgW) / canvas.width);
+            position += pageHpx;
+          }
+        }
+
+        const safeInvNo = (inv.invoice_number||'invoice').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const safeVendor = (inv.vendor_name||'vendor').substring(0,30).replace(/[^a-zA-Z0-9]/g,'_');
+        const vendorFolder = safeVendor;
+        const filename = `${vendorFolder}/AP_${inv.invoice_date||'nodate'}_${safeInvNo}.pdf`;
+
+        const pdfBlob = pdf.output('blob');
+        zip.file(filename, pdfBlob);
+
+        if ((i+1) % 5 === 0 || i === invoices.length-1) {
+          showToast(`📦 PDF 생성 중 (${i+1}/${invoices.length})...`);
+        }
+      } catch(e) {
+        console.error(`PDF 생성 실패 (${inv.invoice_number}):`, e);
+      }
+    }
+
+    showToast('📦 ZIP 파일 압축 중...');
+    const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+
+    const url = URL.createObjectURL(zipBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `AP_All_Invoices_PDF_${new Date().toISOString().slice(0,10)}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    showToast(`✅ ZIP 다운로드 완료! (${invoices.length}개 PDF)`);
+  } catch(e) {
+    showToast('❌ ZIP Export 실패: ' + e.message);
+    console.error(e);
+  }
+}
+
 async function resyncAPJournalEntry(invoiceId) {
   if (!confirm('Journal Entry를 인보이스 데이터와 동기화하시겠습니까?\n\n기존 JE 라인이 삭제되고 재생성됩니다.')) return;
 
@@ -31895,6 +32436,12 @@ async function viewAPInvoice(invoiceId) {
   const editBtn = document.getElementById('ap-inv-edit-btn');
   if (editBtn) {
     editBtn.onclick = () => editAPInvoice(invoiceId, inv, lines || []);
+  }
+
+  // PDF 버튼
+  const pdfBtn = document.getElementById('ap-inv-pdf-btn');
+  if (pdfBtn) {
+    pdfBtn.onclick = () => downloadAPInvoicePDF(invoiceId);
   }
 
   document.getElementById('ap-inv-detail-content').innerHTML = `
