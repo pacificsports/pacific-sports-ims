@@ -1832,7 +1832,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     </div>
 
     <!-- ── Journal Entry 입력 모달 ── -->
-    <div id="je-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
+    <div id="je-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000002;align-items:center;justify-content:center;">
       <div style="background:#fff;border-radius:12px;width:860px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
         <!-- Header -->
         <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
@@ -1924,6 +1924,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
           <span style="color:#fff;font-weight:800;font-size:15px;">📝 Journal Entry Detail</span>
           <div style="display:flex;gap:8px;align-items:center;">
+            <button id="je-edit-btn" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">✏️ Edit</button>
             <button id="je-void-btn" onclick="voidJE()" style="background:rgba(220,38,38,0.2);border:1px solid rgba(220,38,38,0.4);color:#fca5a5;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">🚫 Void</button>
             <button onclick="document.getElementById('je-view-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
           </div>
@@ -31198,15 +31199,25 @@ async function saveAPPaymentGroupEdit(encodedIds) {
     const { data: pmts } = await db.from('ap_payments').select('journal_entry_id, ap_invoice_id').in('id', ids);
     const jeIds = (pmts||[]).map(p => p.journal_entry_id).filter(Boolean);
     if (jeIds.length > 0) {
-      await db.from('journal_entries').update({
+      console.log('[AP Payment Group Edit] Updating JEs:', jeIds, 'new date:', newDate);
+      const { error: jeErr } = await db.from('journal_entries').update({
         entry_date: newDate,
         updated_at: new Date().toISOString()
       }).in('id', jeIds);
+      if (jeErr) {
+        console.error('[AP Payment Group Edit] JE update FAILED:', jeErr);
+        showToast('⚠️ JE 날짜 업데이트 실패: ' + jeErr.message);
+      }
     }
 
     showToast(`✅ ${ids.length}건 수정 완료!`);
     document.getElementById('ap-pmt-group-edit-modal')?.remove();
     await loadAP();
+
+    // Account Detail Ledger가 열려있으면 새로고침
+    if (document.getElementById('acct-detail-modal')) {
+      await reloadAccountDetailLedger();
+    }
   } catch(e) {
     showToast('❌ 저장 실패: ' + e.message);
     console.error(e);
@@ -31378,12 +31389,21 @@ async function saveAPPaymentEdit(paymentId, invoiceId) {
 
     // 3. JE 업데이트 (있는 경우)
     if (oldPmt.journal_entry_id) {
+      console.log('[AP Payment Edit] Updating JE:', oldPmt.journal_entry_id, 'new date:', newDate);
+
       // JE 헤더 날짜 업데이트
-      await db.from('journal_entries').update({
+      const { error: jeErr } = await db.from('journal_entries').update({
         entry_date: newDate,
         description: `AP Payment: ${inv.invoice_number} — ${inv.vendor_name}`,
         updated_at: new Date().toISOString()
       }).eq('id', oldPmt.journal_entry_id);
+
+      if (jeErr) {
+        console.error('[AP Payment Edit] JE header update FAILED:', jeErr);
+        showToast('⚠️ JE 날짜 업데이트 실패: ' + jeErr.message);
+      } else {
+        console.log('[AP Payment Edit] JE header updated OK');
+      }
 
       // JE lines 업데이트: DR 200-001 / CR cash account
       // 기존 cash account 코드를 찾기 위해 현재 라인 조회
@@ -31393,16 +31413,27 @@ async function saveAPPaymentEdit(paymentId, invoiceId) {
       const cashAcct = cashLine?.account_code || '101-001';
 
       // 기존 라인 삭제 후 재삽입
-      await db.from('journal_lines').delete().eq('journal_entry_id', oldPmt.journal_entry_id);
-      await db.from('journal_lines').insert([
+      const { error: delErr } = await db.from('journal_lines').delete().eq('journal_entry_id', oldPmt.journal_entry_id);
+      if (delErr) console.error('[AP Payment Edit] JE lines delete error:', delErr);
+
+      const { error: insErr } = await db.from('journal_lines').insert([
         { journal_entry_id: oldPmt.journal_entry_id, account_code: '200-001', description: `Pay: ${inv.invoice_number}`, debit: newAmount, credit: 0 },
         { journal_entry_id: oldPmt.journal_entry_id, account_code: cashAcct, description: `Pay: ${inv.invoice_number}`, debit: 0, credit: newAmount }
       ]);
+      if (insErr) console.error('[AP Payment Edit] JE lines insert error:', insErr);
+    } else {
+      console.warn('[AP Payment Edit] Payment has no journal_entry_id — JE not updated');
     }
 
     showToast('✅ Payment 수정 완료!');
     document.getElementById('ap-pmt-edit-modal')?.remove();
     await loadAP();
+
+    // Account Detail Ledger가 열려있으면 새로고침
+    if (document.getElementById('acct-detail-modal')) {
+      await reloadAccountDetailLedger();
+    }
+
     viewAPInvoice(invoiceId);
   } catch(e) {
     showToast('❌ 저장 실패: ' + e.message);
@@ -33000,6 +33031,11 @@ async function saveJE() {
     await loadJE();
     await loadGL(); // TB 업데이트
 
+    // Account Detail Ledger가 열려있으면 새로고침
+    if (document.getElementById('acct-detail-modal')) {
+      await reloadAccountDetailLedger();
+    }
+
   } catch(e) {
     showToast('❌ 저장 실패: ' + e.message);
   } finally {
@@ -33018,6 +33054,15 @@ async function viewJE(jeId) {
   if (voidBtn) {
     voidBtn.style.display = (je.status !== 'void') ? 'block' : 'none';
     voidBtn.onclick = () => voidJE(jeId, je.entry_number);
+  }
+
+  const editBtn = document.getElementById('je-edit-btn');
+  if (editBtn) {
+    editBtn.style.display = (je.status !== 'void') ? 'block' : 'none';
+    editBtn.onclick = () => {
+      document.getElementById('je-view-modal').style.display = 'none';
+      openJEModal(jeId);
+    };
   }
 
   const fmt = n => n > 0 ? '$' + parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:2}) : '—';
