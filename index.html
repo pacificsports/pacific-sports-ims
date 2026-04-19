@@ -27045,15 +27045,23 @@ function renderAPPayments() {
 
         const delBtnHTML = `<button onclick="event.stopPropagation();deleteAPPaymentGroup('${delEncoded}')" style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;" title="삭제">✕</button>`;
 
+        // JE가 없는 payment가 하나라도 있으면 "JE 재생성" 버튼 표시
+        const missingJEPayments = g.invoices.filter(i => !i.journal_entry_id);
+        const regenEncoded = encodeURIComponent(JSON.stringify(missingJEPayments.map(i => i.id)));
+        const regenBtnHTML = missingJEPayments.length > 0
+          ? `<button onclick="event.stopPropagation();regenerateJEForPayments('${regenEncoded}')" style="background:#fff7ed;color:#c2410c;border:1px solid #fdba74;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;font-weight:700;" title="JE 재생성 (${missingJEPayments.length}건)">🔄 JE 생성</button>`
+          : '';
+
         const actionBtns = scanUrl
-          ? `<div style="display:flex;gap:3px;justify-content:center;">
+          ? `<div style="display:flex;gap:3px;justify-content:center;align-items:center;">
+               ${regenBtnHTML}
                <button onclick="event.stopPropagation();viewCheckScan('${scanUrl}', '${g.reference||''}')"
                  style="background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;white-space:nowrap;">👁 View</button>
                <a href="${scanUrl}" download onclick="event.stopPropagation();"
                  style="background:#eff6ff;color:#1e3a8a;border:1px solid #bfdbfe;border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;white-space:nowrap;text-decoration:none;">⬇</a>
                ${delBtnHTML}
              </div>`
-          : `<div style="display:flex;gap:3px;justify-content:center;">${delBtnHTML}</div>`;
+          : `<div style="display:flex;gap:3px;justify-content:center;align-items:center;">${regenBtnHTML}${delBtnHTML}</div>`;
 
         return `<tr style="border-bottom:1px solid #f0f0f0;cursor:pointer;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''" onclick="editAPPaymentGroup('${groupEncoded}')">
           <td style="font-size:12px;white-space:nowrap;">${g.payment_date}</td>
@@ -31175,6 +31183,121 @@ function apEditAddLine() {
 }
 
 // ── JE 재동기화 (기존 불일치 데이터 수정용) ──
+// ── AP Payment의 JE 재생성 (JE 삭제/누락된 경우) ──
+async function regenerateJEForPayments(encodedIds) {
+  let pmtIds;
+  try { pmtIds = JSON.parse(decodeURIComponent(encodedIds)); }
+  catch(e) { showToast('❌ 데이터 파싱 오류'); return; }
+
+  if (!pmtIds || pmtIds.length === 0) { showToast('재생성할 payment가 없음'); return; }
+
+  try {
+    // payment 정보 로드
+    const { data: pmts } = await db.from('ap_payments').select('*').in('id', pmtIds);
+    if (!pmts || pmts.length === 0) { showToast('❌ payment 레코드를 찾을 수 없음'); return; }
+
+    // 해당 payment들의 invoice 정보
+    const invIds = [...new Set(pmts.map(p => p.ap_invoice_id).filter(Boolean))];
+    const { data: invs } = await db.from('ap_invoices').select('*').in('id', invIds);
+    const invById = {};
+    (invs||[]).forEach(i => { invById[i.id] = i; });
+
+    // 합계 계산 (같은 체크로 여러 인보이스 지급 시 하나의 JE로 묶음)
+    const totalAmount = pmts.reduce((s, p) => s + (parseFloat(p.amount)||0), 0);
+    const refs = [...new Set(pmts.map(p => p.reference).filter(Boolean))];
+    const reference = refs[0] || '';
+    const method = pmts[0].method || 'check';
+    const paymentDate = pmts[0].payment_date;
+    const vendorName = pmts[0].vendor_name || 'Unknown';
+
+    // cash account 입력 받기
+    // notes에서 힌트 찾기
+    let cashAcctHint = '101-001';
+    for (const p of pmts) {
+      if (p.notes) {
+        try {
+          const parsed = JSON.parse(p.notes);
+          if (parsed.cash_account) { cashAcctHint = parsed.cash_account; break; }
+        } catch(e) {}
+      }
+    }
+
+    const invNumbers = pmts.map(p => invById[p.ap_invoice_id]?.invoice_number).filter(Boolean).join(', ');
+
+    const msg = `다음 지급에 대한 Journal Entry를 재생성합니다:\n\n` +
+      `• 체크 #${reference}\n` +
+      `• 날짜: ${paymentDate}\n` +
+      `• 벤더: ${vendorName}\n` +
+      `• 인보이스: ${invNumbers}\n` +
+      `• 금액: $${totalAmount.toFixed(2)}\n\n` +
+      `현금/은행 계정 코드를 확인하세요:`;
+
+    const cashAcct = prompt(msg, cashAcctHint);
+    if (!cashAcct) { showToast('취소됨'); return; }
+
+    showToast('🔄 JE 재생성 중...');
+
+    // 새 JE 번호 생성
+    const year = paymentDate.slice(0,4);
+    const { data: lastJE } = await db.from('journal_entries')
+      .select('entry_number').like('entry_number', `JE-${year}-%`)
+      .order('entry_number', { ascending: false }).limit(1);
+    const lastNum = lastJE?.[0] ? parseInt(lastJE[0].entry_number.split('-')[2]) || 0 : 0;
+    const jeNum = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+
+    // JE 헤더 생성
+    const { data: je, error: jeErr } = await db.from('journal_entries').insert({
+      entry_number: jeNum,
+      entry_date: paymentDate,
+      description: `AP Payment: ${invNumbers} — ${vendorName}`,
+      source: 'ap_payment',
+      source_id: pmts[0].id,
+      status: 'posted',
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    }).select().single();
+    if (jeErr) throw jeErr;
+
+    // JE 라인 생성: DR 200-001 / CR cash account
+    // 여러 인보이스면 인보이스별로 DR 200-001 라인 분리
+    const jeLines = [];
+    pmts.forEach(p => {
+      const inv = invById[p.ap_invoice_id];
+      const invNum = inv?.invoice_number || '';
+      const amt = parseFloat(p.amount) || 0;
+      jeLines.push({
+        journal_entry_id: je.id,
+        account_code: '200-001',
+        description: `Pay: ${invNum}`,
+        debit: amt,
+        credit: 0
+      });
+    });
+    jeLines.push({
+      journal_entry_id: je.id,
+      account_code: cashAcct.trim(),
+      description: `Pay: ${invNumbers}`,
+      debit: 0,
+      credit: totalAmount
+    });
+
+    const { error: lineErr } = await db.from('journal_lines').insert(jeLines);
+    if (lineErr) throw lineErr;
+
+    // 모든 payment의 journal_entry_id 업데이트
+    await db.from('ap_payments').update({ journal_entry_id: je.id }).in('id', pmtIds);
+
+    showToast(`✅ JE ${jeNum} 재생성 완료!`);
+    await loadAP();
+    if (document.getElementById('acct-detail-modal')) {
+      await reloadAccountDetailLedger();
+    }
+  } catch(e) {
+    console.error('[regenerateJEForPayments]', e);
+    showToast('❌ JE 재생성 실패: ' + e.message);
+  }
+}
+
 // ── AP Payment 수정/삭제 ──
 async function editAPPaymentGroup(encoded) {
   let info;
