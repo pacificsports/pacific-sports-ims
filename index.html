@@ -1928,6 +1928,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <button id="je-repost-btn" style="background:rgba(124,58,237,0.3);border:1px solid rgba(124,58,237,0.6);color:#e9d5ff;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;display:none;" title="Void + 반대분개 + 새 날짜로 재발행 (회계 원칙 준수)">🔄 Void & Re-Post</button>
             <button id="je-edit-btn" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">✏️ Edit</button>
             <button id="je-void-btn" onclick="voidJE()" style="background:rgba(220,38,38,0.2);border:1px solid rgba(220,38,38,0.4);color:#fca5a5;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">🚫 Void</button>
+            <button id="je-hard-delete-btn" style="background:rgba(127,29,29,0.4);border:1px solid rgba(127,29,29,0.7);color:#fecaca;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;" title="완전 삭제 — 복구 불가능">🗑 Delete</button>
             <button onclick="document.getElementById('je-view-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
           </div>
         </div>
@@ -33818,6 +33819,82 @@ async function saveJE() {
   }
 }
 
+// ── JE 완전 삭제 (hard delete) — 연결된 ap_payment/ap_invoice 관계도 정리 ──
+async function hardDeleteJE(jeId, entryNumber, source, sourceId) {
+  // 1차 확인
+  const warning = `⚠️ 완전 삭제 (복구 불가능)\n\n${entryNumber}를 데이터베이스에서 영구적으로 삭제합니다.\n\n다음 작업이 수행됩니다:\n• journal_entries 레코드 삭제\n• journal_lines 모두 삭제\n` +
+    (source === 'ap_payment' ? `• ap_payments 레코드 삭제 (해당 Invoice 잔액 복구)\n• 관련 체크 스캔 첨부 삭제\n` : '') +
+    (source === 'ap_invoice' ? `• ap_invoices의 journal_entry_id 링크 해제 (인보이스 자체는 유지)\n` : '') +
+    `\n회계 원칙상 보통은 "🚫 Void"를 권장하지만, 실수 정리용으로 사용하세요.\n\n계속하시겠습니까?`;
+
+  if (!confirm(warning)) return;
+
+  // 2차 확인 (타이핑으로)
+  const typed = prompt(`최종 확인: "DELETE ${entryNumber}" 를 정확히 입력하세요`, '');
+  if (typed !== `DELETE ${entryNumber}`) {
+    showToast('❌ 확인 문자열 불일치 — 취소됨');
+    return;
+  }
+
+  try {
+    showToast('🗑 삭제 중...');
+
+    // ── Case 1: AP Payment JE → payment도 함께 삭제 + invoice 잔액 복구 ──
+    if (source === 'ap_payment' && sourceId) {
+      const { data: pmt } = await db.from('ap_payments').select('*').eq('id', sourceId).single();
+
+      if (pmt) {
+        // 1) Invoice 잔액 복구
+        if (pmt.ap_invoice_id) {
+          const { data: inv } = await db.from('ap_invoices').select('total_amount, paid_amount').eq('id', pmt.ap_invoice_id).single();
+          if (inv) {
+            const pmtAmt = parseFloat(pmt.amount) || 0;
+            const newPaid = Math.max(0, (parseFloat(inv.paid_amount)||0) - pmtAmt);
+            const newBalance = (parseFloat(inv.total_amount)||0) - newPaid;
+            const newStatus = newBalance <= 0.01 ? 'paid' : (newPaid > 0.01 ? 'partial' : 'open');
+            await db.from('ap_invoices').update({
+              paid_amount: newPaid,
+              status: newStatus,
+              updated_at: new Date().toISOString()
+            }).eq('id', pmt.ap_invoice_id);
+          }
+        }
+        // 2) ap_payments 삭제
+        await db.from('ap_payments').delete().eq('id', sourceId);
+      }
+    }
+
+    // ── Case 2: AP Invoice JE → invoice의 journal_entry_id만 null로 (invoice 자체는 유지) ──
+    if (source === 'ap_invoice' && sourceId) {
+      await db.from('ap_invoices').update({ journal_entry_id: null }).eq('id', sourceId);
+    }
+
+    // ── Case 3: 다른 레코드에서도 혹시 이 JE를 참조하고 있으면 정리 ──
+    await db.from('ap_invoices').update({ journal_entry_id: null }).eq('journal_entry_id', jeId);
+    await db.from('ap_payments').update({ journal_entry_id: null }).eq('journal_entry_id', jeId);
+
+    // ── Case 4: JE lines 삭제 → JE 본체 삭제 ──
+    await db.from('journal_lines').delete().eq('journal_entry_id', jeId);
+    const { error: delErr } = await db.from('journal_entries').delete().eq('id', jeId);
+    if (delErr) throw delErr;
+
+    showToast(`✅ ${entryNumber} 완전 삭제 완료`);
+    document.getElementById('je-view-modal').style.display = 'none';
+    await loadJE();
+    await loadGL();
+    if (document.getElementById('acct-detail-modal')) {
+      await reloadAccountDetailLedger();
+    }
+    // AP 패널이 열려있으면 새로고침
+    if (typeof loadAP === 'function' && document.getElementById('panel-ap')?.classList.contains('active')) {
+      await loadAP();
+    }
+  } catch(e) {
+    console.error('[hardDeleteJE]', e);
+    showToast('❌ 삭제 실패: ' + e.message);
+  }
+}
+
 // ── JE 라인 복구 (원본 거래에서 재생성) ──
 async function recoverJELinesFromSource(jeId, source, sourceId, entryNumber) {
   if (!confirm(`${entryNumber} — 원본 거래에서 JE 라인을 재생성하시겠습니까?\n\n• 원본: ${source} (${sourceId})\n• 기존 라인이 있으면 모두 삭제 후 재생성됩니다.`)) return;
@@ -33942,6 +34019,12 @@ async function viewJE(jeId) {
     } else {
       repostBtn.style.display = 'none';
     }
+  }
+
+  // Hard Delete 버튼 — 항상 표시 (관리자용)
+  const hardDeleteBtn = document.getElementById('je-hard-delete-btn');
+  if (hardDeleteBtn) {
+    hardDeleteBtn.onclick = () => hardDeleteJE(jeId, je.entry_number, je.source, je.source_id);
   }
 
   const fmt = n => n > 0 ? '$' + parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:2}) : '—';
