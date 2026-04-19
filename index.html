@@ -2289,9 +2289,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div style="font-size:10px;color:#166534;margin-top:2px;" id="cf-kpi-next-month-count">—</div>
           </div>
           <div style="padding:14px;background:#f5f3ff;border:2px solid #ddd6fe;border-radius:10px;">
-            <div style="font-size:10px;font-weight:700;color:#5b21b6;text-transform:uppercase;letter-spacing:0.5px;">💸 과지급</div>
-            <div style="font-size:17px;font-weight:800;color:#7c3aed;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-overpaid">—</div>
-            <div style="font-size:10px;color:#5b21b6;margin-top:2px;" id="cf-kpi-overpaid-count">—</div>
+            <div style="font-size:10px;font-weight:700;color:#5b21b6;text-transform:uppercase;letter-spacing:0.5px;">🔖 Credit Memos</div>
+            <div style="font-size:17px;font-weight:800;color:#7c3aed;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-credit-memos">—</div>
+            <div style="font-size:10px;color:#5b21b6;margin-top:2px;" id="cf-kpi-credit-memos-count">—</div>
           </div>
           <div style="padding:14px;background:#f8fafc;border:2px solid #94a3b8;border-radius:10px;">
             <div style="font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;">💰 총 Outstanding</div>
@@ -26798,16 +26798,16 @@ function renderCashFlow() {
   const nextMonthEnd = new Date(today.getFullYear(), today.getMonth()+2, 0);
 
   // ══════════════════════════════════════════════════════════════
-  // 중요: MAS 200과 동일한 기준 = AP KPI와 동일한 기준
-  // 모든 open/partial 인보이스의 balance를 합산 (음수 포함)
-  // 과지급은 음수 balance가 되어 Total에서 차감됨 (회계 원칙)
+  // MAS 200과 동일한 기준 = AP KPI와 동일한 기준
+  // 모든 open/partial 인보이스의 balance를 합산 (Credit Memo 포함)
+  // Credit Memo는 음수 balance로 Total에서 차감됨 (회계 원칙)
   // ══════════════════════════════════════════════════════════════
   let overdue = { amount: 0, count: 0 };
   let thisWeek = { amount: 0, count: 0 };
   let thisMonth = { amount: 0, count: 0 };
   let nextMonth = { amount: 0, count: 0 };
   let noDueDate = { amount: 0, count: 0 };
-  let overpaid = { amount: 0, count: 0 }; // 과지급 (음수 balance) — 별도 추적
+  let creditMemos = { amount: 0, count: 0 }; // Credit Memo (음수 balance) — 벤더가 돌려줄 돈
   let total = { amount: 0, count: 0 };
 
   const rows = [];
@@ -26830,10 +26830,10 @@ function renderCashFlow() {
     const vKey = inv.vendor_name || 'Unknown';
     byVendor[vKey] = (byVendor[vKey] || 0) + balance;
 
-    // 음수 balance(과지급)는 과지급 버킷에
+    // Credit Memo (음수 balance)는 Credit Memo 버킷에
     if (balance < 0) {
-      overpaid.amount += balance; // 음수
-      overpaid.count++;
+      creditMemos.amount += balance; // 음수
+      creditMemos.count++;
     } else if (!dueDate) {
       noDueDate.amount += balance;
       noDueDate.count++;
@@ -26860,32 +26860,28 @@ function renderCashFlow() {
       inv, balance, dueDate, daysDiff,
       vendor: inv.vendor_name || '—',
       invoiceNumber: inv.invoice_number || '—',
-      isOverpaid: balance < 0
+      isCreditMemo: balance < 0
     });
   });
 
-  // 데이터 검증: AP KPI와 일치해야 함
+  // 데이터 검증: AP KPI / MAS 200과 일치해야 함
   console.log(`[CashFlow] Total: $${total.amount.toFixed(2)} (${total.count} invoices) — MAS 200 기준`);
   console.log(`  • Overdue: $${overdue.amount.toFixed(2)} (${overdue.count})`);
   console.log(`  • Due this week: $${thisWeek.amount.toFixed(2)} (${thisWeek.count})`);
   console.log(`  • Due this month: $${thisMonth.amount.toFixed(2)} (${thisMonth.count})`);
   console.log(`  • Due next month: $${nextMonth.amount.toFixed(2)} (${nextMonth.count})`);
   console.log(`  • No due date: $${noDueDate.amount.toFixed(2)} (${noDueDate.count})`);
-  console.log(`  • 과지급(음수): $${overpaid.amount.toFixed(2)} (${overpaid.count}건)`);
+  console.log(`  • Credit Memos: $${creditMemos.amount.toFixed(2)} (${creditMemos.count}건)`);
 
-  // paid_amount > total_amount 상세 정보
-  if (overpaid.count > 0) {
-    const overpaidInvs = openInvs.filter(i => {
-      const b = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
-      return b < -0.01;
-    });
-    console.warn(`[CashFlow] 과지급 인보이스 ${overpaid.count}건 감지 — 상세:`);
-    console.table(overpaidInvs.map(i => ({
+  // Credit Memo 상세 정보
+  if (creditMemos.count > 0) {
+    const cmInvs = openInvs.filter(i => (parseFloat(i.total_amount)||0) < -0.01);
+    console.log(`[CashFlow] Credit Memo ${creditMemos.count}건 상세:`);
+    console.table(cmInvs.map(i => ({
       invoice_number: i.invoice_number,
       vendor: i.vendor_name,
       total_amount: i.total_amount,
       paid_amount: i.paid_amount,
-      overpaid_by: (parseFloat(i.paid_amount)||0) - (parseFloat(i.total_amount)||0),
       status: i.status
     })));
   }
@@ -26959,7 +26955,7 @@ function renderCashFlow() {
   setKPI('this-week', thisWeek.amount, thisWeek.count);
   setKPI('this-month', thisMonth.amount, thisMonth.count);
   setKPI('next-month', nextMonth.amount, nextMonth.count);
-  setKPI('overpaid', overpaid.amount, overpaid.count);
+  setKPI('credit-memos', creditMemos.amount, creditMemos.count);
   setKPI('total', total.amount, total.count);
 
   // 차트 렌더링 (간단 bar chart with CSS)
@@ -27026,23 +27022,29 @@ function renderCashFlow() {
       tbody.innerHTML = '<tr><td colspan="6" class="empty">Open/Partial 인보이스 없음</td></tr>';
     } else {
       tbody.innerHTML = rows.map(r => {
-        const isOverdue = r.daysDiff !== null && r.daysDiff < 0;
-        const isToday = r.daysDiff === 0;
-        const isSoon = r.daysDiff !== null && r.daysDiff > 0 && r.daysDiff <= 7;
-        const rowBg = isOverdue ? 'background:#fef2f2;' : (isSoon ? 'background:#fffbeb;' : '');
-        const dayBadge = r.daysDiff === null ? '<span style="color:#9ca3af;">—</span>'
+        const isCreditMemo = r.isCreditMemo;
+        const isOverdue = !isCreditMemo && r.daysDiff !== null && r.daysDiff < 0;
+        const isToday = !isCreditMemo && r.daysDiff === 0;
+        const isSoon = !isCreditMemo && r.daysDiff !== null && r.daysDiff > 0 && r.daysDiff <= 7;
+        const rowBg = isCreditMemo ? 'background:#f5f3ff;' : (isOverdue ? 'background:#fef2f2;' : (isSoon ? 'background:#fffbeb;' : ''));
+        const dayBadge = isCreditMemo
+          ? `<span style="background:#f5f3ff;color:#7c3aed;border:1px solid #ddd6fe;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">CREDIT</span>`
+          : r.daysDiff === null ? '<span style="color:#9ca3af;">—</span>'
           : isOverdue ? `<span style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">D+${Math.abs(r.daysDiff)}</span>`
           : isToday ? `<span style="background:#fffbeb;color:#d97706;border:1px solid #fde68a;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">TODAY</span>`
           : `<span style="color:#6b7280;font-size:11px;">D-${r.daysDiff}</span>`;
-        const statusColor = r.inv.status === 'partial' ? '#d97706' : '#1a56a0';
-        const statusBg = r.inv.status === 'partial' ? '#fffbeb' : '#eff6ff';
-        return `<tr style="border-bottom:1px solid #f0f0f0;${rowBg}cursor:pointer;" onclick="viewAPInvoice('${r.inv.id}')" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='${isOverdue?'#fef2f2':(isSoon?'#fffbeb':'')}'">
-          <td style="padding:7px 12px;font-size:12px;font-family:monospace;color:${isOverdue?'#dc2626':'#374151'};font-weight:${isOverdue?'700':'500'};">${r.inv.due_date||'—'}</td>
+        const statusColor = isCreditMemo ? '#7c3aed' : (r.inv.status === 'partial' ? '#d97706' : '#1a56a0');
+        const statusBg = isCreditMemo ? '#f5f3ff' : (r.inv.status === 'partial' ? '#fffbeb' : '#eff6ff');
+        const statusLabel = isCreditMemo ? 'CREDIT' : r.inv.status;
+        const balanceColor = isCreditMemo ? '#7c3aed' : (isOverdue ? '#dc2626' : '#0f2744');
+        const hoverBg = isCreditMemo ? '#f5f3ff' : (isOverdue ? '#fef2f2' : (isSoon ? '#fffbeb' : ''));
+        return `<tr style="border-bottom:1px solid #f0f0f0;${rowBg}cursor:pointer;" onclick="viewAPInvoice('${r.inv.id}')" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='${hoverBg}'">
+          <td style="padding:7px 12px;font-size:12px;font-family:monospace;color:${isCreditMemo?'#7c3aed':(isOverdue?'#dc2626':'#374151')};font-weight:${isOverdue||isCreditMemo?'700':'500'};">${r.inv.due_date||'—'}</td>
           <td style="padding:7px 12px;text-align:center;">${dayBadge}</td>
           <td style="padding:7px 12px;font-size:12px;font-family:monospace;font-weight:600;">${r.invoiceNumber}</td>
           <td style="padding:7px 12px;font-size:12px;">${r.vendor}</td>
-          <td style="padding:7px 12px;text-align:right;font-size:12px;font-family:monospace;font-weight:700;color:${isOverdue?'#dc2626':'#0f2744'};">${fmt(r.balance)}</td>
-          <td style="padding:7px 12px;text-align:center;"><span style="background:${statusBg};color:${statusColor};border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;text-transform:uppercase;">${r.inv.status}</span></td>
+          <td style="padding:7px 12px;text-align:right;font-size:12px;font-family:monospace;font-weight:700;color:${balanceColor};">${fmt(r.balance)}</td>
+          <td style="padding:7px 12px;text-align:center;"><span style="background:${statusBg};color:${statusColor};border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;text-transform:uppercase;">${statusLabel}</span></td>
         </tr>`;
       }).join('');
     }
@@ -32527,6 +32529,8 @@ const HEALTH_CHECKS = [
       const mismatches = (invs||[]).filter(i => {
         const total = parseFloat(i.total_amount)||0;
         const paid = parseFloat(i.paid_amount)||0;
+        // Credit Memo는 status 체크에서 제외 (total < 0은 별도 카테고리)
+        if (total < 0) return false;
         const balance = total - paid;
         const expectedStatus = balance <= 0.01 ? 'paid' : (paid > 0.01 ? 'partial' : 'open');
         return i.status !== expectedStatus;
@@ -32690,23 +32694,46 @@ const HEALTH_CHECKS = [
     }
   },
   {
-    id: 'ap_negative_balance',
-    name: 'Negative Balance (Overpayment)',
+    id: 'ap_credit_memos',
+    name: 'Credit Memos (Vendor Credits)',
     category: 'AP',
-    description: 'paid_amount > total_amount 인 인보이스 (과지급)',
+    description: '음수 total_amount = Credit Memo (벤더가 돌려줄 돈, 정상 회계 항목)',
     fn: async () => {
       const { data: invs } = await db.from('ap_invoices').select('id, invoice_number, vendor_name, total_amount, paid_amount, status').neq('status','void');
-      const overpaid = (invs||[]).filter(i => {
-        const diff = (parseFloat(i.paid_amount)||0) - (parseFloat(i.total_amount)||0);
-        return diff > 0.01;
+
+      // Credit Memo: total_amount < 0 (의도적으로 음수로 등록한 항목)
+      const creditMemos = (invs||[]).filter(i => (parseFloat(i.total_amount)||0) < -0.01);
+
+      // 진짜 과지급: total은 양수인데 paid가 total보다 큼
+      const trueOverpaid = (invs||[]).filter(i => {
+        const total = parseFloat(i.total_amount)||0;
+        const paid = parseFloat(i.paid_amount)||0;
+        return total > 0 && paid > total + 0.01;
       });
-      if (overpaid.length === 0) return { status: 'ok', message: '과지급 없음' };
+
+      if (creditMemos.length === 0 && trueOverpaid.length === 0) {
+        return { status: 'ok', message: 'Credit Memo 및 과지급 없음' };
+      }
+
+      const creditTotal = creditMemos.reduce((s,i) => s + (parseFloat(i.total_amount)||0), 0);
+
+      // Credit Memo만 있으면 정상 (ok)
+      // 진짜 과지급이 있으면 경고 (warn)
+      if (trueOverpaid.length === 0) {
+        return {
+          status: 'ok',
+          message: `${creditMemos.length}건 Credit Memo (총 $${Math.abs(creditTotal).toLocaleString('en-US',{minimumFractionDigits:2})} 벤더 크레딧) — 정상`,
+          detail: { creditMemos, trueOverpaid: [] },
+          fixable: false
+        };
+      }
+
       return {
         status: 'warn',
-        message: `${overpaid.length}개 인보이스 과지급`,
-        detail: { overpaid },
+        message: `${trueOverpaid.length}건 과지급 의심 + ${creditMemos.length}건 Credit Memo`,
+        detail: { creditMemos, trueOverpaid },
         fixable: false,
-        fixHint: '지급 기록 확인 후 불필요한 payment 삭제 또는 금액 조정'
+        fixHint: '과지급 의심 건은 지급 기록 확인 후 불필요한 payment 삭제 또는 금액 조정'
       };
     }
   }
@@ -32981,14 +33008,34 @@ function renderHealthCheckDetail(r) {
         ${g.map(j => `<div style="font-size:10px;color:#6b7280;">• ID ${j.id.substring(0,8)} · ${j.entry_date} · ${j.description||''}</div>`).join('')}
       </div>`).join('');
   }
-  if (r.id === 'ap_negative_balance') {
-    return (d.overpaid||[]).map(i => {
-      const over = (parseFloat(i.paid_amount)||0) - (parseFloat(i.total_amount)||0);
-      return `<div style="font-size:11px;color:#6b7280;padding:3px 0;">
-        • <strong>${i.invoice_number}</strong> (${i.vendor_name}): total ${fmt(i.total_amount)}, paid ${fmt(i.paid_amount)}, 초과 ${fmt(over)}
-        <button onclick="viewAPInvoice('${i.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+  if (r.id === 'ap_credit_memos') {
+    let html = '';
+    const creditMemos = d.creditMemos || [];
+    const trueOverpaid = d.trueOverpaid || [];
+
+    if (creditMemos.length > 0) {
+      html += `<div style="margin-bottom:8px;">
+        <div style="font-weight:700;font-size:11px;color:#166534;margin-bottom:4px;">🔖 Credit Memos (정상 — 벤더가 돌려줄 돈, ${creditMemos.length}건):</div>
+        ${creditMemos.map(i => `<div style="font-size:11px;color:#6b7280;padding:2px 0 2px 10px;">
+          • <strong>${i.invoice_number}</strong> (${i.vendor_name}): ${fmt(i.total_amount)}
+          <button onclick="viewAPInvoice('${i.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+        </div>`).join('')}
       </div>`;
-    }).join('');
+    }
+
+    if (trueOverpaid.length > 0) {
+      html += `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #fecaca;">
+        <div style="font-weight:700;font-size:11px;color:#dc2626;margin-bottom:4px;">⚠ 진짜 과지급 의심 (${trueOverpaid.length}건):</div>
+        ${trueOverpaid.map(i => {
+          const over = (parseFloat(i.paid_amount)||0) - (parseFloat(i.total_amount)||0);
+          return `<div style="font-size:11px;color:#6b7280;padding:2px 0 2px 10px;">
+            • <strong>${i.invoice_number}</strong> (${i.vendor_name}): total ${fmt(i.total_amount)}, paid ${fmt(i.paid_amount)}, 초과 ${fmt(over)}
+            <button onclick="viewAPInvoice('${i.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
+    return html;
   }
   return '<pre style="font-size:10px;color:#6b7280;max-height:200px;overflow:auto;">' + JSON.stringify(d, null, 2).replace(/</g,'&lt;') + '</pre>';
 }
