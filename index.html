@@ -2289,9 +2289,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div style="font-size:10px;color:#166534;margin-top:2px;" id="cf-kpi-next-month-count">—</div>
           </div>
           <div style="padding:14px;background:#f5f3ff;border:2px solid #ddd6fe;border-radius:10px;">
-            <div style="font-size:10px;font-weight:700;color:#5b21b6;text-transform:uppercase;letter-spacing:0.5px;">❓ Due Date 없음</div>
-            <div style="font-size:17px;font-weight:800;color:#7c3aed;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-no-due">—</div>
-            <div style="font-size:10px;color:#5b21b6;margin-top:2px;" id="cf-kpi-no-due-count">—</div>
+            <div style="font-size:10px;font-weight:700;color:#5b21b6;text-transform:uppercase;letter-spacing:0.5px;">💸 과지급</div>
+            <div style="font-size:17px;font-weight:800;color:#7c3aed;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-overpaid">—</div>
+            <div style="font-size:10px;color:#5b21b6;margin-top:2px;" id="cf-kpi-overpaid-count">—</div>
           </div>
           <div style="padding:14px;background:#f8fafc;border:2px solid #94a3b8;border-radius:10px;">
             <div style="font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;">💰 총 Outstanding</div>
@@ -26798,14 +26798,16 @@ function renderCashFlow() {
   const nextMonthEnd = new Date(today.getFullYear(), today.getMonth()+2, 0);
 
   // ══════════════════════════════════════════════════════════════
-  // 중요: Total = Overdue + This Week + Future(not due yet) + No Due Date
-  // AP KPI의 Total과 정확히 같은 값이 나오도록 모든 분기를 포함
+  // 중요: MAS 200과 동일한 기준 = AP KPI와 동일한 기준
+  // 모든 open/partial 인보이스의 balance를 합산 (음수 포함)
+  // 과지급은 음수 balance가 되어 Total에서 차감됨 (회계 원칙)
   // ══════════════════════════════════════════════════════════════
   let overdue = { amount: 0, count: 0 };
   let thisWeek = { amount: 0, count: 0 };
   let thisMonth = { amount: 0, count: 0 };
   let nextMonth = { amount: 0, count: 0 };
   let noDueDate = { amount: 0, count: 0 };
+  let overpaid = { amount: 0, count: 0 }; // 과지급 (음수 balance) — 별도 추적
   let total = { amount: 0, count: 0 };
 
   const rows = [];
@@ -26814,36 +26816,39 @@ function renderCashFlow() {
 
   openInvs.forEach(inv => {
     const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
-    // balance가 0 이하(paid 완료 또는 과지급)는 KPI에서 제외 — AP KPI와 동일
-    if (balance <= 0.01) return;
+    // 정상 paid (balance ≈ 0)는 건너뜀 — 이미 정리된 항목
+    if (Math.abs(balance) < 0.01) return;
 
     const dueDate = inv.due_date ? new Date(inv.due_date) : null;
     if (dueDate) dueDate.setHours(0,0,0,0);
 
+    // Total은 음수도 포함 (MAS 200 방식)
     total.amount += balance;
     total.count++;
 
+    // 벤더별 — 음수 포함
     const vKey = inv.vendor_name || 'Unknown';
     byVendor[vKey] = (byVendor[vKey] || 0) + balance;
 
-    if (!dueDate) {
+    // 음수 balance(과지급)는 과지급 버킷에
+    if (balance < 0) {
+      overpaid.amount += balance; // 음수
+      overpaid.count++;
+    } else if (!dueDate) {
       noDueDate.amount += balance;
       noDueDate.count++;
     } else if (dueDate < today) {
       overdue.amount += balance;
       overdue.count++;
     } else {
-      // 이번 주 (오늘 ~ 이번 주 일요일)
       if (dueDate <= endOfWeek) {
         thisWeek.amount += balance;
         thisWeek.count++;
       }
-      // 이번 달 (오늘 ~ 월말)
       if (dueDate <= thisMonthEnd) {
         thisMonth.amount += balance;
         thisMonth.count++;
       }
-      // 다음 달
       if (dueDate >= nextMonthStart && dueDate <= nextMonthEnd) {
         nextMonth.amount += balance;
         nextMonth.count++;
@@ -26854,22 +26859,35 @@ function renderCashFlow() {
     rows.push({
       inv, balance, dueDate, daysDiff,
       vendor: inv.vendor_name || '—',
-      invoiceNumber: inv.invoice_number || '—'
+      invoiceNumber: inv.invoice_number || '—',
+      isOverpaid: balance < 0
     });
   });
 
   // 데이터 검증: AP KPI와 일치해야 함
-  console.log(`[CashFlow] Total: $${total.amount.toFixed(2)} (${total.count} invoices)`);
+  console.log(`[CashFlow] Total: $${total.amount.toFixed(2)} (${total.count} invoices) — MAS 200 기준`);
   console.log(`  • Overdue: $${overdue.amount.toFixed(2)} (${overdue.count})`);
   console.log(`  • Due this week: $${thisWeek.amount.toFixed(2)} (${thisWeek.count})`);
   console.log(`  • Due this month: $${thisMonth.amount.toFixed(2)} (${thisMonth.count})`);
   console.log(`  • Due next month: $${nextMonth.amount.toFixed(2)} (${nextMonth.count})`);
   console.log(`  • No due date: $${noDueDate.amount.toFixed(2)} (${noDueDate.count})`);
+  console.log(`  • 과지급(음수): $${overpaid.amount.toFixed(2)} (${overpaid.count}건)`);
 
-  // paid_amount > total_amount 경고 (Health Check에서 발견되지만 콘솔로도 안내)
-  const overpaid = openInvs.filter(i => (parseFloat(i.paid_amount)||0) > (parseFloat(i.total_amount)||0) + 0.01);
-  if (overpaid.length > 0) {
-    console.warn(`[CashFlow] 과지급 인보이스 ${overpaid.length}건 감지 — Health Check에서 확인/수정 가능`);
+  // paid_amount > total_amount 상세 정보
+  if (overpaid.count > 0) {
+    const overpaidInvs = openInvs.filter(i => {
+      const b = (parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0);
+      return b < -0.01;
+    });
+    console.warn(`[CashFlow] 과지급 인보이스 ${overpaid.count}건 감지 — 상세:`);
+    console.table(overpaidInvs.map(i => ({
+      invoice_number: i.invoice_number,
+      vendor: i.vendor_name,
+      total_amount: i.total_amount,
+      paid_amount: i.paid_amount,
+      overpaid_by: (parseFloat(i.paid_amount)||0) - (parseFloat(i.total_amount)||0),
+      status: i.status
+    })));
   }
 
   // 차트 기간별 데이터
@@ -26941,7 +26959,7 @@ function renderCashFlow() {
   setKPI('this-week', thisWeek.amount, thisWeek.count);
   setKPI('this-month', thisMonth.amount, thisMonth.count);
   setKPI('next-month', nextMonth.amount, nextMonth.count);
-  setKPI('no-due', noDueDate.amount, noDueDate.count);
+  setKPI('overpaid', overpaid.amount, overpaid.count);
   setKPI('total', total.amount, total.count);
 
   // 차트 렌더링 (간단 bar chart with CSS)
