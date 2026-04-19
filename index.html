@@ -2830,6 +2830,20 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               </div>
             </div>
 
+            <!-- Attachments (첨부 파일) -->
+            <div style="padding:0 18px 18px;">
+              <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;display:flex;align-items:center;justify-content:space-between;">
+                <span style="display:flex;align-items:center;gap:6px;">📎 첨부 파일
+                  <span id="ap-det-attach-count" style="background:#f0fdf4;color:#166534;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;">0</span>
+                </span>
+                <button id="ap-det-attach-upload-btn" onclick="document.getElementById('ap-det-attach-input').click()" style="background:#16a34a;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">📤 업로드</button>
+              </div>
+              <input type="file" id="ap-det-attach-input" multiple style="display:none;" onchange="uploadAPAttachments(event)">
+              <div id="ap-det-attach-list" style="font-size:11px;border:1px solid #e5e7eb;border-radius:6px;padding:6px;min-height:40px;">
+                <div style="color:#9ca3af;text-align:center;padding:12px;font-size:11px;">첨부 파일 없음</div>
+              </div>
+            </div>
+
             <!-- 버튼 -->
             <div style="padding:12px 18px;border-top:1px solid #e5e7eb;display:flex;gap:8px;margin-top:auto;flex-shrink:0;">
               <div id="ap-inv-detail-pay-area" style="flex:1;"></div>
@@ -32387,6 +32401,232 @@ function toggleAPHistoryDetail() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// AP ATTACHMENTS — 인보이스별 첨부 파일 관리
+// ══════════════════════════════════════════════════════════════
+let _currentAPInvoiceIdForAttach = null;
+
+function formatFileSize(bytes) {
+  if (!bytes) return '—';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  if (bytes < 1024*1024*1024) return (bytes/(1024*1024)).toFixed(1) + ' MB';
+  return (bytes/(1024*1024*1024)).toFixed(2) + ' GB';
+}
+
+function getFileIcon(mime, filename) {
+  const ext = (filename||'').split('.').pop().toLowerCase();
+  if (mime?.startsWith('image/')) return '🖼️';
+  if (mime === 'application/pdf' || ext === 'pdf') return '📄';
+  if (ext === 'doc' || ext === 'docx' || mime?.includes('word')) return '📝';
+  if (ext === 'xls' || ext === 'xlsx' || mime?.includes('spreadsheet') || mime?.includes('excel')) return '📊';
+  if (ext === 'ppt' || ext === 'pptx' || mime?.includes('presentation')) return '📽️';
+  if (ext === 'eml' || ext === 'msg') return '✉️';
+  if (ext === 'zip' || ext === 'rar' || ext === '7z' || ext === 'tar' || ext === 'gz') return '🗜️';
+  if (ext === 'txt' || ext === 'md') return '📋';
+  if (ext === 'csv') return '📑';
+  return '📎';
+}
+
+/**
+ * Invoice 상세 모달이 열릴 때 호출 — 첨부 파일 목록 로드
+ */
+async function loadAPAttachmentsForInvoice(invoiceId) {
+  _currentAPInvoiceIdForAttach = invoiceId;
+  const listEl = document.getElementById('ap-det-attach-list');
+  const countEl = document.getElementById('ap-det-attach-count');
+  if (!listEl) return;
+
+  // 테이블 존재 여부 체크
+  if (!await checkTableExists('ap_attachments')) {
+    listEl.innerHTML = '<div style="color:#9ca3af;text-align:center;padding:12px;font-size:11px;">ap_attachments 테이블 미설정</div>';
+    if (countEl) countEl.textContent = 'N/A';
+    return;
+  }
+
+  listEl.innerHTML = '<div style="color:#9ca3af;text-align:center;padding:12px;font-size:11px;">Loading...</div>';
+
+  const { data, error } = await db.from('ap_attachments')
+    .select('*')
+    .eq('ap_invoice_id', invoiceId)
+    .order('uploaded_at', { ascending: false });
+
+  if (error) {
+    console.error('[loadAPAttachments]', error);
+    listEl.innerHTML = `<div style="color:#dc2626;text-align:center;padding:12px;font-size:11px;">로드 실패: ${error.message}</div>`;
+    return;
+  }
+
+  if (countEl) countEl.textContent = (data||[]).length;
+
+  if (!data || data.length === 0) {
+    listEl.innerHTML = '<div style="color:#9ca3af;text-align:center;padding:12px;font-size:11px;">첨부 파일 없음</div>';
+    return;
+  }
+
+  listEl.innerHTML = data.map(f => {
+    const icon = getFileIcon(f.mime_type, f.file_name);
+    const dateStr = f.uploaded_at ? new Date(f.uploaded_at).toLocaleString('ko-KR', {
+      year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'
+    }) : '—';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:11px;">
+      <div style="font-size:18px;">${icon}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:600;color:#1f2937;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(f.file_name||'').replace(/"/g,'&quot;')}">${f.file_name||'—'}</div>
+        <div style="color:#6b7280;font-size:10px;">${formatFileSize(f.file_size)} · ${f.uploaded_by||'—'} · ${dateStr}</div>
+      </div>
+      <button onclick="downloadAPAttachment('${f.id}')" title="다운로드" style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">⬇</button>
+      <button onclick="deleteAPAttachment('${f.id}', '${(f.file_name||'').replace(/'/g,"\\'")}')" title="삭제" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">🗑</button>
+    </div>`;
+  }).join('');
+}
+
+/**
+ * 파일 업로드 (여러 개 가능)
+ */
+async function uploadAPAttachments(event) {
+  const files = Array.from(event.target.files || []);
+  if (files.length === 0) return;
+  const invoiceId = _currentAPInvoiceIdForAttach;
+  if (!invoiceId) { showToast('❌ Invoice ID 없음'); return; }
+
+  if (!await checkTableExists('ap_attachments')) {
+    showToast('❌ ap_attachments 테이블이 없습니다. SQL 마이그레이션 실행 필요.');
+    return;
+  }
+
+  const uploadBtn = document.getElementById('ap-det-attach-upload-btn');
+  if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.textContent = '📤 업로드 중...'; }
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (const file of files) {
+    try {
+      // Storage 경로: attachments/{invoiceId}/{timestamp}_{filename}
+      const safeFileName = file.name.replace(/[^\w.-]/g, '_');
+      const filePath = `attachments/${invoiceId}/${Date.now()}_${safeFileName}`;
+
+      const { error: upErr } = await db.storage.from('ap-invoices').upload(filePath, file, {
+        upsert: false,
+        contentType: file.type || 'application/octet-stream'
+      });
+      if (upErr) throw upErr;
+
+      // DB 레코드 추가
+      const record = {
+        ap_invoice_id: invoiceId,
+        file_name: file.name,
+        file_path: filePath,
+        file_size: file.size,
+        mime_type: file.type || 'application/octet-stream',
+        category: 'other',
+        uploaded_by: _currentEmployee?.name || 'System'
+      };
+      const { data: inserted, error: insErr } = await db.from('ap_attachments').insert(record).select().single();
+      if (insErr) {
+        // Storage에 올렸는데 DB 실패하면 Storage도 정리
+        await db.storage.from('ap-invoices').remove([filePath]);
+        throw insErr;
+      }
+
+      // Activity Log 기록
+      try {
+        const inv = _apInvoices.find(i => i.id === invoiceId);
+        await logActivity('ap_invoice', invoiceId, inv?.invoice_number || '', 'attachment_upload', {
+          note: `📎 파일 업로드: ${file.name} (${formatFileSize(file.size)})`,
+          metadata: { attachment_id: inserted?.id, file_name: file.name, file_size: file.size }
+        });
+      } catch(e) {/* 로그 실패는 무시 */}
+
+      successCount++;
+    } catch(e) {
+      console.error('[uploadAPAttachment]', file.name, e);
+      failCount++;
+    }
+  }
+
+  if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.textContent = '📤 업로드'; }
+  event.target.value = ''; // input 리셋
+
+  if (successCount > 0 && failCount === 0) {
+    showToast(`✓ ${successCount}개 파일 업로드 완료`);
+  } else if (successCount > 0 && failCount > 0) {
+    showToast(`⚠ ${successCount}개 성공, ${failCount}개 실패`);
+  } else {
+    showToast(`❌ 업로드 실패`);
+  }
+
+  await loadAPAttachmentsForInvoice(invoiceId);
+}
+
+/**
+ * 파일 다운로드
+ */
+async function downloadAPAttachment(attachmentId) {
+  try {
+    const { data: att, error } = await db.from('ap_attachments').select('*').eq('id', attachmentId).single();
+    if (error || !att) { showToast('❌ 파일 정보 조회 실패'); return; }
+
+    // Signed URL 생성 (1시간 유효)
+    const { data: urlData, error: urlErr } = await db.storage.from('ap-invoices').createSignedUrl(att.file_path, 3600, {
+      download: att.file_name
+    });
+    if (urlErr || !urlData?.signedUrl) {
+      showToast('❌ 다운로드 URL 생성 실패: ' + (urlErr?.message || ''));
+      return;
+    }
+
+    // 새 탭에서 열기 → 브라우저가 다운로드 처리
+    const link = document.createElement('a');
+    link.href = urlData.signedUrl;
+    link.download = att.file_name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch(e) {
+    console.error('[downloadAPAttachment]', e);
+    showToast('❌ 다운로드 오류: ' + e.message);
+  }
+}
+
+/**
+ * 파일 삭제 (Storage + DB)
+ */
+async function deleteAPAttachment(attachmentId, fileName) {
+  if (!confirm(`정말로 이 파일을 삭제하시겠습니까?\n\n${fileName}\n\n삭제 후 복구할 수 없습니다.`)) return;
+
+  try {
+    const { data: att, error } = await db.from('ap_attachments').select('*').eq('id', attachmentId).single();
+    if (error || !att) { showToast('❌ 파일 정보 조회 실패'); return; }
+
+    // Storage에서 먼저 삭제
+    const { error: rmErr } = await db.storage.from('ap-invoices').remove([att.file_path]);
+    if (rmErr) console.warn('[deleteAPAttachment] Storage 삭제 실패 (DB는 계속 진행):', rmErr);
+
+    // DB 레코드 삭제
+    const { error: delErr } = await db.from('ap_attachments').delete().eq('id', attachmentId);
+    if (delErr) throw delErr;
+
+    // Activity Log 기록
+    try {
+      const inv = _apInvoices.find(i => i.id === att.ap_invoice_id);
+      await logActivity('ap_invoice', att.ap_invoice_id, inv?.invoice_number || '', 'attachment_delete', {
+        note: `🗑 파일 삭제: ${att.file_name}`,
+        metadata: { file_name: att.file_name, file_size: att.file_size }
+      });
+    } catch(e) {/* 로그 실패는 무시 */}
+
+    showToast(`✓ 파일 삭제됨: ${att.file_name}`);
+    if (_currentAPInvoiceIdForAttach) {
+      await loadAPAttachmentsForInvoice(_currentAPInvoiceIdForAttach);
+    }
+  } catch(e) {
+    console.error('[deleteAPAttachment]', e);
+    showToast('❌ 삭제 오류: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
 // HEALTH CHECK — 데이터 무결성 검증 시스템 (12개 항목)
 // ══════════════════════════════════════════════════════════════
 let _healthCheckState = {
@@ -34264,6 +34504,13 @@ async function viewAPInvoice(invoiceId) {
     } // if (!checkTableExists) else end
   } catch(e) {
     console.warn('[viewAPInvoice] Failed to load history:', e);
+  }
+
+  // Attachment 목록 로드
+  try {
+    await loadAPAttachmentsForInvoice(invoiceId);
+  } catch(e) {
+    console.warn('[viewAPInvoice] Failed to load attachments:', e);
   }
 
   // PDF 뷰어
