@@ -475,6 +475,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <button id="emergency-badge-btn" onclick="openEmergencyPendingList()" style="display:none;margin-left:8px;position:relative;background:#dc2626;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;color:#fff;">
         🚨 Emergency <span id="emergency-badge-count" style="background:#fff;color:#dc2626;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:10px;font-weight:900;">0</span>
       </button>
+      <button id="health-check-btn" onclick="openHealthCheckModal()" title="데이터 무결성 검증" style="margin-left:8px;background:rgba(34,197,94,0.25);border:1px solid rgba(34,197,94,0.5);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;color:#86efac;display:flex;align-items:center;gap:5px;">
+        <span id="health-check-icon">🟢</span>
+        <span id="health-check-label">Health</span>
+        <span id="health-check-badge" style="background:rgba(255,255,255,0.2);border-radius:10px;padding:1px 6px;font-size:10px;font-weight:900;display:none;">0</span>
+      </button>
       <button class="logout-btn" onclick="doLogout()">Sign Out</button>
         <button class="btn btn-sm" style="margin-left:8px;font-size:10px;padding:4px 8px;background:var(--bg2);color:var(--text2);border:1px solid var(--border);" onclick="exportAllData()">💾 Backup</button>
     </div>
@@ -3681,6 +3686,8 @@ async function startAppWithEmployee(emp) {
   startUrgentAlarmWatch();
   // Emergency Transfer 폴링 시작
   startEmergencyPolling();
+  // Health Check 자동 실행 시작 (3초 후 첫 실행, 이후 5분마다)
+  startHealthCheckAutoRun();
 
   setTimeout(() => {
     const allowedPanels = ROLE_TABS[emp.role] || ROLE_TABS.staff;
@@ -31676,6 +31683,712 @@ async function deleteAPPayment(paymentId, invoiceId) {
 // ══════════════════════════════════════════════════════════════
 // AP INVOICE EXPORT — CSV 다운로드 (백업/이관용)
 // ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// HEALTH CHECK — 데이터 무결성 검증 시스템 (12개 항목)
+// ══════════════════════════════════════════════════════════════
+let _healthCheckState = {
+  lastRun: null,
+  results: [],
+  autoCheckTimer: null
+};
+
+// ── 개별 검증 항목들 ──
+const HEALTH_CHECKS = [
+  {
+    id: 'ap_gl_reconcile',
+    name: 'AP GL Reconciliation',
+    category: 'AP',
+    description: 'GL 200-001 잔액 vs Sum of Open Invoice Balances',
+    fn: async () => {
+      const { data: invs } = await db.from('ap_invoices').select('total_amount, paid_amount, status').in('status', ['open','partial']);
+      const apSum = (invs||[]).reduce((s,i) => s + ((parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0)), 0);
+      const { data: glLines } = await db.from('journal_lines')
+        .select('debit, credit, journal_entries!inner(status)')
+        .eq('account_code', '200-001')
+        .neq('journal_entries.status', 'void');
+      const glBal = (glLines||[]).reduce((s,l) => s + (parseFloat(l.credit)||0) - (parseFloat(l.debit)||0), 0);
+      const diff = Math.abs(glBal - apSum);
+      if (diff < 0.01) {
+        return { status: 'ok', message: `GL: $${glBal.toFixed(2)} = AP: $${apSum.toFixed(2)}` };
+      }
+      return {
+        status: 'error',
+        message: `차이: $${diff.toFixed(2)} (GL: $${glBal.toFixed(2)}, AP: $${apSum.toFixed(2)})`,
+        detail: { glBal, apSum, diff },
+        fixable: false,
+        fixHint: 'AP Payment History 또는 Invoices에서 JE 누락된 항목을 찾아 "🔄 JE 생성" 실행'
+      };
+    }
+  },
+  {
+    id: 'ap_duplicate_invoices',
+    name: 'Duplicate Invoice Numbers',
+    category: 'AP',
+    description: '같은 Vendor + 같은 Invoice # 중복',
+    fn: async () => {
+      const { data: invs } = await db.from('ap_invoices').select('id, invoice_number, vendor_id, vendor_name, total_amount, status, invoice_date').neq('status','void');
+      const groups = {};
+      (invs||[]).forEach(i => {
+        const key = `${i.vendor_id||i.vendor_name}||${(i.invoice_number||'').toUpperCase().trim()}`;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(i);
+      });
+      const dups = Object.values(groups).filter(g => g.length > 1);
+      if (dups.length === 0) return { status: 'ok', message: '중복 없음' };
+      return {
+        status: 'warn',
+        message: `${dups.length}개 그룹에 중복 발견 (${dups.reduce((s,g)=>s+g.length,0)}건)`,
+        detail: { dups },
+        fixable: false,
+        fixHint: '각 그룹에서 올바른 1건만 남기고 나머지 Void 또는 삭제'
+      };
+    }
+  },
+  {
+    id: 'ap_orphan_je_links',
+    name: 'AP Invoice Orphan JE Links',
+    category: 'AP',
+    description: 'ap_invoices.journal_entry_id 가 존재하지 않는 JE 참조',
+    fn: async () => {
+      const { data: invs } = await db.from('ap_invoices').select('id, invoice_number, journal_entry_id').not('journal_entry_id','is',null);
+      if (!invs || invs.length === 0) return { status: 'ok', message: '연결된 인보이스 없음' };
+      const jeIds = [...new Set(invs.map(i => i.journal_entry_id))];
+      const { data: jes } = await db.from('journal_entries').select('id').in('id', jeIds);
+      const existingIds = new Set((jes||[]).map(j => j.id));
+      const orphans = invs.filter(i => !existingIds.has(i.journal_entry_id));
+      if (orphans.length === 0) return { status: 'ok', message: `${invs.length}개 링크 모두 정상` };
+      return {
+        status: 'error',
+        message: `${orphans.length}개 인보이스가 삭제된 JE를 참조`,
+        detail: { orphans },
+        fixable: true,
+        fixId: 'fix_ap_orphan_invoice_je'
+      };
+    }
+  },
+  {
+    id: 'pmt_orphan_je_links',
+    name: 'AP Payment Orphan JE Links',
+    category: 'AP',
+    description: 'ap_payments.journal_entry_id 가 존재하지 않는 JE 참조',
+    fn: async () => {
+      const { data: pmts } = await db.from('ap_payments').select('id, reference, journal_entry_id, ap_invoice_id').not('journal_entry_id','is',null);
+      if (!pmts || pmts.length === 0) return { status: 'ok', message: '연결된 payment 없음' };
+      const jeIds = [...new Set(pmts.map(p => p.journal_entry_id))];
+      const { data: jes } = await db.from('journal_entries').select('id').in('id', jeIds);
+      const existingIds = new Set((jes||[]).map(j => j.id));
+      const orphans = pmts.filter(p => !existingIds.has(p.journal_entry_id));
+      if (orphans.length === 0) return { status: 'ok', message: `${pmts.length}개 링크 모두 정상` };
+      return {
+        status: 'error',
+        message: `${orphans.length}개 payment가 삭제된 JE를 참조`,
+        detail: { orphans },
+        fixable: true,
+        fixId: 'fix_pmt_orphan_je'
+      };
+    }
+  },
+  {
+    id: 'ap_paid_mismatch',
+    name: 'Invoice Paid vs Payment Sum',
+    category: 'AP',
+    description: 'ap_invoices.paid_amount vs Sum(ap_payments)',
+    fn: async () => {
+      const { data: invs } = await db.from('ap_invoices').select('id, invoice_number, paid_amount').neq('status','void');
+      const { data: pmts } = await db.from('ap_payments').select('ap_invoice_id, amount');
+      const paidByInv = {};
+      (pmts||[]).forEach(p => {
+        if (!p.ap_invoice_id) return;
+        paidByInv[p.ap_invoice_id] = (paidByInv[p.ap_invoice_id]||0) + (parseFloat(p.amount)||0);
+      });
+      const mismatches = (invs||[]).filter(i => {
+        const stored = parseFloat(i.paid_amount)||0;
+        const actual = paidByInv[i.id] || 0;
+        return Math.abs(stored - actual) > 0.01;
+      }).map(i => ({ ...i, actual_paid: paidByInv[i.id]||0 }));
+      if (mismatches.length === 0) return { status: 'ok', message: '모두 일치' };
+      return {
+        status: 'error',
+        message: `${mismatches.length}개 인보이스의 paid_amount 불일치`,
+        detail: { mismatches },
+        fixable: true,
+        fixId: 'fix_ap_paid_mismatch'
+      };
+    }
+  },
+  {
+    id: 'ap_status_consistency',
+    name: 'Invoice Status Consistency',
+    category: 'AP',
+    description: 'status (open/partial/paid) vs 실제 balance 일치 여부',
+    fn: async () => {
+      const { data: invs } = await db.from('ap_invoices').select('id, invoice_number, total_amount, paid_amount, status').neq('status','void');
+      const mismatches = (invs||[]).filter(i => {
+        const total = parseFloat(i.total_amount)||0;
+        const paid = parseFloat(i.paid_amount)||0;
+        const balance = total - paid;
+        const expectedStatus = balance <= 0.01 ? 'paid' : (paid > 0.01 ? 'partial' : 'open');
+        return i.status !== expectedStatus;
+      });
+      if (mismatches.length === 0) return { status: 'ok', message: '모두 일치' };
+      return {
+        status: 'warn',
+        message: `${mismatches.length}개 인보이스의 status 불일치`,
+        detail: { mismatches },
+        fixable: true,
+        fixId: 'fix_ap_status'
+      };
+    }
+  },
+  {
+    id: 'je_unbalanced',
+    name: 'JE Debit = Credit Check',
+    category: 'JE',
+    description: 'Journal Entry의 Debit 합 = Credit 합 (회계 원칙)',
+    fn: async () => {
+      const { data: jes } = await db.from('journal_entries').select('id, entry_number, status').neq('status','void');
+      if (!jes || jes.length === 0) return { status: 'ok', message: 'JE 없음' };
+      const jeIds = jes.map(j => j.id);
+      const { data: lines } = await db.from('journal_lines').select('journal_entry_id, debit, credit').in('journal_entry_id', jeIds);
+      const sumByJE = {};
+      (lines||[]).forEach(l => {
+        if (!sumByJE[l.journal_entry_id]) sumByJE[l.journal_entry_id] = { dr: 0, cr: 0 };
+        sumByJE[l.journal_entry_id].dr += parseFloat(l.debit)||0;
+        sumByJE[l.journal_entry_id].cr += parseFloat(l.credit)||0;
+      });
+      const unbalanced = jes.filter(je => {
+        const s = sumByJE[je.id] || { dr: 0, cr: 0 };
+        return Math.abs(s.dr - s.cr) > 0.01 && (s.dr > 0 || s.cr > 0); // 0,0은 빈 JE로 따로 체크
+      }).map(je => ({ ...je, ...sumByJE[je.id] }));
+      if (unbalanced.length === 0) return { status: 'ok', message: '모든 JE 균형' };
+      return {
+        status: 'error',
+        message: `${unbalanced.length}개 JE가 불균형`,
+        detail: { unbalanced },
+        fixable: false,
+        fixHint: '해당 JE 편집 후 Debit/Credit 맞추거나 Void'
+      };
+    }
+  },
+  {
+    id: 'je_empty',
+    name: 'Empty JE (No Lines)',
+    category: 'JE',
+    description: '라인이 0개인 JE',
+    fn: async () => {
+      const { data: jes } = await db.from('journal_entries').select('id, entry_number, entry_date, source, source_id, description').neq('status','void');
+      if (!jes || jes.length === 0) return { status: 'ok', message: 'JE 없음' };
+      const jeIds = jes.map(j => j.id);
+      const { data: lines } = await db.from('journal_lines').select('journal_entry_id').in('journal_entry_id', jeIds);
+      const hasLines = new Set((lines||[]).map(l => l.journal_entry_id));
+      const empty = jes.filter(je => !hasLines.has(je.id));
+      if (empty.length === 0) return { status: 'ok', message: '빈 JE 없음' };
+      return {
+        status: 'error',
+        message: `${empty.length}개 JE에 라인 없음`,
+        detail: { empty },
+        fixable: true,
+        fixId: 'fix_empty_je'
+      };
+    }
+  },
+  {
+    id: 'je_broken_source',
+    name: 'JE Source Reference Broken',
+    category: 'JE',
+    description: 'JE가 ap_payment/ap_invoice인데 source_id가 더 이상 존재 안 함',
+    fn: async () => {
+      const { data: jes } = await db.from('journal_entries').select('id, entry_number, source, source_id').in('source', ['ap_invoice','ap_payment']).not('source_id','is',null).neq('status','void');
+      if (!jes || jes.length === 0) return { status: 'ok', message: '검사할 JE 없음' };
+
+      // invoice-linked JE check
+      const invJEs = jes.filter(j => j.source === 'ap_invoice');
+      const invIds = [...new Set(invJEs.map(j => j.source_id))];
+      let existingInvs = new Set();
+      if (invIds.length) {
+        const { data } = await db.from('ap_invoices').select('id').in('id', invIds);
+        existingInvs = new Set((data||[]).map(x => x.id));
+      }
+
+      // payment-linked JE check
+      const pmtJEs = jes.filter(j => j.source === 'ap_payment');
+      const pmtIds = [...new Set(pmtJEs.map(j => j.source_id))];
+      let existingPmts = new Set();
+      if (pmtIds.length) {
+        const { data } = await db.from('ap_payments').select('id').in('id', pmtIds);
+        existingPmts = new Set((data||[]).map(x => x.id));
+      }
+
+      const broken = [
+        ...invJEs.filter(j => !existingInvs.has(j.source_id)),
+        ...pmtJEs.filter(j => !existingPmts.has(j.source_id))
+      ];
+      if (broken.length === 0) return { status: 'ok', message: `${jes.length}개 JE 모두 정상` };
+      return {
+        status: 'warn',
+        message: `${broken.length}개 JE가 삭제된 원본을 참조`,
+        detail: { broken },
+        fixable: true,
+        fixId: 'fix_je_broken_source'
+      };
+    }
+  },
+  {
+    id: 'je_duplicate_number',
+    name: 'Duplicate JE Entry Numbers',
+    category: 'JE',
+    description: '같은 entry_number를 가진 JE 존재',
+    fn: async () => {
+      const { data: jes } = await db.from('journal_entries').select('id, entry_number, entry_date, description');
+      const groups = {};
+      (jes||[]).forEach(j => {
+        if (!groups[j.entry_number]) groups[j.entry_number] = [];
+        groups[j.entry_number].push(j);
+      });
+      const dups = Object.values(groups).filter(g => g.length > 1);
+      if (dups.length === 0) return { status: 'ok', message: '중복 없음' };
+      return {
+        status: 'error',
+        message: `${dups.length}개 번호가 중복`,
+        detail: { dups },
+        fixable: false,
+        fixHint: '수동으로 하나를 새 번호로 변경 또는 삭제'
+      };
+    }
+  },
+  {
+    id: 'ar_gl_reconcile',
+    name: 'AR GL Reconciliation',
+    category: 'AR',
+    description: 'GL 120-001 (AR) 잔액 vs Sum of Open AR Invoices',
+    fn: async () => {
+      // ar_invoices 테이블 존재 여부 확인
+      const { data: arInvs, error } = await db.from('ar_invoices').select('total_amount, paid_amount, status').in('status', ['open','partial']);
+      if (error) {
+        return { status: 'ok', message: 'AR 모듈 없음 (건너뜀)' };
+      }
+      const arSum = (arInvs||[]).reduce((s,i) => s + ((parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0)), 0);
+      const { data: glLines } = await db.from('journal_lines')
+        .select('debit, credit, journal_entries!inner(status)')
+        .eq('account_code', '120-001')
+        .neq('journal_entries.status', 'void');
+      const glBal = (glLines||[]).reduce((s,l) => s + (parseFloat(l.debit)||0) - (parseFloat(l.credit)||0), 0);
+      const diff = Math.abs(glBal - arSum);
+      if (diff < 0.01) {
+        return { status: 'ok', message: `GL: $${glBal.toFixed(2)} = AR: $${arSum.toFixed(2)}` };
+      }
+      return {
+        status: 'error',
+        message: `차이: $${diff.toFixed(2)} (GL: $${glBal.toFixed(2)}, AR: $${arSum.toFixed(2)})`,
+        detail: { glBal, arSum, diff },
+        fixable: false
+      };
+    }
+  },
+  {
+    id: 'ap_negative_balance',
+    name: 'Negative Balance (Overpayment)',
+    category: 'AP',
+    description: 'paid_amount > total_amount 인 인보이스 (과지급)',
+    fn: async () => {
+      const { data: invs } = await db.from('ap_invoices').select('id, invoice_number, vendor_name, total_amount, paid_amount, status').neq('status','void');
+      const overpaid = (invs||[]).filter(i => {
+        const diff = (parseFloat(i.paid_amount)||0) - (parseFloat(i.total_amount)||0);
+        return diff > 0.01;
+      });
+      if (overpaid.length === 0) return { status: 'ok', message: '과지급 없음' };
+      return {
+        status: 'warn',
+        message: `${overpaid.length}개 인보이스 과지급`,
+        detail: { overpaid },
+        fixable: false,
+        fixHint: '지급 기록 확인 후 불필요한 payment 삭제 또는 금액 조정'
+      };
+    }
+  }
+];
+
+// ── 전체 검증 실행 ──
+async function runHealthCheck(silent = false) {
+  if (!silent) showToast('🔍 데이터 무결성 검사 중...');
+  const results = [];
+  for (const check of HEALTH_CHECKS) {
+    try {
+      const result = await check.fn();
+      results.push({ ...check, result });
+    } catch(e) {
+      console.error(`[HealthCheck] ${check.id} failed:`, e);
+      results.push({ ...check, result: { status: 'error', message: '검사 실패: ' + e.message } });
+    }
+  }
+  _healthCheckState.lastRun = new Date();
+  _healthCheckState.results = results;
+  updateHealthCheckIndicator();
+  if (!silent) {
+    const errors = results.filter(r => r.result.status === 'error').length;
+    const warns = results.filter(r => r.result.status === 'warn').length;
+    if (errors + warns === 0) showToast('✅ 모든 검사 통과!');
+    else showToast(`⚠️ ${errors}개 오류, ${warns}개 경고 발견`);
+  }
+  return results;
+}
+
+// ── 상단 표시등 업데이트 ──
+function updateHealthCheckIndicator() {
+  const btn = document.getElementById('health-check-btn');
+  const icon = document.getElementById('health-check-icon');
+  const label = document.getElementById('health-check-label');
+  const badge = document.getElementById('health-check-badge');
+  if (!btn) return;
+
+  const results = _healthCheckState.results || [];
+  const errors = results.filter(r => r.result.status === 'error').length;
+  const warns = results.filter(r => r.result.status === 'warn').length;
+  const total = errors + warns;
+
+  if (results.length === 0) {
+    icon.textContent = '⚪';
+    label.textContent = 'Health';
+    badge.style.display = 'none';
+    btn.style.background = 'rgba(107,114,128,0.25)';
+    btn.style.borderColor = 'rgba(107,114,128,0.5)';
+    btn.style.color = '#d1d5db';
+  } else if (errors > 0) {
+    icon.textContent = '🔴';
+    label.textContent = 'Issues';
+    badge.textContent = total;
+    badge.style.display = 'inline-block';
+    btn.style.background = 'rgba(220,38,38,0.25)';
+    btn.style.borderColor = 'rgba(220,38,38,0.6)';
+    btn.style.color = '#fca5a5';
+  } else if (warns > 0) {
+    icon.textContent = '🟡';
+    label.textContent = 'Warn';
+    badge.textContent = total;
+    badge.style.display = 'inline-block';
+    btn.style.background = 'rgba(245,158,11,0.25)';
+    btn.style.borderColor = 'rgba(245,158,11,0.6)';
+    btn.style.color = '#fcd34d';
+  } else {
+    icon.textContent = '🟢';
+    label.textContent = 'OK';
+    badge.style.display = 'none';
+    btn.style.background = 'rgba(34,197,94,0.25)';
+    btn.style.borderColor = 'rgba(34,197,94,0.5)';
+    btn.style.color = '#86efac';
+  }
+}
+
+// ── 리포트 모달 열기 ──
+async function openHealthCheckModal() {
+  document.getElementById('health-check-modal')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'health-check-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000005;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:98vw;max-width:1100px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+      <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">🔍 Data Integrity Check</span>
+          <span id="hc-last-run" style="color:#93c5fd;font-size:11px;"></span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button onclick="runHealthCheckAndRender()" style="background:rgba(59,130,246,0.3);border:1px solid rgba(59,130,246,0.6);color:#bfdbfe;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;">🔄 재검사</button>
+          <button onclick="document.getElementById('health-check-modal').remove()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#93c5fd;">✕</button>
+        </div>
+      </div>
+
+      <div style="padding:14px 20px;background:#f8fafc;border-bottom:1px solid #e5e7eb;display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
+        <div><div style="font-size:10px;color:#6b7280;font-weight:700;text-transform:uppercase;">총 검사</div><div id="hc-stat-total" style="font-size:22px;font-weight:800;color:#0f2744;margin-top:2px;">—</div></div>
+        <div><div style="font-size:10px;color:#166534;font-weight:700;text-transform:uppercase;">✓ 통과</div><div id="hc-stat-ok" style="font-size:22px;font-weight:800;color:#16a34a;margin-top:2px;">—</div></div>
+        <div><div style="font-size:10px;color:#92400e;font-weight:700;text-transform:uppercase;">⚠ 경고</div><div id="hc-stat-warn" style="font-size:22px;font-weight:800;color:#d97706;margin-top:2px;">—</div></div>
+        <div><div style="font-size:10px;color:#991b1b;font-weight:700;text-transform:uppercase;">✗ 오류</div><div id="hc-stat-error" style="font-size:22px;font-weight:800;color:#dc2626;margin-top:2px;">—</div></div>
+      </div>
+
+      <div style="flex:1;overflow-y:auto;padding:16px 20px;" id="hc-results">
+        <div style="text-align:center;padding:40px;color:#9ca3af;">검사 중...</div>
+      </div>
+
+      <div style="padding:12px 20px;border-top:1px solid #e5e7eb;background:#f8fafc;border-radius:0 0 12px 12px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:11px;color:#6b7280;">💡 각 항목 클릭 → 상세 / "자동 수정" 버튼으로 안전한 수정 가능</span>
+        <button onclick="document.getElementById('health-check-modal').remove()" style="padding:7px 20px;border:1px solid #d1d5db;border-radius:5px;background:#fff;font-size:12px;cursor:pointer;">닫기</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  await runHealthCheckAndRender();
+}
+
+async function runHealthCheckAndRender() {
+  const container = document.getElementById('hc-results');
+  if (container) container.innerHTML = '<div style="text-align:center;padding:40px;color:#9ca3af;">🔍 검사 중...</div>';
+  await runHealthCheck(true);
+  renderHealthCheckResults();
+}
+
+function renderHealthCheckResults() {
+  const container = document.getElementById('hc-results');
+  if (!container) return;
+
+  const results = _healthCheckState.results || [];
+  const stats = { ok: 0, warn: 0, error: 0 };
+  results.forEach(r => stats[r.result.status] = (stats[r.result.status]||0) + 1);
+
+  const statTotal = document.getElementById('hc-stat-total');
+  const statOk = document.getElementById('hc-stat-ok');
+  const statWarn = document.getElementById('hc-stat-warn');
+  const statError = document.getElementById('hc-stat-error');
+  if (statTotal) statTotal.textContent = results.length;
+  if (statOk) statOk.textContent = stats.ok;
+  if (statWarn) statWarn.textContent = stats.warn;
+  if (statError) statError.textContent = stats.error;
+
+  const lastRunEl = document.getElementById('hc-last-run');
+  if (lastRunEl && _healthCheckState.lastRun) {
+    lastRunEl.textContent = '마지막: ' + _healthCheckState.lastRun.toLocaleString('ko-KR');
+  }
+
+  // 카테고리별 그룹핑
+  const byCategory = {};
+  results.forEach(r => {
+    if (!byCategory[r.category]) byCategory[r.category] = [];
+    byCategory[r.category].push(r);
+  });
+
+  // 상태별 정렬: error > warn > ok
+  const statusOrder = { error: 0, warn: 1, ok: 2 };
+  Object.values(byCategory).forEach(arr => arr.sort((a,b) => statusOrder[a.result.status] - statusOrder[b.result.status]));
+
+  const catLabels = { AP: '💳 Accounts Payable', AR: '📊 Accounts Receivable', JE: '📒 Journal Entries' };
+
+  let html = '';
+  Object.entries(byCategory).forEach(([cat, items]) => {
+    html += `<div style="margin-bottom:20px;">
+      <div style="font-size:11px;font-weight:800;color:#374151;text-transform:uppercase;letter-spacing:1px;padding-bottom:6px;border-bottom:2px solid #e5e7eb;margin-bottom:8px;">
+        ${catLabels[cat] || cat}
+      </div>`;
+    items.forEach((r, idx) => {
+      const statusCfg = {
+        ok: { bg: '#f0fdf4', border: '#bbf7d0', icon: '✓', color: '#16a34a' },
+        warn: { bg: '#fffbeb', border: '#fde68a', icon: '⚠', color: '#d97706' },
+        error: { bg: '#fef2f2', border: '#fecaca', icon: '✗', color: '#dc2626' }
+      }[r.result.status];
+
+      const detailId = `hc-detail-${cat}-${idx}`;
+      const hasDetail = r.result.detail && r.result.status !== 'ok';
+
+      html += `<div style="background:${statusCfg.bg};border:1px solid ${statusCfg.border};border-radius:8px;padding:10px 14px;margin-bottom:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;${hasDetail?'cursor:pointer;':''}" ${hasDetail?`onclick="toggleHCDetail('${detailId}')"`:''}>
+          <div style="flex:1;display:flex;align-items:center;gap:10px;">
+            <span style="font-size:16px;color:${statusCfg.color};font-weight:900;">${statusCfg.icon}</span>
+            <div>
+              <div style="font-size:12px;font-weight:700;color:#111;">${r.name}</div>
+              <div style="font-size:11px;color:#6b7280;margin-top:2px;">${r.result.message}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            ${r.result.fixable ? `<button onclick="event.stopPropagation();runHealthFix('${r.result.fixId}','${r.id}')" style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;">🔧 자동 수정</button>` : ''}
+            ${hasDetail ? `<span style="font-size:10px;color:#6b7280;">▼</span>` : ''}
+          </div>
+        </div>
+        ${hasDetail ? `<div id="${detailId}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid ${statusCfg.border};font-size:11px;">
+          ${renderHealthCheckDetail(r)}
+        </div>` : ''}
+        ${r.result.fixHint && !r.result.fixable ? `<div style="font-size:10px;color:#6b7280;margin-top:6px;padding-top:6px;border-top:1px dashed ${statusCfg.border};">💡 ${r.result.fixHint}</div>` : ''}
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+function toggleHCDetail(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function renderHealthCheckDetail(r) {
+  const d = r.result.detail;
+  if (!d) return '';
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+
+  if (r.id === 'ap_duplicate_invoices') {
+    return (d.dups||[]).map(g => `
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
+        <div style="font-weight:700;font-size:11px;color:#dc2626;margin-bottom:4px;">${g[0].vendor_name} — "${g[0].invoice_number}" (${g.length}건)</div>
+        ${g.map(i => `<div style="font-size:10px;color:#6b7280;">• ${i.invoice_date||'—'} · ${fmt(i.total_amount)} · status: ${i.status} <button onclick="viewAPInvoice('${i.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button></div>`).join('')}
+      </div>`).join('');
+  }
+  if (r.id === 'ap_orphan_je_links') {
+    return (d.orphans||[]).map(i => `
+      <div style="font-size:11px;color:#6b7280;padding:3px 0;">
+        • Invoice <strong>${i.invoice_number}</strong> → 삭제된 JE (${i.journal_entry_id})
+        <button onclick="viewAPInvoice('${i.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+      </div>`).join('');
+  }
+  if (r.id === 'pmt_orphan_je_links') {
+    return (d.orphans||[]).map(p => `
+      <div style="font-size:11px;color:#6b7280;padding:3px 0;">
+        • Payment ref <strong>${p.reference||'—'}</strong> → 삭제된 JE (${p.journal_entry_id})
+      </div>`).join('');
+  }
+  if (r.id === 'ap_paid_mismatch') {
+    return (d.mismatches||[]).map(i => `
+      <div style="font-size:11px;color:#6b7280;padding:3px 0;">
+        • Invoice <strong>${i.invoice_number}</strong>: stored paid ${fmt(i.paid_amount)} ≠ actual sum ${fmt(i.actual_paid)}
+        <button onclick="viewAPInvoice('${i.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+      </div>`).join('');
+  }
+  if (r.id === 'ap_status_consistency') {
+    return (d.mismatches||[]).map(i => {
+      const expected = ((parseFloat(i.total_amount)||0) - (parseFloat(i.paid_amount)||0)) <= 0.01 ? 'paid' : (parseFloat(i.paid_amount)||0) > 0.01 ? 'partial' : 'open';
+      return `<div style="font-size:11px;color:#6b7280;padding:3px 0;">
+        • <strong>${i.invoice_number}</strong>: status="${i.status}" → expected="${expected}"
+        <button onclick="viewAPInvoice('${i.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+      </div>`;
+    }).join('');
+  }
+  if (r.id === 'je_unbalanced') {
+    return (d.unbalanced||[]).map(j => `
+      <div style="font-size:11px;color:#6b7280;padding:3px 0;">
+        • <strong>${j.entry_number}</strong>: DR ${fmt(j.dr)} ≠ CR ${fmt(j.cr)} (차이 ${fmt(Math.abs(j.dr-j.cr))})
+        <button onclick="viewJE('${j.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+      </div>`).join('');
+  }
+  if (r.id === 'je_empty') {
+    return (d.empty||[]).map(j => `
+      <div style="font-size:11px;color:#6b7280;padding:3px 0;">
+        • <strong>${j.entry_number}</strong> (${j.entry_date}, source: ${j.source||'—'}) — ${j.description||''}
+        <button onclick="viewJE('${j.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+      </div>`).join('');
+  }
+  if (r.id === 'je_broken_source') {
+    return (d.broken||[]).map(j => `
+      <div style="font-size:11px;color:#6b7280;padding:3px 0;">
+        • <strong>${j.entry_number}</strong> — ${j.source} ID ${j.source_id} 사라짐
+      </div>`).join('');
+  }
+  if (r.id === 'je_duplicate_number') {
+    return (d.dups||[]).map(g => `
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
+        <div style="font-weight:700;font-size:11px;color:#dc2626;margin-bottom:4px;">${g[0].entry_number} (${g.length}건)</div>
+        ${g.map(j => `<div style="font-size:10px;color:#6b7280;">• ID ${j.id.substring(0,8)} · ${j.entry_date} · ${j.description||''}</div>`).join('')}
+      </div>`).join('');
+  }
+  if (r.id === 'ap_negative_balance') {
+    return (d.overpaid||[]).map(i => {
+      const over = (parseFloat(i.paid_amount)||0) - (parseFloat(i.total_amount)||0);
+      return `<div style="font-size:11px;color:#6b7280;padding:3px 0;">
+        • <strong>${i.invoice_number}</strong> (${i.vendor_name}): total ${fmt(i.total_amount)}, paid ${fmt(i.paid_amount)}, 초과 ${fmt(over)}
+        <button onclick="viewAPInvoice('${i.id}')" style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:3px;padding:1px 6px;font-size:9px;cursor:pointer;margin-left:4px;">보기</button>
+      </div>`;
+    }).join('');
+  }
+  return '<pre style="font-size:10px;color:#6b7280;max-height:200px;overflow:auto;">' + JSON.stringify(d, null, 2).replace(/</g,'&lt;') + '</pre>';
+}
+
+// ── 자동 수정 실행 ──
+async function runHealthFix(fixId, checkId) {
+  if (!confirm(`이 이슈를 자동으로 수정하시겠습니까?\n\n변경 후에는 Health Check가 자동으로 다시 실행됩니다.`)) return;
+  const check = HEALTH_CHECKS.find(c => c.id === checkId);
+  const result = _healthCheckState.results.find(r => r.id === checkId)?.result;
+  if (!result) { showToast('❌ 검사 결과를 찾을 수 없음'); return; }
+
+  try {
+    showToast('🔧 수정 중...');
+    let fixed = 0;
+
+    if (fixId === 'fix_ap_orphan_invoice_je') {
+      // ap_invoices.journal_entry_id = null
+      const orphans = result.detail.orphans || [];
+      for (const o of orphans) {
+        await db.from('ap_invoices').update({ journal_entry_id: null }).eq('id', o.id);
+        fixed++;
+      }
+    }
+    else if (fixId === 'fix_pmt_orphan_je') {
+      const orphans = result.detail.orphans || [];
+      for (const o of orphans) {
+        await db.from('ap_payments').update({ journal_entry_id: null }).eq('id', o.id);
+        fixed++;
+      }
+    }
+    else if (fixId === 'fix_ap_paid_mismatch') {
+      const mismatches = result.detail.mismatches || [];
+      for (const m of mismatches) {
+        // ap_invoice의 total도 다시 가져와서 status 재계산
+        const { data: inv } = await db.from('ap_invoices').select('total_amount').eq('id', m.id).single();
+        const total = parseFloat(inv?.total_amount)||0;
+        const newPaid = m.actual_paid;
+        const balance = total - newPaid;
+        const newStatus = balance <= 0.01 ? 'paid' : (newPaid > 0.01 ? 'partial' : 'open');
+        await db.from('ap_invoices').update({
+          paid_amount: newPaid,
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        }).eq('id', m.id);
+        fixed++;
+      }
+    }
+    else if (fixId === 'fix_ap_status') {
+      const mismatches = result.detail.mismatches || [];
+      for (const m of mismatches) {
+        const total = parseFloat(m.total_amount)||0;
+        const paid = parseFloat(m.paid_amount)||0;
+        const balance = total - paid;
+        const newStatus = balance <= 0.01 ? 'paid' : (paid > 0.01 ? 'partial' : 'open');
+        await db.from('ap_invoices').update({
+          status: newStatus,
+          updated_at: new Date().toISOString()
+        }).eq('id', m.id);
+        fixed++;
+      }
+    }
+    else if (fixId === 'fix_empty_je') {
+      // 빈 JE는 void 처리 (삭제하지 않음 — 감사 로그)
+      const empty = result.detail.empty || [];
+      for (const j of empty) {
+        await db.from('journal_entries').update({
+          status: 'void',
+          updated_at: new Date().toISOString()
+        }).eq('id', j.id);
+        fixed++;
+      }
+    }
+    else if (fixId === 'fix_je_broken_source') {
+      // source_id 끊긴 JE는 source_id만 null로 (JE 자체는 유지)
+      const broken = result.detail.broken || [];
+      for (const j of broken) {
+        await db.from('journal_entries').update({
+          source_id: null,
+          updated_at: new Date().toISOString()
+        }).eq('id', j.id);
+        fixed++;
+      }
+    }
+
+    showToast(`✅ ${fixed}건 수정 완료`);
+    await runHealthCheckAndRender();
+    // 관련 패널 새로고침
+    if (typeof loadAP === 'function' && document.getElementById('panel-ap')?.classList.contains('active')) await loadAP();
+    if (typeof loadGL === 'function') loadGL();
+  } catch(e) {
+    console.error('[runHealthFix]', e);
+    showToast('❌ 수정 실패: ' + e.message);
+  }
+}
+
+// ── 자동 주기 실행 (5분마다) ──
+function startHealthCheckAutoRun() {
+  if (_healthCheckState.autoCheckTimer) clearInterval(_healthCheckState.autoCheckTimer);
+  // 초기 1회
+  setTimeout(() => runHealthCheck(true), 3000);
+  // 5분마다 재실행
+  _healthCheckState.autoCheckTimer = setInterval(() => runHealthCheck(true), 5 * 60 * 1000);
+}
+
 async function exportAPInvoicesCSV() {
   try {
     showToast('📥 데이터 수집 중...');
