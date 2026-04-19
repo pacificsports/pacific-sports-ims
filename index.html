@@ -1925,6 +1925,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <span style="color:#fff;font-weight:800;font-size:15px;">📝 Journal Entry Detail</span>
           <div style="display:flex;gap:8px;align-items:center;">
             <button id="je-recover-btn" style="background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.5);color:#fef3c7;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;display:none;">🔄 라인 복구</button>
+            <button id="je-repost-btn" style="background:rgba(124,58,237,0.3);border:1px solid rgba(124,58,237,0.6);color:#e9d5ff;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;display:none;" title="Void + 반대분개 + 새 날짜로 재발행 (회계 원칙 준수)">🔄 Void & Re-Post</button>
             <button id="je-edit-btn" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">✏️ Edit</button>
             <button id="je-void-btn" onclick="voidJE()" style="background:rgba(220,38,38,0.2);border:1px solid rgba(220,38,38,0.4);color:#fca5a5;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:700;">🚫 Void</button>
             <button onclick="document.getElementById('je-view-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
@@ -33931,6 +33932,18 @@ async function viewJE(jeId) {
     }
   }
 
+  // Void & Re-Post 버튼 — 라인 있고 posted 상태이면 표시
+  const repostBtn = document.getElementById('je-repost-btn');
+  if (repostBtn) {
+    const hasLines = lines && lines.length > 0;
+    if (hasLines && je.status === 'posted') {
+      repostBtn.style.display = 'block';
+      repostBtn.onclick = () => voidAndRepostJE(jeId);
+    } else {
+      repostBtn.style.display = 'none';
+    }
+  }
+
   const fmt = n => n > 0 ? '$' + parseFloat(n).toLocaleString('en-US',{minimumFractionDigits:2}) : '—';
   const totalD = (lines||[]).reduce((s,l) => s+(parseFloat(l.debit)||0), 0);
   const totalC = (lines||[]).reduce((s,l) => s+(parseFloat(l.credit)||0), 0);
@@ -33991,38 +34004,40 @@ async function editJE(jeId) {
 }
 
 async function voidJE(jeId, entryNumber) {
-  if (!confirm(`${entryNumber} — 이 분개를 Void 처리하시겠습니까?\n\n(반대 분개가 자동 생성됩니다)`)) return;
+  if (!confirm(`${entryNumber} — 이 분개를 Void 처리하시겠습니까?\n\n(원본과 같은 날짜로 반대 분개가 자동 생성됩니다)`)) return;
 
-  // 원래 라인 가져오기
+  // 원본 JE와 라인 가져오기
+  const { data: origJE } = await db.from('journal_entries').select('*').eq('id', jeId).single();
   const { data: lines } = await db.from('journal_lines').select('*').eq('journal_entry_id', jeId);
+  if (!origJE) { showToast('❌ 원본 JE를 찾을 수 없음'); return; }
 
   // 상태 void로 변경
   await db.from('journal_entries').update({ status: 'void', updated_at: new Date().toISOString() }).eq('id', jeId);
 
-  // 반대 분개 자동 생성
-  const year = new Date().getFullYear();
+  // 반대 분개 자동 생성 — 원본과 같은 날짜 사용 (그래야 해당 기간의 net 효과가 $0)
+  const reverseYear = (origJE.entry_date || new Date().toISOString().slice(0,10)).slice(0,4);
   const { data: last } = await db.from('journal_entries')
-    .select('entry_number').like('entry_number', `JE-${year}-%`)
+    .select('entry_number').like('entry_number', `JE-${reverseYear}-%`)
     .order('entry_number', { ascending: false }).limit(1);
   const lastNum = last?.[0] ? parseInt(last[0].entry_number.split('-')[2]) || 0 : 0;
-  const reverseNum = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+  const reverseNum = `JE-${reverseYear}-${String(lastNum+1).padStart(4,'0')}`;
 
   const { data: reverseJE } = await db.from('journal_entries').insert({
     entry_number: reverseNum,
-    entry_date: new Date().toISOString().slice(0,10),
-    description: `VOID: ${entryNumber}`,
+    entry_date: origJE.entry_date, // 원본과 같은 날짜
+    description: `VOID: ${entryNumber} — ${origJE.description||''}`,
     source: 'manual', status: 'posted',
     created_by: _currentEmployee?.name || 'System',
     created_at: new Date().toISOString()
   }).select().single();
 
-  if (reverseJE) {
-    const reverseLines = (lines||[]).map(l => ({
+  if (reverseJE && lines && lines.length) {
+    const reverseLines = lines.map(l => ({
       journal_entry_id: reverseJE.id,
       account_code: l.account_code,
       description: `Void of ${entryNumber}`,
-      debit: l.credit,   // 반전
-      credit: l.debit,
+      debit: parseFloat(l.credit)||0,   // 반전
+      credit: parseFloat(l.debit)||0,
     }));
     await db.from('journal_lines').insert(reverseLines);
   }
@@ -34031,6 +34046,123 @@ async function voidJE(jeId, entryNumber) {
   document.getElementById('je-view-modal').style.display = 'none';
   await loadJE();
   await loadGL();
+  if (document.getElementById('acct-detail-modal')) {
+    await reloadAccountDetailLedger();
+  }
+}
+
+// ── JE Void & Re-Post: 원본 void + 반대분개 + 새 날짜로 재발행 (원클릭) ──
+async function voidAndRepostJE(jeId) {
+  try {
+    // 원본 JE + 라인 로드
+    const { data: origJE } = await db.from('journal_entries').select('*').eq('id', jeId).single();
+    const { data: origLines } = await db.from('journal_lines').select('*').eq('journal_entry_id', jeId).order('id');
+    if (!origJE) { showToast('❌ 원본 JE를 찾을 수 없음'); return; }
+    if (!origLines || origLines.length === 0) { showToast('❌ 원본 JE에 라인이 없음. 일반 Edit 기능을 사용하세요.'); return; }
+
+    // 새 날짜 입력 받기
+    const currentDate = origJE.entry_date;
+    const newDate = prompt(`${origJE.entry_number}의 날짜를 수정합니다.\n\n잘못된 날짜: ${currentDate}\n올바른 날짜를 입력하세요 (YYYY-MM-DD):`, currentDate);
+
+    if (!newDate || newDate === currentDate) {
+      showToast('취소됨');
+      return;
+    }
+
+    // 날짜 형식 검증
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
+      showToast('❌ 날짜 형식 오류 (YYYY-MM-DD)');
+      return;
+    }
+
+    if (!confirm(`다음 세 가지 작업이 실행됩니다:\n\n1) 원본 ${origJE.entry_number} → VOID 처리 (${currentDate})\n2) 반대분개 자동 생성 (${currentDate})\n3) 새 분개 생성 (${newDate})\n\n회계 원칙에 따라 원본은 보존되고 반대분개로 효과가 상쇄된 후, 올바른 날짜로 재등록됩니다.\n\n계속하시겠습니까?`)) {
+      return;
+    }
+
+    showToast('🔄 처리 중...');
+
+    // ── 1. 원본 JE를 void로 변경 ──
+    await db.from('journal_entries').update({
+      status: 'void',
+      updated_at: new Date().toISOString()
+    }).eq('id', jeId);
+
+    // ── 번호 생성 helper ──
+    async function nextJENumber(year) {
+      const { data: last } = await db.from('journal_entries')
+        .select('entry_number').like('entry_number', `JE-${year}-%`)
+        .order('entry_number', { ascending: false }).limit(1);
+      const lastNum = last?.[0] ? parseInt(last[0].entry_number.split('-')[2]) || 0 : 0;
+      return `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+    }
+
+    // ── 2. 반대 분개 생성 (원본 날짜) ──
+    const reverseYear = currentDate.slice(0,4);
+    const reverseNum = await nextJENumber(reverseYear);
+    const { data: reverseJE, error: revErr } = await db.from('journal_entries').insert({
+      entry_number: reverseNum,
+      entry_date: currentDate,
+      description: `VOID: ${origJE.entry_number} — Date correction`,
+      source: 'manual',
+      status: 'posted',
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    }).select().single();
+    if (revErr) throw revErr;
+
+    const reverseLines = origLines.map(l => ({
+      journal_entry_id: reverseJE.id,
+      account_code: l.account_code,
+      description: `Void of ${origJE.entry_number}`,
+      debit: parseFloat(l.credit) || 0,   // 반전
+      credit: parseFloat(l.debit) || 0
+    }));
+    const { error: revLineErr } = await db.from('journal_lines').insert(reverseLines);
+    if (revLineErr) throw revLineErr;
+
+    // ── 3. 새 분개 생성 (수정된 날짜) ──
+    const newYear = newDate.slice(0,4);
+    const newNum = await nextJENumber(newYear);
+    const { data: newJE, error: newErr } = await db.from('journal_entries').insert({
+      entry_number: newNum,
+      entry_date: newDate,
+      description: `${origJE.description||''} [Re-posted from ${origJE.entry_number}]`,
+      source: origJE.source || 'manual',
+      source_id: origJE.source_id || null,
+      status: 'posted',
+      created_by: _currentEmployee?.name || 'System',
+      created_at: new Date().toISOString()
+    }).select().single();
+    if (newErr) throw newErr;
+
+    const newLines = origLines.map(l => ({
+      journal_entry_id: newJE.id,
+      account_code: l.account_code,
+      description: l.description,
+      debit: parseFloat(l.debit) || 0,
+      credit: parseFloat(l.credit) || 0
+    }));
+    const { error: newLineErr } = await db.from('journal_lines').insert(newLines);
+    if (newLineErr) throw newLineErr;
+
+    // ── 4. source 레코드의 journal_entry_id 업데이트 (AP invoice/payment가 새 JE를 가리키도록) ──
+    if (origJE.source === 'ap_invoice' && origJE.source_id) {
+      await db.from('ap_invoices').update({ journal_entry_id: newJE.id }).eq('id', origJE.source_id);
+    } else if (origJE.source === 'ap_payment' && origJE.source_id) {
+      await db.from('ap_payments').update({ journal_entry_id: newJE.id }).eq('id', origJE.source_id);
+    }
+
+    showToast(`✅ 완료! 원본 ${origJE.entry_number} Void → 반대분개 ${reverseNum} → 새 분개 ${newNum} (${newDate})`);
+    document.getElementById('je-view-modal').style.display = 'none';
+    await loadJE();
+    await loadGL();
+    if (document.getElementById('acct-detail-modal')) {
+      await reloadAccountDetailLedger();
+    }
+  } catch(e) {
+    console.error('[voidAndRepostJE]', e);
+    showToast('❌ 실패: ' + e.message);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
