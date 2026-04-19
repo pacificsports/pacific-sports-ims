@@ -2267,30 +2267,35 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
 
         <!-- 요약 KPI -->
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;">
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px;">
           <div style="padding:14px;background:#fef2f2;border:2px solid #fecaca;border-radius:10px;">
             <div style="font-size:10px;font-weight:700;color:#991b1b;text-transform:uppercase;letter-spacing:0.5px;">🚨 Overdue</div>
-            <div style="font-size:18px;font-weight:800;color:#dc2626;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-overdue">—</div>
+            <div style="font-size:17px;font-weight:800;color:#dc2626;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-overdue">—</div>
             <div style="font-size:10px;color:#991b1b;margin-top:2px;" id="cf-kpi-overdue-count">—</div>
           </div>
           <div style="padding:14px;background:#fffbeb;border:2px solid #fde68a;border-radius:10px;">
             <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.5px;">📅 이번 주</div>
-            <div style="font-size:18px;font-weight:800;color:#d97706;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-this-week">—</div>
+            <div style="font-size:17px;font-weight:800;color:#d97706;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-this-week">—</div>
             <div style="font-size:10px;color:#92400e;margin-top:2px;" id="cf-kpi-this-week-count">—</div>
           </div>
           <div style="padding:14px;background:#eff6ff;border:2px solid #bfdbfe;border-radius:10px;">
             <div style="font-size:10px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:0.5px;">📆 이번 달</div>
-            <div style="font-size:18px;font-weight:800;color:#1a56a0;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-this-month">—</div>
+            <div style="font-size:17px;font-weight:800;color:#1a56a0;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-this-month">—</div>
             <div style="font-size:10px;color:#1e40af;margin-top:2px;" id="cf-kpi-this-month-count">—</div>
           </div>
           <div style="padding:14px;background:#f0fdf4;border:2px solid #bbf7d0;border-radius:10px;">
             <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:0.5px;">📅 다음 달</div>
-            <div style="font-size:18px;font-weight:800;color:#16a34a;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-next-month">—</div>
+            <div style="font-size:17px;font-weight:800;color:#16a34a;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-next-month">—</div>
             <div style="font-size:10px;color:#166534;margin-top:2px;" id="cf-kpi-next-month-count">—</div>
           </div>
-          <div style="padding:14px;background:#f8fafc;border:2px solid #e5e7eb;border-radius:10px;">
+          <div style="padding:14px;background:#f5f3ff;border:2px solid #ddd6fe;border-radius:10px;">
+            <div style="font-size:10px;font-weight:700;color:#5b21b6;text-transform:uppercase;letter-spacing:0.5px;">❓ Due Date 없음</div>
+            <div style="font-size:17px;font-weight:800;color:#7c3aed;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-no-due">—</div>
+            <div style="font-size:10px;color:#5b21b6;margin-top:2px;" id="cf-kpi-no-due-count">—</div>
+          </div>
+          <div style="padding:14px;background:#f8fafc;border:2px solid #94a3b8;border-radius:10px;">
             <div style="font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;">💰 총 Outstanding</div>
-            <div style="font-size:18px;font-weight:800;color:#0f2744;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-total">—</div>
+            <div style="font-size:17px;font-weight:800;color:#0f2744;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-total">—</div>
             <div style="font-size:10px;color:#6b7280;margin-top:2px;" id="cf-kpi-total-count">—</div>
           </div>
         </div>
@@ -26773,39 +26778,17 @@ function renderCashFlow() {
     return '$' + v.toFixed(0);
   };
 
-  // Open/Partial 인보이스만 (void 제외, paid 제외)
+  // Open/Partial 인보이스만 (void 제외, paid 제외) — AP KPI와 동일한 기준
   const openInvs = (_apInvoices||[]).filter(i => ['open','partial'].includes(i.status));
 
   const today = new Date();
   today.setHours(0,0,0,0);
-  const todayStr = today.toISOString().slice(0,10);
-
-  // 🐛 디버그: 중복 감지
-  const idCounts = {};
-  openInvs.forEach(i => { idCounts[i.id] = (idCounts[i.id]||0) + 1; });
-  const dups = Object.entries(idCounts).filter(([id,c]) => c > 1);
-  if (dups.length > 0) {
-    console.warn('[CashFlow] 중복 인보이스 감지:', dups);
-  }
-
-  // invoice number 중복도 체크
-  const numCounts = {};
-  openInvs.forEach(i => {
-    const key = `${i.vendor_id||i.vendor_name}||${i.invoice_number}`;
-    numCounts[key] = (numCounts[key]||0) + 1;
-  });
-  const invDups = Object.entries(numCounts).filter(([k,c]) => c > 1);
-  if (invDups.length > 0) {
-    console.warn('[CashFlow] 중복 invoice number 감지:', invDups);
-  }
-
-  console.log(`[CashFlow] _apInvoices 총 ${_apInvoices?.length||0}건, open/partial ${openInvs.length}건`);
 
   // 날짜 계산 헬퍼
   const getWeekStart = (d) => {
     const dt = new Date(d);
     const day = dt.getDay();
-    const diff = dt.getDate() - day; // 일요일 기준
+    const diff = dt.getDate() - day;
     return new Date(dt.setDate(diff));
   };
   const endOfWeek = new Date(today);
@@ -26814,19 +26797,24 @@ function renderCashFlow() {
   const nextMonthStart = new Date(today.getFullYear(), today.getMonth()+1, 1);
   const nextMonthEnd = new Date(today.getFullYear(), today.getMonth()+2, 0);
 
-  // KPI 계산
+  // ══════════════════════════════════════════════════════════════
+  // 중요: Total = Overdue + This Week + Future(not due yet) + No Due Date
+  // AP KPI의 Total과 정확히 같은 값이 나오도록 모든 분기를 포함
+  // ══════════════════════════════════════════════════════════════
   let overdue = { amount: 0, count: 0 };
   let thisWeek = { amount: 0, count: 0 };
   let thisMonth = { amount: 0, count: 0 };
   let nextMonth = { amount: 0, count: 0 };
+  let noDueDate = { amount: 0, count: 0 };
   let total = { amount: 0, count: 0 };
 
   const rows = [];
-  const byPeriod = {}; // 차트용
-  const byVendor = {}; // 벤더별 합계
+  const byPeriod = {};
+  const byVendor = {};
 
   openInvs.forEach(inv => {
     const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+    // balance가 0 이하(paid 완료 또는 과지급)는 KPI에서 제외 — AP KPI와 동일
     if (balance <= 0.01) return;
 
     const dueDate = inv.due_date ? new Date(inv.due_date) : null;
@@ -26835,41 +26823,54 @@ function renderCashFlow() {
     total.amount += balance;
     total.count++;
 
-    // 벤더별
     const vKey = inv.vendor_name || 'Unknown';
     byVendor[vKey] = (byVendor[vKey] || 0) + balance;
 
-    // 기간별 분류
-    if (dueDate) {
-      if (dueDate < today) {
-        overdue.amount += balance;
-        overdue.count++;
-      }
-      if (dueDate >= today && dueDate <= endOfWeek) {
+    if (!dueDate) {
+      noDueDate.amount += balance;
+      noDueDate.count++;
+    } else if (dueDate < today) {
+      overdue.amount += balance;
+      overdue.count++;
+    } else {
+      // 이번 주 (오늘 ~ 이번 주 일요일)
+      if (dueDate <= endOfWeek) {
         thisWeek.amount += balance;
         thisWeek.count++;
       }
-      if (dueDate >= today && dueDate <= thisMonthEnd) {
+      // 이번 달 (오늘 ~ 월말)
+      if (dueDate <= thisMonthEnd) {
         thisMonth.amount += balance;
         thisMonth.count++;
       }
+      // 다음 달
       if (dueDate >= nextMonthStart && dueDate <= nextMonthEnd) {
         nextMonth.amount += balance;
         nextMonth.count++;
       }
     }
 
-    // 상세 테이블 로우
     const daysDiff = dueDate ? Math.floor((dueDate - today) / (1000*60*60*24)) : null;
     rows.push({
-      inv,
-      balance,
-      dueDate,
-      daysDiff,
+      inv, balance, dueDate, daysDiff,
       vendor: inv.vendor_name || '—',
       invoiceNumber: inv.invoice_number || '—'
     });
   });
+
+  // 데이터 검증: AP KPI와 일치해야 함
+  console.log(`[CashFlow] Total: $${total.amount.toFixed(2)} (${total.count} invoices)`);
+  console.log(`  • Overdue: $${overdue.amount.toFixed(2)} (${overdue.count})`);
+  console.log(`  • Due this week: $${thisWeek.amount.toFixed(2)} (${thisWeek.count})`);
+  console.log(`  • Due this month: $${thisMonth.amount.toFixed(2)} (${thisMonth.count})`);
+  console.log(`  • Due next month: $${nextMonth.amount.toFixed(2)} (${nextMonth.count})`);
+  console.log(`  • No due date: $${noDueDate.amount.toFixed(2)} (${noDueDate.count})`);
+
+  // paid_amount > total_amount 경고 (Health Check에서 발견되지만 콘솔로도 안내)
+  const overpaid = openInvs.filter(i => (parseFloat(i.paid_amount)||0) > (parseFloat(i.total_amount)||0) + 0.01);
+  if (overpaid.length > 0) {
+    console.warn(`[CashFlow] 과지급 인보이스 ${overpaid.length}건 감지 — Health Check에서 확인/수정 가능`);
+  }
 
   // 차트 기간별 데이터
   const bucket = document.getElementById('cf-bucket')?.value || 'monthly';
@@ -26886,9 +26887,7 @@ function renderCashFlow() {
       const label = `${weekStart.getMonth()+1}/${weekStart.getDate()}`;
       byPeriod[key] = { label, amount: 0, count: 0, isOverdue: false, start: weekStart, end: weekEnd };
     }
-    // overdue 버킷
     byPeriod['OV'] = { label: '과기한', amount: overdue.amount, count: overdue.count, isOverdue: true };
-    // 인보이스 할당
     openInvs.forEach(inv => {
       const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
       if (balance <= 0.01) return;
@@ -26942,6 +26941,7 @@ function renderCashFlow() {
   setKPI('this-week', thisWeek.amount, thisWeek.count);
   setKPI('this-month', thisMonth.amount, thisMonth.count);
   setKPI('next-month', nextMonth.amount, nextMonth.count);
+  setKPI('no-due', noDueDate.amount, noDueDate.count);
   setKPI('total', total.amount, total.count);
 
   // 차트 렌더링 (간단 bar chart with CSS)
@@ -32087,16 +32087,28 @@ async function deleteAPPayment(paymentId, invoiceId) {
 // ══════════════════════════════════════════════════════════════
 // 모든 AP 관련 작업의 이력을 기록하고 조회할 수 있는 시스템
 
+// 테이블 존재 여부 캐시 (404 반복 방지)
+const _tableExistsCache = {};
+
+async function checkTableExists(tableName) {
+  if (_tableExistsCache[tableName] !== undefined) return _tableExistsCache[tableName];
+  try {
+    const { error } = await db.from(tableName).select('*', { head: true, count: 'exact' }).limit(0);
+    _tableExistsCache[tableName] = !error;
+  } catch(e) {
+    _tableExistsCache[tableName] = false;
+  }
+  return _tableExistsCache[tableName];
+}
+
 /**
- * 활동 로그 기록
- * @param {string} entityType - 'ap_invoice' | 'ap_payment' | 'journal_entry' | 'vendor'
- * @param {string} entityId - 대상 레코드의 UUID
- * @param {string} entityRef - 사람이 읽기 위한 참조 (invoice #, JE # 등)
- * @param {string} action - 'create' | 'update' | 'delete' | 'void' | 'pay' | 'unpay' 등
- * @param {object} options - { fieldChanges, note, metadata }
+ * 활동 로그 기록 (ap_activity_log 테이블 필요)
  */
 async function logActivity(entityType, entityId, entityRef, action, options = {}) {
   try {
+    // 테이블 없으면 조용히 skip
+    if (!await checkTableExists('ap_activity_log')) return;
+
     const record = {
       user_name: _currentEmployee?.name || 'System',
       user_role: _currentEmployee?.role || 'unknown',
@@ -32111,7 +32123,6 @@ async function logActivity(entityType, entityId, entityRef, action, options = {}
     const { error } = await db.from('ap_activity_log').insert(record);
     if (error) {
       console.warn('[logActivity] Failed to log:', error, record);
-      // 로그 실패는 본 작업을 막지 않음
     }
   } catch(e) {
     console.warn('[logActivity] Exception:', e);
@@ -32140,6 +32151,7 @@ function diffFields(before, after, fieldsToTrack = null) {
 
 /** 특정 엔티티의 히스토리 조회 */
 async function getEntityHistory(entityType, entityId) {
+  if (!await checkTableExists('ap_activity_log')) return [];
   const { data, error } = await db.from('ap_activity_log')
     .select('*')
     .eq('entity_type', entityType)
@@ -32261,6 +32273,11 @@ async function openActivityLogModal() {
 let _activityLogData = [];
 
 async function loadActivityLogData() {
+  if (!await checkTableExists('ap_activity_log')) {
+    const listEl = document.getElementById('alog-list');
+    if (listEl) listEl.innerHTML = `<div style="text-align:center;padding:40px;color:#dc2626;">⚠️ <strong>ap_activity_log</strong> 테이블이 존재하지 않습니다.<br><br>Supabase SQL Editor에서 마이그레이션 파일을 실행해주세요:<br><code style="background:#f3f4f6;padding:4px 8px;border-radius:4px;font-size:11px;">activity_log_migration.sql</code></div>`;
+    return;
+  }
   const { data, error } = await db.from('ap_activity_log')
     .select('*')
     .order('timestamp', { ascending: false })
@@ -32628,7 +32645,10 @@ const HEALTH_CHECKS = [
     category: 'AR',
     description: 'GL 120-001 (AR) 잔액 vs Sum of Open AR Invoices',
     fn: async () => {
-      // ar_invoices 테이블 존재 여부 확인
+      // ar_invoices 테이블 없으면 스킵
+      if (!await checkTableExists('ar_invoices')) {
+        return { status: 'ok', message: 'AR 모듈 없음 (건너뜀)' };
+      }
       const { data: arInvs, error } = await db.from('ar_invoices').select('total_amount, paid_amount, status').in('status', ['open','partial']);
       if (error) {
         return { status: 'ok', message: 'AR 모듈 없음 (건너뜀)' };
@@ -34144,20 +34164,26 @@ async function viewAPInvoice(invoiceId) {
 
   // Activity History 카운트 및 내용 로드
   try {
-    const history = await getEntityHistory('ap_invoice', invoiceId);
-    // 관련 payment 히스토리도 합침
-    const { data: pmts } = await db.from('ap_payments').select('id').eq('ap_invoice_id', invoiceId);
-    let pmtHistory = [];
-    if (pmts && pmts.length > 0) {
-      const pmtIds = pmts.map(p => p.id);
-      const { data } = await db.from('ap_activity_log')
-        .select('*')
-        .eq('entity_type', 'ap_payment')
-        .in('entity_id', pmtIds)
-        .order('timestamp', { ascending: false });
-      pmtHistory = data || [];
-    }
-    const allHistory = [...history, ...pmtHistory].sort((a,b) => b.timestamp.localeCompare(a.timestamp));
+    if (!await checkTableExists('ap_activity_log')) {
+      const countEl = document.getElementById('ap-det-history-count');
+      if (countEl) countEl.textContent = 'N/A';
+      const historyContent = document.getElementById('ap-det-history-content');
+      if (historyContent) historyContent.innerHTML = '<div style="color:#9ca3af;text-align:center;padding:12px;font-size:11px;">ap_activity_log 테이블 미설정</div>';
+    } else {
+      const history = await getEntityHistory('ap_invoice', invoiceId);
+      // 관련 payment 히스토리도 합침
+      const { data: pmts } = await db.from('ap_payments').select('id').eq('ap_invoice_id', invoiceId);
+      let pmtHistory = [];
+      if (pmts && pmts.length > 0) {
+        const pmtIds = pmts.map(p => p.id);
+        const { data } = await db.from('ap_activity_log')
+          .select('*')
+          .eq('entity_type', 'ap_payment')
+          .in('entity_id', pmtIds)
+          .order('timestamp', { ascending: false });
+        pmtHistory = data || [];
+      }
+      const allHistory = [...history, ...pmtHistory].sort((a,b) => b.timestamp.localeCompare(a.timestamp));
 
     const countEl = document.getElementById('ap-det-history-count');
     if (countEl) countEl.textContent = allHistory.length;
@@ -34170,6 +34196,7 @@ async function viewAPInvoice(invoiceId) {
         historyContent.innerHTML = allHistory.map(renderActivityLogItem).join('');
       }
     }
+    } // if (!checkTableExists) else end
   } catch(e) {
     console.warn('[viewAPInvoice] Failed to load history:', e);
   }
