@@ -2106,6 +2106,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button id="ap-tab-invoices" onclick="apSetTab('invoices')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:var(--primary);color:#fff;border-radius:5px 5px 0 0;cursor:pointer;">🧾 Open Invoices</button>
         <button id="ap-tab-calendar" onclick="apSetTab('calendar')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📅 Payment Calendar</button>
         <button id="ap-tab-aging" onclick="apSetTab('aging')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📊 AP Aging</button>
+        <button id="ap-tab-cashflow" onclick="apSetTab('cashflow')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">💰 Cash Flow</button>
         <button id="ap-tab-checks" onclick="openCheckPrintingModal()" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#0f2744;color:#fff;border-radius:5px 5px 0 0;cursor:pointer;">🖨️ Check Printing</button>
         <button id="ap-tab-payments" onclick="apSetTab('payments')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">💵 Payment History</button>
         <button id="ap-tab-vendors" onclick="apSetTab('vendors')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">🏢 Vendor Management</button>
@@ -2245,6 +2246,88 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             </tr></thead>
             <tbody id="ap-aging-tbody"><tr><td colspan="10" class="empty">Loading...</td></tr></tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- Cash Flow Tab -->
+      <div id="ap-pane-cashflow" style="display:none;">
+        <!-- 헤더 -->
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="font-size:13px;font-weight:700;color:#374151;">💰 Cash Flow Forecast</div>
+            <span style="font-size:11px;color:#6b7280;">Open/Partial 인보이스의 due date 기준</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="cf-bucket" onchange="renderCashFlow()" style="padding:5px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;">
+              <option value="weekly">주별 (12주)</option>
+              <option value="monthly" selected>월별 (6개월)</option>
+            </select>
+            <button onclick="renderCashFlow()" style="padding:6px 12px;background:#1a56a0;color:#fff;border:none;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">🔄 새로고침</button>
+          </div>
+        </div>
+
+        <!-- 요약 KPI -->
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;">
+          <div style="padding:14px;background:#fef2f2;border:2px solid #fecaca;border-radius:10px;">
+            <div style="font-size:10px;font-weight:700;color:#991b1b;text-transform:uppercase;letter-spacing:0.5px;">🚨 Overdue</div>
+            <div style="font-size:18px;font-weight:800;color:#dc2626;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-overdue">—</div>
+            <div style="font-size:10px;color:#991b1b;margin-top:2px;" id="cf-kpi-overdue-count">—</div>
+          </div>
+          <div style="padding:14px;background:#fffbeb;border:2px solid #fde68a;border-radius:10px;">
+            <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.5px;">📅 이번 주</div>
+            <div style="font-size:18px;font-weight:800;color:#d97706;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-this-week">—</div>
+            <div style="font-size:10px;color:#92400e;margin-top:2px;" id="cf-kpi-this-week-count">—</div>
+          </div>
+          <div style="padding:14px;background:#eff6ff;border:2px solid #bfdbfe;border-radius:10px;">
+            <div style="font-size:10px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:0.5px;">📆 이번 달</div>
+            <div style="font-size:18px;font-weight:800;color:#1a56a0;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-this-month">—</div>
+            <div style="font-size:10px;color:#1e40af;margin-top:2px;" id="cf-kpi-this-month-count">—</div>
+          </div>
+          <div style="padding:14px;background:#f0fdf4;border:2px solid #bbf7d0;border-radius:10px;">
+            <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:0.5px;">📅 다음 달</div>
+            <div style="font-size:18px;font-weight:800;color:#16a34a;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-next-month">—</div>
+            <div style="font-size:10px;color:#166534;margin-top:2px;" id="cf-kpi-next-month-count">—</div>
+          </div>
+          <div style="padding:14px;background:#f8fafc;border:2px solid #e5e7eb;border-radius:10px;">
+            <div style="font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;">💰 총 Outstanding</div>
+            <div style="font-size:18px;font-weight:800;color:#0f2744;font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="cf-kpi-total">—</div>
+            <div style="font-size:10px;color:#6b7280;margin-top:2px;" id="cf-kpi-total-count">—</div>
+          </div>
+        </div>
+
+        <!-- 차트 + 벤더 TOP 10 -->
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;">
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;">
+            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:10px;" id="cf-chart-title">기간별 예상 지급액</div>
+            <div id="cf-chart" style="min-height:280px;"></div>
+          </div>
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;overflow:hidden;">
+            <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:10px;">🏢 벤더별 Outstanding TOP 10</div>
+            <div id="cf-vendor-top" style="max-height:280px;overflow-y:auto;"></div>
+          </div>
+        </div>
+
+        <!-- 상세 테이블 -->
+        <div style="margin-top:14px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+          <div style="padding:12px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:12px;font-weight:700;color:#374151;">📋 Upcoming Payments</span>
+            <span id="cf-table-count" style="font-size:11px;color:#6b7280;"></span>
+          </div>
+          <div style="max-height:400px;overflow-y:auto;">
+            <table class="tbl" style="width:100%;">
+              <thead style="position:sticky;top:0;z-index:1;">
+                <tr style="background:#0f2744;color:#fff;">
+                  <th style="text-align:left;padding:8px 12px;">Due Date</th>
+                  <th style="text-align:center;padding:8px 12px;width:70px;">D-Day</th>
+                  <th style="text-align:left;padding:8px 12px;">Invoice #</th>
+                  <th style="text-align:left;padding:8px 12px;">Vendor</th>
+                  <th style="text-align:right;padding:8px 12px;width:140px;">Balance</th>
+                  <th style="text-align:center;padding:8px 12px;width:80px;">Status</th>
+                </tr>
+              </thead>
+              <tbody id="cf-table-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -26305,7 +26388,7 @@ let _apCalMonth = new Date().getMonth(); // 0-indexed
 
 function apSetTab(tab) {
   localStorage.setItem('apActiveTab', tab);
-  ['invoices','calendar','aging','payments','vendors'].forEach(t => {
+  ['invoices','calendar','aging','cashflow','payments','vendors'].forEach(t => {
     const btn = document.getElementById('ap-tab-' + t);
     const pane = document.getElementById('ap-pane-' + t);
     if (!btn || !pane) return;
@@ -26318,6 +26401,7 @@ function apSetTab(tab) {
   if (tab === 'payments') renderAPPayments();
   if (tab === 'calendar') renderAPCalendar();
   if (tab === 'vendors') renderVendorMgmtList();
+  if (tab === 'cashflow') renderCashFlow();
 }
 
 function apCalPrevMonth() {
@@ -26675,6 +26759,255 @@ function renderAPInvoices() {
       </td>
     </tr>`;
   }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════
+// CASH FLOW FORECAST
+// ══════════════════════════════════════════════════════════════
+function renderCashFlow() {
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+  const fmtShort = n => {
+    const v = parseFloat(n)||0;
+    if (v >= 1000000) return '$' + (v/1000000).toFixed(1) + 'M';
+    if (v >= 1000) return '$' + (v/1000).toFixed(1) + 'K';
+    return '$' + v.toFixed(0);
+  };
+
+  // Open/Partial 인보이스만 (void 제외, paid 제외)
+  const openInvs = (_apInvoices||[]).filter(i => ['open','partial'].includes(i.status));
+
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const todayStr = today.toISOString().slice(0,10);
+
+  // 날짜 계산 헬퍼
+  const getWeekStart = (d) => {
+    const dt = new Date(d);
+    const day = dt.getDay();
+    const diff = dt.getDate() - day; // 일요일 기준
+    return new Date(dt.setDate(diff));
+  };
+  const endOfWeek = new Date(today);
+  endOfWeek.setDate(today.getDate() + (6 - today.getDay()));
+  const thisMonthEnd = new Date(today.getFullYear(), today.getMonth()+1, 0);
+  const nextMonthStart = new Date(today.getFullYear(), today.getMonth()+1, 1);
+  const nextMonthEnd = new Date(today.getFullYear(), today.getMonth()+2, 0);
+
+  // KPI 계산
+  let overdue = { amount: 0, count: 0 };
+  let thisWeek = { amount: 0, count: 0 };
+  let thisMonth = { amount: 0, count: 0 };
+  let nextMonth = { amount: 0, count: 0 };
+  let total = { amount: 0, count: 0 };
+
+  const rows = [];
+  const byPeriod = {}; // 차트용
+  const byVendor = {}; // 벤더별 합계
+
+  openInvs.forEach(inv => {
+    const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+    if (balance <= 0.01) return;
+
+    const dueDate = inv.due_date ? new Date(inv.due_date) : null;
+    if (dueDate) dueDate.setHours(0,0,0,0);
+
+    total.amount += balance;
+    total.count++;
+
+    // 벤더별
+    const vKey = inv.vendor_name || 'Unknown';
+    byVendor[vKey] = (byVendor[vKey] || 0) + balance;
+
+    // 기간별 분류
+    if (dueDate) {
+      if (dueDate < today) {
+        overdue.amount += balance;
+        overdue.count++;
+      }
+      if (dueDate >= today && dueDate <= endOfWeek) {
+        thisWeek.amount += balance;
+        thisWeek.count++;
+      }
+      if (dueDate >= today && dueDate <= thisMonthEnd) {
+        thisMonth.amount += balance;
+        thisMonth.count++;
+      }
+      if (dueDate >= nextMonthStart && dueDate <= nextMonthEnd) {
+        nextMonth.amount += balance;
+        nextMonth.count++;
+      }
+    }
+
+    // 상세 테이블 로우
+    const daysDiff = dueDate ? Math.floor((dueDate - today) / (1000*60*60*24)) : null;
+    rows.push({
+      inv,
+      balance,
+      dueDate,
+      daysDiff,
+      vendor: inv.vendor_name || '—',
+      invoiceNumber: inv.invoice_number || '—'
+    });
+  });
+
+  // 차트 기간별 데이터
+  const bucket = document.getElementById('cf-bucket')?.value || 'monthly';
+
+  if (bucket === 'weekly') {
+    // 향후 12주 (이번 주 포함)
+    for (let w = 0; w < 12; w++) {
+      const weekStart = getWeekStart(new Date(today.getTime() + w * 7 * 24 * 60 * 60 * 1000));
+      weekStart.setHours(0,0,0,0);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      weekEnd.setHours(23,59,59,999);
+      const key = `W${w}`;
+      const label = `${weekStart.getMonth()+1}/${weekStart.getDate()}`;
+      byPeriod[key] = { label, amount: 0, count: 0, isOverdue: false, start: weekStart, end: weekEnd };
+    }
+    // overdue 버킷
+    byPeriod['OV'] = { label: '과기한', amount: overdue.amount, count: overdue.count, isOverdue: true };
+    // 인보이스 할당
+    openInvs.forEach(inv => {
+      const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+      if (balance <= 0.01) return;
+      const dueDate = inv.due_date ? new Date(inv.due_date) : null;
+      if (!dueDate || dueDate < today) return; // 과기한은 별도
+      dueDate.setHours(0,0,0,0);
+      for (let w = 0; w < 12; w++) {
+        const b = byPeriod[`W${w}`];
+        if (dueDate >= b.start && dueDate <= b.end) {
+          b.amount += balance;
+          b.count++;
+          break;
+        }
+      }
+    });
+  } else {
+    // 향후 6개월 (이번 달 포함)
+    for (let m = 0; m < 6; m++) {
+      const monStart = new Date(today.getFullYear(), today.getMonth()+m, 1);
+      const monEnd = new Date(today.getFullYear(), today.getMonth()+m+1, 0, 23, 59, 59);
+      const key = `M${m}`;
+      const label = monStart.toLocaleDateString('en-US', { month:'short', year:'2-digit' });
+      byPeriod[key] = { label, amount: 0, count: 0, isOverdue: false, start: monStart, end: monEnd };
+    }
+    byPeriod['OV'] = { label: '과기한', amount: overdue.amount, count: overdue.count, isOverdue: true };
+    openInvs.forEach(inv => {
+      const balance = (parseFloat(inv.total_amount)||0) - (parseFloat(inv.paid_amount)||0);
+      if (balance <= 0.01) return;
+      const dueDate = inv.due_date ? new Date(inv.due_date) : null;
+      if (!dueDate || dueDate < today) return;
+      dueDate.setHours(0,0,0,0);
+      for (let m = 0; m < 6; m++) {
+        const b = byPeriod[`M${m}`];
+        if (dueDate >= b.start && dueDate <= b.end) {
+          b.amount += balance;
+          b.count++;
+          break;
+        }
+      }
+    });
+  }
+
+  // KPI 업데이트
+  const setKPI = (id, amt, count) => {
+    const amtEl = document.getElementById(`cf-kpi-${id}`);
+    const cntEl = document.getElementById(`cf-kpi-${id}-count`);
+    if (amtEl) amtEl.textContent = fmt(amt);
+    if (cntEl) cntEl.textContent = `${count} invoices`;
+  };
+  setKPI('overdue', overdue.amount, overdue.count);
+  setKPI('this-week', thisWeek.amount, thisWeek.count);
+  setKPI('this-month', thisMonth.amount, thisMonth.count);
+  setKPI('next-month', nextMonth.amount, nextMonth.count);
+  setKPI('total', total.amount, total.count);
+
+  // 차트 렌더링 (간단 bar chart with CSS)
+  const chartTitle = document.getElementById('cf-chart-title');
+  if (chartTitle) chartTitle.textContent = bucket === 'weekly' ? '주별 예상 지급액 (향후 12주)' : '월별 예상 지급액 (향후 6개월)';
+
+  const chartEl = document.getElementById('cf-chart');
+  if (chartEl) {
+    const periods = Object.values(byPeriod);
+    const maxAmount = Math.max(...periods.map(p => p.amount), 1);
+
+    chartEl.innerHTML = `
+      <div style="display:flex;align-items:flex-end;gap:6px;height:240px;padding:10px 0;border-bottom:2px solid #e5e7eb;">
+        ${periods.map(p => {
+          const pct = (p.amount / maxAmount) * 100;
+          const barColor = p.isOverdue ? '#dc2626' : (p.amount > 0 ? '#1a56a0' : '#e5e7eb');
+          const labelColor = p.isOverdue ? '#991b1b' : '#374151';
+          return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;position:relative;" title="${p.label}: ${fmt(p.amount)} (${p.count}건)">
+            ${p.amount > 0 ? `<div style="font-size:9px;color:${labelColor};font-weight:700;margin-bottom:2px;white-space:nowrap;font-family:monospace;">${fmtShort(p.amount)}</div>` : ''}
+            <div style="width:100%;background:${barColor};height:${pct}%;min-height:${p.amount > 0 ? '2px' : '0'};border-radius:3px 3px 0 0;transition:all 0.3s;${p.isOverdue ? 'border:2px solid #991b1b;' : ''}"></div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        ${periods.map(p => `<div style="flex:1;text-align:center;font-size:10px;font-weight:600;color:${p.isOverdue ? '#991b1b' : '#6b7280'};">${p.label}</div>`).join('')}
+      </div>`;
+  }
+
+  // 벤더 TOP 10
+  const vendorTopEl = document.getElementById('cf-vendor-top');
+  if (vendorTopEl) {
+    const sortedVendors = Object.entries(byVendor).sort((a,b) => b[1] - a[1]).slice(0, 10);
+    const maxV = sortedVendors[0]?.[1] || 1;
+    if (sortedVendors.length === 0) {
+      vendorTopEl.innerHTML = '<div style="color:#9ca3af;text-align:center;padding:20px;font-size:11px;">Open/Partial 인보이스 없음</div>';
+    } else {
+      vendorTopEl.innerHTML = sortedVendors.map(([v, amt], idx) => {
+        const pct = (amt / maxV) * 100;
+        return `<div style="margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:11px;">
+            <span style="color:#374151;font-weight:600;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${v.replace(/"/g,'&quot;')}">${idx+1}. ${v}</span>
+            <span style="color:#0f2744;font-weight:800;font-family:monospace;">${fmt(amt)}</span>
+          </div>
+          <div style="height:6px;background:#e5e7eb;border-radius:3px;margin-top:3px;overflow:hidden;">
+            <div style="height:100%;background:linear-gradient(90deg,#1e40af,#3b82f6);width:${pct}%;border-radius:3px;"></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // 상세 테이블 — due date 순 정렬
+  rows.sort((a,b) => {
+    if (!a.dueDate) return 1;
+    if (!b.dueDate) return -1;
+    return a.dueDate - b.dueDate;
+  });
+
+  const tbody = document.getElementById('cf-table-tbody');
+  const countEl = document.getElementById('cf-table-count');
+  if (countEl) countEl.textContent = `${rows.length} invoices — ${fmt(total.amount)}`;
+  if (tbody) {
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">Open/Partial 인보이스 없음</td></tr>';
+    } else {
+      tbody.innerHTML = rows.map(r => {
+        const isOverdue = r.daysDiff !== null && r.daysDiff < 0;
+        const isToday = r.daysDiff === 0;
+        const isSoon = r.daysDiff !== null && r.daysDiff > 0 && r.daysDiff <= 7;
+        const rowBg = isOverdue ? 'background:#fef2f2;' : (isSoon ? 'background:#fffbeb;' : '');
+        const dayBadge = r.daysDiff === null ? '<span style="color:#9ca3af;">—</span>'
+          : isOverdue ? `<span style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">D+${Math.abs(r.daysDiff)}</span>`
+          : isToday ? `<span style="background:#fffbeb;color:#d97706;border:1px solid #fde68a;border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">TODAY</span>`
+          : `<span style="color:#6b7280;font-size:11px;">D-${r.daysDiff}</span>`;
+        const statusColor = r.inv.status === 'partial' ? '#d97706' : '#1a56a0';
+        const statusBg = r.inv.status === 'partial' ? '#fffbeb' : '#eff6ff';
+        return `<tr style="border-bottom:1px solid #f0f0f0;${rowBg}cursor:pointer;" onclick="viewAPInvoice('${r.inv.id}')" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='${isOverdue?'#fef2f2':(isSoon?'#fffbeb':'')}'">
+          <td style="padding:7px 12px;font-size:12px;font-family:monospace;color:${isOverdue?'#dc2626':'#374151'};font-weight:${isOverdue?'700':'500'};">${r.inv.due_date||'—'}</td>
+          <td style="padding:7px 12px;text-align:center;">${dayBadge}</td>
+          <td style="padding:7px 12px;font-size:12px;font-family:monospace;font-weight:600;">${r.invoiceNumber}</td>
+          <td style="padding:7px 12px;font-size:12px;">${r.vendor}</td>
+          <td style="padding:7px 12px;text-align:right;font-size:12px;font-family:monospace;font-weight:700;color:${isOverdue?'#dc2626':'#0f2744'};">${fmt(r.balance)}</td>
+          <td style="padding:7px 12px;text-align:center;"><span style="background:${statusBg};color:${statusColor};border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;text-transform:uppercase;">${r.inv.status}</span></td>
+        </tr>`;
+      }).join('');
+    }
+  }
 }
 
 function renderAPAging() {
