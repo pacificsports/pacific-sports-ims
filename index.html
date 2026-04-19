@@ -26780,6 +26780,27 @@ function renderCashFlow() {
   today.setHours(0,0,0,0);
   const todayStr = today.toISOString().slice(0,10);
 
+  // 🐛 디버그: 중복 감지
+  const idCounts = {};
+  openInvs.forEach(i => { idCounts[i.id] = (idCounts[i.id]||0) + 1; });
+  const dups = Object.entries(idCounts).filter(([id,c]) => c > 1);
+  if (dups.length > 0) {
+    console.warn('[CashFlow] 중복 인보이스 감지:', dups);
+  }
+
+  // invoice number 중복도 체크
+  const numCounts = {};
+  openInvs.forEach(i => {
+    const key = `${i.vendor_id||i.vendor_name}||${i.invoice_number}`;
+    numCounts[key] = (numCounts[key]||0) + 1;
+  });
+  const invDups = Object.entries(numCounts).filter(([k,c]) => c > 1);
+  if (invDups.length > 0) {
+    console.warn('[CashFlow] 중복 invoice number 감지:', invDups);
+  }
+
+  console.log(`[CashFlow] _apInvoices 총 ${_apInvoices?.length||0}건, open/partial ${openInvs.length}건`);
+
   // 날짜 계산 헬퍼
   const getWeekStart = (d) => {
     const dt = new Date(d);
