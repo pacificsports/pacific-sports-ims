@@ -1526,9 +1526,15 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
 
         <!-- 확인 입력 -->
-        <div style="margin-bottom:12px;">
-          <label style="font-size:11px;font-weight:700;color:#991b1b;display:block;margin-bottom:4px;">확인 텍스트 입력: <code style="background:#fef2f2;padding:1px 6px;border-radius:3px;color:#dc2626;font-weight:800;">DELETE</code> 를 정확히 입력하세요</label>
-          <input type="text" id="cleanup-confirm-text" placeholder="DELETE" style="width:200px;padding:6px 10px;border:2px solid #fca5a5;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace;font-weight:700;text-transform:uppercase;" autocomplete="off">
+        <div style="margin-bottom:12px;display:flex;gap:14px;flex-wrap:wrap;">
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#991b1b;display:block;margin-bottom:4px;">확인 텍스트: <code style="background:#fef2f2;padding:1px 6px;border-radius:3px;color:#dc2626;font-weight:800;">DELETE</code></label>
+            <input type="text" id="cleanup-confirm-text" placeholder="DELETE" style="width:200px;padding:6px 10px;border:2px solid #fca5a5;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace;font-weight:700;text-transform:uppercase;" autocomplete="off">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:#991b1b;display:block;margin-bottom:4px;">🔒 Admin PIN (4자리)</label>
+            <input type="password" id="cleanup-admin-pin" placeholder="••••" inputmode="numeric" maxlength="4" pattern="[0-9]*" style="width:100px;padding:6px 10px;border:2px solid #fca5a5;border-radius:5px;font-size:14px;font-family:'IBM Plex Mono',monospace;font-weight:700;text-align:center;letter-spacing:4px;" autocomplete="off">
+          </div>
         </div>
 
         <!-- 실행 버튼 -->
@@ -9284,13 +9290,37 @@ async function executeDataCleanup() {
   );
   if (!confirm1) { setStatus('취소됨'); return; }
 
-  // 안전장치 5: Admin PIN 재확인
-  openPinModal('🔒', '데이터 삭제 재확인', 'Admin PIN을 한 번 더 입력하세요', async (emp) => {
-    if (emp.role !== 'admin') {
-      showToast('❌ Admin PIN이 아닙니다');
-      return;
+  // 안전장치 5: Admin PIN 인라인 확인
+  const pinInput = document.getElementById('cleanup-admin-pin');
+  const pin = pinInput?.value?.trim() || '';
+  if (!pin || pin.length !== 4) {
+    showToast('❌ Admin PIN 4자리를 입력하세요');
+    if (pinInput) {
+      pinInput.style.borderColor = '#dc2626';
+      pinInput.focus();
+      setTimeout(() => { pinInput.style.borderColor = '#fca5a5'; }, 1500);
     }
+    return;
+  }
 
+  // PIN 검증
+  if (!_pinEmployees || _pinEmployees.length === 0) {
+    await loadPinEmployees();
+  }
+  const emp = _pinEmployees.find(e => e.pin === pin && e.role === 'admin');
+  if (!emp) {
+    showToast('❌ 잘못된 Admin PIN');
+    if (pinInput) {
+      pinInput.value = '';
+      pinInput.style.borderColor = '#dc2626';
+      pinInput.focus();
+      setTimeout(() => { pinInput.style.borderColor = '#fca5a5'; }, 1500);
+    }
+    return;
+  }
+
+  // 여기부터 기존 try 블록 (emp는 검증된 admin)
+  {
     // 실행 로그
     const startedAt = new Date().toISOString();
     console.log('[DATA CLEANUP] Started by', emp.name, startedAt);
@@ -9422,6 +9452,8 @@ async function executeDataCleanup() {
 
       // UI 리셋
       document.getElementById('cleanup-confirm-text').value = '';
+      const pinInp = document.getElementById('cleanup-admin-pin');
+      if (pinInp) pinInp.value = '';
       ['cleanup-group-orders','cleanup-group-inventory-logs','cleanup-group-po','cleanup-group-transit','cleanup-group-inventory','cleanup-group-styles'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.checked = false;
@@ -9434,7 +9466,7 @@ async function executeDataCleanup() {
       setStatus('❌ 실패: ' + e.message, '#dc2626');
       alert('❌ 삭제 실패:\n\n' + e.message);
     }
-  });
+  }
 }
 
 // ── Inventory Committed 재계산 ──────────────────────────
