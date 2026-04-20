@@ -519,6 +519,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <div class="ntab-dd" id="dd-accounting">
         <div onclick="showPanel('ar',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📊 AR — Accounts Receivable</div>
         <div onclick="showPanel('ap',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">💳 AP — Accounts Payable</div>
+        <div onclick="showPanel('po',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📦 Purchase Orders</div>
         <div onclick="showPanel('pl',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📈 Income Statement (P&L)</div>
         <div onclick="showPanel('bs',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">🏦 Balance Sheet</div>
         <div onclick="showPanel('gl',document.getElementById('ntab-accounting'));hideDropdown('dd-accounting')">📒 General Ledger</div>
@@ -3183,6 +3184,166 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
 
+    <!-- ── PO Editor 모달 (생성/편집) ── -->
+    <div id="po-editor-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:1200px;max-width:98vw;max-height:94vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+          <span style="color:#fff;font-weight:800;font-size:16px;">📦 <span id="po-editor-title">New Purchase Order</span></span>
+          <button onclick="closePOEditor()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
+        </div>
+
+        <div style="overflow-y:auto;flex:1;padding:18px 20px;">
+          <!-- Header fields -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;">
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">PO NUMBER</label>
+              <input type="text" id="po-number" class="fi" style="width:100%;font-size:12px;font-family:'IBM Plex Mono',monospace;font-weight:700;" readonly style2="background:#f3f4f6;">
+            </div>
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">PO DATE *</label>
+              <input type="date" id="po-date" class="fi" style="width:100%;font-size:12px;">
+            </div>
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">EXPECTED DATE</label>
+              <input type="date" id="po-expected-date" class="fi" style="width:100%;font-size:12px;">
+            </div>
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">STATUS</label>
+              <select id="po-status" class="fi" style="width:100%;font-size:12px;">
+                <option value="draft">Draft</option>
+                <option value="sent">Sent</option>
+                <option value="partial">Partially Received</option>
+                <option value="received">Fully Received</option>
+                <option value="invoiced">Invoiced</option>
+                <option value="closed">Closed</option>
+                <option value="void">Void</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:14px;">
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">VENDOR *</label>
+              <select id="po-vendor" class="fi" style="width:100%;font-size:12px;" onchange="onPOVendorChange()">
+                <option value="">Select vendor...</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">PAYMENT TERMS</label>
+              <select id="po-terms" class="fi" style="width:100%;font-size:12px;">
+                <option value="">(default)</option>
+                <option value="Net 15">Net 15</option>
+                <option value="Net 30">Net 30</option>
+                <option value="Net 60">Net 60</option>
+                <option value="Net 90">Net 90</option>
+                <option value="Due on Receipt">Due on Receipt</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-bottom:14px;">
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">SHIP TO WAREHOUSE</label>
+              <select id="po-ship-warehouse" class="fi" style="width:100%;font-size:12px;" onchange="onPOShipWarehouseChange()">
+                <option value="">Select...</option>
+                <option value="SC">SC (Sumter)</option>
+                <option value="CA">CA (Eastvale)</option>
+                <option value="OTHER">Other (주소 직접 입력)</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">SHIP TO ADDRESS</label>
+              <input type="text" id="po-ship-address" class="fi" style="width:100%;font-size:12px;" placeholder="자동 입력 또는 직접 수정 가능">
+            </div>
+          </div>
+
+          <!-- Line Items -->
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+              <span style="font-size:12px;font-weight:700;color:#374151;">Line Items</span>
+              <div style="display:flex;gap:6px;">
+                <button type="button" onclick="addPOLine('inventory')" style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;">+ Inventory Item</button>
+                <button type="button" onclick="addPOLine('expense')" style="background:#7c3aed;color:#fff;border:none;border-radius:4px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;">+ Expense/Service</button>
+              </div>
+            </div>
+            <table class="tbl" style="width:100%;">
+              <thead>
+                <tr style="background:#e5e7eb;color:#374151;font-size:10px;">
+                  <th style="text-align:center;padding:6px;width:40px;">#</th>
+                  <th style="text-align:left;padding:6px;width:80px;">Type</th>
+                  <th style="text-align:left;padding:6px;">Description / Style</th>
+                  <th style="text-align:right;padding:6px;width:80px;">Qty</th>
+                  <th style="text-align:left;padding:6px;width:60px;">UOM</th>
+                  <th style="text-align:right;padding:6px;width:100px;">Unit Price</th>
+                  <th style="text-align:right;padding:6px;width:110px;">Total</th>
+                  <th style="text-align:left;padding:6px;width:180px;">GL Account</th>
+                  <th style="width:40px;"></th>
+                </tr>
+              </thead>
+              <tbody id="po-lines-tbody">
+                <tr><td colspan="9" class="empty">No line items yet. Click "+ Add" button above.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Totals -->
+          <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;">
+            <div>
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">INTERNAL NOTES</label>
+              <textarea id="po-notes" class="fi" rows="3" style="width:100%;font-size:12px;resize:vertical;" placeholder="내부 메모 (PO에 출력 안 됨)"></textarea>
+
+              <label style="font-size:10px;font-weight:700;color:#374151;display:block;margin-bottom:3px;margin-top:10px;">VENDOR NOTES <span style="font-weight:400;color:#6b7280;">(PO에 출력됨)</span></label>
+              <textarea id="po-vendor-notes" class="fi" rows="3" style="width:100%;font-size:12px;resize:vertical;" placeholder="벤더에게 전달할 메모 (PDF에 출력)"></textarea>
+            </div>
+            <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;">
+              <div style="display:grid;grid-template-columns:1fr 120px;gap:8px;align-items:center;font-size:12px;">
+                <div style="color:#6b7280;text-align:right;">Subtotal:</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;text-align:right;" id="po-subtotal">$0.00</div>
+
+                <div style="color:#6b7280;text-align:right;">Tax:</div>
+                <input type="number" id="po-tax" step="0.01" value="0" oninput="recalcPOTotal()" class="fi" style="font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:right;padding:4px 6px;">
+
+                <div style="color:#6b7280;text-align:right;">Shipping:</div>
+                <input type="number" id="po-shipping" step="0.01" value="0" oninput="recalcPOTotal()" class="fi" style="font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:right;padding:4px 6px;">
+
+                <div style="color:#6b7280;text-align:right;">Other Charges:</div>
+                <input type="number" id="po-other-charges" step="0.01" value="0" oninput="recalcPOTotal()" class="fi" style="font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:right;padding:4px 6px;">
+
+                <div style="border-top:2px solid #d1d5db;grid-column:1/-1;margin:4px 0;"></div>
+
+                <div style="color:#0f2744;text-align:right;font-weight:800;font-size:13px;">TOTAL:</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-weight:800;text-align:right;color:#0f2744;font-size:14px;" id="po-total">$0.00</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer buttons -->
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:space-between;flex-shrink:0;background:#f9fafb;">
+          <div id="po-editor-meta" style="font-size:11px;color:#6b7280;align-self:center;"></div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn" onclick="closePOEditor()">Cancel</button>
+            <button id="po-save-draft-btn" class="btn" onclick="savePO(false)">💾 Save as Draft</button>
+            <button id="po-save-send-btn" class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="savePO(true)">✈️ Save & Mark Sent</button>
+            <button id="po-pdf-btn" class="btn" style="background:#0f2744;color:#fff;border-color:#0f2744;font-weight:700;display:none;" onclick="downloadPOPDF()">📄 PDF</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PO Detail 모달 (보기 전용) ── -->
+    <div id="po-detail-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:12px;width:1000px;max-width:98vw;max-height:94vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="background:#0f2744;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+          <span style="color:#fff;font-weight:800;font-size:16px;">📦 <span id="po-detail-title">PO Details</span></span>
+          <button onclick="document.getElementById('po-detail-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#93c5fd;">✕</button>
+        </div>
+        <div id="po-detail-body" style="overflow-y:auto;flex:1;padding:18px 20px;">
+          <div class="empty">Loading...</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ── 1099 Report 모달 ── -->
     <div id="form1099-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
       <div style="background:#fff;border-radius:12px;width:1100px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
@@ -3264,6 +3425,93 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <tbody id="1099-tbody"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════ -->
+    <!-- Purchase Orders (PO) 패널                          -->
+    <!-- ══════════════════════════════════════════════════ -->
+    <div class="panel" id="panel-po">
+      <!-- PO Header -->
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:16px;font-weight:700;">📦 Purchase Orders</h2>
+        <div style="flex:1;"></div>
+        <button class="btn" onclick="loadPOList()">🔄 Refresh</button>
+        <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;" onclick="openPOEditor()">+ New PO</button>
+        <button class="btn" onclick="exportPOListCSV()">⬇ Export CSV</button>
+      </div>
+
+      <!-- PO KPI 카드 -->
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px;">
+        <div style="padding:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;">
+          <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;">Total Open</div>
+          <div style="font-size:17px;font-weight:800;color:#0f2744;font-family:'IBM Plex Mono',monospace;margin-top:3px;" id="po-kpi-open">—</div>
+          <div style="font-size:10px;color:#6b7280;" id="po-kpi-open-ct">—</div>
+        </div>
+        <div style="padding:12px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:8px;">
+          <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;">Draft</div>
+          <div style="font-size:17px;font-weight:800;color:#6b7280;font-family:'IBM Plex Mono',monospace;margin-top:3px;" id="po-kpi-draft">—</div>
+          <div style="font-size:10px;color:#6b7280;" id="po-kpi-draft-ct">—</div>
+        </div>
+        <div style="padding:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;">
+          <div style="font-size:10px;font-weight:700;color:#1e40af;text-transform:uppercase;">Sent</div>
+          <div style="font-size:17px;font-weight:800;color:#1a56a0;font-family:'IBM Plex Mono',monospace;margin-top:3px;" id="po-kpi-sent">—</div>
+          <div style="font-size:10px;color:#1e40af;" id="po-kpi-sent-ct">—</div>
+        </div>
+        <div style="padding:12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;">
+          <div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;">Partial Recv</div>
+          <div style="font-size:17px;font-weight:800;color:#d97706;font-family:'IBM Plex Mono',monospace;margin-top:3px;" id="po-kpi-partial">—</div>
+          <div style="font-size:10px;color:#92400e;" id="po-kpi-partial-ct">—</div>
+        </div>
+        <div style="padding:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;">
+          <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;">Received</div>
+          <div style="font-size:17px;font-weight:800;color:#16a34a;font-family:'IBM Plex Mono',monospace;margin-top:3px;" id="po-kpi-received">—</div>
+          <div style="font-size:10px;color:#166534;" id="po-kpi-received-ct">—</div>
+        </div>
+        <div style="padding:12px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;">
+          <div style="font-size:10px;font-weight:700;color:#5b21b6;text-transform:uppercase;">Closed (YTD)</div>
+          <div style="font-size:17px;font-weight:800;color:#7c3aed;font-family:'IBM Plex Mono',monospace;margin-top:3px;" id="po-kpi-closed">—</div>
+          <div style="font-size:10px;color:#5b21b6;" id="po-kpi-closed-ct">—</div>
+        </div>
+      </div>
+
+      <!-- 검색 및 필터 -->
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;padding:10px 14px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;">
+        <input type="text" id="po-search" placeholder="🔍 PO #, 벤더명, Notes..." oninput="filterPOList()"
+               style="flex:1;min-width:200px;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;">
+        <select id="po-filter-status" onchange="filterPOList()" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;">
+          <option value="">All Statuses</option>
+          <option value="draft">Draft</option>
+          <option value="sent">Sent</option>
+          <option value="partial">Partially Received</option>
+          <option value="received">Fully Received</option>
+          <option value="invoiced">Invoiced</option>
+          <option value="closed">Closed</option>
+          <option value="void">Void</option>
+        </select>
+        <select id="po-filter-vendor" onchange="filterPOList()" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;min-width:160px;">
+          <option value="">All Vendors</option>
+        </select>
+        <span id="po-list-count" style="font-size:11px;color:#6b7280;"></span>
+      </div>
+
+      <!-- PO 목록 테이블 -->
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+        <table class="tbl" style="width:100%;">
+          <thead style="position:sticky;top:0;z-index:1;">
+            <tr style="background:#0f2744;color:#fff;">
+              <th style="text-align:left;padding:9px 12px;width:130px;">PO #</th>
+              <th style="text-align:left;padding:9px 12px;width:100px;">Date</th>
+              <th style="text-align:left;padding:9px 12px;">Vendor</th>
+              <th style="text-align:left;padding:9px 12px;width:100px;">Expected</th>
+              <th style="text-align:center;padding:9px 12px;width:70px;">Lines</th>
+              <th style="text-align:right;padding:9px 12px;width:130px;">Total</th>
+              <th style="text-align:center;padding:9px 12px;width:100px;">Status</th>
+              <th style="text-align:center;padding:9px 12px;width:180px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="po-tbody"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
+        </table>
       </div>
     </div>
 
@@ -3930,9 +4178,9 @@ let _currentEmployee = null; // 현재 로그인된 직원
 
 // 역할별 허용 탭
 const ROLE_TABS = {
-  admin:      ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','settings','ar','ap','pl','bs','gl','coa'],
-  supervisor: ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar','ap','pl','bs','gl','coa'],
-  manager:    ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar','ap','pl','bs','gl','coa'],
+  admin:      ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','settings','ar','ap','po','pl','bs','gl','coa'],
+  supervisor: ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar','ap','po','pl','bs','gl','coa'],
+  manager:    ['dashboard','orderstatus','backorders','customerpos','picktickets','packinglists','invoice','completed','inventory','receiving','intransit','styles','customers','ar','ap','po','pl','bs','gl','coa'],
   staff:      ['orderstatus','backorders'],
 };
 
@@ -4050,6 +4298,7 @@ const PANEL_TO_TAB = {
   // Accounting 드롭다운
   ar: '#ntab-accounting',
   ap: '#ntab-accounting',
+  po: '#ntab-accounting',
   pl: '#ntab-accounting',
   bs: '#ntab-accounting',
   gl: '#ntab-accounting',
@@ -4228,6 +4477,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'settings') { loadSettings(); loadManagerApprovals(); updateBuildingUI(); setTimeout(_renderErrorLog, 100); setTimeout(loadDefectReport, 150); }
   if (name === 'ar') loadAR();
   if (name === 'ap') { loadGL(); loadAP(); }
+  if (name === 'po') loadPOList();
   if (name === 'pl') { loadGL(); loadPL(); }
   if (name === 'bs') { loadGL(); loadBS(); }
   if (name === 'coa') loadCOA();
@@ -36494,6 +36744,958 @@ async function generate1096Summary() {
 
   doc.save(`Form_1096_${_1099Data.year}.pdf`);
   showToast(`✓ Form 1096 Summary 생성 완료`);
+}
+
+// ══════════════════════════════════════════════════════════════
+// PURCHASE ORDER (PO) 모듈
+// ══════════════════════════════════════════════════════════════
+let _purchaseOrderList = [];      // 전체 PO 목록
+let _purchaseOrderEditId = null;  // 편집 중인 PO ID
+let _purchaseOrderLines = [];     // Editor에서 편집 중인 라인 배열
+
+// ─ 목록 로드 ───────────────────────────────────────────
+async function loadPOList() {
+  const tbody = document.getElementById('po-tbody');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty">Loading...</td></tr>';
+
+  // 테이블 존재 확인
+  if (!await checkTableExists('purchase_orders')) {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="empty" style="color:#dc2626;">⚠️ purchase_orders 테이블 미설정. SQL 마이그레이션 실행 필요.</td></tr>';
+    return;
+  }
+
+  const { data, error } = await db.from('purchase_orders').select('*').order('po_date', { ascending: false }).order('created_at', { ascending: false });
+  if (error) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="empty" style="color:#dc2626;">로드 실패: ${error.message}</td></tr>`;
+    return;
+  }
+  _purchaseOrderList = data || [];
+
+  // 벤더 필터 옵션 채우기
+  const vendorFilter = document.getElementById('po-filter-vendor');
+  if (vendorFilter) {
+    const currentVal = vendorFilter.value;
+    const vendors = [...new Set(_purchaseOrderList.map(p => p.vendor_name).filter(Boolean))].sort();
+    vendorFilter.innerHTML = '<option value="">All Vendors</option>' +
+      vendors.map(v => `<option value="${v.replace(/"/g,'&quot;')}">${v}</option>`).join('');
+    vendorFilter.value = currentVal;
+  }
+
+  renderPOKPI();
+  filterPOList();
+}
+
+function renderPOKPI() {
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const currentYear = new Date().getFullYear();
+
+  // 오픈 = draft/sent/partial
+  const openPOs = _purchaseOrderList.filter(p => ['draft','sent','partial'].includes(p.status));
+  const draftPOs = _purchaseOrderList.filter(p => p.status === 'draft');
+  const sentPOs = _purchaseOrderList.filter(p => p.status === 'sent');
+  const partialPOs = _purchaseOrderList.filter(p => p.status === 'partial');
+  const receivedPOs = _purchaseOrderList.filter(p => p.status === 'received');
+  const closedThisYear = _purchaseOrderList.filter(p => {
+    if (!['closed','invoiced'].includes(p.status)) return false;
+    const d = p.po_date || '';
+    return d.startsWith(String(currentYear));
+  });
+
+  const sumTotal = arr => arr.reduce((s,p) => s + (parseFloat(p.total)||0), 0);
+  const setKPI = (id, amount, count) => {
+    const amtEl = document.getElementById(`po-kpi-${id}`);
+    const ctEl = document.getElementById(`po-kpi-${id}-ct`);
+    if (amtEl) amtEl.textContent = fmt(amount);
+    if (ctEl) ctEl.textContent = `${count} POs`;
+  };
+
+  setKPI('open', sumTotal(openPOs), openPOs.length);
+  setKPI('draft', sumTotal(draftPOs), draftPOs.length);
+  setKPI('sent', sumTotal(sentPOs), sentPOs.length);
+  setKPI('partial', sumTotal(partialPOs), partialPOs.length);
+  setKPI('received', sumTotal(receivedPOs), receivedPOs.length);
+  setKPI('closed', sumTotal(closedThisYear), closedThisYear.length);
+}
+
+function filterPOList() {
+  const search = (document.getElementById('po-search')?.value || '').toLowerCase().trim();
+  const status = document.getElementById('po-filter-status')?.value || '';
+  const vendor = document.getElementById('po-filter-vendor')?.value || '';
+
+  let filtered = _purchaseOrderList.filter(p => {
+    if (status && p.status !== status) return false;
+    if (vendor && p.vendor_name !== vendor) return false;
+    if (search) {
+      const hay = [p.po_number, p.vendor_name, p.notes, p.vendor_notes, p.ship_to_address]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  renderPOTable(filtered);
+}
+
+function renderPOTable(pos) {
+  const tbody = document.getElementById('po-tbody');
+  const countEl = document.getElementById('po-list-count');
+  if (!tbody) return;
+  if (countEl) countEl.textContent = `${pos.length} of ${_purchaseOrderList.length}`;
+
+  if (pos.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No POs found.</td></tr>';
+    return;
+  }
+
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+  tbody.innerHTML = pos.map(p => {
+    const statusBadge = getPOStatusBadge(p.status);
+    return `<tr style="border-bottom:1px solid #f0f0f0;cursor:pointer;" onclick="viewPODetail('${p.id}')" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+      <td style="padding:8px 12px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#0f2744;">${p.po_number||'—'}</td>
+      <td style="padding:8px 12px;font-size:12px;font-family:'IBM Plex Mono',monospace;">${p.po_date||'—'}</td>
+      <td style="padding:8px 12px;font-size:12px;">${p.vendor_name||'—'}</td>
+      <td style="padding:8px 12px;font-size:12px;font-family:'IBM Plex Mono',monospace;color:#6b7280;">${p.expected_date||'—'}</td>
+      <td style="padding:8px 12px;text-align:center;font-size:11px;color:#6b7280;" id="po-lc-${p.id}">—</td>
+      <td style="padding:8px 12px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;">${fmt(p.total)}</td>
+      <td style="padding:8px 12px;text-align:center;">${statusBadge}</td>
+      <td style="padding:8px 12px;text-align:center;" onclick="event.stopPropagation()">
+        <button onclick="event.stopPropagation(); editPO('${p.id}')" style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;margin-right:3px;">✏️ Edit</button>
+        <button onclick="event.stopPropagation(); downloadPOPDFById('${p.id}')" style="background:#0f2744;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;margin-right:3px;">📄 PDF</button>
+        <button onclick="event.stopPropagation(); deletePO('${p.id}','${(p.po_number||'').replace(/'/g,'')}')" style="background:none;border:1px solid #fecaca;color:#dc2626;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Line counts 비동기 로드 (성능)
+  loadPOLineCounts(pos.map(p => p.id));
+}
+
+async function loadPOLineCounts(poIds) {
+  if (!poIds || poIds.length === 0) return;
+  const { data } = await db.from('purchase_order_lines').select('purchase_order_id').in('purchase_order_id', poIds);
+  if (!data) return;
+  const counts = {};
+  data.forEach(l => { counts[l.purchase_order_id] = (counts[l.purchase_order_id]||0) + 1; });
+  Object.entries(counts).forEach(([poId, count]) => {
+    const el = document.getElementById(`po-lc-${poId}`);
+    if (el) el.textContent = count;
+  });
+  // 0건 표시
+  poIds.forEach(poId => {
+    const el = document.getElementById(`po-lc-${poId}`);
+    if (el && el.textContent === '—') el.textContent = '0';
+  });
+}
+
+function getPOStatusBadge(status) {
+  const badges = {
+    draft:    { label: 'DRAFT',    bg: '#f3f4f6', fg: '#374151', border: '#d1d5db' },
+    sent:     { label: 'SENT',     bg: '#eff6ff', fg: '#1e40af', border: '#bfdbfe' },
+    partial:  { label: 'PARTIAL',  bg: '#fffbeb', fg: '#92400e', border: '#fde68a' },
+    received: { label: 'RECEIVED', bg: '#f0fdf4', fg: '#166534', border: '#bbf7d0' },
+    invoiced: { label: 'INVOICED', bg: '#f5f3ff', fg: '#5b21b6', border: '#ddd6fe' },
+    closed:   { label: 'CLOSED',   bg: '#e5e7eb', fg: '#1f2937', border: '#9ca3af' },
+    void:     { label: 'VOID',     bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' }
+  };
+  const s = badges[status] || badges.draft;
+  return `<span style="background:${s.bg};color:${s.fg};border:1px solid ${s.border};border-radius:10px;padding:2px 8px;font-size:10px;font-weight:700;">${s.label}</span>`;
+}
+
+// ─ Editor 모달 ───────────────────────────────────────────
+async function openPOEditor(poId = null) {
+  _purchaseOrderEditId = poId;
+  _purchaseOrderLines = [];
+
+  // 제목 설정
+  const titleEl = document.getElementById('po-editor-title');
+  if (titleEl) titleEl.textContent = poId ? 'Edit Purchase Order' : 'New Purchase Order';
+
+  // 벤더 드롭다운 채우기
+  const vendorSel = document.getElementById('po-vendor');
+  if (vendorSel) {
+    const { data: vendors } = await db.from('vendors').select('id, name, terms, default_account_code, default_account_name').eq('is_active', true).order('name');
+    vendorSel.innerHTML = '<option value="">Select vendor...</option>' +
+      (vendors||[]).map(v => `<option value="${v.id}" data-terms="${v.terms||''}" data-acct-code="${v.default_account_code||''}" data-acct-name="${(v.default_account_name||'').replace(/"/g,'&quot;')}">${v.name}</option>`).join('');
+  }
+
+  if (poId) {
+    // 기존 PO 로드
+    const { data: po } = await db.from('purchase_orders').select('*').eq('id', poId).single();
+    if (!po) { showToast('❌ PO 로드 실패'); return; }
+
+    document.getElementById('po-number').value = po.po_number || '';
+    document.getElementById('po-date').value = po.po_date || '';
+    document.getElementById('po-expected-date').value = po.expected_date || '';
+    document.getElementById('po-status').value = po.status || 'draft';
+    document.getElementById('po-vendor').value = po.vendor_id || '';
+    document.getElementById('po-terms').value = po.terms || '';
+    document.getElementById('po-ship-warehouse').value = po.ship_to_warehouse || '';
+    document.getElementById('po-ship-address').value = po.ship_to_address || '';
+    document.getElementById('po-notes').value = po.notes || '';
+    document.getElementById('po-vendor-notes').value = po.vendor_notes || '';
+    document.getElementById('po-tax').value = po.tax || 0;
+    document.getElementById('po-shipping').value = po.shipping || 0;
+    document.getElementById('po-other-charges').value = po.other_charges || 0;
+
+    // 라인 로드
+    const { data: lines } = await db.from('purchase_order_lines').select('*').eq('purchase_order_id', poId).order('line_number');
+    _purchaseOrderLines = (lines||[]).map(l => ({
+      id: l.id,
+      line_type: l.line_type || 'expense',
+      style_id: l.style_id,
+      style_number: l.style_number || '',
+      description: l.description || '',
+      qty_ordered: parseFloat(l.qty_ordered) || 0,
+      qty_received: parseFloat(l.qty_received) || 0,
+      uom: l.uom || 'EA',
+      unit_price: parseFloat(l.unit_price) || 0,
+      gl_account_code: l.gl_account_code || '',
+      gl_account_name: l.gl_account_name || ''
+    }));
+
+    // 메타 정보 표시
+    const metaEl = document.getElementById('po-editor-meta');
+    if (metaEl) {
+      metaEl.textContent = `Created ${po.created_at?.slice(0,16).replace('T',' ')||''} by ${po.created_by||'—'}` +
+        (po.updated_at !== po.created_at ? ` · Updated ${po.updated_at?.slice(0,16).replace('T',' ')||''}` : '');
+    }
+
+    // PDF 버튼 표시
+    const pdfBtn = document.getElementById('po-pdf-btn');
+    if (pdfBtn) pdfBtn.style.display = '';
+  } else {
+    // New PO
+    const today = new Date().toISOString().slice(0,10);
+    document.getElementById('po-number').value = await generatePONumber();
+    document.getElementById('po-date').value = today;
+    document.getElementById('po-expected-date').value = '';
+    document.getElementById('po-status').value = 'draft';
+    document.getElementById('po-vendor').value = '';
+    document.getElementById('po-terms').value = '';
+    document.getElementById('po-ship-warehouse').value = 'SC';
+    document.getElementById('po-ship-address').value = '1605 South Guignard Parkway, Sumter, SC 29150';
+    document.getElementById('po-notes').value = '';
+    document.getElementById('po-vendor-notes').value = '';
+    document.getElementById('po-tax').value = 0;
+    document.getElementById('po-shipping').value = 0;
+    document.getElementById('po-other-charges').value = 0;
+    const metaEl = document.getElementById('po-editor-meta');
+    if (metaEl) metaEl.textContent = '';
+    const pdfBtn = document.getElementById('po-pdf-btn');
+    if (pdfBtn) pdfBtn.style.display = 'none';
+  }
+
+  renderPOLinesTable();
+  recalcPOTotal();
+  document.getElementById('po-editor-modal').style.display = 'flex';
+}
+
+function closePOEditor() {
+  document.getElementById('po-editor-modal').style.display = 'none';
+  _purchaseOrderEditId = null;
+  _purchaseOrderLines = [];
+}
+
+// PO 번호 생성: PO-YYYY-NNNN
+async function generatePONumber() {
+  const year = new Date().getFullYear();
+  const prefix = `PO-${year}-`;
+  const { data } = await db.from('purchase_orders')
+    .select('po_number')
+    .like('po_number', prefix + '%')
+    .order('po_number', { ascending: false })
+    .limit(1);
+  let next = 1;
+  if (data && data.length > 0) {
+    const last = data[0].po_number;
+    const match = last.match(/PO-\d{4}-(\d+)/);
+    if (match) next = parseInt(match[1]) + 1;
+  }
+  return prefix + String(next).padStart(4, '0');
+}
+
+function onPOVendorChange() {
+  const sel = document.getElementById('po-vendor');
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !opt.value) return;
+
+  // 벤더의 기본 terms 자동 채우기 (비어있으면)
+  const termsEl = document.getElementById('po-terms');
+  if (termsEl && !termsEl.value) {
+    termsEl.value = opt.dataset.terms || '';
+  }
+}
+
+function onPOShipWarehouseChange() {
+  const wh = document.getElementById('po-ship-warehouse').value;
+  const addrEl = document.getElementById('po-ship-address');
+  if (!addrEl) return;
+  // 기본 주소 자동 입력
+  if (wh === 'SC') {
+    addrEl.value = '1605 South Guignard Parkway, Sumter, SC 29150';
+  } else if (wh === 'CA') {
+    addrEl.value = 'Eastvale, CA';
+  } else if (wh === 'OTHER') {
+    addrEl.value = '';
+    addrEl.focus();
+  }
+}
+
+// ─ 라인 관리 ───────────────────────────────────────────
+function addPOLine(type = 'expense') {
+  _purchaseOrderLines.push({
+    id: null,
+    line_type: type,
+    style_id: null,
+    style_number: '',
+    description: '',
+    qty_ordered: 1,
+    qty_received: 0,
+    uom: 'EA',
+    unit_price: 0,
+    gl_account_code: '',
+    gl_account_name: ''
+  });
+  renderPOLinesTable();
+}
+
+function removePOLine(idx) {
+  _purchaseOrderLines.splice(idx, 1);
+  renderPOLinesTable();
+  recalcPOTotal();
+}
+
+function renderPOLinesTable() {
+  const tbody = document.getElementById('po-lines-tbody');
+  if (!tbody) return;
+
+  if (_purchaseOrderLines.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No line items yet. Click "+ Add" button above.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = _purchaseOrderLines.map((line, idx) => {
+    const typeBadge = line.line_type === 'inventory'
+      ? '<span style="background:#eff6ff;color:#1a56a0;border:1px solid #bfdbfe;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:700;">INV</span>'
+      : '<span style="background:#f5f3ff;color:#7c3aed;border:1px solid #ddd6fe;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:700;">EXP</span>';
+
+    const descCell = line.line_type === 'inventory'
+      ? `<div style="display:flex;gap:4px;align-items:center;">
+          <input type="text" value="${(line.style_number||'').replace(/"/g,'&quot;')}" placeholder="Style #" onchange="_purchaseOrderLines[${idx}].style_number=this.value" style="width:100px;padding:3px 6px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;font-family:'IBM Plex Mono',monospace;">
+          <input type="text" value="${(line.description||'').replace(/"/g,'&quot;')}" placeholder="Description" onchange="_purchaseOrderLines[${idx}].description=this.value" style="flex:1;padding:3px 6px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;">
+        </div>`
+      : `<input type="text" value="${(line.description||'').replace(/"/g,'&quot;')}" placeholder="e.g. Freight, Professional Services" onchange="_purchaseOrderLines[${idx}].description=this.value" style="width:100%;padding:3px 6px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;">`;
+
+    const lineTotal = (parseFloat(line.qty_ordered)||0) * (parseFloat(line.unit_price)||0);
+
+    return `<tr>
+      <td style="padding:4px;text-align:center;font-size:11px;color:#6b7280;">${idx+1}</td>
+      <td style="padding:4px;text-align:center;">${typeBadge}</td>
+      <td style="padding:4px;">${descCell}</td>
+      <td style="padding:4px;"><input type="number" step="0.001" value="${line.qty_ordered}" oninput="_purchaseOrderLines[${idx}].qty_ordered=parseFloat(this.value)||0;recalcPOTotal();" style="width:100%;padding:3px 6px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:right;"></td>
+      <td style="padding:4px;"><input type="text" value="${line.uom||'EA'}" onchange="_purchaseOrderLines[${idx}].uom=this.value" style="width:100%;padding:3px 6px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;text-align:center;"></td>
+      <td style="padding:4px;"><input type="number" step="0.01" value="${line.unit_price}" oninput="_purchaseOrderLines[${idx}].unit_price=parseFloat(this.value)||0;recalcPOTotal();" style="width:100%;padding:3px 6px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:right;"></td>
+      <td style="padding:4px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">$${lineTotal.toFixed(2)}</td>
+      <td style="padding:4px;">
+        <input type="text" value="${(line.gl_account_code||'')}${line.gl_account_name?' — '+line.gl_account_name:''}" placeholder="GL account (optional)" onclick="pickGLAccountForPOLine(${idx})" readonly style="width:100%;padding:3px 6px;border:1px solid #d1d5db;border-radius:3px;font-size:10px;cursor:pointer;background:#f9fafb;">
+      </td>
+      <td style="padding:4px;text-align:center;">
+        <button onclick="removePOLine(${idx})" title="삭제" style="background:none;border:1px solid #fecaca;color:#dc2626;border-radius:3px;padding:2px 6px;font-size:11px;cursor:pointer;">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function pickGLAccountForPOLine(idx) {
+  // 간단한 prompt 기반 (추후 더 나은 UI로)
+  const options = _glAccounts.filter(a => a.is_active !== false)
+    .map(a => `${a.code} — ${a.name}`)
+    .join('\n');
+  const input = prompt(`GL Account 코드를 입력하세요 (예: 501-001)\n\n사용 가능한 계정:\n${options}`, _purchaseOrderLines[idx].gl_account_code || '');
+  if (input === null) return;
+  const code = input.trim().split(/\s/)[0]; // "501-001 — ..." 에서 코드만
+  const acct = _glAccounts.find(a => a.code === code);
+  if (acct) {
+    _purchaseOrderLines[idx].gl_account_code = acct.code;
+    _purchaseOrderLines[idx].gl_account_name = acct.name;
+  } else if (!code) {
+    _purchaseOrderLines[idx].gl_account_code = '';
+    _purchaseOrderLines[idx].gl_account_name = '';
+  } else {
+    showToast('❌ 해당 계정 없음: ' + code);
+    return;
+  }
+  renderPOLinesTable();
+}
+
+function recalcPOTotal() {
+  const subtotal = _purchaseOrderLines.reduce((s,l) => s + (parseFloat(l.qty_ordered)||0) * (parseFloat(l.unit_price)||0), 0);
+  const tax = parseFloat(document.getElementById('po-tax')?.value) || 0;
+  const shipping = parseFloat(document.getElementById('po-shipping')?.value) || 0;
+  const other = parseFloat(document.getElementById('po-other-charges')?.value) || 0;
+  const total = subtotal + tax + shipping + other;
+
+  const fmt = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const subEl = document.getElementById('po-subtotal');
+  const totEl = document.getElementById('po-total');
+  if (subEl) subEl.textContent = fmt(subtotal);
+  if (totEl) totEl.textContent = fmt(total);
+}
+
+// ─ 저장 ───────────────────────────────────────────
+async function savePO(markAsSent = false) {
+  const poDate = document.getElementById('po-date').value;
+  const vendorSel = document.getElementById('po-vendor');
+  const vendorId = vendorSel.value;
+  const vendorName = vendorSel.options[vendorSel.selectedIndex]?.textContent || '';
+
+  if (!poDate) { showToast('❌ PO Date 필수'); return; }
+  if (!vendorId) { showToast('❌ Vendor 선택 필수'); return; }
+  if (_purchaseOrderLines.length === 0) { showToast('❌ 라인 아이템 최소 1개 이상 필요'); return; }
+
+  // 라인 검증
+  for (let i = 0; i < _purchaseOrderLines.length; i++) {
+    const l = _purchaseOrderLines[i];
+    if (!l.description && !l.style_number) {
+      showToast(`❌ Line ${i+1}: Description 또는 Style # 필수`);
+      return;
+    }
+    if (!l.qty_ordered || l.qty_ordered <= 0) {
+      showToast(`❌ Line ${i+1}: Qty > 0 필수`);
+      return;
+    }
+  }
+
+  const subtotal = _purchaseOrderLines.reduce((s,l) => s + (parseFloat(l.qty_ordered)||0) * (parseFloat(l.unit_price)||0), 0);
+  const tax = parseFloat(document.getElementById('po-tax').value) || 0;
+  const shipping = parseFloat(document.getElementById('po-shipping').value) || 0;
+  const otherCharges = parseFloat(document.getElementById('po-other-charges').value) || 0;
+  const total = subtotal + tax + shipping + otherCharges;
+
+  let status = document.getElementById('po-status').value;
+  if (markAsSent && status === 'draft') status = 'sent';
+
+  const poPayload = {
+    po_number: document.getElementById('po-number').value,
+    vendor_id: vendorId,
+    vendor_name: vendorName,
+    po_date: poDate,
+    expected_date: document.getElementById('po-expected-date').value || null,
+    status: status,
+    ship_to_warehouse: document.getElementById('po-ship-warehouse').value || null,
+    ship_to_address: document.getElementById('po-ship-address').value.trim() || null,
+    subtotal: subtotal,
+    tax: tax,
+    shipping: shipping,
+    other_charges: otherCharges,
+    total: total,
+    terms: document.getElementById('po-terms').value || null,
+    notes: document.getElementById('po-notes').value.trim() || null,
+    vendor_notes: document.getElementById('po-vendor-notes').value.trim() || null
+  };
+
+  let poId = _purchaseOrderEditId;
+  try {
+    if (poId) {
+      // Update
+      const { error } = await db.from('purchase_orders').update({ ...poPayload, updated_at: new Date().toISOString() }).eq('id', poId);
+      if (error) throw error;
+
+      // sent 표시
+      if (markAsSent && status === 'sent') {
+        await db.from('purchase_orders').update({ sent_at: new Date().toISOString(), sent_by: _currentEmployee?.name || 'System' }).eq('id', poId);
+      }
+
+      // 라인 전체 재구성: 기존 라인 삭제 후 재삽입 (안전)
+      // 먼저 라인 백업
+      const { data: oldLines } = await db.from('purchase_order_lines').select('*').eq('purchase_order_id', poId);
+      await db.from('purchase_order_lines').delete().eq('purchase_order_id', poId);
+
+      const linesToInsert = _purchaseOrderLines.map((l, idx) => ({
+        purchase_order_id: poId,
+        line_number: idx + 1,
+        line_type: l.line_type,
+        style_id: l.style_id,
+        style_number: l.style_number || null,
+        description: l.description || (l.style_number || ''),
+        qty_ordered: l.qty_ordered,
+        qty_received: l.qty_received || 0,
+        uom: l.uom || 'EA',
+        unit_price: l.unit_price,
+        gl_account_code: l.gl_account_code || null,
+        gl_account_name: l.gl_account_name || null
+      }));
+
+      if (linesToInsert.length > 0) {
+        const { error: linesErr } = await db.from('purchase_order_lines').insert(linesToInsert);
+        if (linesErr) {
+          // 실패 시 복원
+          if (oldLines && oldLines.length > 0) {
+            await db.from('purchase_order_lines').insert(oldLines);
+          }
+          throw linesErr;
+        }
+      }
+
+      // Activity Log
+      try {
+        await logActivity('purchase_order', poId, poPayload.po_number, markAsSent ? 'update_and_send' : 'update', {
+          note: markAsSent ? 'PO 업데이트 후 Sent 처리' : 'PO 업데이트',
+          metadata: { total: poPayload.total, line_count: linesToInsert.length }
+        });
+      } catch(e) {/* 무시 */}
+
+      showToast(`✅ PO 저장됨: ${poPayload.po_number}`);
+    } else {
+      // Insert
+      const { data: newPO, error } = await db.from('purchase_orders').insert({
+        ...poPayload,
+        created_by: _currentEmployee?.name || 'System',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        sent_at: markAsSent ? new Date().toISOString() : null,
+        sent_by: markAsSent ? (_currentEmployee?.name || 'System') : null
+      }).select().single();
+      if (error) throw error;
+      poId = newPO.id;
+
+      // 라인 삽입
+      const linesToInsert = _purchaseOrderLines.map((l, idx) => ({
+        purchase_order_id: poId,
+        line_number: idx + 1,
+        line_type: l.line_type,
+        style_id: l.style_id,
+        style_number: l.style_number || null,
+        description: l.description || (l.style_number || ''),
+        qty_ordered: l.qty_ordered,
+        qty_received: 0,
+        uom: l.uom || 'EA',
+        unit_price: l.unit_price,
+        gl_account_code: l.gl_account_code || null,
+        gl_account_name: l.gl_account_name || null
+      }));
+
+      if (linesToInsert.length > 0) {
+        const { error: linesErr } = await db.from('purchase_order_lines').insert(linesToInsert);
+        if (linesErr) throw linesErr;
+      }
+
+      // Activity Log
+      try {
+        await logActivity('purchase_order', poId, poPayload.po_number, 'create', {
+          note: markAsSent ? 'PO 생성 & 발송' : 'PO 생성 (Draft)',
+          metadata: { total: poPayload.total, line_count: linesToInsert.length, status: status }
+        });
+      } catch(e) {/* 무시 */}
+
+      showToast(`✅ PO 생성됨: ${poPayload.po_number}`);
+    }
+
+    closePOEditor();
+    await loadPOList();
+  } catch(e) {
+    showToast('❌ 저장 실패: ' + e.message);
+    console.error('[savePO]', e);
+  }
+}
+
+async function editPO(poId) {
+  await openPOEditor(poId);
+}
+
+async function deletePO(poId, poNumber) {
+  if (!confirm(`정말로 PO ${poNumber}를 삭제하시겠습니까?\n\n라인 아이템도 함께 삭제됩니다.\n삭제 후 복구할 수 없습니다.`)) return;
+  try {
+    const { error } = await db.from('purchase_orders').delete().eq('id', poId);
+    if (error) throw error;
+
+    try {
+      await logActivity('purchase_order', poId, poNumber, 'delete', { note: `PO ${poNumber} 삭제됨` });
+    } catch(e) {/* 무시 */}
+
+    showToast(`✅ PO 삭제됨: ${poNumber}`);
+    await loadPOList();
+  } catch(e) {
+    showToast('❌ 삭제 실패: ' + e.message);
+  }
+}
+
+// ─ 상세 뷰 ───────────────────────────────────────────
+async function viewPODetail(poId) {
+  const modalEl = document.getElementById('po-detail-modal');
+  const bodyEl = document.getElementById('po-detail-body');
+  const titleEl = document.getElementById('po-detail-title');
+  if (bodyEl) bodyEl.innerHTML = '<div class="empty">Loading...</div>';
+  if (modalEl) modalEl.style.display = 'flex';
+
+  const { data: po, error } = await db.from('purchase_orders').select('*').eq('id', poId).single();
+  if (error || !po) {
+    if (bodyEl) bodyEl.innerHTML = `<div class="empty" style="color:#dc2626;">로드 실패: ${error?.message||'없음'}</div>`;
+    return;
+  }
+
+  const { data: lines } = await db.from('purchase_order_lines').select('*').eq('purchase_order_id', poId).order('line_number');
+
+  if (titleEl) titleEl.textContent = po.po_number;
+
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  const statusBadge = getPOStatusBadge(po.status);
+
+  const linesHTML = (lines||[]).map(l => {
+    const lineTotal = (parseFloat(l.qty_ordered)||0) * (parseFloat(l.unit_price)||0);
+    const receivedBadge = parseFloat(l.qty_received) >= parseFloat(l.qty_ordered)
+      ? '<span style="background:#dcfce7;color:#166534;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:700;">✓ Full</span>'
+      : parseFloat(l.qty_received) > 0
+        ? `<span style="background:#fffbeb;color:#92400e;border-radius:8px;padding:1px 6px;font-size:9px;font-weight:700;">${l.qty_received}/${l.qty_ordered}</span>`
+        : '';
+    return `<tr style="border-bottom:1px solid #f0f0f0;">
+      <td style="padding:6px 8px;text-align:center;font-size:11px;color:#6b7280;">${l.line_number}</td>
+      <td style="padding:6px 8px;">
+        ${l.style_number ? `<strong style="font-family:'IBM Plex Mono',monospace;">${l.style_number}</strong><br>` : ''}
+        <span style="font-size:11px;color:#6b7280;">${l.description||''}</span>
+      </td>
+      <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;">${l.qty_ordered} ${l.uom||''}</td>
+      <td style="padding:6px 8px;text-align:center;">${receivedBadge}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;">$${parseFloat(l.unit_price).toFixed(2)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;">${fmt(lineTotal)}</td>
+    </tr>`;
+  }).join('');
+
+  if (bodyEl) {
+    bodyEl.innerHTML = `
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px;">
+        <div>
+          <div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700;">Vendor</div>
+          <div style="font-size:14px;font-weight:700;color:#0f2744;margin-top:2px;">${po.vendor_name||'—'}</div>
+          <div style="margin-top:10px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;font-size:11px;">
+            <div><div style="color:#6b7280;font-size:10px;text-transform:uppercase;font-weight:700;">PO Date</div><div style="font-family:'IBM Plex Mono',monospace;margin-top:2px;">${po.po_date||'—'}</div></div>
+            <div><div style="color:#6b7280;font-size:10px;text-transform:uppercase;font-weight:700;">Expected</div><div style="font-family:'IBM Plex Mono',monospace;margin-top:2px;">${po.expected_date||'—'}</div></div>
+            <div><div style="color:#6b7280;font-size:10px;text-transform:uppercase;font-weight:700;">Terms</div><div style="margin-top:2px;">${po.terms||'—'}</div></div>
+          </div>
+          <div style="margin-top:10px;font-size:11px;">
+            <div style="color:#6b7280;font-size:10px;text-transform:uppercase;font-weight:700;">Ship To</div>
+            <div style="margin-top:2px;">${po.ship_to_warehouse ? `<strong>${po.ship_to_warehouse}</strong> · ` : ''}${po.ship_to_address||'—'}</div>
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <div style="margin-bottom:8px;">${statusBadge}</div>
+          <div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700;">Total</div>
+          <div style="font-size:22px;font-weight:800;color:#0f2744;font-family:'IBM Plex Mono',monospace;">${fmt(po.total)}</div>
+          <div style="font-size:10px;color:#6b7280;margin-top:6px;">
+            Subtotal: ${fmt(po.subtotal)}<br>
+            Tax: ${fmt(po.tax)} · Shipping: ${fmt(po.shipping)}<br>
+            Other: ${fmt(po.other_charges)}
+          </div>
+        </div>
+      </div>
+
+      <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:14px;">
+        <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px;">Line Items (${(lines||[]).length})</div>
+        <table class="tbl" style="width:100%;">
+          <thead><tr style="background:#e5e7eb;color:#374151;font-size:10px;">
+            <th style="text-align:center;padding:6px;width:40px;">#</th>
+            <th style="text-align:left;padding:6px;">Description</th>
+            <th style="text-align:right;padding:6px;width:100px;">Qty</th>
+            <th style="text-align:center;padding:6px;width:80px;">Received</th>
+            <th style="text-align:right;padding:6px;width:90px;">Unit Price</th>
+            <th style="text-align:right;padding:6px;width:110px;">Total</th>
+          </tr></thead>
+          <tbody>${linesHTML || '<tr><td colspan="6" class="empty">No lines</td></tr>'}</tbody>
+        </table>
+      </div>
+
+      ${po.notes ? `<div style="font-size:11px;margin-bottom:10px;"><strong style="color:#6b7280;text-transform:uppercase;font-size:10px;">Internal Notes:</strong><br>${po.notes.replace(/</g,'&lt;').replace(/\n/g,'<br>')}</div>` : ''}
+      ${po.vendor_notes ? `<div style="font-size:11px;margin-bottom:10px;padding:8px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;"><strong style="color:#92400e;text-transform:uppercase;font-size:10px;">Vendor Notes:</strong><br>${po.vendor_notes.replace(/</g,'&lt;').replace(/\n/g,'<br>')}</div>` : ''}
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:12px;border-top:1px solid #e5e7eb;">
+        <button class="btn" onclick="document.getElementById('po-detail-modal').style.display='none';editPO('${po.id}')" style="background:#1a56a0;color:#fff;border-color:#1a56a0;">✏️ Edit</button>
+        <button class="btn" onclick="downloadPOPDFById('${po.id}')" style="background:#0f2744;color:#fff;border-color:#0f2744;">📄 Download PDF</button>
+      </div>
+    `;
+  }
+}
+
+// ─ PDF 생성 ───────────────────────────────────────────
+async function downloadPOPDF() {
+  if (!_purchaseOrderEditId) {
+    showToast('먼저 저장해주세요');
+    return;
+  }
+  await downloadPOPDFById(_purchaseOrderEditId);
+}
+
+async function downloadPOPDFById(poId) {
+  const { data: po } = await db.from('purchase_orders').select('*').eq('id', poId).single();
+  if (!po) { showToast('❌ PO 로드 실패'); return; }
+  const { data: lines } = await db.from('purchase_order_lines').select('*').eq('purchase_order_id', poId).order('line_number');
+  const { data: vendor } = po.vendor_id ? await db.from('vendors').select('*').eq('id', po.vendor_id).single() : { data: null };
+  const company = await getCompanyInfo();
+
+  // jsPDF 로드
+  if (typeof window.jspdf === 'undefined') {
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+
+  const margin = 36;
+  const pageWidth = 612;
+  let y = margin;
+
+  // ─ 헤더: 회사명 + PO 제목 ─
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.setTextColor(15, 39, 68);
+  doc.text(company.company_dba || company.company_name || 'Pacific Sports', margin, y + 16);
+
+  doc.setFontSize(20);
+  doc.setTextColor(0);
+  doc.text('PURCHASE ORDER', pageWidth - margin, y + 16, { align: 'right' });
+  y += 22;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(80);
+  if (company.company_name && company.company_name !== company.company_dba) {
+    doc.text(company.company_name, margin, y + 10);
+    y += 10;
+  }
+  if (company.company_address1) doc.text(company.company_address1, margin, y + 10), y += 10;
+  if (company.company_address2) doc.text(company.company_address2, margin, y + 10), y += 10;
+  const cityLine = [company.company_city, company.company_state, company.company_zip].filter(Boolean).join(', ');
+  if (cityLine) doc.text(cityLine, margin, y + 10), y += 10;
+  if (company.company_phone) doc.text('Phone: ' + company.company_phone, margin, y + 10), y += 10;
+  doc.setTextColor(0);
+
+  // PO 번호 / 날짜 박스
+  doc.setDrawColor(15, 39, 68);
+  doc.setLineWidth(1);
+  doc.rect(pageWidth - margin - 200, margin + 26, 200, 70);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('PO Number:', pageWidth - margin - 195, margin + 40);
+  doc.text('PO Date:', pageWidth - margin - 195, margin + 56);
+  doc.text('Expected:', pageWidth - margin - 195, margin + 72);
+  doc.text('Terms:', pageWidth - margin - 195, margin + 88);
+
+  doc.setFont('helvetica', 'normal');
+  doc.text(po.po_number || '', pageWidth - margin - 100, margin + 40);
+  doc.text(po.po_date || '', pageWidth - margin - 100, margin + 56);
+  doc.text(po.expected_date || '—', pageWidth - margin - 100, margin + 72);
+  doc.text(po.terms || '—', pageWidth - margin - 100, margin + 88);
+
+  y = Math.max(y + 10, margin + 110);
+
+  // ─ Vendor + Ship To ─
+  doc.setFillColor(240, 244, 248);
+  doc.rect(margin, y, 260, 80, 'F');
+  doc.rect(pageWidth - margin - 260, y, 260, 80, 'F');
+  doc.setDrawColor(200);
+  doc.rect(margin, y, 260, 80);
+  doc.rect(pageWidth - margin - 260, y, 260, 80);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(15, 39, 68);
+  doc.text('VENDOR:', margin + 8, y + 14);
+  doc.text('SHIP TO:', pageWidth - margin - 252, y + 14);
+  doc.setTextColor(0);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  let vy = y + 28;
+  doc.setFont('helvetica', 'bold');
+  doc.text(po.vendor_name || '', margin + 8, vy); vy += 12;
+  doc.setFont('helvetica', 'normal');
+  if (vendor) {
+    if (vendor.contact) { doc.text(`Attn: ${vendor.contact}`, margin + 8, vy); vy += 12; }
+    if (vendor.address) { doc.text(vendor.address, margin + 8, vy); vy += 12; }
+    const vCity = [vendor.city, vendor.state, vendor.zip].filter(Boolean).join(', ');
+    if (vCity) { doc.text(vCity, margin + 8, vy); vy += 12; }
+    if (vendor.phone) { doc.text(`Phone: ${vendor.phone}`, margin + 8, vy); vy += 12; }
+  }
+
+  let sy = y + 28;
+  doc.setFont('helvetica', 'bold');
+  if (po.ship_to_warehouse) { doc.text(po.ship_to_warehouse + ' Warehouse', pageWidth - margin - 252, sy); sy += 12; }
+  doc.setFont('helvetica', 'normal');
+  if (po.ship_to_address) {
+    const shipLines = doc.splitTextToSize(po.ship_to_address, 240);
+    doc.text(shipLines, pageWidth - margin - 252, sy);
+  }
+
+  y += 96;
+
+  // ─ Line Items Table ─
+  const tblX = margin;
+  const tblW = pageWidth - 2 * margin;
+  const colX = {
+    num: tblX + 4,
+    desc: tblX + 30,
+    qty: tblX + tblW - 230,
+    uom: tblX + tblW - 180,
+    price: tblX + tblW - 130,
+    total: tblX + tblW - 50
+  };
+
+  // Table header
+  doc.setFillColor(15, 39, 68);
+  doc.rect(tblX, y, tblW, 20, 'F');
+  doc.setTextColor(255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('#', colX.num, y + 13);
+  doc.text('Description', colX.desc, y + 13);
+  doc.text('Qty', colX.qty, y + 13, { align: 'right' });
+  doc.text('UOM', colX.uom, y + 13);
+  doc.text('Unit Price', colX.price, y + 13, { align: 'right' });
+  doc.text('Total', colX.total, y + 13, { align: 'right' });
+  y += 20;
+
+  // Rows
+  doc.setTextColor(0);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+
+  (lines || []).forEach((l, idx) => {
+    const lineTotal = (parseFloat(l.qty_ordered)||0) * (parseFloat(l.unit_price)||0);
+    const descText = (l.style_number ? l.style_number + ' — ' : '') + (l.description || '');
+    const descLines = doc.splitTextToSize(descText, colX.qty - colX.desc - 4);
+    const rowHeight = Math.max(16, 12 * descLines.length + 4);
+
+    // 페이지 넘김 체크
+    if (y + rowHeight > 720) {
+      doc.addPage();
+      y = margin;
+    }
+
+    // 교차 배경
+    if (idx % 2 === 1) {
+      doc.setFillColor(248, 250, 252);
+      doc.rect(tblX, y, tblW, rowHeight, 'F');
+    }
+
+    doc.text(String(l.line_number || idx+1), colX.num, y + 12);
+    doc.text(descLines, colX.desc, y + 12);
+    doc.text(String(l.qty_ordered || ''), colX.qty, y + 12, { align: 'right' });
+    doc.text(l.uom || 'EA', colX.uom, y + 12);
+    doc.text('$' + parseFloat(l.unit_price||0).toFixed(2), colX.price, y + 12, { align: 'right' });
+    doc.text('$' + lineTotal.toFixed(2), colX.total, y + 12, { align: 'right' });
+
+    y += rowHeight;
+  });
+
+  // 바닥선
+  doc.setDrawColor(200);
+  doc.line(tblX, y, tblX + tblW, y);
+  y += 10;
+
+  // ─ Totals (우측 정렬) ─
+  if (y > 680) { doc.addPage(); y = margin; }
+
+  const totLabelX = pageWidth - margin - 180;
+  const totValX = pageWidth - margin - 10;
+  const fmt = n => '$' + (parseFloat(n)||0).toLocaleString('en-US', {minimumFractionDigits:2});
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text('Subtotal:', totLabelX, y + 12, { align: 'left' });
+  doc.text(fmt(po.subtotal), totValX, y + 12, { align: 'right' });
+  y += 14;
+
+  if (parseFloat(po.tax) > 0) {
+    doc.text('Tax:', totLabelX, y + 12, { align: 'left' });
+    doc.text(fmt(po.tax), totValX, y + 12, { align: 'right' });
+    y += 14;
+  }
+  if (parseFloat(po.shipping) > 0) {
+    doc.text('Shipping:', totLabelX, y + 12, { align: 'left' });
+    doc.text(fmt(po.shipping), totValX, y + 12, { align: 'right' });
+    y += 14;
+  }
+  if (parseFloat(po.other_charges) > 0) {
+    doc.text('Other:', totLabelX, y + 12, { align: 'left' });
+    doc.text(fmt(po.other_charges), totValX, y + 12, { align: 'right' });
+    y += 14;
+  }
+
+  doc.setDrawColor(15, 39, 68);
+  doc.setLineWidth(1.5);
+  doc.line(totLabelX - 5, y + 4, totValX, y + 4);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(15, 39, 68);
+  doc.text('TOTAL:', totLabelX, y + 20, { align: 'left' });
+  doc.text(fmt(po.total), totValX, y + 20, { align: 'right' });
+  doc.setTextColor(0);
+  y += 34;
+
+  // ─ Vendor Notes ─
+  if (po.vendor_notes) {
+    if (y > 680) { doc.addPage(); y = margin; }
+    doc.setFillColor(254, 243, 199);
+    doc.rect(margin, y, pageWidth - 2 * margin, 10, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(146, 64, 14);
+    doc.text('NOTES', margin + 6, y + 8);
+    y += 12;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(0);
+    const noteLines = doc.splitTextToSize(po.vendor_notes, pageWidth - 2 * margin - 12);
+    doc.text(noteLines, margin + 6, y + 10);
+    y += noteLines.length * 11 + 10;
+  }
+
+  // ─ Footer ─
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(8);
+  doc.setTextColor(120);
+  doc.text(`Generated ${new Date().toLocaleString('en-US')} · ${_currentEmployee?.name || ''}`, margin, 792 - 20);
+  doc.text('Pacific Sports IMS', pageWidth - margin, 792 - 20, { align: 'right' });
+
+  const filename = `${po.po_number}.pdf`;
+  doc.save(filename);
+  showToast(`✓ PDF 다운로드: ${filename}`);
+}
+
+// ─ CSV Export ───────────────────────────────────────────
+function exportPOListCSV() {
+  if (!_purchaseOrderList || _purchaseOrderList.length === 0) {
+    showToast('❌ Export할 PO 없음');
+    return;
+  }
+  const headers = ['PO #','PO Date','Vendor','Expected','Status','Subtotal','Tax','Shipping','Other','Total','Terms','Ship To','Notes'];
+  const rows = _purchaseOrderList.map(p => [
+    p.po_number, p.po_date, p.vendor_name, p.expected_date, p.status,
+    parseFloat(p.subtotal||0).toFixed(2),
+    parseFloat(p.tax||0).toFixed(2),
+    parseFloat(p.shipping||0).toFixed(2),
+    parseFloat(p.other_charges||0).toFixed(2),
+    parseFloat(p.total||0).toFixed(2),
+    p.terms||'', p.ship_to_address||'', (p.notes||'').replace(/\n/g,' ')
+  ]);
+  const csv = [headers, ...rows].map(r => r.map(c => `"${String(c||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `PO_List_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  showToast(`✓ CSV 다운로드: ${_purchaseOrderList.length}개 PO`);
 }
 
 async function saveVendor() {
