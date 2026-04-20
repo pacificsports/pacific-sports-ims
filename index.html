@@ -596,9 +596,10 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">WAREHOUSE</label>
             <select class="fsel" id="inv-filter-wh" onchange="filterInventory()" style="width:100%">
               <option value="">All (CA + SC + PCR)</option>
-              <option value="CA">CA — Eastvale</option>
               <option value="SC">SC — Sumter</option>
               <option value="SC-PCR">SC-PCR — Pcs Room</option>
+              <option value="CA">CA — Eastvale</option>
+              <option value="CA-PCR">CA-PCR — Pcs Room</option>
             </select></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">SIZE</label>
            <input class="fi" id="inv-filter-size" placeholder="Size..." onkeydown="if(event.key==='Enter')filterInventory()"/></div>
@@ -8007,20 +8008,29 @@ function renderColorGrid(color, data, showTubular, showSs, style) {
 async function loadInventory() {
   document.getElementById('inventory-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
   let allData = [];
-  let from = 0;
-  const batchSize = 1000;
-  allData = [];
   let _aFrom = 0;
   while (true) {
-    const { data: _aChunk } = await db.from('inventory')
+    const { data: _aChunk, error } = await db.from('inventory')
       .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box), skus(variant)')
-      .order('created_at', {ascending:false})
+      .order('id', {ascending: true})
       .range(_aFrom, _aFrom + 999);
+    if (error) {
+      console.error('[loadInventory] error:', error);
+      break;
+    }
     if (!_aChunk || _aChunk.length === 0) break;
     allData = allData.concat(_aChunk);
     if (_aChunk.length < 1000) break;
     _aFrom += 1000;
   }
+  console.log(`[loadInventory] Loaded ${allData.length} rows`);
+  // 창고별 개수 확인
+  const whCounts = {};
+  allData.forEach(i => {
+    const wh = i.warehouses?.code || 'UNKNOWN';
+    whCounts[wh] = (whCounts[wh] || 0) + 1;
+  });
+  console.log('[loadInventory] By warehouse:', whCounts);
   allInventory = allData;
   renderInventoryTable(allInventory);
 }
