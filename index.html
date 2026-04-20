@@ -7503,6 +7503,11 @@ function renderInventoryTable(data) {
   const sumTotal = sumSC + sumSCPCR + sumCA + sumCAPCR;
   const sumComm = rows.reduce((s,r) => s + r.committed, 0);
 
+  // 단위 변환 (pcs / box)
+  const isBox = (document.getElementById('inv-unit-toggle')?.value || 'pcs') === 'box';
+  const toUnit = (qty, ppb) => isBox ? Math.floor(qty / (ppb || 72)) : qty;
+  const unitLabel = isBox ? 'boxes' : 'pcs';
+
   const sumEl = document.getElementById('inv-summary');
   if (sumEl) {
     sumEl.style.display = 'block';
@@ -7517,56 +7522,51 @@ function renderInventoryTable(data) {
   }
 
   // 테이블
-  const isBox = (document.getElementById('inv-unit-toggle')?.value || 'pcs') === 'box';
-  const toUnit = (qty, ppb) => isBox ? Math.floor(qty / (ppb || 72)) : qty;
-  const unitLabel = isBox ? 'boxes' : 'pcs';
-  const isSS = sku => (sku||'').includes('+ss');
+
   const html = rows.map((r, idx) => {
     const avail = r.total - r.committed;
-    const ssBadge = isSS(r.sku) ? ' <span style="font-size:10px;background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;border-radius:3px;padding:1px 5px;font-weight:600;">SS</span>' : '';
-    const detailRows = r.details.map(d =>
-      `<tr style="background:#f8f9fb;" onclick="editInventoryItem('${d.id}')">
-        <td></td><td></td><td></td><td></td><td></td>
-        <td style="font-size:11px;color:var(--text3);padding-left:24px;">↳ ${d.wh==='CA'?'<span class="loc-ca">CA</span>':d.wh==='SC-PCR'?'<span class="loc-sc" style="background:var(--orange)">PCR</span>':'<span class="loc-sc">SC</span>'} <span style="font-family:\'IBM Plex Mono\',monospace;">${d.loc}</span></td>
-        <td class="num" style="font-size:11px;color:var(--text3)">${toUnit(d.qty,r.ppb).toLocaleString()}</td>
-        <td class="num" style="font-size:11px;color:var(--text3)">${toUnit(d.committed,r.ppb)}</td>
-        <td class="num" style="font-size:11px;color:var(--text3)">${toUnit(d.qty - d.committed,r.ppb).toLocaleString()}</td>
-        <td></td>
-      </tr>`
-    ).join('');
+    const isSs = r.variant === 'Side Seam';
+    const variantBadge = isSs
+      ? '<span style="background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;">Side Seam</span>'
+      : '<span style="background:#f3f4f6;color:#4b5563;border:1px solid #d1d5db;border-radius:3px;padding:2px 8px;font-size:10px;font-weight:600;">Tubular</span>';
 
-return `<tr style="cursor:pointer;font-weight:500;" onclick="document.querySelectorAll('.detail-${idx}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')" ondblclick="event.stopPropagation();bulkEditGroup('${r.styleNum}','${r.color.replace(/'/g,"\\'")}','${r.size}')">
-      <td class="mono" style="font-weight:700;color:var(--primary)">${r.styleNum}</td>
-      <td>${r.desc}${ssBadge}</td>
-      <td>${r.color}</td>
-      <td>${r.size}</td>
-    <td class="num" style="color:var(--sc)">${r.sc > 0 ? toUnit(r.sc,r.ppb).toLocaleString() : '—'}</td>
-      <td class="num" style="color:#c2410c">${r.sc_pcr > 0 ? toUnit(r.sc_pcr,r.ppb).toLocaleString() : '—'}</td>
-      <td class="num" style="color:var(--ca)">${r.ca > 0 ? toUnit(r.ca,r.ppb).toLocaleString() : '—'}</td>
-      <td class="num" style="color:#7c2d12">${r.ca_pcr > 0 ? toUnit(r.ca_pcr,r.ppb).toLocaleString() : '—'}</td>
-      <td class="num" style="font-weight:700;font-size:13px;">${toUnit(r.total,r.ppb).toLocaleString()}</td>
-      <td class="num" style="color:${avail<0?'var(--red)':'var(--green)'}">${toUnit(avail,r.ppb).toLocaleString()}</td>
-      <td>${r.total===0?'<span class="chip c-r">Out</span>':avail<=0?'<span class="chip c-o">Low</span>':'<span class="chip c-g">OK</span>'}</td>
-    </tr>
-    ${r.details.map(d => {
+    // 창고별 드릴다운 (기본 접힘, 메인 row 클릭 시 펼침)
+    const detailRows = r.details.map(d => {
       const whBadge = d.wh === 'CA' ? '<span class="loc-ca">CA</span>' :
                       d.wh === 'SC-PCR' ? '<span class="loc-sc" style="background:#c2410c">SC-PCR</span>' :
                       d.wh === 'CA-PCR' ? '<span class="loc-ca" style="background:#7c2d12">CA-PCR</span>' :
                       '<span class="loc-sc">SC</span>';
-      return `<tr class="detail-${idx}" style="display:none;background:#f8f9fb;cursor:pointer;" onclick="event.stopPropagation();editInventoryItem('${d.id}')">
-      <td></td><td></td><td></td><td></td>
-      <td colspan="4" style="font-size:11px;color:var(--text3);padding-left:24px;">↳ ${whBadge} <span style="font-family:'IBM Plex Mono',monospace;">${d.loc}</span></td>
-    <td class="num" style="font-size:11px;color:var(--text3)">${toUnit(d.qty,r.ppb).toLocaleString()}</td>
-        <td class="num" style="font-size:11px;color:var(--text3)">${toUnit(d.qty - d.committed,r.ppb).toLocaleString()}</td>
-      <td></td>
-    </tr>`;
-    }).join('')}`;
+      const locDisplay = (d.loc && d.loc !== '—') ? d.loc : '<em style="color:#9ca3af;">(no bin)</em>';
+      return `<tr class="detail-${idx}" style="display:none;background:#f8fafc;cursor:pointer;" onclick="event.stopPropagation();editInventoryItem('${d.id}')">
+        <td colspan="5" style="font-size:11px;color:var(--text3);padding-left:36px;">↳ ${whBadge} <span style="font-family:'IBM Plex Mono',monospace;">${locDisplay}</span></td>
+        <td class="num" style="font-size:11px;color:var(--text3);" colspan="4">Qty: ${toUnit(d.qty,r.ppb).toLocaleString()}</td>
+        <td class="num" style="font-size:11px;color:var(--text3);">${toUnit(d.qty,r.ppb).toLocaleString()}</td>
+        <td class="num" style="font-size:11px;color:var(--text3);">${toUnit(d.qty - d.committed,r.ppb).toLocaleString()}</td>
+        <td></td>
+      </tr>`;
+    }).join('');
+
+    const mainRowStyle = isSs ? 'background:#fffbf0;' : '';
+    return `<tr style="cursor:pointer;font-weight:500;${mainRowStyle}" onclick="document.querySelectorAll('.detail-${idx}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')" ondblclick="event.stopPropagation();bulkEditGroup('${r.styleNum}','${r.color.replace(/'/g,"\\'")}','${r.size}')">
+      <td class="mono" style="font-weight:700;color:var(--primary)">${r.styleNum}</td>
+      <td style="font-size:11px;">${r.desc}</td>
+      <td>${r.color}</td>
+      <td>${r.size}</td>
+      <td>${variantBadge}</td>
+      <td class="num" style="color:var(--sc)">${r.sc > 0 ? toUnit(r.sc,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="color:#c2410c">${r.sc_pcr > 0 ? toUnit(r.sc_pcr,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="color:var(--ca)">${r.ca > 0 ? toUnit(r.ca,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="color:#7c2d12">${r.ca_pcr > 0 ? toUnit(r.ca_pcr,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="font-weight:700;font-size:13px;">${toUnit(r.total,r.ppb).toLocaleString()}</td>
+      <td class="num" style="color:${avail<0?'var(--red)':avail===0?'var(--text3)':'var(--green)'}">${toUnit(avail,r.ppb).toLocaleString()}</td>
+      <td>${r.total===0?'<span class="chip c-r">Out</span>':avail<=0?'<span class="chip c-o">Low</span>':'<span class="chip c-g">OK</span>'}</td>
+    </tr>${detailRows}`;
   }).join('');
 
   document.getElementById('inventory-table-wrap').innerHTML = `
     <table class="tbl">
       <thead><tr>
-        <th>Style #</th><th>Description</th><th>Color</th><th>Size</th>
+        <th>Style #</th><th>Description</th><th>Color</th><th>Size</th><th>Variant</th>
         <th class="num" style="color:var(--sc)">SC</th>
         <th class="num" style="color:#c2410c">SC-PCR</th>
         <th class="num" style="color:var(--ca)">CA</th>
