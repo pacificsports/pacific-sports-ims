@@ -4188,6 +4188,30 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <span style="color:#9ca3af;">사이즈: XS, S, M, L, XL, 2XL, 3XL, 4XL, 5XL (고정)</span>
           </div>
 
+          <!-- 창고 선택 (자리 예약) -->
+          <div style="margin-bottom:12px;padding:10px;background:#fff;border:1px solid #bae6fd;border-radius:5px;">
+            <div style="font-size:11px;font-weight:700;color:#0c4a6e;margin-bottom:6px;">🏬 자리 예약할 창고 선택:</div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;">
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="imp-wh-sc" value="SC" checked>
+                <span>🟢 SC (Sumter)</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="imp-wh-ca" value="CA" checked>
+                <span>🟠 CA (Eastvale)</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="imp-wh-sc-pcr" value="SC-PCR" checked>
+                <span>🟢 SC-PCR (Pcs Room)</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="imp-wh-ca-pcr" value="CA-PCR" checked>
+                <span>🟠 CA-PCR (Pcs Room)</span>
+              </label>
+            </div>
+            <div style="font-size:10px;color:#6b7280;margin-top:6px;">체크된 창고에 각 SKU 당 1개의 row가 생성됩니다 (수량 0, 자리 예약용)</div>
+          </div>
+
           <div style="display:flex;gap:8px;">
             <button class="btn btn-primary" onclick="previewSkuImport()">👁 미리보기</button>
             <button class="btn" id="imp-sku-save-btn" onclick="executeSkuImport()" style="display:none;background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;">✓ 스타일 + SKU 등록</button>
@@ -9478,21 +9502,33 @@ function previewSkuImport() {
   });
 
   // 미리보기 데이터 저장
+  const selectedWarehouses = [];
+  if (document.getElementById('imp-wh-sc')?.checked) selectedWarehouses.push('SC');
+  if (document.getElementById('imp-wh-ca')?.checked) selectedWarehouses.push('CA');
+  if (document.getElementById('imp-wh-sc-pcr')?.checked) selectedWarehouses.push('SC-PCR');
+  if (document.getElementById('imp-wh-ca-pcr')?.checked) selectedWarehouses.push('CA-PCR');
+
   _skuImportData = {
     style: { style_number: styleNum, description: desc, category: cat, size_range: 'XS-5XL', pcs_per_box: ppbSmall, pcs_per_box_large: ppbLarge },
     skus: skus,
-    colors: uniqueColors
+    colors: uniqueColors,
+    warehouses: selectedWarehouses
   };
 
   // 미리보기 UI
+  const invRowCount = skus.length * selectedWarehouses.length;
   let html = `
     <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:5px;padding:12px;">
       <div style="font-weight:700;color:#166534;margin-bottom:8px;">✓ 미리보기 OK</div>
-      <div style="font-size:12px;color:#15803d;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px;">
+      <div style="font-size:12px;color:#15803d;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:6px;">
         <div>📦 Style: <strong>${styleNum}</strong></div>
         <div>🎨 색상: <strong>${uniqueColors.length}개</strong></div>
         <div>📏 사이즈: <strong>9개</strong></div>
         <div>🏷️ 총 SKU: <strong>${skus.length}개</strong></div>
+      </div>
+      <div style="font-size:11px;color:#15803d;margin-bottom:10px;padding:6px 8px;background:#dcfce7;border-radius:4px;">
+        🏬 자리 예약 창고: <strong>${selectedWarehouses.length > 0 ? selectedWarehouses.join(', ') : '없음'}</strong>
+        → 총 <strong>${invRowCount.toLocaleString()}</strong> inventory rows 생성됨 (${skus.length} SKU × ${selectedWarehouses.length} 창고)
       </div>
       <details style="font-size:11px;">
         <summary style="cursor:pointer;color:#15803d;font-weight:600;">📋 생성될 SKU 미리보기 (처음 12개)</summary>
@@ -9538,52 +9574,54 @@ async function executeSkuImport() {
       btn.textContent = `⏳ SKU 등록 중... ${inserted}/${skus.length}`;
     }
 
-    // 3. 모든 창고(SC, CA, SC-PCR, CA-PCR)에 각 SKU를 0으로 자리 예약
+    // 3. 선택된 창고에 각 SKU를 0으로 자리 예약
     btn.textContent = '⏳ 창고별 자리 예약 중...';
-    const { data: warehouses } = await db.from('warehouses').select('id, code').in('code', ['SC', 'CA', 'SC-PCR', 'CA-PCR']);
+    const selectedWhCodes = _skuImportData.warehouses || [];
     
     let invCreated = 0;
-    if (warehouses && warehouses.length > 0) {
-      const invRows = [];
-      for (const wh of warehouses) {
-        for (const sku of _skuImportData.skus) {
-          invRows.push({
-            warehouse_id: wh.id,
-            style_id: styleId,
-            style_number: sku.style_number,
-            sku_id: sku.sku_id,
-            color: sku.color,
-            size: sku.size,
-            location: null,
-            qty_on_hand: 0,
-            qty_committed: 0
-          });
+    if (selectedWhCodes.length > 0) {
+      const { data: warehouses } = await db.from('warehouses').select('id, code').in('code', selectedWhCodes);
+      
+      if (warehouses && warehouses.length > 0) {
+        const invRows = [];
+        for (const wh of warehouses) {
+          for (const sku of _skuImportData.skus) {
+            invRows.push({
+              warehouse_id: wh.id,
+              style_id: styleId,
+              style_number: sku.style_number,
+              sku_id: sku.sku_id,
+              color: sku.color,
+              size: sku.size,
+              location: null,
+              qty_on_hand: 0,
+              qty_committed: 0
+            });
+          }
         }
-      }
 
-      // 기존에 있는 (warehouse_id, sku_id) 조합은 건너뛰기 위해 upsert
-      // 단, inventory에 unique constraint가 없을 수 있으므로, 먼저 기존 row 확인
-      // 간단하게: 이미 있는 warehouse × sku 조합은 skip
-      const { data: existing } = await db.from('inventory')
-        .select('warehouse_id, sku_id')
-        .eq('style_id', styleId);
-      const existingSet = new Set((existing || []).map(e => `${e.warehouse_id}|${e.sku_id}`));
-      const newRows = invRows.filter(r => !existingSet.has(`${r.warehouse_id}|${r.sku_id}`));
+        // 기존 (warehouse_id, sku_id) 조합 확인 → 중복 방지
+        const { data: existing } = await db.from('inventory')
+          .select('warehouse_id, sku_id')
+          .eq('style_id', styleId);
+        const existingSet = new Set((existing || []).map(e => `${e.warehouse_id}|${e.sku_id}`));
+        const newRows = invRows.filter(r => !existingSet.has(`${r.warehouse_id}|${r.sku_id}`));
 
-      for (let i = 0; i < newRows.length; i += CHUNK) {
-        const chunk = newRows.slice(i, i + CHUNK);
-        const { error } = await db.from('inventory').insert(chunk);
-        if (error) throw error;
-        invCreated += chunk.length;
-        btn.textContent = `⏳ 자리 예약 중... ${invCreated}/${newRows.length}`;
+        for (let i = 0; i < newRows.length; i += CHUNK) {
+          const chunk = newRows.slice(i, i + CHUNK);
+          const { error } = await db.from('inventory').insert(chunk);
+          if (error) throw error;
+          invCreated += chunk.length;
+          btn.textContent = `⏳ 자리 예약 중... ${invCreated}/${newRows.length}`;
+        }
       }
     }
 
     // 4. Activity Log
     try {
       await logActivity('system', 'sku_import', _skuImportData.style.style_number, 'create', {
-        note: `Style ${_skuImportData.style.style_number} + ${inserted} SKUs + ${invCreated} inventory rows`,
-        metadata: { style: _skuImportData.style.style_number, sku_count: inserted, inv_rows: invCreated }
+        note: `Style ${_skuImportData.style.style_number} + ${inserted} SKUs + ${invCreated} inventory rows (${selectedWhCodes.join(', ')})`,
+        metadata: { style: _skuImportData.style.style_number, sku_count: inserted, inv_rows: invCreated, warehouses: selectedWhCodes }
       });
     } catch(e) {}
 
@@ -9591,10 +9629,9 @@ async function executeSkuImport() {
       `✅ 등록 완료!\n\n` +
       `스타일: ${_skuImportData.style.style_number}\n` +
       `SKU: ${inserted}개\n` +
-      `창고별 재고 자리: ${invCreated}개 (SC, CA, SC-PCR, CA-PCR × ${_skuImportData.skus.length} SKUs)\n\n` +
+      `창고별 자리: ${invCreated}개 (${selectedWhCodes.join(', ')})\n\n` +
       `모든 수량은 0으로 초기화되었습니다.\n` +
-      `SC와 CA는 Inventory Import에서 Davinci 파일로 덮어쓸 수 있습니다.\n` +
-      `PCR은 재고 조사 후 Inventory Adjust에서 직접 수정하세요.`
+      `Inventory Import에서 Davinci 파일로 실제 수량을 업데이트하세요.`
     );
 
     // 리셋
