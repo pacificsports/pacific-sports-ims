@@ -35768,7 +35768,7 @@ function unmaskFieldDisplay(input, durationMs = 10000) {
   }, durationMs);
 }
 
-/** 👁 버튼 클릭 — PIN 입력 후 필드 공개 */
+/** 👁 버튼 클릭 — 인라인 PIN 입력으로 필드 공개 */
 function revealSensitiveField(fieldId, fieldType) {
   const input = document.getElementById(fieldId);
   if (!input) return;
@@ -35779,31 +35779,99 @@ function revealSensitiveField(fieldId, fieldType) {
     return;
   }
 
-  // 이미 편집 중이면 바로 공개
+  // 이미 공개 상태면 무시
   if (input.dataset.masked !== 'true' && !input.dataset.realValue) {
     return;
   }
 
-  const label = fieldType === 'EIN' ? '회사 EIN' : fieldType === 'TAX_ID' ? '벤더 Tax ID' : '민감 정보';
+  // 인라인 PIN 입력 UI 표시/토글
+  const wrapperSelector = `pin-inline-${fieldId}`;
+  let existing = document.getElementById(wrapperSelector);
+  if (existing) {
+    // 이미 열려있으면 닫기
+    existing.remove();
+    return;
+  }
 
-  // PIN 모달은 PIN이 맞으면 emp 객체와 함께 callback 호출
-  openPinModal('🔒', label + ' 조회', 'Admin PIN을 입력하면 10초간 표시됩니다', (emp) => {
-    // Admin 권한 재확인 (PIN은 맞아도 staff일 수 있음)
-    if (emp.role !== 'admin') {
-      showToast('❌ 관리자 PIN이 아닙니다');
-      return;
+  // input의 부모 요소(position:relative인 div)에 PIN 입력 삽입
+  const parent = input.parentElement;
+  if (!parent) return;
+
+  const wrapper = document.createElement('div');
+  wrapper.id = wrapperSelector;
+  wrapper.style.cssText = 'margin-top:6px;padding:8px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;display:flex;align-items:center;gap:8px;';
+  wrapper.innerHTML = `
+    <span style="font-size:11px;font-weight:700;color:#92400e;">🔒 Admin PIN:</span>
+    <input type="password"
+           inputmode="numeric"
+           maxlength="4"
+           pattern="[0-9]*"
+           autocomplete="off"
+           id="pin-inline-input-${fieldId}"
+           oninput="checkInlinePin('${fieldId}','${fieldType}', this.value)"
+           style="width:80px;padding:4px 8px;border:1px solid #fbbf24;border-radius:4px;font-size:14px;font-family:'IBM Plex Mono',monospace;text-align:center;letter-spacing:4px;"
+           placeholder="••••">
+    <span id="pin-inline-error-${fieldId}" style="font-size:11px;color:#dc2626;"></span>
+    <span style="flex:1;"></span>
+    <button type="button" onclick="document.getElementById('${wrapperSelector}').remove()" style="background:none;border:none;color:#92400e;cursor:pointer;font-size:14px;">✕</button>
+  `;
+
+  // parent 다음에 삽입 (parent의 다음 형제로)
+  parent.parentElement.insertBefore(wrapper, parent.nextSibling);
+
+  // 포커스
+  setTimeout(() => {
+    const pinInput = document.getElementById(`pin-inline-input-${fieldId}`);
+    if (pinInput) pinInput.focus();
+  }, 50);
+}
+
+/** 인라인 PIN 입력 검증 */
+async function checkInlinePin(fieldId, fieldType, pinValue) {
+  const errorEl = document.getElementById(`pin-inline-error-${fieldId}`);
+  if (errorEl) errorEl.textContent = '';
+
+  if (!pinValue || pinValue.length < 4) return;
+
+  // _pinEmployees 로드 (없으면)
+  if (!_pinEmployees || _pinEmployees.length === 0) {
+    await loadPinEmployees();
+  }
+
+  // Admin PIN만 허용
+  const emp = _pinEmployees.find(e => e.pin === pinValue && e.role === 'admin');
+
+  if (!emp) {
+    // 잘못된 PIN
+    if (errorEl) errorEl.textContent = '❌ 잘못된 Admin PIN';
+    const pinInput = document.getElementById(`pin-inline-input-${fieldId}`);
+    if (pinInput) {
+      pinInput.value = '';
+      pinInput.style.borderColor = '#dc2626';
+      setTimeout(() => { pinInput.style.borderColor = '#fbbf24'; pinInput.focus(); }, 800);
     }
+    return;
+  }
+
+  // PIN 정확 → 공개
+  const input = document.getElementById(fieldId);
+  if (input) {
     unmaskFieldDisplay(input, 10000);
     showToast(`🔓 ${emp.name}님: 10초간 표시됩니다`);
 
-    // 활동 로그 (admin이 민감 정보 조회했음을 기록)
+    // 활동 로그
     try {
+      const label = fieldType === 'EIN' ? '회사 EIN' : fieldType === 'TAX_ID' ? '벤더 Tax ID' : '민감 정보';
       logActivity('company_settings', fieldId, fieldType, 'reveal_sensitive', {
         note: `${emp.name}(${emp.role})이 ${label} 조회`,
         metadata: { field_id: fieldId, field_type: fieldType }
       });
     } catch(e) {/* 무시 */}
-  });
+  }
+
+  // PIN 입력 UI 제거
+  const wrapper = document.getElementById(`pin-inline-${fieldId}`);
+  if (wrapper) wrapper.remove();
 }
 
 /** 민감 필드 로드 시 호출 — 값을 dataset에 저장하고 마스킹 */
