@@ -4365,6 +4365,69 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
   </div>
 </div>
 
+<!-- STYLE EDIT MODAL -->
+<div class="modal-overlay" id="modal-edit-style">
+  <div class="modal" style="width:700px;max-width:95vw;">
+    <div class="modal-head" style="background:#0f2744;">
+      <span class="modal-title">✏️ Style 편집</span>
+      <button class="modal-close" onclick="closeModal('modal-edit-style')">×</button>
+    </div>
+    <div class="modal-body" style="padding:16px;">
+      <input type="hidden" id="edit-style-id">
+      
+      <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">STYLE #</label>
+          <input type="text" id="edit-style-num" disabled style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#f9fafb;color:#6b7280;">
+          <div style="font-size:10px;color:#9ca3af;margin-top:2px;">Style # 는 변경할 수 없습니다</div>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">DESCRIPTION</label>
+          <input type="text" id="edit-style-desc" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;">
+        </div>
+      </div>
+      
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">CATEGORY</label>
+          <select id="edit-style-cat" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;">
+            <option>Adult S/S</option>
+            <option>Adult L/S</option>
+            <option>Youth S/S</option>
+            <option>Youth L/S</option>
+            <option>Toddler S/S</option>
+            <option>Toddler L/S</option>
+            <option>Adult Hoodie</option>
+            <option>Adult Hoodie L/S</option>
+            <option>Youth Hoodie</option>
+            <option>Sweatpants</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">PCS/BOX (XS-2XL)</label>
+          <input type="number" id="edit-style-ppb-small" min="1" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;text-align:center;">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">PCS/BOX (3XL-5XL)</label>
+          <input type="number" id="edit-style-ppb-large" min="1" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;text-align:center;">
+        </div>
+      </div>
+      
+      <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:10px;font-size:11px;color:#92400e;">
+        <div style="font-weight:700;margin-bottom:3px;">💡 참고사항:</div>
+        <div>· Description, Category, PCS/Box는 자유롭게 수정 가능</div>
+        <div>· Style # 는 SKU와 Inventory가 연결되어 있어 수정 불가</div>
+        <div>· PCS/Box 변경 시 박스 환산 수량에 영향을 미칩니다</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal('modal-edit-style')">Cancel</button>
+      <button class="btn" onclick="saveStyleEdit()" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;">💾 저장</button>
+    </div>
+  </div>
+</div>
+
 <!-- INVENTORY ADJUST MODAL -->
 <div class="modal-overlay" id="modal-adjust-inv">
   <div class="modal" style="width:1100px;max-width:98vw;max-height:92vh;overflow-y:auto;">
@@ -7488,6 +7551,91 @@ let inv = [];
 // INVENTORY
 // ══════════════════════════════════
 // ══════════════════════════════════════════════════════════════
+// ✏️ STYLE EDIT (from Grid View)
+// ══════════════════════════════════════════════════════════════
+
+async function openStyleEdit(styleNum) {
+  try {
+    const { data: style, error } = await db.from('styles').select('*').eq('style_number', styleNum).single();
+    if (error || !style) throw new Error(`Style ${styleNum} 없음`);
+    
+    // 모달에 값 채우기
+    document.getElementById('edit-style-id').value = style.id;
+    document.getElementById('edit-style-num').value = style.style_number;
+    document.getElementById('edit-style-desc').value = style.description || '';
+    document.getElementById('edit-style-ppb-small').value = style.pcs_per_box || 72;
+    document.getElementById('edit-style-ppb-large').value = style.pcs_per_box_large || 48;
+    
+    // 카테고리 설정 (없는 옵션이면 Other로)
+    const catSelect = document.getElementById('edit-style-cat');
+    const cat = style.category || 'Other';
+    let found = false;
+    for (let i = 0; i < catSelect.options.length; i++) {
+      if (catSelect.options[i].value === cat) {
+        catSelect.value = cat;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // 없는 카테고리 추가
+      const opt = document.createElement('option');
+      opt.value = cat;
+      opt.textContent = cat;
+      catSelect.insertBefore(opt, catSelect.firstChild);
+      catSelect.value = cat;
+    }
+    
+    openModal('modal-edit-style');
+  } catch(e) {
+    alert('❌ ' + e.message);
+  }
+}
+
+async function saveStyleEdit() {
+  const id = document.getElementById('edit-style-id').value;
+  const desc = document.getElementById('edit-style-desc').value.trim();
+  const cat = document.getElementById('edit-style-cat').value;
+  const ppbSmall = parseInt(document.getElementById('edit-style-ppb-small').value) || 72;
+  const ppbLarge = parseInt(document.getElementById('edit-style-ppb-large').value) || 48;
+  const styleNum = document.getElementById('edit-style-num').value;
+  
+  if (!desc) { alert('Description을 입력하세요'); return; }
+  if (ppbSmall < 1 || ppbLarge < 1) { alert('PCS/Box는 1 이상이어야 합니다'); return; }
+  
+  try {
+    const { error } = await db.from('styles')
+      .update({
+        description: desc,
+        category: cat,
+        pcs_per_box: ppbSmall,
+        pcs_per_box_large: ppbLarge
+      })
+      .eq('id', id);
+    if (error) throw error;
+    
+    // Activity Log
+    try {
+      await logActivity('system', 'style_edit', styleNum, 'update', {
+        note: `Style ${styleNum} 수정: ${desc} / ${cat} / ${ppbSmall}·${ppbLarge}`,
+        metadata: { style: styleNum, description: desc, category: cat, ppb_small: ppbSmall, ppb_large: ppbLarge }
+      });
+    } catch(e) {}
+    
+    alert('✅ 저장 완료');
+    closeModal('modal-edit-style');
+    
+    // Grid View 다시 로드
+    if (_gridSelectedStyle === styleNum) {
+      await loadGridView();
+    }
+  } catch(e) {
+    console.error(e);
+    alert('❌ 저장 실패: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
 // 🎨 INVENTORY GRID VIEW — 색상별 SKU 피벗 그리드
 // ══════════════════════════════════════════════════════════════
 
@@ -7644,7 +7792,7 @@ async function loadGridView() {
     if (!style) throw new Error(`스타일 ${_gridSelectedStyle} 없음`);
     
     const { data: inv } = await db.from('inventory')
-      .select('*, warehouses(code)')
+      .select('*, warehouses(code), skus(variant)')
       .eq('style_id', style.id);
     
     _gridCurrentData = { style, inventory: inv || [] };
@@ -7693,7 +7841,9 @@ function renderGridView() {
   for (const r of inventory) {
     const color = r.color || '';
     const size = r.size || '';
-    const variant = (r.sku_id || '').includes('+ss') ? 'Side Seam' : 'Tubular';
+    // Variant: skus 테이블의 variant 필드 우선, 없으면 +ss 여부로 판단
+    const dbVariant = r.skus?.variant;
+    const variant = dbVariant || ((r.sku_id || '').includes('+ss') ? 'Side Seam' : 'Tubular');
     const wh = r.warehouses?.code || '';
     const qty = r.qty_on_hand || 0;
     
@@ -7727,9 +7877,14 @@ function renderGridView() {
         <div style="font-size:14px;font-weight:800;">Style ${style.style_number} — ${style.description || ''}</div>
         <div style="font-size:11px;opacity:0.8;margin-top:2px;">${style.category || ''} · ${style.pcs_per_box || 72} pcs/box (XS-2XL), ${style.pcs_per_box_large || 48} pcs/box (3XL-5XL)</div>
       </div>
-      <button onclick="toggleGridFavorite('${style.style_number}')" style="background:${isFav?'#fbbf24':'rgba(255,255,255,0.2)'};color:${isFav?'#000':'#fff'};border:1px solid rgba(255,255,255,0.3);padding:6px 12px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:700;">
-        ${isFav ? '⭐ 즐겨찾기' : '☆ 즐겨찾기 추가'}
-      </button>
+      <div style="display:flex;gap:8px;">
+        <button onclick="openStyleEdit('${style.style_number}')" style="background:rgba(255,255,255,0.2);color:#fff;border:1px solid rgba(255,255,255,0.3);padding:6px 12px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:700;">
+          ✏️ Edit
+        </button>
+        <button onclick="toggleGridFavorite('${style.style_number}')" style="background:${isFav?'#fbbf24':'rgba(255,255,255,0.2)'};color:${isFav?'#000':'#fff'};border:1px solid rgba(255,255,255,0.3);padding:6px 12px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:700;">
+          ${isFav ? '⭐ 즐겨찾기' : '☆ 즐겨찾기 추가'}
+        </button>
+      </div>
     </div>
   `;
   
@@ -7858,7 +8013,7 @@ async function loadInventory() {
   let _aFrom = 0;
   while (true) {
     const { data: _aChunk } = await db.from('inventory')
-      .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box)')
+      .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box), skus(variant)')
       .order('created_at', {ascending:false})
       .range(_aFrom, _aFrom + 999);
     if (!_aChunk || _aChunk.length === 0) break;
@@ -7910,8 +8065,10 @@ function renderInventoryTable(data) {
       ? `SKU:${skuId}` 
       : `${i.styles?.style_number||i.style_number||''}|${(i.color||'').toUpperCase()}|${(i.size||'').toUpperCase()}`;
     
-    // Variant 추출 (+ss 여부)
-    const isSs = skuId && skuId.includes('+ss');
+    // Variant 추출: skus 테이블의 variant 필드 우선, 없으면 +ss 여부로 판단 (레거시 fallback)
+    const dbVariant = i.skus?.variant;
+    const isSs = dbVariant ? (dbVariant === 'Side Seam') : (skuId && skuId.includes('+ss'));
+    const variantLabel = dbVariant || (isSs ? 'Side Seam' : 'Tubular');
     
     if (!grouped[key]) {
       grouped[key] = {
@@ -7920,7 +8077,7 @@ function renderInventoryTable(data) {
         color: i.color || '',
         size: i.size || '',
         sku: skuId,
-        variant: isSs ? 'Side Seam' : 'Tubular',
+        variant: variantLabel,
         sc: 0, sc_pcr: 0, ca: 0, ca_pcr: 0, total: 0,
         committed: 0,
         details: []
