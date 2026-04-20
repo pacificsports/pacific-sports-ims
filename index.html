@@ -4262,11 +4262,24 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           </div>
 
           <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;font-size:11px;color:#075985;">
-            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
-              <input type="checkbox" id="imp-include-ss" checked>
-              <span>Side Seam (+ss) 버전도 생성</span>
-            </label>
-            <span style="color:#9ca3af;">사이즈: XS, S, M, L, XL, 2XL, 3XL, 4XL, 5XL (고정)</span>
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#0c4a6e;margin-bottom:4px;">VARIANT 생성 방식:</div>
+              <div style="display:flex;gap:0;border:1px solid #bae6fd;border-radius:5px;overflow:hidden;">
+                <label style="padding:6px 14px;background:#0284c7;color:#fff;cursor:pointer;font-weight:700;font-size:12px;display:flex;align-items:center;gap:4px;" id="imp-variant-both-label">
+                  <input type="radio" name="imp-variant" value="both" checked style="margin:0;" onchange="updateImpVariantUI()">
+                  <span>Tubular + Side Seam</span>
+                </label>
+                <label style="padding:6px 14px;background:#fff;color:#075985;cursor:pointer;font-weight:700;font-size:12px;border-left:1px solid #bae6fd;display:flex;align-items:center;gap:4px;" id="imp-variant-tub-label">
+                  <input type="radio" name="imp-variant" value="tubular" style="margin:0;" onchange="updateImpVariantUI()">
+                  <span>Tubular만</span>
+                </label>
+                <label style="padding:6px 14px;background:#fff;color:#075985;cursor:pointer;font-weight:700;font-size:12px;border-left:1px solid #bae6fd;display:flex;align-items:center;gap:4px;" id="imp-variant-ss-label">
+                  <input type="radio" name="imp-variant" value="ss" style="margin:0;" onchange="updateImpVariantUI()">
+                  <span>Side Seam만 (Tubular 없음)</span>
+                </label>
+              </div>
+            </div>
+            <span style="color:#9ca3af;margin-top:18px;">사이즈: XS, S, M, L, XL, 2XL, 3XL, 4XL, 5XL (고정)</span>
           </div>
 
           <!-- 창고 선택 (자리 예약) -->
@@ -9816,6 +9829,28 @@ async function loadSettings() {
 // 📥 SKU & INVENTORY IMPORT
 // ══════════════════════════════════════════════════════════════
 
+/** Variant 라디오 버튼 UI 업데이트 (선택된 것 하이라이트) */
+function updateImpVariantUI() {
+  const selected = document.querySelector('input[name="imp-variant"]:checked');
+  const value = selected ? selected.value : 'both';
+  const labels = {
+    'both': 'imp-variant-both-label',
+    'tubular': 'imp-variant-tub-label',
+    'ss': 'imp-variant-ss-label'
+  };
+  Object.entries(labels).forEach(([val, id]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (val === value) {
+      el.style.background = '#0284c7';
+      el.style.color = '#fff';
+    } else {
+      el.style.background = '#fff';
+      el.style.color = '#075985';
+    }
+  });
+}
+
 function openImportModal() {
   // 초기화
   _skuImportData = null;
@@ -9905,7 +9940,6 @@ function previewSkuImport() {
   const cat = document.getElementById('imp-style-cat').value;
   const ppbSmall = parseInt(document.getElementById('imp-ppb-small').value) || 72;
   const ppbLarge = parseInt(document.getElementById('imp-ppb-large').value) || 48;
-  const includeSs = document.getElementById('imp-include-ss').checked;
   const colorsRaw = document.getElementById('imp-colors').value.trim();
 
   const previewEl = document.getElementById('imp-sku-preview');
@@ -9941,29 +9975,50 @@ function previewSkuImport() {
     return;
   }
 
+  // Variant 모드 읽기 (3옵션 라디오)
+  const variantRadio = document.querySelector('input[name="imp-variant"]:checked');
+  const variantMode = variantRadio ? variantRadio.value : 'both';  // 'both' | 'tubular' | 'ss'
+  
+  // 각 모드별 생성할 variant 리스트
+  // - 'both':    둘 다 (Tubular + Side Seam 구분 위해 +ss 붙임)
+  // - 'tubular': Tubular만 (+ss 없음, 기본 SKU)
+  // - 'ss':      Side Seam만 (+ss 없음, 기본 SKU로 저장. Davinci 방식)
+  //              → Tubular가 없는 스타일이므로 구분할 필요가 없음
+  
   // SKU 생성
   const skus = [];
   uniqueColors.forEach(color => {
     const cc = colorCode6(color);
     IMPORT_SIZES.forEach(size => {
-      const variants = includeSs ? ['Tubular', 'Side Seam'] : ['Tubular'];
-      variants.forEach(variant => {
-        let skuId = `${styleNum}${cc}${size.toLowerCase()}`;
-        let skuDesc = desc;
-        if (variant === 'Side Seam') {
-          skuId += '+ss';
-          skuDesc += ' - Side Seam';
-        }
+      const baseSkuId = `${styleNum}${cc}${size.toLowerCase()}`;
+      
+      if (variantMode === 'both') {
+        // Tubular + Side Seam 둘 다 (Side Seam은 +ss 붙임)
         skus.push({
-          sku_id: skuId,
-          style_number: styleNum,
-          color: color,
-          color_code: cc,
-          size: size,
-          variant: variant,
-          description: skuDesc
+          sku_id: baseSkuId,
+          style_number: styleNum, color: color, color_code: cc, size: size,
+          variant: 'Tubular', description: desc
         });
-      });
+        skus.push({
+          sku_id: baseSkuId + '+ss',
+          style_number: styleNum, color: color, color_code: cc, size: size,
+          variant: 'Side Seam', description: desc + ' - Side Seam'
+        });
+      } else if (variantMode === 'tubular') {
+        // Tubular만
+        skus.push({
+          sku_id: baseSkuId,
+          style_number: styleNum, color: color, color_code: cc, size: size,
+          variant: 'Tubular', description: desc
+        });
+      } else if (variantMode === 'ss') {
+        // Side Seam만 (+ss 없이 기본 SKU로 - Davinci 방식)
+        skus.push({
+          sku_id: baseSkuId,
+          style_number: styleNum, color: color, color_code: cc, size: size,
+          variant: 'Side Seam', description: desc
+        });
+      }
     });
   });
 
