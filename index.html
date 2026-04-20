@@ -1175,6 +1175,22 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
     <!-- ── RECEIVING ── -->
     <div class="panel" id="panel-receiving">
+      <!-- PO 연동 섹션 (Phase 2) -->
+      <div class="card" style="border-left:4px solid #1a56a0;">
+        <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;">
+          <span class="card-title">📦 PO에서 입고 (선택사항)</span>
+          <span style="font-size:11px;color:#6b7280;">Sent/Partial 상태의 PO를 선택해 자동 채우기</span>
+        </div>
+        <div style="padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <select id="recv-po-select" onchange="onReceivingPOChange()" style="flex:1;min-width:250px;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;">
+            <option value="">-- PO 선택 안 함 (일반 입고) --</option>
+          </select>
+          <button type="button" class="btn" onclick="loadReceivingPOList()">🔄 PO 목록 새로고침</button>
+          <span id="recv-po-info" style="font-size:11px;color:#6b7280;"></span>
+        </div>
+        <div id="recv-po-lines" style="padding:0 14px 12px;display:none;"></div>
+      </div>
+
       <div class="card">
         <div class="card-head"><span class="card-title">📥 Receive Inventory</span></div>
         <div class="fgrid fg4">
@@ -4471,7 +4487,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'backorders') loadBackOrders();
   if (name === 'styles') loadStyles();
   if (name === 'customers') loadCustomers();
-  if (name === 'receiving') loadReceivingHistory();
+  if (name === 'receiving') { loadReceivingHistory(); loadReceivingPOList(); }
   if (name === 'intransit') loadInTransit();
   if (name === 'completed') loadCompleted();
   if (name === 'settings') { loadSettings(); loadManagerApprovals(); updateBuildingUI(); setTimeout(_renderErrorLog, 100); setTimeout(loadDefectReport, 150); }
@@ -21120,6 +21136,274 @@ function calcRecv() {
   document.getElementById('recv-total').textContent = total.toLocaleString();
 }
 
+// ══════════════════════════════════════════════════════════════
+// PHASE 2 — Receiving ↔ PO 연동
+// ══════════════════════════════════════════════════════════════
+let _receivingActivePOs = [];    // 현재 입고 가능한 PO 목록 (sent/partial)
+let _receivingSelectedPO = null; // 현재 선택된 PO
+let _receivingSelectedLine = null; // 현재 선택된 PO 라인
+
+async function loadReceivingPOList() {
+  const sel = document.getElementById('recv-po-select');
+  if (!sel) return;
+
+  // 테이블 존재 확인
+  if (!await checkTableExists('purchase_orders')) {
+    sel.innerHTML = '<option value="">⚠️ purchase_orders 테이블 미설정</option>';
+    return;
+  }
+
+  // sent + partial 상태만 로드
+  const { data, error } = await db.from('purchase_orders')
+    .select('id, po_number, vendor_name, po_date, expected_date, status, total')
+    .in('status', ['sent', 'partial'])
+    .order('po_date', { ascending: false });
+
+  if (error) {
+    sel.innerHTML = '<option value="">로드 실패: ' + error.message + '</option>';
+    return;
+  }
+
+  _receivingActivePOs = data || [];
+
+  sel.innerHTML = '<option value="">-- PO 선택 안 함 (일반 입고) --</option>' +
+    _receivingActivePOs.map(p => {
+      const statusIcon = p.status === 'partial' ? '🟡' : '🔵';
+      return `<option value="${p.id}">${statusIcon} ${p.po_number} — ${p.vendor_name} · ${p.po_date} · $${parseFloat(p.total||0).toLocaleString('en-US',{minimumFractionDigits:2})}</option>`;
+    }).join('');
+}
+
+async function onReceivingPOChange() {
+  const poId = document.getElementById('recv-po-select').value;
+  const infoEl = document.getElementById('recv-po-info');
+  const linesWrap = document.getElementById('recv-po-lines');
+
+  _receivingSelectedPO = null;
+  _receivingSelectedLine = null;
+  if (infoEl) infoEl.textContent = '';
+  if (linesWrap) { linesWrap.innerHTML = ''; linesWrap.style.display = 'none'; }
+
+  if (!poId) return;
+
+  // PO 헤더 + 라인 로드
+  const { data: po } = await db.from('purchase_orders').select('*').eq('id', poId).single();
+  const { data: lines } = await db.from('purchase_order_lines').select('*').eq('purchase_order_id', poId).order('line_number');
+
+  if (!po) { showToast('❌ PO 로드 실패'); return; }
+
+  _receivingSelectedPO = po;
+
+  // 라인 중 inventory 타입만 (expense는 입고 대상 아님)
+  const inventoryLines = (lines || []).filter(l => l.line_type === 'inventory');
+  const expenseCount = (lines || []).length - inventoryLines.length;
+
+  if (infoEl) {
+    let info = `${po.vendor_name} · ${po.po_number} · 총 ${lines?.length||0}개 라인`;
+    if (expenseCount > 0) info += ` (경비 ${expenseCount}개 제외)`;
+    infoEl.textContent = info;
+  }
+
+  if (inventoryLines.length === 0) {
+    if (linesWrap) {
+      linesWrap.style.display = 'block';
+      linesWrap.innerHTML = '<div class="empty" style="padding:20px;">이 PO에는 재고 품목(Inventory Line)이 없습니다.</div>';
+    }
+    return;
+  }
+
+  // 라인 선택 테이블 그리기
+  if (linesWrap) {
+    linesWrap.style.display = 'block';
+    linesWrap.innerHTML = `
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;">
+        <div style="font-size:11px;font-weight:700;color:#1e40af;margin-bottom:8px;">입고할 라인을 선택하세요:</div>
+        <table class="tbl" style="width:100%;">
+          <thead>
+            <tr style="background:#dbeafe;color:#1e40af;font-size:10px;">
+              <th style="text-align:left;padding:6px 8px;width:50px;">Line</th>
+              <th style="text-align:left;padding:6px 8px;">Style / Description</th>
+              <th style="text-align:right;padding:6px 8px;width:80px;">Ordered</th>
+              <th style="text-align:right;padding:6px 8px;width:80px;">Received</th>
+              <th style="text-align:right;padding:6px 8px;width:80px;">Remaining</th>
+              <th style="text-align:center;padding:6px 8px;width:90px;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${inventoryLines.map(l => {
+              const ordered = parseFloat(l.qty_ordered) || 0;
+              const received = parseFloat(l.qty_received) || 0;
+              const remaining = ordered - received;
+              const isDone = remaining <= 0;
+              return `<tr style="border-bottom:1px solid #dbeafe;${isDone?'opacity:0.5;':''}">
+                <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;">#${l.line_number}</td>
+                <td style="padding:6px 8px;">
+                  ${l.style_number ? `<strong style="font-family:'IBM Plex Mono',monospace;">${l.style_number}</strong><br>` : ''}
+                  <span style="font-size:11px;color:#6b7280;">${l.description||''}</span>
+                </td>
+                <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;">${ordered} ${l.uom||''}</td>
+                <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;color:#16a34a;">${received}</td>
+                <td style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${remaining>0?'#dc2626':'#16a34a'};">${remaining}</td>
+                <td style="padding:6px 8px;text-align:center;">
+                  ${isDone
+                    ? '<span style="color:#16a34a;font-size:11px;font-weight:700;">✓ Done</span>'
+                    : `<button onclick="selectReceivingPOLine('${l.id}')" style="background:#1a56a0;color:#fff;border:none;border-radius:4px;padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;">Select</button>`}
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+}
+
+async function selectReceivingPOLine(lineId) {
+  if (!_receivingSelectedPO) return;
+
+  const { data: line } = await db.from('purchase_order_lines').select('*').eq('id', lineId).single();
+  if (!line) { showToast('❌ 라인 로드 실패'); return; }
+
+  _receivingSelectedLine = line;
+
+  const remaining = (parseFloat(line.qty_ordered)||0) - (parseFloat(line.qty_received)||0);
+
+  // Style 찾기 (style_id 우선, 없으면 style_number로)
+  let styleId = line.style_id;
+  if (!styleId && line.style_number) {
+    const matchedStyle = styles.find(s => s.style_number === line.style_number);
+    if (matchedStyle) styleId = matchedStyle.id;
+  }
+
+  // Receiving 폼 자동 채우기
+  if (styleId) {
+    const styleSelect = document.getElementById('recv-style');
+    if (styleSelect) {
+      styleSelect.value = styleId;
+      styleSelect.dispatchEvent(new Event('change'));
+    }
+  }
+
+  // 수량 힌트: 남은 수량 기본값으로
+  // 단, Box 단위로 나누어 떨어지면 Box로, 아니면 loose로
+  const ppb = parseInt(document.getElementById('recv-ppb')?.value) || 0;
+  if (ppb > 0 && remaining % ppb === 0) {
+    document.getElementById('recv-boxes').value = Math.floor(remaining / ppb);
+    document.getElementById('recv-loose-in').value = 0;
+  } else if (ppb > 0) {
+    document.getElementById('recv-boxes').value = Math.floor(remaining / ppb);
+    document.getElementById('recv-loose-in').value = remaining % ppb;
+  } else {
+    document.getElementById('recv-boxes').value = 0;
+    document.getElementById('recv-loose-in').value = remaining;
+  }
+
+  calcRecv();
+
+  // UI 피드백
+  const infoEl = document.getElementById('recv-po-info');
+  if (infoEl) {
+    infoEl.innerHTML = `✓ <strong>라인 #${line.line_number}</strong> 선택됨 · ${line.style_number || line.description} · 남은 수량: <strong>${remaining}</strong>`;
+    infoEl.style.color = '#16a34a';
+    infoEl.style.fontWeight = '700';
+  }
+
+  showToast(`✓ Line #${line.line_number} 선택됨. Color/Size/Warehouse 확인 후 Post Receipt 클릭.`);
+
+  // 페이지 스크롤 (Receive Inventory 카드로)
+  document.querySelector('#panel-receiving .card:nth-child(2)')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+/**
+ * 입고 후 PO 라인 업데이트 & PO 상태 자동 전환
+ * postReceiving 함수에서 호출됨
+ */
+async function updatePOAfterReceiving(receivedQty, invId) {
+  if (!_receivingSelectedPO || !_receivingSelectedLine) return;
+
+  const poId = _receivingSelectedPO.id;
+  const lineId = _receivingSelectedLine.id;
+
+  try {
+    // 1. 라인 qty_received 업데이트
+    const newReceived = (parseFloat(_receivingSelectedLine.qty_received)||0) + receivedQty;
+    await db.from('purchase_order_lines').update({
+      qty_received: newReceived
+    }).eq('id', lineId);
+
+    // 2. inventory_logs에 PO 연결 저장 (마지막 삽입된 row 업데이트)
+    if (invId) {
+      // 가장 최근 inventory_logs row 찾기 (이 inventory_id로)
+      const { data: recentLog } = await db.from('inventory_logs')
+        .select('id')
+        .eq('inventory_id', invId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (recentLog && recentLog.length > 0) {
+        await db.from('inventory_logs').update({
+          purchase_order_id: poId,
+          po_line_id: lineId
+        }).eq('id', recentLog[0].id);
+      }
+    }
+
+    // 3. PO 전체 라인 체크 → 상태 자동 전환
+    const { data: allLines } = await db.from('purchase_order_lines')
+      .select('qty_ordered, qty_received, line_type')
+      .eq('purchase_order_id', poId);
+
+    if (allLines) {
+      const invLines = allLines.filter(l => l.line_type === 'inventory');
+      if (invLines.length > 0) {
+        const allReceived = invLines.every(l => (parseFloat(l.qty_received)||0) >= (parseFloat(l.qty_ordered)||0));
+        const anyReceived = invLines.some(l => (parseFloat(l.qty_received)||0) > 0);
+
+        let newStatus = _receivingSelectedPO.status;
+        if (allReceived) newStatus = 'received';
+        else if (anyReceived) newStatus = 'partial';
+
+        if (newStatus !== _receivingSelectedPO.status) {
+          await db.from('purchase_orders').update({
+            status: newStatus,
+            updated_at: new Date().toISOString()
+          }).eq('id', poId);
+
+          // Activity Log
+          try {
+            await logActivity('purchase_order', poId, _receivingSelectedPO.po_number, 'status_auto_change', {
+              note: `입고 완료로 상태 자동 변경: ${_receivingSelectedPO.status} → ${newStatus}`,
+              metadata: { from: _receivingSelectedPO.status, to: newStatus, received_qty: receivedQty }
+            });
+          } catch(e) {/* 무시 */}
+        }
+      }
+    }
+
+    // 4. Activity Log
+    try {
+      await logActivity('purchase_order_line', lineId, _receivingSelectedPO.po_number + ' Line #' + _receivingSelectedLine.line_number, 'receive', {
+        note: `입고 ${receivedQty}개 (누적: ${newReceived}/${_receivingSelectedLine.qty_ordered})`,
+        metadata: { received_qty: receivedQty, total_received: newReceived, ordered: _receivingSelectedLine.qty_ordered }
+      });
+    } catch(e) {/* 무시 */}
+
+  } catch(e) {
+    console.error('[updatePOAfterReceiving] failed:', e);
+    showToast('⚠️ 입고는 완료됐으나 PO 업데이트 실패: ' + e.message);
+  }
+}
+
+function clearReceivingPOSelection() {
+  _receivingSelectedPO = null;
+  _receivingSelectedLine = null;
+  const sel = document.getElementById('recv-po-select');
+  if (sel) sel.value = '';
+  const infoEl = document.getElementById('recv-po-info');
+  if (infoEl) { infoEl.textContent = ''; infoEl.style.color = ''; infoEl.style.fontWeight = ''; }
+  const linesWrap = document.getElementById('recv-po-lines');
+  if (linesWrap) { linesWrap.innerHTML = ''; linesWrap.style.display = 'none'; }
+}
+
 async function postReceiving() {
   const whId      = document.getElementById('recv-wh').value;
   const styleId   = document.getElementById('recv-style').value;
@@ -21148,17 +21432,43 @@ async function postReceiving() {
     .maybeSingle();
 
   if (existing) {
+    const qtyBefore = existing.qty_on_hand || 0;
+    const qtyAfter = qtyBefore + totalQty;
     await db.from('inventory').update({
-      qty_on_hand: (existing.qty_on_hand || 0) + totalQty,
+      qty_on_hand: qtyAfter,
       received_date: recvDate,
       updated_at: new Date().toISOString()
     }).eq('id', existing.id);
+    // 입고 로그
+    await logInventoryChange(existing.id, qtyBefore, qtyAfter, 'receiving',
+      _currentEmployee?.name || 'system',
+      _receivingSelectedPO?.id || null,
+      _receivingSelectedPO ? 'purchase_order' : null,
+      `Received ${totalQty}pcs${_receivingSelectedPO ? ' via ' + _receivingSelectedPO.po_number : ''}`
+    );
+    // Phase 2: PO 업데이트
+    if (_receivingSelectedPO && _receivingSelectedLine) {
+      await updatePOAfterReceiving(totalQty, existing.id);
+    }
   } else {
-    await db.from('inventory').insert({
+    const { data: inserted } = await db.from('inventory').insert({
       warehouse_id: whId, style_id: styleId, color, size,
       location: location || '', received_date: recvDate,
       qty_on_hand: totalQty, qty_committed: 0
-    });
+    }).select('id').single();
+    // 입고 로그
+    if (inserted?.id) {
+      await logInventoryChange(inserted.id, 0, totalQty, 'receiving',
+        _currentEmployee?.name || 'system',
+        _receivingSelectedPO?.id || null,
+        _receivingSelectedPO ? 'purchase_order' : null,
+        `Received ${totalQty}pcs (new inventory)${_receivingSelectedPO ? ' via ' + _receivingSelectedPO.po_number : ''}`
+      );
+      // Phase 2: PO 업데이트
+      if (_receivingSelectedPO && _receivingSelectedLine) {
+        await updatePOAfterReceiving(totalQty, inserted.id);
+      }
+    }
   }
 
   // ── Back Order 자동 매칭 체크
@@ -21183,6 +21493,13 @@ async function postReceiving() {
 ${totalQty.toLocaleString()} pcs → ${whCode} / ${location || 'No Bin'}
 입고일: ${recvDate}`;
 
+  // Phase 2: PO 정보 추가
+  if (_receivingSelectedPO) {
+    msg += `
+📦 PO: ${_receivingSelectedPO.po_number} (${_receivingSelectedPO.vendor_name})
+Line #${_receivingSelectedLine?.line_number || '?'}`;
+  }
+
   if (relevantBO.length > 0) {
     const totalBoQty = relevantBO.reduce((s, l) => s + (l.qty_backordered || 0), 0);
     msg += `
@@ -21200,6 +21517,12 @@ ${relevantBO.length}건 오더 / ${totalBoQty.toLocaleString()} pcs Back Order �
   document.getElementById('recv-loose-in').value = '0';
   document.getElementById('recv-total').textContent = '0';
   // 날짜는 유지 (연속 입고 편의)
+
+  // Phase 2: PO 선택 리셋 (다음 입고 준비)
+  if (_receivingSelectedPO) {
+    clearReceivingPOSelection();
+    await loadReceivingPOList(); // PO 목록 갱신 (상태 변경 반영)
+  }
 
   // binInventory 갱신
   await loadScInventory();
