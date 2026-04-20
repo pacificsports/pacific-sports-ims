@@ -567,6 +567,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <div class="card">
         <div class="card-head"><span class="card-title">📦 Inventory — CA + SC Combined</span>
           <div style="display:flex;gap:6px;">
+            <button class="btn btn-sm" style="background:#fef3c7;color:#92400e;border-color:#fde68a;" onclick="openAdjustInventory()">✏️ Adjust Qty</button>
             <button class="btn btn-sm" style="background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="openInventoryLog()">📋 Change Log</button>
             <button class="btn btn-primary btn-sm" onclick="openAddInventory()">+ Add Stock</button>
           </div>
@@ -1549,6 +1550,18 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             </div>
 
             <div id="imp-inv-preview" style="margin-top:12px;"></div>
+
+            <!-- PCR 초기화 섹션 -->
+            <div style="margin-top:20px;padding-top:16px;border-top:2px dashed #bae6fd;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div>
+                  <div style="font-size:13px;font-weight:700;color:#0c4a6e;">🏬 PCR 창고 초기화</div>
+                  <div style="font-size:10px;color:#6b7280;margin-top:2px;">선택한 스타일의 모든 SKU를 SC-PCR과 CA-PCR에 <strong>수량 0</strong>으로 생성합니다. 실제 PCR 재고 발견 시 Receiving으로 입력.</div>
+                </div>
+                <button class="btn" onclick="initPcrForStyle()" style="background:#0284c7;color:#fff;border-color:#0369a1;font-weight:700;">🏬 PCR 0으로 초기화</button>
+              </div>
+              <div id="pcr-init-status" style="font-size:11px;color:#6b7280;margin-top:6px;"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -4240,6 +4253,60 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <div class="modal-foot">
       <button class="btn" onclick="closeModal('modal-add-inv')">Cancel</button>
       <button class="btn btn-primary" onclick="saveInventory()">✓ Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- INVENTORY ADJUST MODAL -->
+<div class="modal-overlay" id="modal-adjust-inv">
+  <div class="modal" style="width:1100px;max-width:98vw;max-height:92vh;overflow-y:auto;">
+    <div class="modal-head" style="background:#92400e;position:sticky;top:0;z-index:10;">
+      <span class="modal-title">✏️ Inventory Adjust — 재고 수량 조정</span>
+      <button class="modal-close" onclick="closeModal('modal-adjust-inv')">×</button>
+    </div>
+    <div class="modal-body" style="padding:16px;">
+      <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:11px;color:#92400e;">
+        <div style="font-weight:700;margin-bottom:4px;">💡 사용 방법:</div>
+        <div>· 스타일 + 창고 선택 → 해당 재고 테이블이 나옴</div>
+        <div>· "조정 수량" 칸에 새 수량 입력 (빈 칸은 변동 없음)</div>
+        <div>· 저장하면 해당 row들의 qty_on_hand가 입력값으로 덮어쓰기</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:10px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">STYLE #</label>
+          <select id="adj-style" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;">
+            <option value="">-- 선택 --</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:3px;">WAREHOUSE</label>
+          <select id="adj-wh" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;">
+            <option value="">-- 선택 --</option>
+            <option value="SC">SC — Sumter</option>
+            <option value="CA">CA — Eastvale</option>
+            <option value="SC-PCR">SC-PCR — Pcs Room SC</option>
+            <option value="CA-PCR">CA-PCR — Pcs Room CA</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:flex-end;">
+          <button class="btn btn-primary" onclick="loadAdjustTable()">🔍 조회</button>
+        </div>
+        <div style="display:flex;align-items:flex-end;">
+          <input type="text" id="adj-search" placeholder="색상/사이즈 검색..." style="width:180px;padding:6px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;" oninput="filterAdjustTable()">
+        </div>
+      </div>
+
+      <div id="adj-summary" style="font-size:11px;color:#6b7280;margin-bottom:8px;"></div>
+
+      <div id="adj-table-wrap" style="max-height:500px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px;">
+        <div style="padding:20px;text-align:center;color:#9ca3af;font-size:12px;">스타일과 창고를 선택 후 '조회' 버튼을 눌러주세요</div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <div style="flex:1;font-size:11px;color:#6b7280;" id="adj-change-count">변경사항 없음</div>
+      <button class="btn" onclick="closeModal('modal-adjust-inv')">닫기</button>
+      <button class="btn" id="adj-save-btn" onclick="saveAdjustments()" style="background:#16a34a;color:#fff;border-color:#15803d;font-weight:700;" disabled>💾 변경사항 저장</button>
     </div>
   </div>
 </div>
@@ -9456,23 +9523,72 @@ async function executeSkuImport() {
 
     const CHUNK = 500;
     let inserted = 0;
-    let skipped = 0;
     for (let i = 0; i < skus.length; i += CHUNK) {
       const chunk = skus.slice(i, i + CHUNK);
       const { data, error } = await db.from('skus').upsert(chunk, { onConflict: 'sku_id', ignoreDuplicates: false }).select('sku_id');
       if (error) throw error;
       inserted += (data || []).length;
+      btn.textContent = `⏳ SKU 등록 중... ${inserted}/${skus.length}`;
     }
 
-    // 3. Activity Log
+    // 3. 모든 창고(SC, CA, SC-PCR, CA-PCR)에 각 SKU를 0으로 자리 예약
+    btn.textContent = '⏳ 창고별 자리 예약 중...';
+    const { data: warehouses } = await db.from('warehouses').select('id, code').in('code', ['SC', 'CA', 'SC-PCR', 'CA-PCR']);
+    
+    let invCreated = 0;
+    if (warehouses && warehouses.length > 0) {
+      const invRows = [];
+      for (const wh of warehouses) {
+        for (const sku of _skuImportData.skus) {
+          invRows.push({
+            warehouse_id: wh.id,
+            style_id: styleId,
+            style_number: sku.style_number,
+            sku_id: sku.sku_id,
+            color: sku.color,
+            size: sku.size,
+            location: null,
+            qty_on_hand: 0,
+            qty_committed: 0
+          });
+        }
+      }
+
+      // 기존에 있는 (warehouse_id, sku_id) 조합은 건너뛰기 위해 upsert
+      // 단, inventory에 unique constraint가 없을 수 있으므로, 먼저 기존 row 확인
+      // 간단하게: 이미 있는 warehouse × sku 조합은 skip
+      const { data: existing } = await db.from('inventory')
+        .select('warehouse_id, sku_id')
+        .eq('style_id', styleId);
+      const existingSet = new Set((existing || []).map(e => `${e.warehouse_id}|${e.sku_id}`));
+      const newRows = invRows.filter(r => !existingSet.has(`${r.warehouse_id}|${r.sku_id}`));
+
+      for (let i = 0; i < newRows.length; i += CHUNK) {
+        const chunk = newRows.slice(i, i + CHUNK);
+        const { error } = await db.from('inventory').insert(chunk);
+        if (error) throw error;
+        invCreated += chunk.length;
+        btn.textContent = `⏳ 자리 예약 중... ${invCreated}/${newRows.length}`;
+      }
+    }
+
+    // 4. Activity Log
     try {
       await logActivity('system', 'sku_import', _skuImportData.style.style_number, 'create', {
-        note: `Style ${_skuImportData.style.style_number} + ${inserted} SKUs 등록됨`,
-        metadata: { style: _skuImportData.style.style_number, sku_count: inserted }
+        note: `Style ${_skuImportData.style.style_number} + ${inserted} SKUs + ${invCreated} inventory rows`,
+        metadata: { style: _skuImportData.style.style_number, sku_count: inserted, inv_rows: invCreated }
       });
     } catch(e) {}
 
-    alert(`✅ 등록 완료!\n\n스타일: ${_skuImportData.style.style_number}\nSKU: ${inserted}개\n\n이제 Inventory Import 탭에서 재고 데이터를 업로드할 수 있습니다.`);
+    alert(
+      `✅ 등록 완료!\n\n` +
+      `스타일: ${_skuImportData.style.style_number}\n` +
+      `SKU: ${inserted}개\n` +
+      `창고별 재고 자리: ${invCreated}개 (SC, CA, SC-PCR, CA-PCR × ${_skuImportData.skus.length} SKUs)\n\n` +
+      `모든 수량은 0으로 초기화되었습니다.\n` +
+      `SC와 CA는 Inventory Import에서 Davinci 파일로 덮어쓸 수 있습니다.\n` +
+      `PCR은 재고 조사 후 Inventory Adjust에서 직접 수정하세요.`
+    );
 
     // 리셋
     _skuImportData = null;
@@ -9709,43 +9825,57 @@ async function executeInventoryImport() {
     if (styleErr || !style) throw new Error(`스타일 ${_invImportData.styleNum}을 찾을 수 없습니다`);
     const styleId = style.id;
 
-    // 2. 기존 데이터 삭제 (같은 창고 × 같은 스타일)
-    const { error: delErr } = await db.from('inventory').delete().eq('warehouse_id', whId).eq('style_id', styleId);
-    if (delErr) throw delErr;
+    // 2. 기존 데이터 모두 0으로 리셋 후 업데이트 (자리는 유지)
+    //    (자리 예약된 row들이 있으니 delete 하지 않고 update만)
+    btn.textContent = '⏳ 기존 재고 리셋...';
+    const { error: resetErr } = await db.from('inventory')
+      .update({ qty_on_hand: 0, location: null })
+      .eq('warehouse_id', whId)
+      .eq('style_id', styleId);
+    if (resetErr) throw resetErr;
 
-    // 3. 새 데이터 입력 (500개씩 청크)
-    const rows = _invImportData.matched.map(r => ({
-      warehouse_id: whId,
-      style_id: styleId,
-      style_number: _invImportData.styleNum,
-      sku_id: r.sku_id,
-      color: r.color,
-      size: r.size,
-      location: r.location,
-      qty_on_hand: r.qty_on_hand,
-      qty_committed: 0
-    }));
-
-    const CHUNK = 500;
-    let inserted = 0;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const chunk = rows.slice(i, i + CHUNK);
-      const { error } = await db.from('inventory').insert(chunk);
+    // 3. Davinci 데이터로 업데이트 (row별로 update)
+    btn.textContent = '⏳ 업로드 중...';
+    let updated = 0;
+    let notFound = [];
+    for (const r of _invImportData.matched) {
+      const { data, error } = await db.from('inventory')
+        .update({ qty_on_hand: r.qty_on_hand, location: r.location })
+        .eq('warehouse_id', whId)
+        .eq('sku_id', r.sku_id)
+        .select('id');
       if (error) throw error;
-      inserted += chunk.length;
-      btn.textContent = `⏳ 업로드 중... ${inserted}/${rows.length}`;
+      if (!data || data.length === 0) {
+        // 자리 예약 안 된 SKU — 새로 만듦
+        const { error: insErr } = await db.from('inventory').insert({
+          warehouse_id: whId,
+          style_id: styleId,
+          style_number: _invImportData.styleNum,
+          sku_id: r.sku_id,
+          color: r.color,
+          size: r.size,
+          location: r.location,
+          qty_on_hand: r.qty_on_hand,
+          qty_committed: 0
+        });
+        if (insErr) notFound.push(r.sku_id);
+      }
+      updated++;
+      if (updated % 100 === 0) {
+        btn.textContent = `⏳ 업로드 중... ${updated}/${_invImportData.matched.length}`;
+      }
     }
 
     // 4. Activity Log
     try {
-      const totalPcs = rows.reduce((s, r) => s + r.qty_on_hand, 0);
+      const totalPcs = _invImportData.matched.reduce((s, r) => s + r.qty_on_hand, 0);
       await logActivity('system', 'inventory_import', `${_invImportData.styleNum}/${_invImportData.whCode}`, 'create', {
-        note: `${_invImportData.styleNum} 재고 업로드 (${_invImportData.whCode}): ${inserted} rows, ${totalPcs.toLocaleString()} pcs`,
-        metadata: { style: _invImportData.styleNum, warehouse: _invImportData.whCode, rows: inserted, total_pcs: totalPcs }
+        note: `${_invImportData.styleNum} 재고 업로드 (${_invImportData.whCode}): ${updated} rows, ${totalPcs.toLocaleString()} pcs`,
+        metadata: { style: _invImportData.styleNum, warehouse: _invImportData.whCode, rows: updated, total_pcs: totalPcs, not_found: notFound }
       });
     } catch(e) {}
 
-    alert(`✅ 업로드 완료!\n\n${inserted}개 재고 row가 ${_invImportData.whCode} 창고에 등록되었습니다.`);
+    alert(`✅ 업로드 완료!\n\n${updated}개 재고 row가 ${_invImportData.whCode} 창고에 업데이트되었습니다.` + (notFound.length > 0 ? `\n\n⚠️ 자리 예약 없어서 새로 만든 SKU ${notFound.length}개` : ''));
 
     // 리셋
     _invImportData = null;
@@ -9759,6 +9889,275 @@ async function executeInventoryImport() {
   } finally {
     btn.disabled = false;
     btn.textContent = '✓ 재고 업로드';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ✏️ INVENTORY ADJUST — 재고 수량 조정 (PCR 재고 조사 등)
+// ══════════════════════════════════════════════════════════════
+
+let _adjustData = null;  // 현재 조회된 재고 데이터
+let _adjustChanges = {}; // { row_id: new_qty }
+
+async function openAdjustInventory() {
+  // 스타일 드롭다운 채우기
+  const sel = document.getElementById('adj-style');
+  sel.innerHTML = '<option value="">-- 선택 --</option>';
+  try {
+    const { data: styles } = await db.from('styles').select('style_number, description').order('style_number');
+    (styles || []).forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.style_number;
+      opt.textContent = `${s.style_number} — ${s.description || ''}`;
+      sel.appendChild(opt);
+    });
+  } catch(e) {
+    console.warn(e);
+  }
+  // 초기화
+  _adjustData = null;
+  _adjustChanges = {};
+  document.getElementById('adj-wh').value = '';
+  document.getElementById('adj-search').value = '';
+  document.getElementById('adj-table-wrap').innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:12px;">스타일과 창고를 선택 후 \'조회\' 버튼을 눌러주세요</div>';
+  document.getElementById('adj-summary').textContent = '';
+  document.getElementById('adj-change-count').textContent = '변경사항 없음';
+  document.getElementById('adj-save-btn').disabled = true;
+  openModal('modal-adjust-inv');
+}
+
+async function loadAdjustTable() {
+  const styleNum = document.getElementById('adj-style').value;
+  const whCode = document.getElementById('adj-wh').value;
+  const wrap = document.getElementById('adj-table-wrap');
+  const summary = document.getElementById('adj-summary');
+
+  if (!styleNum || !whCode) {
+    wrap.innerHTML = '<div style="padding:20px;text-align:center;color:#dc2626;font-size:12px;">스타일과 창고를 모두 선택하세요</div>';
+    return;
+  }
+
+  wrap.innerHTML = '<div style="padding:20px;text-align:center;color:#6b7280;font-size:12px;">⏳ 로드 중...</div>';
+
+  try {
+    const { data: wh, error: whErr } = await db.from('warehouses').select('id, code').eq('code', whCode).single();
+    if (whErr || !wh) throw new Error(`창고 ${whCode} 없음`);
+
+    const { data: inv, error } = await db.from('inventory')
+      .select('id, sku_id, color, size, location, qty_on_hand, qty_committed')
+      .eq('warehouse_id', wh.id)
+      .eq('style_number', styleNum)
+      .order('color')
+      .order('size');
+    if (error) throw error;
+
+    if (!inv || inv.length === 0) {
+      wrap.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:12px;">해당 스타일/창고에 재고 row가 없습니다. SKU Import에서 먼저 등록하세요.</div>';
+      return;
+    }
+
+    _adjustData = inv;
+    _adjustChanges = {};
+
+    const totalPcs = inv.reduce((s, r) => s + (r.qty_on_hand||0), 0);
+    summary.textContent = `📊 ${styleNum} / ${whCode} — ${inv.length} rows · 현재 총 ${totalPcs.toLocaleString()} pcs`;
+
+    renderAdjustTable();
+    document.getElementById('adj-save-btn').disabled = true;
+    document.getElementById('adj-change-count').textContent = '변경사항 없음';
+  } catch(e) {
+    console.error(e);
+    wrap.innerHTML = `<div style="padding:20px;text-align:center;color:#dc2626;font-size:12px;">❌ ${e.message}</div>`;
+  }
+}
+
+function renderAdjustTable() {
+  if (!_adjustData) return;
+  const search = (document.getElementById('adj-search')?.value || '').toLowerCase().trim();
+  const filtered = _adjustData.filter(r => {
+    if (!search) return true;
+    return (r.color||'').toLowerCase().includes(search) ||
+           (r.size||'').toLowerCase().includes(search) ||
+           (r.sku_id||'').toLowerCase().includes(search) ||
+           (r.location||'').toLowerCase().includes(search);
+  });
+
+  let html = `
+    <table style="width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11px;">
+      <thead style="background:#fef3c7;position:sticky;top:0;z-index:1;">
+        <tr>
+          <th style="padding:6px 8px;text-align:left;border-bottom:2px solid #fde68a;">SKU</th>
+          <th style="padding:6px 8px;text-align:left;border-bottom:2px solid #fde68a;">Color</th>
+          <th style="padding:6px 8px;text-align:center;border-bottom:2px solid #fde68a;">Size</th>
+          <th style="padding:6px 8px;text-align:left;border-bottom:2px solid #fde68a;">Bin Location</th>
+          <th style="padding:6px 8px;text-align:right;border-bottom:2px solid #fde68a;">현재 수량</th>
+          <th style="padding:6px 8px;text-align:right;border-bottom:2px solid #fde68a;">Committed</th>
+          <th style="padding:6px 8px;text-align:center;border-bottom:2px solid #fde68a;background:#fed7aa;">조정 수량 (입력)</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  filtered.forEach(r => {
+    const hasChange = _adjustChanges[r.id] !== undefined;
+    const rowBg = hasChange ? 'background:#fef9c3;' : '';
+    const qty = r.qty_on_hand||0;
+    const currentVal = hasChange ? _adjustChanges[r.id] : '';
+    html += `
+      <tr style="${rowBg}border-bottom:1px solid #f3f4f6;">
+        <td style="padding:5px 8px;font-weight:600;">${r.sku_id || '-'}</td>
+        <td style="padding:5px 8px;">${r.color || '-'}</td>
+        <td style="padding:5px 8px;text-align:center;">${r.size || '-'}</td>
+        <td style="padding:5px 8px;">
+          <input type="text" value="${r.location||''}" placeholder="Bin..." 
+            onchange="markAdjustLocationChange('${r.id}', this.value)"
+            style="width:100px;padding:3px 6px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;font-family:inherit;">
+        </td>
+        <td style="padding:5px 8px;text-align:right;font-weight:700;">${qty.toLocaleString()}</td>
+        <td style="padding:5px 8px;text-align:right;color:${(r.qty_committed||0)>0?'#dc2626':'#9ca3af'};">${r.qty_committed||0}</td>
+        <td style="padding:5px 8px;text-align:center;">
+          <input type="number" min="0" value="${currentVal}" placeholder="..." 
+            onchange="markAdjustQtyChange('${r.id}', this.value)"
+            style="width:90px;padding:3px 6px;border:2px solid ${hasChange?'#f59e0b':'#fde68a'};border-radius:3px;font-size:12px;font-family:inherit;text-align:right;font-weight:700;${hasChange?'background:#fffbeb;':''}">
+        </td>
+      </tr>
+    `;
+  });
+
+  html += '</tbody></table>';
+  if (filtered.length === 0) {
+    html = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:12px;">검색 결과 없음</div>';
+  }
+
+  document.getElementById('adj-table-wrap').innerHTML = html;
+}
+
+function filterAdjustTable() {
+  renderAdjustTable();
+}
+
+function markAdjustQtyChange(rowId, newVal) {
+  const original = _adjustData.find(r => r.id === rowId);
+  if (!original) return;
+  const num = newVal === '' ? null : parseInt(newVal);
+  
+  if (num === null || num === (original.qty_on_hand||0)) {
+    // 변경 취소 or 원래값과 같음
+    delete _adjustChanges[rowId];
+  } else if (!isNaN(num) && num >= 0) {
+    _adjustChanges[rowId] = num;
+  }
+
+  // 변경사항 표시 업데이트
+  const changes = Object.keys(_adjustChanges).length;
+  const btn = document.getElementById('adj-save-btn');
+  const cnt = document.getElementById('adj-change-count');
+  if (changes > 0) {
+    btn.disabled = false;
+    cnt.textContent = `✏️ ${changes}개 row 변경 예정`;
+    cnt.style.color = '#f59e0b';
+    cnt.style.fontWeight = '700';
+  } else {
+    btn.disabled = true;
+    cnt.textContent = '변경사항 없음';
+    cnt.style.color = '#6b7280';
+    cnt.style.fontWeight = 'normal';
+  }
+}
+
+function markAdjustLocationChange(rowId, newLoc) {
+  const original = _adjustData.find(r => r.id === rowId);
+  if (!original) return;
+  const cleaned = (newLoc||'').trim() || null;
+  const originalLoc = original.location || null;
+  
+  if (cleaned === originalLoc) {
+    // 변경 취소
+    if (_adjustChanges[rowId] && typeof _adjustChanges[rowId] === 'object') {
+      delete _adjustChanges[rowId].location;
+      if (Object.keys(_adjustChanges[rowId]).length === 0) delete _adjustChanges[rowId];
+    }
+  } else {
+    if (!_adjustChanges[rowId] || typeof _adjustChanges[rowId] !== 'object') {
+      // 기존에 qty만 있었으면 객체로 변환
+      const existingQty = typeof _adjustChanges[rowId] === 'number' ? _adjustChanges[rowId] : null;
+      _adjustChanges[rowId] = {};
+      if (existingQty !== null) _adjustChanges[rowId].qty = existingQty;
+    }
+    _adjustChanges[rowId].location = cleaned;
+  }
+
+  const changes = Object.keys(_adjustChanges).length;
+  const btn = document.getElementById('adj-save-btn');
+  const cnt = document.getElementById('adj-change-count');
+  if (changes > 0) {
+    btn.disabled = false;
+    cnt.textContent = `✏️ ${changes}개 row 변경 예정`;
+    cnt.style.color = '#f59e0b';
+    cnt.style.fontWeight = '700';
+  } else {
+    btn.disabled = true;
+    cnt.textContent = '변경사항 없음';
+    cnt.style.color = '#6b7280';
+  }
+}
+
+async function saveAdjustments() {
+  const changeCount = Object.keys(_adjustChanges).length;
+  if (changeCount === 0) { alert('변경사항이 없습니다'); return; }
+
+  if (!confirm(`${changeCount}개 row를 업데이트합니다. 계속하시겠습니까?`)) return;
+
+  const btn = document.getElementById('adj-save-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 저장 중...';
+
+  try {
+    let updated = 0;
+    const errors = [];
+
+    for (const [rowId, change] of Object.entries(_adjustChanges)) {
+      const updateData = {};
+      if (typeof change === 'number') {
+        updateData.qty_on_hand = change;
+      } else if (typeof change === 'object') {
+        if ('qty' in change) updateData.qty_on_hand = change.qty;
+        if ('location' in change) updateData.location = change.location;
+      }
+
+      const { error } = await db.from('inventory').update(updateData).eq('id', rowId);
+      if (error) {
+        errors.push({ rowId, err: error.message });
+      } else {
+        updated++;
+      }
+
+      if (updated % 10 === 0) btn.textContent = `⏳ 저장 중... ${updated}/${changeCount}`;
+    }
+
+    // Activity Log
+    try {
+      await logActivity('system', 'inventory_adjust', 'Inventory Adjust', 'update', {
+        note: `${updated}개 row 재고 조정`,
+        metadata: { changes: _adjustChanges, errors }
+      });
+    } catch(e) {}
+
+    if (errors.length > 0) {
+      alert(`⚠️ ${updated}개 성공, ${errors.length}개 실패\n\n${errors.slice(0,5).map(e => e.err).join('\n')}`);
+    } else {
+      alert(`✅ ${updated}개 row 업데이트 완료!`);
+    }
+
+    // 다시 로드
+    _adjustChanges = {};
+    await loadAdjustTable();
+  } catch(e) {
+    console.error(e);
+    alert('❌ 저장 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 변경사항 저장';
   }
 }
 
