@@ -7445,18 +7445,27 @@ function renderInventoryTable(data) {
     return;
   }
 
-  // 합산: style+color+size 기준
+  // 합산: SKU 기준 (Tubular와 Side Seam은 다른 SKU로 취급)
   const grouped = {};
   data.forEach(i => {
-    const key = `${i.styles?.style_number||i.style_number||''}|${(i.color||'').toUpperCase()}|${(i.size||'').toUpperCase()}`;
+    // sku_id가 있으면 SKU 기반, 없으면 style+color+size 기반 (레거시 호환)
+    const skuId = i.sku_id || i.sku || '';
+    const key = skuId 
+      ? `SKU:${skuId}` 
+      : `${i.styles?.style_number||i.style_number||''}|${(i.color||'').toUpperCase()}|${(i.size||'').toUpperCase()}`;
+    
+    // Variant 추출 (+ss 여부)
+    const isSs = skuId && skuId.includes('+ss');
+    
     if (!grouped[key]) {
       grouped[key] = {
         styleNum: i.styles?.style_number || i.style_number || '',
         desc: i.styles?.description || '',
         color: i.color || '',
         size: i.size || '',
-        sku: i.sku || '',
-        sc: 0, ca: 0, pcr: 0, total: 0,
+        sku: skuId,
+        variant: isSs ? 'Side Seam' : 'Tubular',
+        sc: 0, sc_pcr: 0, ca: 0, ca_pcr: 0, total: 0,
         committed: 0,
         details: []
       };
@@ -7466,39 +7475,43 @@ function renderInventoryTable(data) {
     const wh = i.warehouses?.code || '';
     if (wh === 'SC') g.sc += qty;
     else if (wh === 'CA') g.ca += qty;
-    else if (wh === 'SC-PCR') g.pcr += qty;
+    else if (wh === 'SC-PCR') g.sc_pcr += qty;
+    else if (wh === 'CA-PCR') g.ca_pcr += qty;
     g.total += qty;
     g.committed += (i.qty_committed || 0);
     if (!g.ppb) g.ppb = i.styles?.pcs_per_box || i.pcs_per_box || 72;
-    if (i.sku && i.sku.includes('+ss')) g.sku = i.sku;
     g.details.push({ wh, loc: i.location || '—', qty, id: i.id, committed: i.qty_committed || 0 });
   });
 
-  // 정렬
+  // 정렬: style → color → variant (Tubular 먼저) → size
   const rows = Object.values(grouped);
   rows.sort((a,b) => {
     const sn = a.styleNum.localeCompare(b.styleNum);
     if (sn !== 0) return sn;
     const cl = a.color.localeCompare(b.color);
     if (cl !== 0) return cl;
+    // Tubular 먼저, Side Seam 나중
+    if (a.variant !== b.variant) return a.variant === 'Tubular' ? -1 : 1;
     return sizeOrder(a.size) - sizeOrder(b.size);
   });
 
   // 합계
   const sumSC = rows.reduce((s,r) => s + r.sc, 0);
+  const sumSCPCR = rows.reduce((s,r) => s + r.sc_pcr, 0);
   const sumCA = rows.reduce((s,r) => s + r.ca, 0);
-  const sumPCR = rows.reduce((s,r) => s + r.pcr, 0);
-  const sumTotal = sumSC + sumCA + sumPCR;
+  const sumCAPCR = rows.reduce((s,r) => s + r.ca_pcr, 0);
+  const sumTotal = sumSC + sumSCPCR + sumCA + sumCAPCR;
   const sumComm = rows.reduce((s,r) => s + r.committed, 0);
 
   const sumEl = document.getElementById('inv-summary');
   if (sumEl) {
     sumEl.style.display = 'block';
-    sumEl.innerHTML = `<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">
+    sumEl.innerHTML = `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
       <div style="font-size:12px;color:var(--text2);">Rows: <strong style="font-family:'IBM Plex Mono',monospace;color:var(--primary);">${rows.length.toLocaleString()}</strong></div>
       <div style="font-size:12px;"><span class="loc-sc">SC</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumSC.toLocaleString()}</strong></div>
+      <div style="font-size:12px;"><span class="loc-sc" style="background:#c2410c">SC-PCR</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumSCPCR.toLocaleString()}</strong></div>
       <div style="font-size:12px;"><span class="loc-ca">CA</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumCA.toLocaleString()}</strong></div>
-      <div style="font-size:12px;"><span class="loc-sc" style="background:var(--orange)">PCR</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumPCR.toLocaleString()}</strong></div>
+      <div style="font-size:12px;"><span class="loc-ca" style="background:#7c2d12">CA-PCR</span> <strong style="font-family:'IBM Plex Mono',monospace;margin-left:4px;">${sumCAPCR.toLocaleString()}</strong></div>
 <div style="font-size:13px;font-weight:700;color:var(--primary);border-left:2px solid var(--border);padding-left:12px;">TOTAL: <span style="font-family:'IBM Plex Mono',monospace;font-size:15px;">${isBox ? toUnit(sumTotal,72).toLocaleString() : sumTotal.toLocaleString()}</span> ${unitLabel}</div>
     </div>`;
   }
@@ -7528,20 +7541,26 @@ return `<tr style="cursor:pointer;font-weight:500;" onclick="document.querySelec
       <td>${r.color}</td>
       <td>${r.size}</td>
     <td class="num" style="color:var(--sc)">${r.sc > 0 ? toUnit(r.sc,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="color:#c2410c">${r.sc_pcr > 0 ? toUnit(r.sc_pcr,r.ppb).toLocaleString() : '—'}</td>
       <td class="num" style="color:var(--ca)">${r.ca > 0 ? toUnit(r.ca,r.ppb).toLocaleString() : '—'}</td>
-      <td class="num" style="color:var(--orange)">${r.pcr > 0 ? toUnit(r.pcr,r.ppb).toLocaleString() : '—'}</td>
+      <td class="num" style="color:#7c2d12">${r.ca_pcr > 0 ? toUnit(r.ca_pcr,r.ppb).toLocaleString() : '—'}</td>
       <td class="num" style="font-weight:700;font-size:13px;">${toUnit(r.total,r.ppb).toLocaleString()}</td>
       <td class="num" style="color:${avail<0?'var(--red)':'var(--green)'}">${toUnit(avail,r.ppb).toLocaleString()}</td>
       <td>${r.total===0?'<span class="chip c-r">Out</span>':avail<=0?'<span class="chip c-o">Low</span>':'<span class="chip c-g">OK</span>'}</td>
     </tr>
-    ${r.details.map(d => `<tr class="detail-${idx}" style="display:none;background:#f8f9fb;cursor:pointer;" onclick="event.stopPropagation();editInventoryItem('${d.id}')">
+    ${r.details.map(d => {
+      const whBadge = d.wh === 'CA' ? '<span class="loc-ca">CA</span>' :
+                      d.wh === 'SC-PCR' ? '<span class="loc-sc" style="background:#c2410c">SC-PCR</span>' :
+                      d.wh === 'CA-PCR' ? '<span class="loc-ca" style="background:#7c2d12">CA-PCR</span>' :
+                      '<span class="loc-sc">SC</span>';
+      return `<tr class="detail-${idx}" style="display:none;background:#f8f9fb;cursor:pointer;" onclick="event.stopPropagation();editInventoryItem('${d.id}')">
       <td></td><td></td><td></td><td></td>
-      <td colspan="2" style="font-size:11px;color:var(--text3);padding-left:24px;">↳ ${d.wh==='CA'?'<span class="loc-ca">CA</span>':d.wh==='SC-PCR'?'<span class="loc-sc" style="background:var(--orange)">PCR</span>':'<span class="loc-sc">SC</span>'} <span style="font-family:'IBM Plex Mono',monospace;">${d.loc}</span></td>
+      <td colspan="4" style="font-size:11px;color:var(--text3);padding-left:24px;">↳ ${whBadge} <span style="font-family:'IBM Plex Mono',monospace;">${d.loc}</span></td>
     <td class="num" style="font-size:11px;color:var(--text3)">${toUnit(d.qty,r.ppb).toLocaleString()}</td>
-        <td></td>
         <td class="num" style="font-size:11px;color:var(--text3)">${toUnit(d.qty - d.committed,r.ppb).toLocaleString()}</td>
       <td></td>
-    </tr>`).join('')}`;
+    </tr>`;
+    }).join('')}`;
   }).join('');
 
   document.getElementById('inventory-table-wrap').innerHTML = `
@@ -7549,8 +7568,9 @@ return `<tr style="cursor:pointer;font-weight:500;" onclick="document.querySelec
       <thead><tr>
         <th>Style #</th><th>Description</th><th>Color</th><th>Size</th>
         <th class="num" style="color:var(--sc)">SC</th>
+        <th class="num" style="color:#c2410c">SC-PCR</th>
         <th class="num" style="color:var(--ca)">CA</th>
-        <th class="num" style="color:var(--orange)">PCR</th>
+        <th class="num" style="color:#7c2d12">CA-PCR</th>
         <th class="num">Total</th>
         <th class="num">Available</th>
         <th>Status</th>
