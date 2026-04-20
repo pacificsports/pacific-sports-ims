@@ -645,7 +645,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <div id="grid-style-search-results" style="display:none;margin-top:8px;max-height:200px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:5px;"></div>
           </div>
 
-          <!-- 필터 (색상 검색, 재고 있는 것만, SS 포함) -->
+          <!-- 필터 (색상 검색, 재고 있는 것만, Variant 선택) -->
           <div id="grid-filters" style="display:none;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:12px;">
             <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
               <div>
@@ -654,13 +654,26 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   style="width:180px;padding:5px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;"
                   oninput="renderGridView()">
               </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:2px;font-weight:700;">VARIANT</label>
+                <div style="display:flex;gap:0;border:1px solid #d1d5db;border-radius:4px;overflow:hidden;">
+                  <button onclick="setGridVariant('both')" id="grid-variant-both" 
+                    style="padding:5px 12px;background:#0f2744;color:#fff;border:none;cursor:pointer;font-size:11px;font-weight:700;">
+                    둘 다
+                  </button>
+                  <button onclick="setGridVariant('tubular')" id="grid-variant-tubular" 
+                    style="padding:5px 12px;background:#fff;color:#374151;border:none;border-left:1px solid #d1d5db;cursor:pointer;font-size:11px;font-weight:700;">
+                    Tubular만
+                  </button>
+                  <button onclick="setGridVariant('ss')" id="grid-variant-ss" 
+                    style="padding:5px 12px;background:#fff;color:#374151;border:none;border-left:1px solid #d1d5db;cursor:pointer;font-size:11px;font-weight:700;">
+                    Side Seam만
+                  </button>
+                </div>
+              </div>
               <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;margin-top:14px;">
                 <input type="checkbox" id="grid-only-stocked" onchange="renderGridView()">
                 <span>재고 있는 것만</span>
-              </label>
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;margin-top:14px;">
-                <input type="checkbox" id="grid-include-ss" checked onchange="renderGridView()">
-                <span>Side Seam 포함</span>
               </label>
               <div style="margin-left:auto;font-size:11px;color:#6b7280;" id="grid-summary">—</div>
             </div>
@@ -7629,6 +7642,27 @@ async function loadGridView() {
   }
 }
 
+let _gridVariantMode = 'both';  // 'both' | 'tubular' | 'ss'
+
+/** Variant 필터 버튼 토글 */
+function setGridVariant(mode) {
+  _gridVariantMode = mode;
+  // 버튼 스타일 업데이트
+  ['both', 'tubular', 'ss'].forEach(m => {
+    const btn = document.getElementById(`grid-variant-${m}`);
+    if (btn) {
+      if (m === mode) {
+        btn.style.background = '#0f2744';
+        btn.style.color = '#fff';
+      } else {
+        btn.style.background = '#fff';
+        btn.style.color = '#374151';
+      }
+    }
+  });
+  renderGridView();
+}
+
 /** Grid 실제 렌더 */
 function renderGridView() {
   if (!_gridCurrentData) return;
@@ -7636,10 +7670,12 @@ function renderGridView() {
   const wrap = document.getElementById('inv-grid-wrap');
   const colorFilter = (document.getElementById('grid-color-filter')?.value || '').toLowerCase().trim();
   const onlyStocked = document.getElementById('grid-only-stocked')?.checked;
-  const includeSs = document.getElementById('grid-include-ss')?.checked;
+  
+  // Variant 필터 적용
+  const showTubular = _gridVariantMode === 'both' || _gridVariantMode === 'tubular';
+  const showSs = _gridVariantMode === 'both' || _gridVariantMode === 'ss';
   
   // 색상별 그룹핑
-  // 데이터 구조: { color: { variant: { warehouse: { size: qty } } } }
   const byColor = {};
   for (const r of inventory) {
     const color = r.color || '';
@@ -7663,9 +7699,10 @@ function renderGridView() {
   if (onlyStocked) {
     colors = colors.filter(c => {
       const d = byColor[c];
-      const tubSum = Object.values(d.Tubular).reduce((s, wh) => s + Object.values(wh).reduce((a,b)=>a+b,0), 0);
-      const ssSum = Object.values(d['Side Seam']).reduce((s, wh) => s + Object.values(wh).reduce((a,b)=>a+b,0), 0);
-      return includeSs ? (tubSum + ssSum > 0) : (tubSum > 0);
+      let sum = 0;
+      if (showTubular) sum += Object.values(d.Tubular).reduce((s, wh) => s + Object.values(wh).reduce((a,b)=>a+b,0), 0);
+      if (showSs) sum += Object.values(d['Side Seam']).reduce((s, wh) => s + Object.values(wh).reduce((a,b)=>a+b,0), 0);
+      return sum > 0;
     });
   }
   
@@ -7684,9 +7721,12 @@ function renderGridView() {
   `;
   
   // 요약
+  const variantLabel = _gridVariantMode === 'both' ? 'Tubular + Side Seam' 
+                     : _gridVariantMode === 'tubular' ? 'Tubular만' 
+                     : 'Side Seam만';
   const sumEl = document.getElementById('grid-summary');
   if (sumEl) {
-    sumEl.textContent = `색상 ${colors.length}개 표시 중 · Variant: ${includeSs ? 'Tubular + Side Seam' : 'Tubular만'}`;
+    sumEl.textContent = `색상 ${colors.length}개 표시 중 · ${variantLabel}`;
   }
   
   if (colors.length === 0) {
@@ -7697,16 +7737,17 @@ function renderGridView() {
   
   // 각 색상별 그리드
   html += colors.map(color => {
-    return renderColorGrid(color, byColor[color], includeSs, style);
+    return renderColorGrid(color, byColor[color], showTubular, showSs, style);
   }).join('');
   
   wrap.innerHTML = html;
 }
 
 /** 한 색상의 그리드 렌더 */
-function renderColorGrid(color, data, includeSs, style) {
-  // 각 creq (creq: 창고×variant) 조합의 수량 + 합계 계산
-  const variants = includeSs ? ['Tubular', 'Side Seam'] : ['Tubular'];
+function renderColorGrid(color, data, showTubular, showSs, style) {
+  const variants = [];
+  if (showTubular) variants.push('Tubular');
+  if (showSs) variants.push('Side Seam');
   
   // 색상 총 재고
   let colorTotal = 0;
