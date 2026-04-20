@@ -573,6 +573,21 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <button class="btn btn-primary btn-sm" onclick="openAddInventory()">+ Add Stock</button>
           </div>
         </div>
+
+        <!-- View Tabs: List / Grid -->
+        <div style="display:flex;gap:0;margin:8px 0 12px 0;border-bottom:2px solid #e5e7eb;">
+          <button id="inv-view-tab-list" onclick="switchInventoryView('list')" 
+            style="padding:8px 20px;background:#0f2744;color:#fff;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-weight:700;font-size:12px;">
+            📋 List View
+          </button>
+          <button id="inv-view-tab-grid" onclick="switchInventoryView('grid')" 
+            style="padding:8px 20px;background:#fff;color:#374151;border:1px solid #e5e7eb;border-bottom:none;border-radius:6px 6px 0 0;cursor:pointer;font-weight:700;font-size:12px;">
+            🎨 Grid View
+          </button>
+        </div>
+
+        <!-- List View (기존) -->
+        <div id="inv-view-list" style="display:block;">
 <div class="inv-filter" style="grid-template-columns:repeat(8,1fr);">
 <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STYLE #</label>
             <input class="fi" id="inv-filter-style" placeholder="e.g. 1368" onkeydown="if(event.key==='Enter')filterInventory()"/></div>
@@ -605,6 +620,59 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div id="inventory-table-wrap">
           <div class="loading"><div class="spinner"></div> Loading inventory...</div>
         </div>
+        </div><!-- /List View -->
+
+        <!-- Grid View (새로) -->
+        <div id="inv-view-grid" style="display:none;">
+          <!-- Style 검색 & 빠른 선택 -->
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:12px;">
+            <div style="display:grid;grid-template-columns:300px 1fr;gap:12px;align-items:end;">
+              <div>
+                <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px;font-weight:700;">🔍 STYLE 검색</label>
+                <input type="text" id="grid-style-search" placeholder="Style # 입력 (예: 1368)" 
+                  style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:5px;font-size:13px;font-family:'IBM Plex Mono',monospace;font-weight:700;"
+                  oninput="onGridStyleSearch()" onkeydown="if(event.key==='Enter')loadGridView()">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px;font-weight:700;">⭐ 빠른 선택 (최근 / 즐겨찾기)</label>
+                <div id="grid-quick-styles" style="display:flex;gap:6px;flex-wrap:wrap;min-height:30px;">
+                  <span style="color:#9ca3af;font-size:11px;font-style:italic;">스타일 검색 후 나타납니다</span>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 검색 결과 리스트 -->
+            <div id="grid-style-search-results" style="display:none;margin-top:8px;max-height:200px;overflow-y:auto;background:#fff;border:1px solid #d1d5db;border-radius:5px;"></div>
+          </div>
+
+          <!-- 필터 (색상 검색, 재고 있는 것만, SS 포함) -->
+          <div id="grid-filters" style="display:none;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:12px;">
+            <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+              <div>
+                <label style="font-size:10px;color:var(--text3);display:block;margin-bottom:2px;font-weight:700;">COLOR 필터</label>
+                <input type="text" id="grid-color-filter" placeholder="색상 이름..." 
+                  style="width:180px;padding:5px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;"
+                  oninput="renderGridView()">
+              </div>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;margin-top:14px;">
+                <input type="checkbox" id="grid-only-stocked" onchange="renderGridView()">
+                <span>재고 있는 것만</span>
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;margin-top:14px;">
+                <input type="checkbox" id="grid-include-ss" checked onchange="renderGridView()">
+                <span>Side Seam 포함</span>
+              </label>
+              <div style="margin-left:auto;font-size:11px;color:#6b7280;" id="grid-summary">—</div>
+            </div>
+          </div>
+
+          <!-- Grid 컨테이너 -->
+          <div id="inv-grid-wrap">
+            <div style="text-align:center;padding:40px;color:#9ca3af;font-size:13px;">
+              👆 스타일을 검색하거나 빠른 선택에서 선택하세요
+            </div>
+          </div>
+        </div><!-- /Grid View -->
       </div>
     </div>
 
@@ -7393,6 +7461,340 @@ let inv = [];
 // ══════════════════════════════════
 // INVENTORY
 // ══════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+// 🎨 INVENTORY GRID VIEW — 색상별 SKU 피벗 그리드
+// ══════════════════════════════════════════════════════════════
+
+const GRID_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+const GRID_WAREHOUSES = ['SC', 'SC-PCR', 'CA', 'CA-PCR'];
+let _gridSelectedStyle = null;  // 현재 선택된 스타일 번호
+let _gridAllStyles = [];         // 전체 스타일 목록 (검색용)
+let _gridRecentStyles = [];      // 최근 본 스타일 (localStorage)
+let _gridFavoriteStyles = [];    // 즐겨찾기 스타일 (localStorage)
+let _gridCurrentData = null;     // 현재 그리드 데이터
+
+/** List / Grid 뷰 전환 */
+function switchInventoryView(view) {
+  const listEl = document.getElementById('inv-view-list');
+  const gridEl = document.getElementById('inv-view-grid');
+  const listTab = document.getElementById('inv-view-tab-list');
+  const gridTab = document.getElementById('inv-view-tab-grid');
+
+  if (view === 'list') {
+    listEl.style.display = 'block';
+    gridEl.style.display = 'none';
+    listTab.style.background = '#0f2744';
+    listTab.style.color = '#fff';
+    listTab.style.border = 'none';
+    gridTab.style.background = '#fff';
+    gridTab.style.color = '#374151';
+    gridTab.style.border = '1px solid #e5e7eb';
+    gridTab.style.borderBottom = 'none';
+  } else {
+    listEl.style.display = 'none';
+    gridEl.style.display = 'block';
+    listTab.style.background = '#fff';
+    listTab.style.color = '#374151';
+    listTab.style.border = '1px solid #e5e7eb';
+    listTab.style.borderBottom = 'none';
+    gridTab.style.background = '#0f2744';
+    gridTab.style.color = '#fff';
+    gridTab.style.border = 'none';
+    // Grid 첫 로드
+    initGridView();
+  }
+}
+
+/** Grid View 초기화 */
+async function initGridView() {
+  // 스타일 목록 로드
+  if (_gridAllStyles.length === 0) {
+    try {
+      const { data } = await db.from('styles').select('style_number, description').order('style_number');
+      _gridAllStyles = data || [];
+    } catch(e) { console.warn(e); }
+  }
+  // 최근/즐겨찾기 로드 (localStorage 불가 환경에서도 안전하게)
+  try {
+    _gridRecentStyles = JSON.parse(localStorage.getItem('ps_grid_recent') || '[]');
+    _gridFavoriteStyles = JSON.parse(localStorage.getItem('ps_grid_favorites') || '[]');
+  } catch(e) {
+    _gridRecentStyles = [];
+    _gridFavoriteStyles = [];
+  }
+  renderQuickStyles();
+}
+
+/** 빠른 선택 버튼 렌더 */
+function renderQuickStyles() {
+  const el = document.getElementById('grid-quick-styles');
+  if (!el) return;
+  
+  const favorites = _gridFavoriteStyles.slice(0, 10);
+  const recent = _gridRecentStyles.filter(s => !favorites.includes(s)).slice(0, 5);
+  const all = [...favorites, ...recent];
+  
+  if (all.length === 0) {
+    el.innerHTML = '<span style="color:#9ca3af;font-size:11px;font-style:italic;">스타일 검색 후 나타납니다</span>';
+    return;
+  }
+  
+  el.innerHTML = all.map(sn => {
+    const isFav = _gridFavoriteStyles.includes(sn);
+    const star = isFav ? '⭐' : '🕐';
+    const active = _gridSelectedStyle === sn;
+    return `<button onclick="selectGridStyle('${sn}')" 
+      style="padding:5px 10px;background:${active?'#0f2744':'#fff'};color:${active?'#fff':'#374151'};border:1px solid ${active?'#0f2744':'#d1d5db'};border-radius:4px;cursor:pointer;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;display:inline-flex;align-items:center;gap:3px;">
+      ${star} ${sn}
+    </button>`;
+  }).join('');
+}
+
+/** 스타일 검색 입력 시 */
+function onGridStyleSearch() {
+  const q = (document.getElementById('grid-style-search')?.value || '').trim().toLowerCase();
+  const resEl = document.getElementById('grid-style-search-results');
+  if (!q) { resEl.style.display = 'none'; return; }
+  
+  const matches = _gridAllStyles.filter(s => 
+    s.style_number.toLowerCase().includes(q) || 
+    (s.description || '').toLowerCase().includes(q)
+  ).slice(0, 15);
+  
+  if (matches.length === 0) {
+    resEl.style.display = 'block';
+    resEl.innerHTML = '<div style="padding:10px;color:#9ca3af;font-size:12px;text-align:center;">검색 결과 없음</div>';
+    return;
+  }
+  
+  resEl.style.display = 'block';
+  resEl.innerHTML = matches.map(s => `
+    <div onclick="selectGridStyle('${s.style_number}')" 
+      style="padding:8px 12px;border-bottom:1px solid #f3f4f6;cursor:pointer;font-size:12px;"
+      onmouseover="this.style.background='#f9fafb'" onmouseout="this.style.background='#fff'">
+      <strong style="font-family:'IBM Plex Mono',monospace;color:#0f2744;">${s.style_number}</strong>
+      <span style="color:#6b7280;margin-left:8px;">${s.description || ''}</span>
+    </div>
+  `).join('');
+}
+
+/** 스타일 선택 */
+async function selectGridStyle(styleNum) {
+  _gridSelectedStyle = styleNum;
+  document.getElementById('grid-style-search').value = styleNum;
+  document.getElementById('grid-style-search-results').style.display = 'none';
+
+  // 최근 본 스타일에 추가 (최대 5개)
+  _gridRecentStyles = [styleNum, ..._gridRecentStyles.filter(s => s !== styleNum)].slice(0, 5);
+  try { localStorage.setItem('ps_grid_recent', JSON.stringify(_gridRecentStyles)); } catch(e) {}
+  
+  renderQuickStyles();
+  await loadGridView();
+}
+
+/** 즐겨찾기 토글 */
+function toggleGridFavorite(styleNum) {
+  if (_gridFavoriteStyles.includes(styleNum)) {
+    _gridFavoriteStyles = _gridFavoriteStyles.filter(s => s !== styleNum);
+  } else {
+    _gridFavoriteStyles = [styleNum, ..._gridFavoriteStyles].slice(0, 10);
+  }
+  try { localStorage.setItem('ps_grid_favorites', JSON.stringify(_gridFavoriteStyles)); } catch(e) {}
+  renderQuickStyles();
+  renderGridView();
+}
+
+/** Grid View 로드 */
+async function loadGridView() {
+  if (!_gridSelectedStyle) return;
+  
+  const wrap = document.getElementById('inv-grid-wrap');
+  const filtersEl = document.getElementById('grid-filters');
+  wrap.innerHTML = '<div style="text-align:center;padding:40px;color:#6b7280;"><div class="spinner" style="margin:0 auto 12px;"></div>로드 중...</div>';
+  
+  try {
+    // 스타일 정보 + inventory 조회
+    const { data: style } = await db.from('styles').select('*').eq('style_number', _gridSelectedStyle).single();
+    if (!style) throw new Error(`스타일 ${_gridSelectedStyle} 없음`);
+    
+    const { data: inv } = await db.from('inventory')
+      .select('*, warehouses(code)')
+      .eq('style_id', style.id);
+    
+    _gridCurrentData = { style, inventory: inv || [] };
+    filtersEl.style.display = 'block';
+    renderGridView();
+  } catch(e) {
+    wrap.innerHTML = `<div style="color:#dc2626;padding:20px;text-align:center;">❌ ${e.message}</div>`;
+  }
+}
+
+/** Grid 실제 렌더 */
+function renderGridView() {
+  if (!_gridCurrentData) return;
+  const { style, inventory } = _gridCurrentData;
+  const wrap = document.getElementById('inv-grid-wrap');
+  const colorFilter = (document.getElementById('grid-color-filter')?.value || '').toLowerCase().trim();
+  const onlyStocked = document.getElementById('grid-only-stocked')?.checked;
+  const includeSs = document.getElementById('grid-include-ss')?.checked;
+  
+  // 색상별 그룹핑
+  // 데이터 구조: { color: { variant: { warehouse: { size: qty } } } }
+  const byColor = {};
+  for (const r of inventory) {
+    const color = r.color || '';
+    const size = r.size || '';
+    const variant = (r.sku_id || '').includes('+ss') ? 'Side Seam' : 'Tubular';
+    const wh = r.warehouses?.code || '';
+    const qty = r.qty_on_hand || 0;
+    
+    if (!byColor[color]) byColor[color] = { Tubular: {}, 'Side Seam': {} };
+    if (!byColor[color][variant][wh]) byColor[color][variant][wh] = {};
+    byColor[color][variant][wh][size] = qty;
+  }
+  
+  // 색상 리스트 (정렬)
+  let colors = Object.keys(byColor).sort();
+  
+  // 필터 적용
+  if (colorFilter) {
+    colors = colors.filter(c => c.toLowerCase().includes(colorFilter));
+  }
+  if (onlyStocked) {
+    colors = colors.filter(c => {
+      const d = byColor[c];
+      const tubSum = Object.values(d.Tubular).reduce((s, wh) => s + Object.values(wh).reduce((a,b)=>a+b,0), 0);
+      const ssSum = Object.values(d['Side Seam']).reduce((s, wh) => s + Object.values(wh).reduce((a,b)=>a+b,0), 0);
+      return includeSs ? (tubSum + ssSum > 0) : (tubSum > 0);
+    });
+  }
+  
+  // 헤더
+  const isFav = _gridFavoriteStyles.includes(style.style_number);
+  let html = `
+    <div style="background:#0f2744;color:#fff;padding:12px 16px;border-radius:8px 8px 0 0;margin-bottom:0;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-size:14px;font-weight:800;">Style ${style.style_number} — ${style.description || ''}</div>
+        <div style="font-size:11px;opacity:0.8;margin-top:2px;">${style.category || ''} · ${style.pcs_per_box || 72} pcs/box (XS-2XL), ${style.pcs_per_box_large || 48} pcs/box (3XL-5XL)</div>
+      </div>
+      <button onclick="toggleGridFavorite('${style.style_number}')" style="background:${isFav?'#fbbf24':'rgba(255,255,255,0.2)'};color:${isFav?'#000':'#fff'};border:1px solid rgba(255,255,255,0.3);padding:6px 12px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:700;">
+        ${isFav ? '⭐ 즐겨찾기' : '☆ 즐겨찾기 추가'}
+      </button>
+    </div>
+  `;
+  
+  // 요약
+  const sumEl = document.getElementById('grid-summary');
+  if (sumEl) {
+    sumEl.textContent = `색상 ${colors.length}개 표시 중 · Variant: ${includeSs ? 'Tubular + Side Seam' : 'Tubular만'}`;
+  }
+  
+  if (colors.length === 0) {
+    html += `<div style="padding:30px;text-align:center;color:#9ca3af;background:#fff;border:1px solid #e5e7eb;border-radius:0 0 8px 8px;">조건에 맞는 색상이 없습니다</div>`;
+    wrap.innerHTML = html;
+    return;
+  }
+  
+  // 각 색상별 그리드
+  html += colors.map(color => {
+    return renderColorGrid(color, byColor[color], includeSs, style);
+  }).join('');
+  
+  wrap.innerHTML = html;
+}
+
+/** 한 색상의 그리드 렌더 */
+function renderColorGrid(color, data, includeSs, style) {
+  // 각 creq (creq: 창고×variant) 조합의 수량 + 합계 계산
+  const variants = includeSs ? ['Tubular', 'Side Seam'] : ['Tubular'];
+  
+  // 색상 총 재고
+  let colorTotal = 0;
+  variants.forEach(v => {
+    GRID_WAREHOUSES.forEach(wh => {
+      GRID_SIZES.forEach(sz => {
+        colorTotal += (data[v][wh]?.[sz] || 0);
+      });
+    });
+  });
+  
+  // 색상 헤더
+  let html = `
+    <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;margin-bottom:10px;">
+      <div style="background:#f9fafb;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #e5e7eb;">
+        <div style="font-weight:700;font-size:13px;color:#0f2744;">🎨 ${color}</div>
+        <div style="font-size:12px;color:#6b7280;">Total: <strong style="color:#0f2744;font-family:'IBM Plex Mono',monospace;">${colorTotal.toLocaleString()}</strong> pcs</div>
+      </div>
+      
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="background:#f3f4f6;">
+            <th style="padding:6px 10px;text-align:left;font-size:11px;color:#374151;border-right:1px solid #e5e7eb;width:160px;">Warehouse / Variant</th>
+            ${GRID_SIZES.map(sz => `<th style="padding:6px 6px;text-align:center;font-size:11px;color:#374151;border-right:1px solid #e5e7eb;min-width:55px;">${sz}</th>`).join('')}
+            <th style="padding:6px 10px;text-align:center;font-size:11px;color:#374151;background:#fef3c7;min-width:70px;">TOTAL</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+  
+  // 각 창고×variant 행
+  for (const wh of GRID_WAREHOUSES) {
+    for (const variant of variants) {
+      const isSs = variant === 'Side Seam';
+      const rowBg = isSs ? '#fffbf0' : '';
+      const whColor = wh === 'SC' ? '#0f2744' : wh === 'CA' ? '#c2410c' : wh === 'SC-PCR' ? '#6b21a8' : '#9a3412';
+      const whBadge = `<span style="background:${whColor};color:#fff;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;font-family:'IBM Plex Mono',monospace;">${wh}</span>`;
+      const variantBadge = isSs 
+        ? '<span style="background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:3px;padding:2px 6px;font-size:9px;font-weight:700;margin-left:6px;">SS</span>'
+        : '<span style="background:#f3f4f6;color:#4b5563;border:1px solid #d1d5db;border-radius:3px;padding:2px 6px;font-size:9px;font-weight:600;margin-left:6px;">Tub</span>';
+      
+      let rowTotal = 0;
+      const cells = GRID_SIZES.map(sz => {
+        const qty = data[variant][wh]?.[sz] || 0;
+        rowTotal += qty;
+        const cellColor = qty > 0 ? '#166534' : '#d1d5db';
+        const cellWeight = qty > 0 ? '600' : 'normal';
+        return `<td style="padding:6px 6px;text-align:center;border-right:1px solid #f3f4f6;font-family:'IBM Plex Mono',monospace;color:${cellColor};font-weight:${cellWeight};">${qty > 0 ? qty.toLocaleString() : '—'}</td>`;
+      }).join('');
+      
+      html += `
+        <tr style="${rowBg ? 'background:'+rowBg+';' : ''}border-bottom:1px solid #f3f4f6;">
+          <td style="padding:6px 10px;border-right:1px solid #e5e7eb;white-space:nowrap;">
+            ${whBadge}${variantBadge}
+          </td>
+          ${cells}
+          <td style="padding:6px 10px;text-align:center;background:#fffbeb;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${rowTotal>0?'#0f2744':'#9ca3af'};">${rowTotal > 0 ? rowTotal.toLocaleString() : '—'}</td>
+        </tr>
+      `;
+    }
+  }
+  
+  // 사이즈별 합계 (하단 요약 행)
+  const sizeTotals = GRID_SIZES.map(sz => {
+    let total = 0;
+    variants.forEach(v => {
+      GRID_WAREHOUSES.forEach(wh => {
+        total += (data[v][wh]?.[sz] || 0);
+      });
+    });
+    return total;
+  });
+  
+  html += `
+        <tr style="background:#f3f4f6;font-weight:700;border-top:2px solid #d1d5db;">
+          <td style="padding:8px 10px;border-right:1px solid #e5e7eb;">📊 Size Total</td>
+          ${sizeTotals.map(t => `<td style="padding:8px 6px;text-align:center;border-right:1px solid #e5e7eb;font-family:'IBM Plex Mono',monospace;color:${t>0?'#0f2744':'#9ca3af'};">${t > 0 ? t.toLocaleString() : '—'}</td>`).join('')}
+          <td style="padding:8px 10px;text-align:center;background:#fef3c7;font-family:'IBM Plex Mono',monospace;color:#92400e;">${colorTotal.toLocaleString()}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  `;
+  
+  return html;
+}
+
+// ──────────────────────────────────────────────────────
 async function loadInventory() {
   document.getElementById('inventory-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
   let allData = [];
