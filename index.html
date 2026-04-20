@@ -590,7 +590,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div id="inv-view-list" style="display:block;">
 <div class="inv-filter" style="grid-template-columns:repeat(8,1fr);">
 <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STYLE #</label>
-            <input class="fi" id="inv-filter-style" placeholder="e.g. 1368" onkeydown="if(event.key==='Enter')filterInventory()"/></div>
+            <input class="fi" id="inv-filter-style" placeholder="e.g. 1368 or 1368abyssm" onkeydown="if(event.key==='Enter')filterInventory()"/></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">COLOR</label>
             <input class="fi" id="inv-filter-color" placeholder="Color..." onkeydown="if(event.key==='Enter')filterInventory()"/></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">WAREHOUSE</label>
@@ -8032,7 +8032,12 @@ function filterInventory() {
     const status = document.getElementById('inv-filter-status')?.value || '';
 
   let filtered = allInventory.filter(i => {
-    if (style && !i.styles?.style_number?.toLowerCase().includes(style)) return false;
+    // Style # 필드에서 Style 번호 또는 SKU ID 검색
+    if (style) {
+      const styleMatch = i.styles?.style_number?.toLowerCase().includes(style);
+      const skuMatch = (i.sku_id || '').toLowerCase().includes(style);
+      if (!styleMatch && !skuMatch) return false;
+    }
     if (color && i.color?.toLowerCase() !== color) return false;
     if (wh && i.warehouses?.code !== wh) return false;
     if (size && !i.size?.toLowerCase().includes(size)) return false;
@@ -8165,7 +8170,10 @@ function renderInventoryTable(data) {
     const mainRowStyle = isSs ? 'background:#fffbf0;' : '';
     return `<tr style="cursor:pointer;font-weight:500;${mainRowStyle}" onclick="document.querySelectorAll('.detail-${idx}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')" ondblclick="event.stopPropagation();bulkEditGroup('${r.styleNum}','${r.color.replace(/'/g,"\\'")}','${r.size}')">
       <td class="mono" style="font-weight:700;color:var(--primary)">${r.styleNum}</td>
-      <td style="font-size:11px;">${r.desc}</td>
+      <td style="font-size:11px;">
+        <div>${r.desc}</div>
+        ${r.sku ? `<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6b7280;font-weight:600;margin-top:2px;">${r.sku}</div>` : ''}
+      </td>
       <td>${r.color}</td>
       <td>${r.size}</td>
       <td>${variantBadge}</td>
