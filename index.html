@@ -4235,7 +4235,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             </div>
             <div>
               <label style="font-size:11px;font-weight:700;color:#0c4a6e;display:block;margin-bottom:3px;">CATEGORY</label>
-              <select id="imp-style-cat" style="width:100%;padding:6px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:13px;">
+              <select id="imp-style-cat" onchange="onImpCategoryChange()" style="width:100%;padding:6px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:13px;">
                 <option>Adult S/S</option>
                 <option>Adult L/S</option>
                 <option>Adult Tank Top</option>
@@ -4249,17 +4249,17 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 <option>Juvy L/S</option>
                 <option>Toddler S/S</option>
                 <option>Toddler L/S</option>
-                <option>Kids Performance</option>
+                <option>Kids S/S</option>
                 <option>Other</option>
               </select>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
               <div>
-                <label style="font-size:11px;font-weight:700;color:#0c4a6e;display:block;margin-bottom:3px;">PCS/BOX (XS-2XL)</label>
+                <label id="imp-ppb-small-label" style="font-size:11px;font-weight:700;color:#0c4a6e;display:block;margin-bottom:3px;">PCS/BOX (XS-2XL)</label>
                 <input type="number" id="imp-ppb-small" value="72" style="width:100%;padding:6px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:13px;text-align:center;">
               </div>
-              <div>
-                <label style="font-size:11px;font-weight:700;color:#0c4a6e;display:block;margin-bottom:3px;">PCS/BOX (3XL-5XL)</label>
+              <div id="imp-ppb-large-wrap">
+                <label id="imp-ppb-large-label" style="font-size:11px;font-weight:700;color:#0c4a6e;display:block;margin-bottom:3px;">PCS/BOX (3XL-5XL)</label>
                 <input type="number" id="imp-ppb-large" value="48" style="width:100%;padding:6px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:13px;text-align:center;">
               </div>
             </div>
@@ -4288,7 +4288,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 </label>
               </div>
             </div>
-            <span style="color:#9ca3af;margin-top:18px;">사이즈: XS, S, M, L, XL, 2XL, 3XL, 4XL, 5XL (고정)</span>
+            <span id="imp-size-info" style="color:#0c4a6e;margin-top:18px;font-size:11px;font-weight:600;">사이즈: XS, S, M, L, XL, 2XL, 3XL, 4XL, 5XL (9개)</span>
           </div>
 
           <!-- 창고 선택 (자리 예약) -->
@@ -4413,7 +4413,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <option>Juvy L/S</option>
             <option>Toddler S/S</option>
             <option>Toddler L/S</option>
-            <option>Kids Performance</option>
+            <option>Kids S/S</option>
             <option>Other</option>
           </select>
         </div>
@@ -4627,7 +4627,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <option>Juvy L/S</option>
             <option>Toddler S/S</option>
             <option>Toddler L/S</option>
-            <option>Kids Performance</option>
+            <option>Kids S/S</option>
             <option>Other</option>
           </select></div>
         <div class="ff"><label>Size Range</label><input class="fi" id="as-range" placeholder="e.g. XS-2XL"/></div>
@@ -10029,6 +10029,67 @@ async function loadSettings() {
 // 📥 SKU & INVENTORY IMPORT
 // ══════════════════════════════════════════════════════════════
 
+// 카테고리별 사이즈 + PCS/Box 매핑
+const CATEGORY_CONFIG = {
+  'Adult S/S':         { sizes: ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'], ppbSmall: 72, ppbLarge: 48, smallSizes: ['XS','S','M','L','XL','2XL'], largeSizes: ['3XL','4XL','5XL'] },
+  'Adult L/S':         { sizes: ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'], ppbSmall: 60, ppbLarge: 48, smallSizes: ['XS','S','M','L','XL','2XL'], largeSizes: ['3XL','4XL','5XL'] },
+  'Adult Tank Top':    { sizes: ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'], ppbSmall: 72, ppbLarge: 48, smallSizes: ['XS','S','M','L','XL','2XL'], largeSizes: ['3XL','4XL','5XL'] },
+  'Adult Hoodie L/S':  { sizes: ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'], ppbSmall: 60, ppbLarge: 48, smallSizes: ['XS','S','M','L','XL','2XL'], largeSizes: ['3XL','4XL','5XL'] },
+  'Adult Raglan':      { sizes: ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'], ppbSmall: 72, ppbLarge: 48, smallSizes: ['XS','S','M','L','XL','2XL'], largeSizes: ['3XL','4XL','5XL'] },
+  'Adult Ringer S/S':  { sizes: ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'], ppbSmall: 72, ppbLarge: 48, smallSizes: ['XS','S','M','L','XL','2XL'], largeSizes: ['3XL','4XL','5XL'] },
+  'Adult Performance': { sizes: ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'], ppbSmall: 72, ppbLarge: 48, smallSizes: ['XS','S','M','L','XL','2XL'], largeSizes: ['3XL','4XL','5XL'] },
+  'Youth S/S':         { sizes: ['XS','S','M','L','XL'], ppbSmall: 72, ppbLarge: null, smallSizes: ['XS','S','M','L','XL'], largeSizes: [] },
+  'Youth L/S':         { sizes: ['XS','S','M','L','XL'], ppbSmall: 60, ppbLarge: null, smallSizes: ['XS','S','M','L','XL'], largeSizes: [] },
+  'Juvy S/S':          { sizes: ['S','M','L'], ppbSmall: 144, ppbLarge: null, smallSizes: ['S','M','L'], largeSizes: [] },
+  'Juvy L/S':          { sizes: ['S','M','L'], ppbSmall: 120, ppbLarge: null, smallSizes: ['S','M','L'], largeSizes: [] },
+  'Toddler S/S':       { sizes: ['2T','3T','4T'], ppbSmall: 144, ppbLarge: null, smallSizes: ['2T','3T','4T'], largeSizes: [] },
+  'Toddler L/S':       { sizes: ['2T','3T','4T'], ppbSmall: 120, ppbLarge: null, smallSizes: ['2T','3T','4T'], largeSizes: [] },
+  'Kids S/S':          { sizes: ['2T','3T','4T','5T','XS','S','M','L','XL'], ppbSmall: 72, ppbLarge: null, smallSizes: ['2T','3T','4T','5T','XS','S','M','L','XL'], largeSizes: [] },
+  'Other':             { sizes: ['XS','S','M','L','XL','2XL','3XL','4XL','5XL'], ppbSmall: 72, ppbLarge: 48, smallSizes: ['XS','S','M','L','XL','2XL'], largeSizes: ['3XL','4XL','5XL'] }
+};
+
+/** 카테고리 변경 시 사이즈/PPB 자동 업데이트 */
+function onImpCategoryChange() {
+  const cat = document.getElementById('imp-style-cat').value;
+  const config = CATEGORY_CONFIG[cat] || CATEGORY_CONFIG['Other'];
+  
+  // 사이즈 정보 표시
+  const sizeInfoEl = document.getElementById('imp-size-info');
+  if (sizeInfoEl) {
+    sizeInfoEl.textContent = `사이즈: ${config.sizes.join(', ')} (${config.sizes.length}개)`;
+  }
+  
+  // PPB Small 입력 업데이트
+  const ppbSmallEl = document.getElementById('imp-ppb-small');
+  const ppbSmallLabelEl = document.getElementById('imp-ppb-small-label');
+  if (ppbSmallEl) ppbSmallEl.value = config.ppbSmall;
+  if (ppbSmallLabelEl) {
+    if (config.largeSizes && config.largeSizes.length > 0) {
+      // Adult 계열: 작은/큰 구분
+      ppbSmallLabelEl.textContent = `PCS/BOX (${config.smallSizes[0]}-${config.smallSizes[config.smallSizes.length-1]})`;
+    } else {
+      // Youth/Juvy/Toddler/Kids: 전체
+      ppbSmallLabelEl.textContent = `PCS/BOX (전체: ${config.sizes.join(', ')})`;
+    }
+  }
+  
+  // PPB Large 입력 표시/숨김
+  const ppbLargeWrap = document.getElementById('imp-ppb-large-wrap');
+  const ppbLargeEl = document.getElementById('imp-ppb-large');
+  const ppbLargeLabelEl = document.getElementById('imp-ppb-large-label');
+  if (config.ppbLarge === null) {
+    // 큰 사이즈 없음 → PPB Large 숨김
+    if (ppbLargeWrap) ppbLargeWrap.style.display = 'none';
+    if (ppbLargeEl) ppbLargeEl.value = '';
+  } else {
+    if (ppbLargeWrap) ppbLargeWrap.style.display = '';
+    if (ppbLargeEl) ppbLargeEl.value = config.ppbLarge;
+    if (ppbLargeLabelEl && config.largeSizes.length > 0) {
+      ppbLargeLabelEl.textContent = `PCS/BOX (${config.largeSizes[0]}-${config.largeSizes[config.largeSizes.length-1]})`;
+    }
+  }
+}
+
 /** Variant 라디오 버튼 UI 업데이트 (선택된 것 하이라이트) */
 function updateImpVariantUI() {
   const selected = document.querySelector('input[name="imp-variant"]:checked');
@@ -10063,6 +10124,10 @@ function openImportModal() {
   const invPrev = document.getElementById('imp-inv-preview');
   if (skuPrev) skuPrev.innerHTML = '';
   if (invPrev) invPrev.innerHTML = '';
+  // 카테고리 기본값 기준으로 사이즈/PPB 적용
+  setTimeout(() => {
+    if (typeof onImpCategoryChange === 'function') onImpCategoryChange();
+  }, 50);
   // SKU Import 탭으로 시작
   switchImportTab('sku');
   openModal('modal-import');
@@ -10139,7 +10204,8 @@ function previewSkuImport() {
   const desc = document.getElementById('imp-style-desc').value.trim();
   const cat = document.getElementById('imp-style-cat').value;
   const ppbSmall = parseInt(document.getElementById('imp-ppb-small').value) || 72;
-  const ppbLarge = parseInt(document.getElementById('imp-ppb-large').value) || 48;
+  const ppbLargeRaw = document.getElementById('imp-ppb-large').value;
+  const ppbLarge = ppbLargeRaw ? parseInt(ppbLargeRaw) : null;
   const colorsRaw = document.getElementById('imp-colors').value.trim();
 
   const previewEl = document.getElementById('imp-sku-preview');
@@ -10185,11 +10251,14 @@ function previewSkuImport() {
   // - 'ss':      Side Seam만 (+ss 없음, 기본 SKU로 저장. Davinci 방식)
   //              → Tubular가 없는 스타일이므로 구분할 필요가 없음
   
-  // SKU 생성
+  // SKU 생성 — 카테고리별 사이즈 사용
+  const catConfig = CATEGORY_CONFIG[cat] || CATEGORY_CONFIG['Other'];
+  const sizesForStyle = catConfig.sizes;
+  
   const skus = [];
   uniqueColors.forEach(color => {
     const cc = colorCode6(color);
-    IMPORT_SIZES.forEach(size => {
+    sizesForStyle.forEach(size => {
       const baseSkuId = `${styleNum}${cc}${size.toLowerCase()}`;
       
       if (variantMode === 'both') {
@@ -10230,7 +10299,14 @@ function previewSkuImport() {
   if (document.getElementById('imp-wh-ca-pcr')?.checked) selectedWarehouses.push('CA-PCR');
 
   _skuImportData = {
-    style: { style_number: styleNum, description: desc, category: cat, size_range: 'XS-5XL', pcs_per_box: ppbSmall, pcs_per_box_large: ppbLarge },
+    style: { 
+      style_number: styleNum, 
+      description: desc, 
+      category: cat, 
+      size_range: `${sizesForStyle[0]}-${sizesForStyle[sizesForStyle.length-1]}`, 
+      pcs_per_box: ppbSmall, 
+      pcs_per_box_large: ppbLarge 
+    },
     skus: skus,
     colors: uniqueColors,
     warehouses: selectedWarehouses
