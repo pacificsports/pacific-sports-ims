@@ -4267,7 +4267,10 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
           <div style="margin-bottom:12px;">
             <label style="font-size:11px;font-weight:700;color:#0c4a6e;display:block;margin-bottom:3px;">색상 목록 (한 줄에 하나씩, Excel에서 복사 → 붙여넣기)</label>
-            <textarea id="imp-colors" rows="6" placeholder="ABYSS&#10;ARTICHOKE&#10;BABY BLUE&#10;BERMUDA&#10;BLACK&#10;..." style="width:100%;padding:8px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace;"></textarea>
+            <textarea id="imp-colors" rows="6" placeholder="ABYSS&#10;ARTICHOKE&#10;BLACK&#10;CHARCOAL:ht  ← suffix 추가하려면 :접미어&#10;CHARCOAL:tk&#10;LIGHT BLUE&#10;..." style="width:100%;padding:8px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace;"></textarea>
+            <div style="font-size:10px;color:#0c4a6e;margin-top:4px;">
+              💡 같은 색상에 변형이 있으면 <code style="background:#bae6fd;padding:1px 4px;border-radius:2px;">색상명:접미어</code> 형식으로 입력 (예: <code>CHARCOAL:ht</code>, <code>CHARCOAL:tk</code>) → SKU에 자동으로 +접미어 추가됨
+            </div>
           </div>
 
           <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;font-size:11px;color:#075985;">
@@ -10217,27 +10220,48 @@ function previewSkuImport() {
   if (!desc) { previewEl.innerHTML = '<div style="color:#dc2626;padding:10px;">❌ Description 입력 필요</div>'; return; }
   if (!colorsRaw) { previewEl.innerHTML = '<div style="color:#dc2626;padding:10px;">❌ 색상 목록 입력 필요</div>'; return; }
 
-  // 색상 파싱 (한 줄씩)
-  const colors = colorsRaw.split('\n').map(s => s.trim()).filter(s => s).map(s => s.toUpperCase());
-  const uniqueColors = [...new Set(colors)];
+  // 색상 파싱 (한 줄씩) — suffix 지원: "COLOR:suffix" 형식
+  // 예: "CHARCOAL:ht" → color="CHARCOAL", suffix="ht"
+  const colorEntries = [];
+  colorsRaw.split('\n').forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const [colorPart, suffixPart] = trimmed.split(':');
+    const color = colorPart.trim().toUpperCase();
+    const suffix = (suffixPart || '').trim().toLowerCase();
+    if (color) colorEntries.push({ color, suffix });
+  });
 
-  // 색상 코드 중복 체크
+  // 중복 제거 (color + suffix 조합 기준)
+  const seen = new Set();
+  const uniqueEntries = colorEntries.filter(e => {
+    const key = `${e.color}|${e.suffix}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // 표시용 색상 목록 (UI 메시지용)
+  const uniqueColors = uniqueEntries.map(e => e.suffix ? `${e.color}:${e.suffix}` : e.color);
+
+  // 색상 코드 + suffix 조합 중복 체크
   const codeMap = {};
   const dupCodes = [];
-  uniqueColors.forEach(c => {
-    const code = colorCode6(c);
-    if (!codeMap[code]) codeMap[code] = [];
-    codeMap[code].push(c);
-    if (codeMap[code].length > 1) dupCodes.push(code);
+  uniqueEntries.forEach(e => {
+    const code = colorCode6(e.color);
+    const fullKey = e.suffix ? `${code}+${e.suffix}` : code;
+    if (!codeMap[fullKey]) codeMap[fullKey] = [];
+    codeMap[fullKey].push(e.suffix ? `${e.color}:${e.suffix}` : e.color);
+    if (codeMap[fullKey].length > 1) dupCodes.push(fullKey);
   });
 
   if (dupCodes.length > 0) {
     let html = '<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:5px;padding:10px;color:#991b1b;font-size:12px;">';
     html += '<div style="font-weight:700;margin-bottom:6px;">⚠️ 색상 코드 중복 발견:</div>';
-    dupCodes.forEach(code => {
+    [...new Set(dupCodes)].forEach(code => {
       html += `<div>· "${code}" : ${codeMap[code].join(', ')}</div>`;
     });
-    html += '<div style="margin-top:6px;font-size:11px;">첫 6자가 같은 색상은 구분이 안됩니다. 색상명을 조정하세요.</div></div>';
+    html += '<div style="margin-top:6px;font-size:11px;">첫 6자가 같은 색상은 구분이 안됩니다. 색상명을 조정하거나 :suffix를 추가하세요.</div></div>';
     previewEl.innerHTML = html;
     return;
   }
@@ -10246,46 +10270,42 @@ function previewSkuImport() {
   const variantRadio = document.querySelector('input[name="imp-variant"]:checked');
   const variantMode = variantRadio ? variantRadio.value : 'both';  // 'both' | 'tubular' | 'ss'
   
-  // 각 모드별 생성할 variant 리스트
-  // - 'both':    둘 다 (Tubular + Side Seam 구분 위해 +ss 붙임)
-  // - 'tubular': Tubular만 (+ss 없음, 기본 SKU)
-  // - 'ss':      Side Seam만 (+ss 없음, 기본 SKU로 저장. Davinci 방식)
-  //              → Tubular가 없는 스타일이므로 구분할 필요가 없음
-  
-  // SKU 생성 — 카테고리별 사이즈 사용
+  // SKU 생성 — 카테고리별 사이즈 사용 + suffix 지원
   const catConfig = CATEGORY_CONFIG[cat] || CATEGORY_CONFIG['Other'];
   const sizesForStyle = catConfig.sizes;
   
   const skus = [];
-  uniqueColors.forEach(color => {
+  uniqueEntries.forEach(({ color, suffix }) => {
     const cc = colorCode6(color);
+    const suffixPart = suffix ? `+${suffix}` : '';
+    const colorDisplayName = suffix ? `${color} (${suffix.toUpperCase()})` : color;
+    
     sizesForStyle.forEach(size => {
-      const baseSkuId = `${styleNum}${cc}${size.toLowerCase()}`;
+      // SKU 형식: {style}{cc}{size}{+suffix?}{+ss?}
+      // 예: 1315charcoxs+ht (Tubular HT), 1315charcoxs+ht+ss (Side Seam HT)
+      const baseSkuId = `${styleNum}${cc}${size.toLowerCase()}${suffixPart}`;
       
       if (variantMode === 'both') {
-        // Tubular + Side Seam 둘 다 (Side Seam은 +ss 붙임)
         skus.push({
           sku_id: baseSkuId,
-          style_number: styleNum, color: color, color_code: cc, size: size,
+          style_number: styleNum, color: colorDisplayName, color_code: cc, size: size,
           variant: 'Tubular', description: desc
         });
         skus.push({
           sku_id: baseSkuId + '+ss',
-          style_number: styleNum, color: color, color_code: cc, size: size,
+          style_number: styleNum, color: colorDisplayName, color_code: cc, size: size,
           variant: 'Side Seam', description: desc + ' - Side Seam'
         });
       } else if (variantMode === 'tubular') {
-        // Tubular만
         skus.push({
           sku_id: baseSkuId,
-          style_number: styleNum, color: color, color_code: cc, size: size,
+          style_number: styleNum, color: colorDisplayName, color_code: cc, size: size,
           variant: 'Tubular', description: desc
         });
       } else if (variantMode === 'ss') {
-        // Side Seam만 (+ss 없이 기본 SKU로 - Davinci 방식)
         skus.push({
           sku_id: baseSkuId,
-          style_number: styleNum, color: color, color_code: cc, size: size,
+          style_number: styleNum, color: colorDisplayName, color_code: cc, size: size,
           variant: 'Side Seam', description: desc
         });
       }
