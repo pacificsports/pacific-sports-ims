@@ -25513,17 +25513,60 @@ async function autofillCustomerFromPo(event) {
     const data = await response.json();
     const parsed = data.data || data;
     
+    // 디버깅: 파싱된 내용 콘솔 출력
+    console.log('[autofillCustomerFromPo] Parsed data:', parsed);
+    
+    // 우리 회사 이름 (이걸 뽑아오면 반대쪽에서 찾아야 함)
+    const OUR_COMPANY_PATTERNS = [
+      /peace\s*textile/i,
+      /pacific\s*sports/i,
+    ];
+    const isOurCompany = (name) => {
+      if (!name) return false;
+      return OUR_COMPANY_PATTERNS.some(re => re.test(name));
+    };
+    
+    // Customer name 결정: 여러 후보 중에서 "우리 회사가 아닌" 것 선택
+    const nameCandidates = [
+      parsed.customer_name,
+      parsed.bill_to_name,
+      parsed.company_name,
+      parsed.ship_to_name,
+      parsed.delivery_location_name,
+      parsed.buyer_name,
+      parsed.buyer,
+    ].filter(n => n && String(n).trim());
+    
+    let customerName = nameCandidates.find(n => !isOurCompany(n)) || nameCandidates[0] || '';
+    
+    // 주소도 마찬가지 — vendor 주소 (우리 주소)가 아닌 delivery/ship_to 우선
+    const addrFromDelivery = parsed.delivery_location_address || parsed.delivery_address || parsed.ship_to_address;
+    const addrFromBill = parsed.bill_to_address || parsed.bill_address || parsed.billing_address;
+    
     // 추출 가능한 필드들 체크
     const fields = {
-      'cust-company':           parsed.customer_name || parsed.bill_to_name || parsed.company_name,
-      'cust-contact':           parsed.contact_name || parsed.contact,
-      'cust-phone':             parsed.phone || parsed.customer_phone,
-      'cust-email':             parsed.email || parsed.customer_email,
+      'cust-company':           customerName,
+      'cust-contact':           parsed.contact_name || parsed.contact || parsed.buyer_name,
+      'cust-phone':             parsed.phone || parsed.customer_phone || parsed.ship_to_phone || parsed.delivery_phone,
+      'cust-email':             parsed.email || parsed.customer_email || parsed.contact_email,
       'cust-accounting-email':  parsed.accounting_email || parsed.ap_email,
-      'cust-bill-addr':         parsed.bill_to_address || parsed.bill_address || parsed.billing_address,
-      'cust-ship-addr':         parsed.ship_to_address || parsed.ship_address || parsed.shipping_address,
+      'cust-bill-addr':         addrFromBill,
+      'cust-ship-addr':         addrFromDelivery,
       'cust-terms':             parsed.terms || parsed.payment_terms,
     };
+    
+    // 만약 bill_addr가 우리 주소라면 delivery로 교체
+    // (우리 주소 패턴: "1605 S Guignard" 또는 "Sumter" 포함)
+    const isOurAddress = (addr) => {
+      if (!addr) return false;
+      const s = String(addr).toLowerCase();
+      return s.includes('guignard') || s.includes('sumter') || s.includes('peace textile');
+    };
+    if (isOurAddress(fields['cust-bill-addr']) && !isOurAddress(fields['cust-ship-addr'])) {
+      // Bill이 우리 주소면 Ship을 Bill로 (고객 주소를 bill에 넣음)
+      fields['cust-bill-addr'] = fields['cust-ship-addr'];
+      fields['cust-ship-addr'] = '';  // 같으니까 ship은 비움
+    }
     
     // Bill To가 여러 필드로 나뉘어 있을 수도 (address, city, state, zip)
     if (!fields['cust-bill-addr']) {
@@ -42656,4 +42699,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-22T14:19:15Z - customer modal scroll fix -->
+
+<!-- Deploy trigger: 2026-04-22T14:27:07Z - autofill our-company filter -->
