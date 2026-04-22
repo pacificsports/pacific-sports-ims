@@ -4267,11 +4267,12 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
           <div style="margin-bottom:12px;">
             <label style="font-size:11px;font-weight:700;color:#0c4a6e;display:block;margin-bottom:3px;">색상 목록 (한 줄에 하나씩, Excel에서 복사 → 붙여넣기)</label>
-            <textarea id="imp-colors" rows="6" placeholder="ABYSS&#10;BLACK&#10;CHARCOAL:ht         ← suffix 추가&#10;CHARCOAL:tk&#10;WHITE/BLACK         ← 2색 조합&#10;LIGHT BLUE/NAVY&#10;..." style="width:100%;padding:8px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace;"></textarea>
-            <div style="font-size:10px;color:#0c4a6e;margin-top:4px;line-height:1.5;">
+            <textarea id="imp-colors" rows="6" placeholder="ABYSS&#10;CHARCOAL:ht         ← suffix&#10;WHITE/BLACK         ← 2색 조합&#10;VINTAGE BLACK|vblack ← 커스텀 코드&#10;..." style="width:100%;padding:8px 10px;border:1px solid #bae6fd;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace;"></textarea>
+            <div style="font-size:10px;color:#0c4a6e;margin-top:4px;line-height:1.6;">
               💡 <strong>특수 형식 지원:</strong><br>
-              · <code style="background:#bae6fd;padding:1px 4px;border-radius:2px;">색상명:접미어</code> → 같은 색상 변형 (예: <code>CHARCOAL:ht</code> → SKU에 <code>+ht</code> 추가)<br>
-              · <code style="background:#bae6fd;padding:1px 4px;border-radius:2px;">색상1/색상2</code> → 2색 조합 (예: <code>WHITE/BLACK</code> → 코드 <code>whibla</code>, 각 색상 앞 3자씩)
+              · <code style="background:#bae6fd;padding:1px 4px;border-radius:2px;">색상명:접미어</code> → 변형 (예: <code>CHARCOAL:ht</code> → SKU에 <code>+ht</code> 추가)<br>
+              · <code style="background:#bae6fd;padding:1px 4px;border-radius:2px;">색상1/색상2</code> → 2색 조합 (예: <code>WHITE/BLACK</code> → <code>whibla</code>)<br>
+              · <code style="background:#bae6fd;padding:1px 4px;border-radius:2px;">색상명|커스텀코드</code> → 코드 직접 지정 (예: <code>VINTAGE BLACK|vblack</code> → <code>vblack</code>, 표시는 "VINTAGE BLACK")
             </div>
           </div>
 
@@ -10230,38 +10231,60 @@ function previewSkuImport() {
   if (!desc) { previewEl.innerHTML = '<div style="color:#dc2626;padding:10px;">❌ Description 입력 필요</div>'; return; }
   if (!colorsRaw) { previewEl.innerHTML = '<div style="color:#dc2626;padding:10px;">❌ 색상 목록 입력 필요</div>'; return; }
 
-  // 색상 파싱 (한 줄씩) — suffix 지원: "COLOR:suffix" 형식
-  // 예: "CHARCOAL:ht" → color="CHARCOAL", suffix="ht"
+  // 색상 파싱 (한 줄씩) — 3가지 특수 형식 지원:
+  //   1. "COLOR|customcode" : 커스텀 코드 지정 (예: "VINTAGE BLACK|vblack")
+  //   2. "COLOR:suffix"     : suffix 추가 (예: "CHARCOAL:ht")
+  //   3. "COLOR1/COLOR2"    : 2색 조합 (예: "WHITE/BLACK")
+  //   * 조합도 가능: "COLOR|customcode:suffix"
   const colorEntries = [];
   colorsRaw.split('\n').forEach(line => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    const [colorPart, suffixPart] = trimmed.split(':');
+    
+    // Step 1: | 로 커스텀 코드 분리
+    let mainPart = trimmed;
+    let customCode = null;
+    if (trimmed.includes('|')) {
+      const pipeIdx = trimmed.indexOf('|');
+      mainPart = trimmed.substring(0, pipeIdx).trim();
+      customCode = trimmed.substring(pipeIdx + 1).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+    
+    // Step 2: : 로 suffix 분리
+    const [colorPart, suffixPart] = mainPart.split(':');
     const color = colorPart.trim().toUpperCase();
     const suffix = (suffixPart || '').trim().toLowerCase();
-    if (color) colorEntries.push({ color, suffix });
+    
+    if (color) colorEntries.push({ color, suffix, customCode });
   });
 
-  // 중복 제거 (color + suffix 조합 기준)
+  // 중복 제거 (color + suffix + customCode 조합 기준)
   const seen = new Set();
   const uniqueEntries = colorEntries.filter(e => {
-    const key = `${e.color}|${e.suffix}`;
+    const key = `${e.color}::${e.suffix}::${e.customCode||''}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
   // 표시용 색상 목록 (UI 메시지용)
-  const uniqueColors = uniqueEntries.map(e => e.suffix ? `${e.color}:${e.suffix}` : e.color);
+  const uniqueColors = uniqueEntries.map(e => {
+    let s = e.color;
+    if (e.suffix) s += `:${e.suffix}`;
+    if (e.customCode) s += `|${e.customCode}`;
+    return s;
+  });
 
   // 색상 코드 + suffix 조합 중복 체크
   const codeMap = {};
   const dupCodes = [];
   uniqueEntries.forEach(e => {
-    const code = colorCode6(e.color);
+    // 커스텀 코드가 있으면 그걸 쓰고, 없으면 자동 생성
+    const code = e.customCode || colorCode6(e.color);
     const fullKey = e.suffix ? `${code}+${e.suffix}` : code;
     if (!codeMap[fullKey]) codeMap[fullKey] = [];
-    codeMap[fullKey].push(e.suffix ? `${e.color}:${e.suffix}` : e.color);
+    const displayName = e.customCode ? `${e.color}|${e.customCode}` : (e.suffix ? `${e.color}:${e.suffix}` : e.color);
+    codeMap[fullKey].push(displayName);
     if (codeMap[fullKey].length > 1) dupCodes.push(fullKey);
   });
 
@@ -10285,8 +10308,9 @@ function previewSkuImport() {
   const sizesForStyle = catConfig.sizes;
   
   const skus = [];
-  uniqueEntries.forEach(({ color, suffix }) => {
-    const cc = colorCode6(color);
+  uniqueEntries.forEach(({ color, suffix, customCode }) => {
+    // 커스텀 코드 우선, 없으면 자동 생성
+    const cc = customCode || colorCode6(color);
     const suffixPart = suffix ? `+${suffix}` : '';
     const colorDisplayName = suffix ? `${color} (${suffix.toUpperCase()})` : color;
     
@@ -42484,4 +42508,5 @@ function exportArCsv() {
 </html>
 
 
-<!-- Deploy trigger: 2026-04-21T19:22:38Z - combo colors -->
+
+<!-- Deploy trigger: 2026-04-22T01:16:34Z - custom codes -->
