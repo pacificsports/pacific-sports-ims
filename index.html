@@ -4011,10 +4011,17 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <label>Bill To Address</label>
           <textarea class="fi" id="cust-bill-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="6650 S Narragansett Ave&#10;Unit B&#10;Bedford Park IL 60638"></textarea>
         </div>
-        <div class="ff">
-          <label>Ship To Address <span style="color:var(--text4);font-weight:400">(다를 경우)</span></label>
-          <textarea class="fi" id="cust-ship-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="비우면 Bill To와 동일"></textarea>
+        <div class="ff" style="grid-column:1/-1;">
+          <label style="display:flex;align-items:center;justify-content:space-between;">
+            <span>📦 Ship To Addresses <span style="color:var(--text4);font-weight:400;font-size:10px;">(여러 배송지 등록 가능 — 기본 배송지 ⭐ 표시)</span></span>
+            <button type="button" class="btn btn-sm" onclick="addShipAddress()" style="font-size:11px;padding:3px 10px;background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;">+ 배송지 추가</button>
+          </label>
+          <div id="ship-addresses-list" style="border:1px solid #e5e7eb;border-radius:6px;min-height:60px;background:#fafafa;padding:6px;">
+            <!-- 동적으로 채워짐 -->
+          </div>
         </div>
+        <!-- 레거시 Ship To 필드 (숨김) — 호환성 유지용 -->
+        <input type="hidden" id="cust-ship-addr"/>
 <div class="ff"><label>Payment Terms</label><input class="fi" id="cust-terms" value="N30" placeholder="N30"/></div>         <div class="ff"><label>Credit Limit ($)</label><input class="fi" id="cust-credit-limit" type="number" min="0" step="100" value="0" placeholder="0 = 무제한"/></div>
         <div class="ff"><label>Aliases (별칭, 쉼표 구분)</label><input class="fi" id="cust-aliases" placeholder="Concept 360, LRC LLC..."/></div>         <div class="ff"><label>우선 배송 창고</label>
           <select class="fsel" id="cust-pref-wh" style="width:100%">
@@ -25472,6 +25479,9 @@ function openAddCustomer() {
   // 자동 채우기 박스 다시 표시
   const autofillEl = document.getElementById('cust-po-autofill');
   if (autofillEl) autofillEl.style.display = 'flex';
+  // Ship addresses 초기화 (빈 배열)
+  _currentShipAddresses = [];
+  renderShipAddressesList();
   openModal('modal-customer');
 }
 
@@ -25663,6 +25673,8 @@ function openEditCustomer(id) {
   document.getElementById('cust-aliases').value = c.aliases || '';
   document.getElementById('cust-credit-limit').value = c.credit_limit || 0;
   document.getElementById('cust-pref-wh').value = c.preferred_warehouse || 'SC';
+  // Ship addresses DB에서 로드
+  loadShipAddressesForCustomer(c.id);
   openModal('modal-customer');
 }
 
@@ -25688,12 +25700,22 @@ async function saveCustomer() {
   if (!payload.name) { alert('Company Name은 필수입니다.'); return; }
 
   let error;
+  let customerId = id;
   if (id) {
     ({ error } = await db.from('customers').update(payload).eq('id', id));
   } else {
-    ({ error } = await db.from('customers').insert(payload));
+    // 신규 insert 후 customer ID 받아오기
+    const { data: newCust, error: insErr } = await db.from('customers').insert(payload).select().single();
+    error = insErr;
+    if (newCust) customerId = newCust.id;
   }
   if (error) { alert('Error: ' + error.message); return; }
+  
+  // Ship addresses 동기화 (신규/수정/삭제)
+  if (customerId) {
+    await syncShipAddresses(customerId);
+  }
+  
   closeModal('modal-customer');
   await loadMasterData();
   loadCustomers();
@@ -25709,6 +25731,309 @@ async function deleteCustomer() {
   closeModal('modal-customer');
   await loadMasterData();
   loadCustomers();
+}
+
+// ══════════════════════════════════════════════════════════════
+// 📦 SHIP ADDRESSES 관리 (여러 배송지)
+// ══════════════════════════════════════════════════════════════
+
+// 모달이 열려있을 때 현재 편집 중인 배송지 리스트 (메모리)
+// 저장 시 한꺼번에 DB에 반영
+let _currentShipAddresses = [];  // [{id?, label, company_name, contact_name, phone, address_line1, address_line2, city, state, zip, is_default, notes, _deleted?, _new?}]
+
+/** Customer 모달 열릴 때 DB에서 ship_addresses 로드 */
+async function loadShipAddressesForCustomer(customerId) {
+  _currentShipAddresses = [];
+  if (!customerId) {
+    // 신규 Customer면 빈 배열
+    renderShipAddressesList();
+    return;
+  }
+  const { data, error } = await db.from('ship_addresses')
+    .select('*')
+    .eq('customer_id', customerId)
+    .order('is_default', { ascending: false })
+    .order('created_at', { ascending: true });
+  if (error) {
+    console.error('[loadShipAddresses] error:', error);
+    _currentShipAddresses = [];
+  } else {
+    _currentShipAddresses = data || [];
+  }
+  renderShipAddressesList();
+}
+
+/** Ship Addresses 리스트 렌더링 */
+function renderShipAddressesList() {
+  const container = document.getElementById('ship-addresses-list');
+  if (!container) return;
+  
+  // 삭제 예정 아닌 것만 표시
+  const visible = _currentShipAddresses.filter(a => !a._deleted);
+  
+  if (visible.length === 0) {
+    container.innerHTML = `<div style="padding:16px;text-align:center;color:#9ca3af;font-size:12px;">등록된 배송지가 없습니다. "+ 배송지 추가" 버튼으로 추가하세요.</div>`;
+    return;
+  }
+  
+  container.innerHTML = visible.map((a, idx) => {
+    const realIdx = _currentShipAddresses.indexOf(a);
+    const isDefault = a.is_default;
+    const addrLine = [a.address_line1, a.address_line2].filter(x => x).join(', ');
+    const cityLine = [a.city, a.state, a.zip].filter(x => x).join(' ');
+    const label = a.label || a.company_name || '(No label)';
+    
+    return `<div style="background:#fff;border:1px solid ${isDefault ? '#fbbf24' : '#e5e7eb'};border-radius:5px;padding:8px 10px;margin-bottom:6px;${isDefault ? 'box-shadow:0 0 0 2px #fef3c7;' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;font-size:12px;color:#0f2744;margin-bottom:2px;">
+            ${isDefault ? '⭐ ' : ''}${escapeHtml(label)}
+            ${isDefault ? '<span style="background:#fef3c7;color:#b45309;padding:1px 6px;border-radius:3px;font-size:9px;margin-left:4px;">DEFAULT</span>' : ''}
+          </div>
+          ${a.company_name && a.company_name !== a.label ? `<div style="font-size:11px;color:#374151;">${escapeHtml(a.company_name)}</div>` : ''}
+          ${a.contact_name ? `<div style="font-size:11px;color:#6b7280;">👤 ${escapeHtml(a.contact_name)}${a.phone ? ' · 📞 ' + escapeHtml(a.phone) : ''}</div>` : a.phone ? `<div style="font-size:11px;color:#6b7280;">📞 ${escapeHtml(a.phone)}</div>` : ''}
+          <div style="font-size:11px;color:#374151;margin-top:2px;">${escapeHtml(addrLine)}</div>
+          ${cityLine ? `<div style="font-size:11px;color:#374151;">${escapeHtml(cityLine)}</div>` : ''}
+          ${a.notes ? `<div style="font-size:10px;color:#9ca3af;margin-top:2px;font-style:italic;">${escapeHtml(a.notes)}</div>` : ''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:3px;flex-shrink:0;">
+          ${!isDefault ? `<button type="button" class="btn btn-sm" onclick="setDefaultShipAddress(${realIdx})" style="font-size:10px;padding:2px 6px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;white-space:nowrap;">⭐ Default</button>` : ''}
+          <button type="button" class="btn btn-sm" onclick="editShipAddress(${realIdx})" style="font-size:10px;padding:2px 6px;">Edit</button>
+          <button type="button" class="btn btn-sm" onclick="deleteShipAddress(${realIdx})" style="font-size:10px;padding:2px 6px;color:#dc2626;">✕</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/** HTML escape */
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/** 새 배송지 추가 (모달 열기) */
+function addShipAddress() {
+  openShipAddressEditor(-1);
+}
+
+/** 기존 배송지 편집 */
+function editShipAddress(idx) {
+  openShipAddressEditor(idx);
+}
+
+/** Ship Address 편집 모달 열기 */
+function openShipAddressEditor(idx) {
+  const isNew = idx === -1;
+  const addr = isNew ? {} : _currentShipAddresses[idx];
+  
+  // 간단한 prompt 대신 inline modal 띄우기
+  const modalHTML = `
+    <div id="ship-addr-editor" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:8px;padding:0;width:550px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="background:#0f2744;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
+          <span style="font-weight:700;font-size:14px;">${isNew ? '➕ 배송지 추가' : '✏️ 배송지 편집'}</span>
+          <button onclick="closeShipAddressEditor()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">×</button>
+        </div>
+        <div style="padding:16px;overflow-y:auto;flex:1;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">LABEL (별명)</label>
+              <input class="fi" id="sa-label" placeholder="HQ, Warehouse, Imagine Printworks..." value="${escapeHtml(addr.label || '')}" style="width:100%;"/>
+            </div>
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">COMPANY NAME (배송지 회사명)</label>
+              <input class="fi" id="sa-company" placeholder="Imagine Printworks" value="${escapeHtml(addr.company_name || '')}" style="width:100%;"/>
+            </div>
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">CONTACT NAME</label>
+              <input class="fi" id="sa-contact" placeholder="John Smith" value="${escapeHtml(addr.contact_name || '')}" style="width:100%;"/>
+            </div>
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">PHONE</label>
+              <input class="fi" id="sa-phone" placeholder="(312) 555-0000" value="${escapeHtml(addr.phone || '')}" style="width:100%;"/>
+            </div>
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ADDRESS LINE 1 *</label>
+            <input class="fi" id="sa-addr1" placeholder="1430 Pioneer St" value="${escapeHtml(addr.address_line1 || '')}" style="width:100%;"/>
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ADDRESS LINE 2 (선택)</label>
+            <input class="fi" id="sa-addr2" placeholder="Suite 200" value="${escapeHtml(addr.address_line2 || '')}" style="width:100%;"/>
+          </div>
+          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">CITY</label>
+              <input class="fi" id="sa-city" placeholder="Brea" value="${escapeHtml(addr.city || '')}" style="width:100%;"/>
+            </div>
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">STATE</label>
+              <input class="fi" id="sa-state" placeholder="CA" maxlength="2" value="${escapeHtml(addr.state || '')}" style="width:100%;text-transform:uppercase;"/>
+            </div>
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ZIP</label>
+              <input class="fi" id="sa-zip" placeholder="92821" value="${escapeHtml(addr.zip || '')}" style="width:100%;"/>
+            </div>
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">NOTES</label>
+            <input class="fi" id="sa-notes" placeholder="특이사항..." value="${escapeHtml(addr.notes || '')}" style="width:100%;"/>
+          </div>
+          <div>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+              <input type="checkbox" id="sa-default" ${addr.is_default ? 'checked' : ''}/>
+              <span>⭐ 기본 배송지로 설정</span>
+            </label>
+          </div>
+        </div>
+        <div style="padding:12px 16px;background:#f9fafb;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+          <button class="btn" onclick="closeShipAddressEditor()">Cancel</button>
+          <button class="btn btn-primary" onclick="saveShipAddressInline(${idx})">✓ 저장</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // 기존 에디터 있으면 제거
+  const existing = document.getElementById('ship-addr-editor');
+  if (existing) existing.remove();
+  
+  document.body.insertAdjacentHTML('beforeend', modalHTML);
+  // state는 자동으로 대문자
+  const stateEl = document.getElementById('sa-state');
+  if (stateEl) stateEl.addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
+}
+
+/** Ship Address 편집기 닫기 */
+function closeShipAddressEditor() {
+  const el = document.getElementById('ship-addr-editor');
+  if (el) el.remove();
+}
+
+/** Ship Address inline 저장 (_currentShipAddresses에만, DB는 customer 저장 시) */
+function saveShipAddressInline(idx) {
+  const isNew = idx === -1;
+  const addr = {
+    label: document.getElementById('sa-label').value.trim(),
+    company_name: document.getElementById('sa-company').value.trim(),
+    contact_name: document.getElementById('sa-contact').value.trim(),
+    phone: document.getElementById('sa-phone').value.trim(),
+    address_line1: document.getElementById('sa-addr1').value.trim(),
+    address_line2: document.getElementById('sa-addr2').value.trim(),
+    city: document.getElementById('sa-city').value.trim(),
+    state: document.getElementById('sa-state').value.trim().toUpperCase(),
+    zip: document.getElementById('sa-zip').value.trim(),
+    notes: document.getElementById('sa-notes').value.trim(),
+    is_default: document.getElementById('sa-default').checked,
+  };
+  
+  if (!addr.address_line1) {
+    alert('Address Line 1은 필수입니다.');
+    return;
+  }
+  
+  // 기본 배송지로 설정한 경우 다른 것들의 default 해제
+  if (addr.is_default) {
+    _currentShipAddresses.forEach(a => { a.is_default = false; });
+  }
+  
+  if (isNew) {
+    addr._new = true;
+    _currentShipAddresses.push(addr);
+  } else {
+    // 기존 addr 업데이트 (id 유지)
+    Object.assign(_currentShipAddresses[idx], addr);
+    // 만약 DB에 이미 있는 거면 update 필요 표시
+    if (_currentShipAddresses[idx].id) {
+      _currentShipAddresses[idx]._updated = true;
+    }
+  }
+  
+  closeShipAddressEditor();
+  renderShipAddressesList();
+}
+
+/** Ship Address 삭제 (메모리에서 삭제 표시만, DB는 customer 저장 시) */
+function deleteShipAddress(idx) {
+  const addr = _currentShipAddresses[idx];
+  if (!addr) return;
+  if (!confirm(`"${addr.label || addr.address_line1}" 배송지를 삭제할까요?`)) return;
+  
+  if (addr.id) {
+    // DB에 있는 건 _deleted 플래그만 (저장 시 실제 삭제)
+    addr._deleted = true;
+  } else {
+    // 아직 DB에 없는 건 배열에서 제거
+    _currentShipAddresses.splice(idx, 1);
+  }
+  renderShipAddressesList();
+}
+
+/** 특정 배송지를 기본으로 설정 */
+function setDefaultShipAddress(idx) {
+  _currentShipAddresses.forEach((a, i) => {
+    a.is_default = (i === idx);
+    // DB에 있는 건 update 필요
+    if (a.id) a._updated = true;
+  });
+  renderShipAddressesList();
+}
+
+/** Customer 저장 후 ship_addresses DB 동기화 */
+async function syncShipAddresses(customerId) {
+  if (!customerId) return;
+  
+  const errors = [];
+  
+  for (const addr of _currentShipAddresses) {
+    if (addr._deleted && addr.id) {
+      // 삭제
+      const { error } = await db.from('ship_addresses').delete().eq('id', addr.id);
+      if (error) errors.push('Delete: ' + error.message);
+    } else if (addr._new) {
+      // 신규 생성
+      const payload = {
+        customer_id: customerId,
+        label: addr.label || null,
+        company_name: addr.company_name || null,
+        contact_name: addr.contact_name || null,
+        phone: addr.phone || null,
+        address_line1: addr.address_line1,
+        address_line2: addr.address_line2 || null,
+        city: addr.city || null,
+        state: addr.state || null,
+        zip: addr.zip || null,
+        is_default: !!addr.is_default,
+        notes: addr.notes || null,
+      };
+      const { error } = await db.from('ship_addresses').insert(payload);
+      if (error) errors.push('Insert: ' + error.message);
+    } else if (addr._updated && addr.id) {
+      // 기존 업데이트
+      const payload = {
+        label: addr.label || null,
+        company_name: addr.company_name || null,
+        contact_name: addr.contact_name || null,
+        phone: addr.phone || null,
+        address_line1: addr.address_line1,
+        address_line2: addr.address_line2 || null,
+        city: addr.city || null,
+        state: addr.state || null,
+        zip: addr.zip || null,
+        is_default: !!addr.is_default,
+        notes: addr.notes || null,
+        updated_at: new Date().toISOString(),
+      };
+      const { error } = await db.from('ship_addresses').update(payload).eq('id', addr.id);
+      if (error) errors.push('Update: ' + error.message);
+    }
+  }
+  
+  if (errors.length > 0) {
+    console.error('[syncShipAddresses] errors:', errors);
+    alert('⚠️ 일부 배송지 저장 실패:\n' + errors.join('\n'));
+  }
 }
 
 // HELPERS
@@ -42703,4 +43028,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-22T14:35:51Z - better debug log -->
+
+<!-- Deploy trigger: 2026-04-23T02:12:14Z - multiple ship addresses -->
