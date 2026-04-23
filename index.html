@@ -2523,7 +2523,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <th class="num" style="width:110px;color:#f87171;font-weight:800;">61–90</th>
               <th class="num" style="width:110px;color:#fca5a5;font-weight:800;">90+</th>
             </tr></thead>
-            <tbody id="ap-aging-tbody"><tr><td colspan="10" class="empty">Loading...</td></tr></tbody>
+            <tbody id="ap-aging-tbody"><tr><td colspan="10" class="empty">Loading...</td></tr>
+        </tbody>
           </table>
         </div>
       </div>
@@ -29862,7 +29863,7 @@ function showCreditHoldFlash(overAmt) {
     <div style="overflow-y:auto;flex:1;">
       <table class="tbl" style="table-layout:fixed;">
         <thead style="position:sticky;top:0;z-index:1;">
-          <tr>
+          <tr id="ps-thead-row">
             <th style="width:36px;text-align:center;">
               <input type="checkbox" id="ps-check-all" title="전체 선택"
                 style="width:14px;height:14px;cursor:pointer;accent-color:#1a56a0;"
@@ -29870,11 +29871,18 @@ function showCreditHoldFlash(overAmt) {
             </th>
             <th style="width:80px;">Style #</th>
             <th>Description</th>
-            <th style="width:115px;text-align:right;color:#1a56a0;">XS–XL</th>
-            <th style="width:95px;text-align:right;color:#374151;">2XL</th>
-            <th style="width:95px;text-align:right;color:#374151;">3XL</th>
-            <th style="width:95px;text-align:right;color:#374151;">4XL</th>
-            <th style="width:95px;text-align:right;color:#374151;">5XL</th>
+            <!-- Adults 컬럼 (Kids 탭에서 숨김) -->
+            <th style="width:115px;text-align:right;color:#1a56a0;" id="ps-th-base">XS–XL</th>
+            <th style="width:95px;text-align:right;color:#374151;" id="ps-th-u1">2XL</th>
+            <th style="width:95px;text-align:right;color:#374151;" id="ps-th-u2">3XL</th>
+            <th style="width:95px;text-align:right;color:#374151;" id="ps-th-u3">4XL</th>
+            <th style="width:95px;text-align:right;color:#374151;" id="ps-th-u4">5XL</th>
+            <!-- Kids 전용 컬럼 (Adults 탭에서 숨김) -->
+            <th style="width:100px;text-align:right;color:#ea580c;display:none;" id="ps-th-kids-toddler" title="Toddler S/S, Toddler L/S — 2T, 3T, 4T">Toddler<br><span style="font-size:9px;font-weight:400;">2T-4T</span></th>
+            <th style="width:100px;text-align:right;color:#d97706;display:none;" id="ps-th-kids-juvy" title="Juvy S/S, Juvy L/S — S, M, L">Juvy<br><span style="font-size:9px;font-weight:400;">S-L</span></th>
+            <th style="width:100px;text-align:right;color:#059669;display:none;" id="ps-th-kids-youth" title="Youth S/S, Youth L/S — XS, S, M, L, XL">Youth<br><span style="font-size:9px;font-weight:400;">XS-XL</span></th>
+            <th style="width:100px;text-align:right;color:#7c3aed;display:none;" id="ps-th-kids-2t5t" title="Kids S/S — 2T, 3T, 4T, 5T">Kids<br><span style="font-size:9px;font-weight:400;">2T-5T</span></th>
+            <th style="width:100px;text-align:right;color:#1a56a0;display:none;" id="ps-th-kids-xsxl" title="Kids S/S — XS, S, M, L, XL">Kids<br><span style="font-size:9px;font-weight:400;">XS-XL</span></th>
             <th style="width:95px;">Effective</th>
             <th style="width:110px;">Notes</th>
           </tr>
@@ -30113,7 +30121,7 @@ function psSetTab(tab) {
 
 // ── 데이터 로드 ──
 async function loadPriceSheet() {
-  document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="10" class="empty">Loading...</td></tr>';
+  document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="15" class="empty">Loading...</td></tr>';
 
   // 모든 스타일 로드
   const { data: styles } = await db.from('styles').select('id,style_number,description,category').order('style_number');
@@ -30146,22 +30154,48 @@ function renderPriceSheet() {
 
   const filtered = _psAllStyles.filter(s => {
     const cat = (s.category || '').toLowerCase();
-    const isKids = cat.includes('kid') || cat.includes('youth') || cat.includes('toddler');
+    const isKids = cat.includes('kid') || cat.includes('youth') || cat.includes('toddler') || cat.includes('juvy');
     if (_psTab === 'kids' && !isKids) return false;
     if (_psTab === 'adults' && isKids) return false;
     if (search && !s.style_number?.toLowerCase().includes(search) && !s.description?.toLowerCase().includes(search)) return false;
-    const hasPrice = (_psPrices[s.style_number]?.base_price || 0) > 0;
+    // hasPrice: base_price, price_toddler, price_juvy, price_youth, price_2t 중 하나라도 있으면
+    const p = _psPrices[s.style_number];
+    const hasPrice = !!p && ((p.base_price||0) > 0 || (p.price_toddler||0) > 0 || (p.price_juvy||0) > 0 || (p.price_youth||0) > 0 || (p.price_2t||0) > 0);
     if (filterVal === 'priced' && !hasPrice) return false;
     if (filterVal === 'selected' && !_psSelected.has(s.style_number)) return false;
     return true;
   });
 
-  const priced = filtered.filter(s => (_psPrices[s.style_number]?.base_price || 0) > 0).length;
+  const priced = filtered.filter(s => {
+    const p = _psPrices[s.style_number];
+    return !!p && ((p.base_price||0) > 0 || (p.price_toddler||0) > 0 || (p.price_juvy||0) > 0 || (p.price_youth||0) > 0 || (p.price_2t||0) > 0);
+  }).length;
   document.getElementById('ps-count').textContent =
     `${priced} / ${filtered.length} styles priced · ${_psSelected.size} selected for PDF`;
+  
+  // 탭별로 컬럼 헤더 보이기/숨기기
+  // Adults 탭: XS-XL, 2XL, 3XL, 4XL, 5XL (5개)
+  // Kids 탭: Toddler 2T-4T, Juvy S-L, Youth XS-XL, Kids 2T-5T, Kids XS-XL (5개)
+  const isKidsTab = _psTab === 'kids';
+  
+  // Adults 컬럼 헤더
+  const thBase = document.getElementById('ps-th-base');
+  const thU1 = document.getElementById('ps-th-u1');
+  const thU2 = document.getElementById('ps-th-u2');
+  const thU3 = document.getElementById('ps-th-u3');
+  const thU4 = document.getElementById('ps-th-u4');
+  // Kids 컬럼 헤더
+  const thKidsTod = document.getElementById('ps-th-kids-toddler');
+  const thKidsJuvy = document.getElementById('ps-th-kids-juvy');
+  const thKidsYouth = document.getElementById('ps-th-kids-youth');
+  const thKids2t5t = document.getElementById('ps-th-kids-2t5t');
+  const thKidsXsxl = document.getElementById('ps-th-kids-xsxl');
+  
+  [thBase, thU1, thU2, thU3, thU4].forEach(th => { if (th) th.style.display = isKidsTab ? 'none' : ''; });
+  [thKidsTod, thKidsJuvy, thKidsYouth, thKids2t5t, thKidsXsxl].forEach(th => { if (th) th.style.display = isKidsTab ? '' : 'none'; });
 
   if (filtered.length === 0) {
-    document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="10" class="empty">No styles found</td></tr>';
+    document.getElementById('ps-tbody').innerHTML = '<tr><td colspan="15" class="empty">No styles found</td></tr>';
     return;
   }
 
@@ -30185,18 +30219,101 @@ function renderPriceSheet() {
   document.getElementById('ps-tbody').innerHTML = filtered.map(s => {
     const p = _psPrices[s.style_number];
     const base = p?.base_price || 0;
-    const hasPrce = base > 0;
+    // hasPrce: 어떤 가격이라도 있으면
+    const hasPrce = !!p && (base > 0 || (p.price_toddler||0) > 0 || (p.price_juvy||0) > 0 || (p.price_youth||0) > 0 || (p.price_2t||0) > 0);
     const isSelected = _psSelected.has(s.style_number);
     const rowBg = isSelected ? '#f0f7ff' : (hasPrce ? '#fff' : '#fafafa');
 
-    // XL 가격: DB에 저장된 커스텀값 우선, 없으면 자동계산
-    const p2xl = p?.price_2xl != null ? p.price_2xl : (hasPrce ? getPriceForSize(base,'2XL') : 0);
-    const p3xl = p?.price_3xl != null ? p.price_3xl : (hasPrce ? getPriceForSize(base,'3XL') : 0);
-    const p4xl = p?.price_4xl != null ? p.price_4xl : (hasPrce ? getPriceForSize(base,'4XL') : 0);
-    const p5xl = p?.price_5xl != null ? p.price_5xl : (hasPrce ? getPriceForSize(base,'5XL') : 0);
-
     const disabled = !_psUnlocked ? 'disabled' : '';
     const blurStyle = !_psUnlocked ? 'filter:blur(4px);pointer-events:none;' : '';
+
+    // 스타일 카테고리 판단
+    const cat = (s.category || '').toLowerCase();
+    const isToddler = cat.includes('toddler');
+    const isJuvy = cat.includes('juvy');
+    const isYouth = cat.includes('youth');
+    // "Kids S/S"만 (Kids + XS-XL 9 sizes)
+    const isKidsStyle = cat.includes('kid') && !isToddler && !isJuvy && !isYouth;
+    
+    // Kids 전용 single-price 입력 셀 생성 helper
+    const kidsPriceCell = (fieldKey, dbField, color, enabled) => {
+      if (!enabled) {
+        return `<td style="text-align:center;padding:5px 6px;background:#f3f4f6;">
+          <span style="color:#d1d5db;font-size:11px;">—</span>
+        </td>`;
+      }
+      const val = p?.[dbField];
+      const hasVal = val != null;
+      return `<td style="text-align:right;padding:5px 6px;">
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:2px;">
+          <span style="font-size:10px;color:#9ca3af;">$</span>
+          <input type="number" value="${hasVal ? Number(val).toFixed(2) : ''}"
+            placeholder="—" step="0.01" min="0"
+            id="ps-${fieldKey}-${s.style_number}"
+            ${disabled}
+            style="${blurStyle}width:64px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;
+                   border:1px solid ${hasVal?color+'60':'#e5e7eb'};border-radius:4px;padding:3px 5px;
+                   background:${hasVal?color+'15':'#fff'};color:${hasVal?color:'#374151'};"
+            oninput="markPsDirty('${s.style_number}');onPsKidsPriceInput(this,'${color}')"
+            onfocus="this.style.borderColor='${color}';"
+            onblur="this.style.borderColor='${hasVal?color+'60':'#e5e7eb'}';">
+        </div>
+      </td>`;
+    };
+
+    if (isKidsTab) {
+      // Kids 탭: 5개 컬럼 (Toddler, Juvy, Youth, Kids 2T-5T, Kids XS-XL)
+      return `<tr style="background:${rowBg};border-bottom:1px solid #f0f0f0;" id="ps-row-${s.style_number}">
+        <td style="text-align:center;padding:6px 4px;">
+          <input type="checkbox" ${isSelected ? 'checked' : ''}
+            style="width:15px;height:15px;cursor:pointer;accent-color:#1a56a0;"
+            onchange="psToogleStyle('${s.style_number}', this.checked)">
+        </td>
+        <td style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:${hasPrce?'#111':'#9ca3af'};">${s.style_number}</td>
+        <td style="font-size:12px;color:${hasPrce?'#374151':'#9ca3af'};">${s.description || '—'}</td>
+        <!-- Adults 5개 컬럼은 숨김 -->
+        <td style="display:none;"></td>
+        <td style="display:none;"></td>
+        <td style="display:none;"></td>
+        <td style="display:none;"></td>
+        <td style="display:none;"></td>
+        <!-- Kids 5개 컬럼 -->
+        ${kidsPriceCell('toddler', 'price_toddler', '#ea580c', isToddler)}
+        ${kidsPriceCell('juvy', 'price_juvy', '#d97706', isJuvy)}
+        ${kidsPriceCell('youth', 'price_youth', '#059669', isYouth)}
+        ${kidsPriceCell('kids2t5t', 'price_2t', '#7c3aed', isKidsStyle)}
+        <!-- Kids XS-XL (base_price 사용) -->
+        ${isKidsStyle ? `<td style="text-align:right;padding:5px 6px;">
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:2px;">
+            <span style="font-size:10px;color:#9ca3af;">$</span>
+            <input type="number" value="${hasPrce ? base.toFixed(2) : ''}"
+              placeholder="—" step="0.01" min="0"
+              id="ps-input-${s.style_number}"
+              ${disabled}
+              style="${blurStyle}width:64px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;
+                     border:1px solid ${hasPrce?'#bfdbfe':'#e5e7eb'};border-radius:4px;padding:3px 5px;
+                     background:${hasPrce?'#f0f7ff':'#fff'};color:${hasPrce?'#1a56a0':'#374151'};"
+              oninput="onPsBaseInput('${s.style_number}', '${(s.description||'').replace(/'/g,"\\'")}', this.value)"
+              onfocus="this.style.borderColor='#3b82f6';"
+              onblur="this.style.borderColor='${hasPrce?'#bfdbfe':'#e5e7eb'}';">
+          </div>
+        </td>` : `<td style="text-align:center;padding:5px 6px;background:#f3f4f6;"><span style="color:#d1d5db;font-size:11px;">—</span></td>`}
+        <td style="font-size:11px;color:#9ca3af;padding:5px 6px;" id="ps-eff-${s.style_number}">${p?.effective_date || '—'}</td>
+        <td style="padding:4px 6px;">
+          <input type="text" value="${p?.notes||''}" placeholder="notes..."
+            id="ps-notes-${s.style_number}"
+            style="width:100%;border:none;background:transparent;font-size:11px;color:#6b7280;outline:none;"
+            oninput="markPsDirty('${s.style_number}')">
+        </td>
+      </tr>`;
+    }
+    
+    // ── Adults (기존 로직) ──
+    let col1Key = '2xl', col2Key = '3xl', col3Key = '4xl', col4Key = '5xl';
+    let col1Val = p?.price_2xl != null ? p.price_2xl : (hasPrce ? getPriceForSize(base,'2XL') : 0);
+    let col2Val = p?.price_3xl != null ? p.price_3xl : (hasPrce ? getPriceForSize(base,'3XL') : 0);
+    let col3Val = p?.price_4xl != null ? p.price_4xl : (hasPrce ? getPriceForSize(base,'4XL') : 0);
+    let col4Val = p?.price_5xl != null ? p.price_5xl : (hasPrce ? getPriceForSize(base,'5XL') : 0);
 
     return `<tr style="background:${rowBg};border-bottom:1px solid #f0f0f0;" id="ps-row-${s.style_number}">
       <td style="text-align:center;padding:6px 4px;">
@@ -30221,10 +30338,16 @@ function renderPriceSheet() {
             onblur="this.style.borderColor='${hasPrce?'#bfdbfe':'#e5e7eb'}';">
         </div>
       </td>
-      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,'2xl',p2xl,hasPrce)}</td>
-      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,'3xl',p3xl,hasPrce)}</td>
-      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,'4xl',p4xl,hasPrce)}</td>
-      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,'5xl',p5xl,hasPrce)}</td>
+      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,col1Key,col1Val,hasPrce)}</td>
+      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,col2Key,col2Val,hasPrce)}</td>
+      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,col3Key,col3Val,hasPrce)}</td>
+      <td style="text-align:right;padding:5px 6px;">${xlInput(s.style_number,col4Key,col4Val,hasPrce)}</td>
+      <!-- Kids 5개 컬럼 자리 (Adults 탭에서 숨김) -->
+      <td style="display:none;"></td>
+      <td style="display:none;"></td>
+      <td style="display:none;"></td>
+      <td style="display:none;"></td>
+      <td style="display:none;"></td>
       <td style="font-size:11px;color:#9ca3af;padding:5px 6px;" id="ps-eff-${s.style_number}">${p?.effective_date || '—'}</td>
       <td style="padding:4px 6px;">
         <input type="text" value="${p?.notes||''}" placeholder="notes..."
@@ -30236,22 +30359,45 @@ function renderPriceSheet() {
   }).join('');
 }
 
-// Base price 변경 시 XL 가격 자동계산 (단, 이미 커스텀 값 있으면 유지)
+/** Kids 전용 가격 입력 색상 업데이트 */
+function onPsKidsPriceInput(inp, color) {
+  const v = parseFloat(inp.value) || 0;
+  if (v > 0) {
+    inp.style.background = color + '15';
+    inp.style.color = color;
+    inp.style.borderColor = color + '60';
+  } else {
+    inp.style.background = '#fff';
+    inp.style.color = '#374151';
+    inp.style.borderColor = '#e5e7eb';
+  }
+}
+
+// Base price 변경 시 XL/2T-5T 가격 자동계산 (단, 이미 커스텀 값 있으면 유지)
 function onPsBaseInput(styleNum, desc, val) {
   if (!_psUnlocked) return;
   markPsDirty(styleNum);
   const base = parseFloat(val) || 0;
 
-  // XL 필드들: 현재 비어있거나 자동계산 값이면 업데이트
+  // 스타일 카테고리로 Kids 판단
+  const s = _psAllStyles.find(x => x.style_number === styleNum);
+  const cat = (s?.category || '').toLowerCase();
+  const isKidsStyle = cat.includes('kid') || cat.includes('youth') || cat.includes('toddler');
+  
+  if (isKidsStyle) {
+    // Kids: Base 입력칸 = XS-XL (base_price). 2T-5T는 별도 입력칸 (ps-2t5t-).
+    // 자동계산 없음 (사용자가 각자 입력)
+    return;
+  }
+  
+  // Adults: 2XL-5XL 자동계산
   const p = _psPrices[styleNum];
   ['2xl','3xl','4xl','5xl'].forEach(size => {
     const inp = document.getElementById(`ps-${size}-${styleNum}`);
     if (!inp) return;
-    const sizeKey = size.toUpperCase();
     const currentCustom = p?.[`price_${size}`];
-    // 커스텀 값이 없으면 자동계산으로 채워줌
     if (currentCustom == null && base > 0) {
-      inp.value = getPriceForSize(base, sizeKey).toFixed(2);
+      inp.value = getPriceForSize(base, size.toUpperCase()).toFixed(2);
       inp.style.background = '#fff';
       inp.style.color = '#374151';
       inp.style.borderColor = '#e5e7eb';
@@ -30261,8 +30407,32 @@ function onPsBaseInput(styleNum, desc, val) {
   });
 }
 
+/** Kids 2T-5T 가격 입력 handler */
+function onPsKids2t5tInput(styleNum, val) {
+  if (!_psUnlocked) return;
+  markPsDirty(styleNum);
+  const inp = document.getElementById(`ps-2t5t-${styleNum}`);
+  if (!inp) return;
+  const v = parseFloat(val) || 0;
+  // 스타일 업데이트
+  if (v > 0) {
+    inp.style.background = '#faf5ff';
+    inp.style.color = '#7c3aed';
+    inp.style.borderColor = '#ddd6fe';
+  } else {
+    inp.style.background = '#fff';
+    inp.style.color = '#374151';
+    inp.style.borderColor = '#e5e7eb';
+  }
+}
+
 function updateXlDisplay(styleNum) {
-  // XL 직접 수정 시 스타일 업데이트
+  // Kids 스타일은 2XL/3XL/4XL/5XL 없음
+  const s = _psAllStyles.find(x => x.style_number === styleNum);
+  const cat = (s?.category || '').toLowerCase();
+  const isKidsStyle = cat.includes('kid') || cat.includes('youth') || cat.includes('toddler');
+  if (isKidsStyle) return;
+  
   ['2xl','3xl','4xl','5xl'].forEach(size => {
     const inp = document.getElementById(`ps-${size}-${styleNum}`);
     if (!inp) return;
@@ -30338,15 +30508,62 @@ async function savePriceSheet() {
       const v = parseFloat(inp?.value);
       return isNaN(v) || inp?.value === '' ? null : v;
     };
-
-    const p2xl = get('2xl');
-    const p3xl = get('3xl');
-    const p4xl = get('4xl');
-    const p5xl = get('5xl');
+    
+    // 카테고리 기반으로 Kids 유형 판단
+    const cat = (s.category || '').toLowerCase();
+    const isToddler = cat.includes('toddler');
+    const isJuvy = cat.includes('juvy');
+    const isYouth = cat.includes('youth');
+    const isKidsStyle = cat.includes('kid') && !isToddler && !isJuvy && !isYouth;
+    
+    let p2xl = null, p3xl = null, p4xl = null, p5xl = null;
+    let p2t = null, p3t = null, p4t = null, p5t = null;
+    let pToddler = null, pJuvy = null, pYouth = null;
+    
+    // Input helper
+    const getFieldVal = (fieldKey) => {
+      const inp = document.getElementById(`ps-${fieldKey}-${styleNum}`);
+      if (!inp || inp.value === '') return null;
+      const v = parseFloat(inp.value);
+      return isNaN(v) ? null : v;
+    };
+    
+    if (isToddler) {
+      pToddler = getFieldVal('toddler');
+    } else if (isJuvy) {
+      pJuvy = getFieldVal('juvy');
+    } else if (isYouth) {
+      pYouth = getFieldVal('youth');
+    } else if (isKidsStyle) {
+      // Kids S/S: 2T-5T (price_2t 대표, 나머지 동일값 복사) + XS-XL (base_price)
+      const kids2t5t = getFieldVal('kids2t5t');
+      p2t = kids2t5t;
+      p3t = kids2t5t;
+      p4t = kids2t5t;
+      p5t = kids2t5t;
+    } else {
+      // Adults
+      p2xl = get('2xl');
+      p3xl = get('3xl');
+      p4xl = get('4xl');
+      p5xl = get('5xl');
+    }
+    
     const notes = document.getElementById('ps-notes-' + styleNum)?.value || '';
-
-    if (base <= 0) {
-      // 가격 0 → 삭제
+    
+    // 유효한 가격이 하나도 없으면 삭제
+    // Adults: base_price만 체크
+    // Toddler/Juvy/Youth: 각자 필드만 체크  
+    // Kids: base_price 또는 price_2t 중 하나라도 있어야
+    let hasAnyPrice = false;
+    if (isToddler) hasAnyPrice = pToddler != null && pToddler > 0;
+    else if (isJuvy) hasAnyPrice = pJuvy != null && pJuvy > 0;
+    else if (isYouth) hasAnyPrice = pYouth != null && pYouth > 0;
+    else if (isKidsStyle) hasAnyPrice = (base > 0) || (p2t != null && p2t > 0);
+    else hasAnyPrice = base > 0;  // Adults
+    
+    if (!hasAnyPrice) {
+      // 가격 없음 → 삭제
       if (_psPrices[styleNum]) {
         await db.from('customer_prices').delete().eq('id', _psPrices[styleNum].id);
         delete _psPrices[styleNum];
@@ -30367,6 +30584,13 @@ async function savePriceSheet() {
       price_3xl: p3xl,
       price_4xl: p4xl,
       price_5xl: p5xl,
+      price_2t: p2t,
+      price_3t: p3t,
+      price_4t: p4t,
+      price_5t: p5t,
+      price_toddler: pToddler,
+      price_juvy: pJuvy,
+      price_youth: pYouth,
       notes,
       effective_date: today,
       included: _psSelected.has(styleNum),
@@ -43699,4 +43923,7 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-23T13:49:14Z - structured bill address -->
+
+
+
+<!-- Deploy trigger: 2026-04-23T16:12:24Z - Kids tab 5 columns (Toddler/Juvy/Youth/Kids 2T-5T/Kids XS-XL) -->
