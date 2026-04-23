@@ -4007,9 +4007,48 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div class="ff"><label>Email CC <span style="font-size:10px;color:#6b7280;">(쉼표로 구분)</span></label><input class="fi" id="cust-email-cc" placeholder="cc1@customer.com, cc2@customer.com"/></div>
         <div class="ff"><label>Accounting Email <span style="font-size:10px;color:#6b7280;">(Invoice 수신)</span></label><input class="fi" id="cust-accounting-email" placeholder="accounting@customer.com"/></div>
         <div class="ff"><label>Accounting CC <span style="font-size:10px;color:#6b7280;">(쉼표로 구분)</span></label><input class="fi" id="cust-accounting-email-cc" placeholder="cc1@accounting.com, cc2@accounting.com"/></div>
-        <div class="ff">
-          <label>Bill To Address</label>
-          <textarea class="fi" id="cust-bill-addr" rows="4" style="height:80px;padding:6px;resize:none;" placeholder="6650 S Narragansett Ave&#10;Unit B&#10;Bedford Park IL 60638"></textarea>
+        <div class="ff" style="grid-column:1/-1;border-top:1px solid #e5e7eb;padding-top:10px;margin-top:4px;">
+          <label>📍 Bill To Address</label>
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+              <div>
+                <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">COMPANY NAME <span style="font-weight:400;color:#9ca3af;">(Customer명과 다를 경우)</span></label>
+                <input class="fi" id="cust-bill-company" placeholder="(비워두면 Customer명과 동일)" style="width:100%;"/>
+              </div>
+              <div>
+                <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">CONTACT NAME</label>
+                <input class="fi" id="cust-bill-contact" placeholder="Accounting 담당자" style="width:100%;"/>
+              </div>
+            </div>
+            <div style="margin-bottom:8px;">
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">PHONE</label>
+              <input class="fi" id="cust-bill-phone" placeholder="(312) 555-0000" style="width:40%;"/>
+            </div>
+            <div style="margin-bottom:8px;">
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">ADDRESS LINE 1 *</label>
+              <input class="fi" id="cust-bill-addr1" placeholder="1731 S Wadsworth Blvd" style="width:100%;"/>
+            </div>
+            <div style="margin-bottom:8px;">
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">ADDRESS LINE 2 <span style="font-weight:400;color:#9ca3af;">(Suite / PO Box 등)</span></label>
+              <input class="fi" id="cust-bill-addr2" placeholder="Suite 200, PO Box 657 등" style="width:100%;"/>
+            </div>
+            <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;">
+              <div>
+                <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">CITY</label>
+                <input class="fi" id="cust-bill-city" placeholder="Lakewood" style="width:100%;"/>
+              </div>
+              <div>
+                <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">STATE</label>
+                <input class="fi" id="cust-bill-state" placeholder="CO" maxlength="2" style="width:100%;text-transform:uppercase;"/>
+              </div>
+              <div>
+                <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">ZIP</label>
+                <input class="fi" id="cust-bill-zip" placeholder="80232" style="width:100%;"/>
+              </div>
+            </div>
+          </div>
+          <!-- 레거시 Bill To Address (자동 생성) — 호환성 유지용 -->
+          <input type="hidden" id="cust-bill-addr"/>
         </div>
         <div class="ff" style="grid-column:1/-1;">
           <label style="display:flex;align-items:center;justify-content:space-between;">
@@ -18869,6 +18908,11 @@ function closePodModal() {
 
 document.addEventListener('DOMContentLoaded', () => {
   const fi = document.getElementById('pod-file-input');
+  // Bill State 자동 대문자 변환
+  const billStateEl = document.getElementById('cust-bill-state');
+  if (billStateEl) {
+    billStateEl.addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
+  }
   if (fi) fi.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -25597,7 +25641,7 @@ function openAddCustomer() {
   document.getElementById('cust-edit-id').value = '';
   document.getElementById('cust-modal-title').textContent = '+ Add Customer';
   document.getElementById('cust-delete-btn').style.display = 'none';
-  ['cust-company','cust-contact','cust-phone','cust-email','cust-email-cc','cust-accounting-email','cust-accounting-email-cc','cust-bill-addr','cust-ship-addr','cust-notes','cust-customer-no','cust-salesperson','cust-aliases','cust-cc-last4','cust-cc-expires','cust-cc-cardholder','cust-cc-billing-zip','cust-cc-notes'].forEach(id => {
+  ['cust-company','cust-contact','cust-phone','cust-email','cust-email-cc','cust-accounting-email','cust-accounting-email-cc','cust-bill-addr','cust-ship-addr','cust-notes','cust-customer-no','cust-salesperson','cust-aliases','cust-cc-last4','cust-cc-expires','cust-cc-cardholder','cust-cc-billing-zip','cust-cc-notes','cust-bill-company','cust-bill-contact','cust-bill-phone','cust-bill-addr1','cust-bill-addr2','cust-bill-city','cust-bill-state','cust-bill-zip'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -25701,6 +25745,31 @@ async function autofillCustomerFromPo(event) {
     const addrFromDelivery = parsed.delivery_location_address || parsed.delivery_address || parsed.ship_to_address;
     const addrFromBill = parsed.bill_to_address || parsed.bill_address || parsed.billing_address;
     
+    // 구조화된 Bill To 주소 필드 추출 (Worker가 분리해서 보낼 수도)
+    const billStreet = parsed.bill_to_street || parsed.bill_street || parsed.billing_street;
+    const billCity = parsed.bill_to_city || parsed.bill_city || parsed.billing_city;
+    const billState = parsed.bill_to_state || parsed.bill_state || parsed.billing_state;
+    const billZip = parsed.bill_to_zip || parsed.bill_zip || parsed.billing_zip;
+    
+    // addrFromBill이 "line1\n...\nCity, State ZIP" 형식이면 파싱 시도
+    let parsedBill = null;
+    if (addrFromBill && !billCity) {
+      const lines = String(addrFromBill).split(/\r?\n/).map(l => l.trim()).filter(l => l);
+      if (lines.length >= 2) {
+        const lastLine = lines[lines.length - 1];
+        const m = lastLine.match(/^(.+?),\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+        if (m) {
+          parsedBill = {
+            line1: lines[0],
+            line2: lines.length >= 3 ? lines.slice(1, -1).join('\n') : null,
+            city: m[1].trim(),
+            state: m[2],
+            zip: m[3]
+          };
+        }
+      }
+    }
+    
     // 추출 가능한 필드들 체크
     const fields = {
       'cust-company':           customerName,
@@ -25709,6 +25778,12 @@ async function autofillCustomerFromPo(event) {
       'cust-email':             parsed.email || parsed.customer_email || parsed.contact_email,
       'cust-accounting-email':  parsed.accounting_email || parsed.ap_email,
       'cust-bill-addr':         addrFromBill,
+      // 구조화된 Bill To
+      'cust-bill-addr1':        billStreet || parsedBill?.line1,
+      'cust-bill-addr2':        parsed.bill_to_line2 || parsedBill?.line2,
+      'cust-bill-city':         billCity || parsedBill?.city,
+      'cust-bill-state':        billState || parsedBill?.state,
+      'cust-bill-zip':          billZip || parsedBill?.zip,
       'cust-ship-addr':         addrFromDelivery,
       'cust-terms':             parsed.terms || parsed.payment_terms,
     };
@@ -25813,6 +25888,15 @@ function openEditCustomer(id) {
   document.getElementById('cust-email-cc').value = c.email_cc || '';
   document.getElementById('cust-accounting-email-cc').value = c.accounting_email_cc || '';
   document.getElementById('cust-bill-addr').value = c.bill_address || '';
+  // 구조화된 Bill To 필드 로드
+  document.getElementById('cust-bill-company').value = c.bill_company_name || '';
+  document.getElementById('cust-bill-contact').value = c.bill_contact_name || '';
+  document.getElementById('cust-bill-phone').value = c.bill_phone || '';
+  document.getElementById('cust-bill-addr1').value = c.bill_address_line1 || '';
+  document.getElementById('cust-bill-addr2').value = c.bill_address_line2 || '';
+  document.getElementById('cust-bill-city').value = c.bill_city || '';
+  document.getElementById('cust-bill-state').value = c.bill_state || '';
+  document.getElementById('cust-bill-zip').value = c.bill_zip || '';
   document.getElementById('cust-ship-addr').value = c.ship_address || '';
   setCustomerTermsValue(c.terms || 'N30');
   document.getElementById('cust-notes').value = c.notes || '';
@@ -25836,6 +25920,20 @@ function openEditCustomer(id) {
 
 async function saveCustomer() {
   const id = document.getElementById('cust-edit-id').value;
+  
+  // 구조화된 Bill To 필드에서 legacy bill_address 자동 생성
+  const billAddr1 = document.getElementById('cust-bill-addr1').value.trim();
+  const billAddr2 = document.getElementById('cust-bill-addr2').value.trim();
+  const billCity = document.getElementById('cust-bill-city').value.trim();
+  const billState = document.getElementById('cust-bill-state').value.trim().toUpperCase();
+  const billZip = document.getElementById('cust-bill-zip').value.trim();
+  // 레거시 bill_address 형식: "Line1\n[Line2\n]City, State Zip"
+  const billAddrLegacy = [
+    billAddr1,
+    billAddr2,
+    (billCity || billState || billZip) ? [billCity, [billState, billZip].filter(x=>x).join(' ')].filter(x=>x).join(', ') : ''
+  ].filter(x => x).join('\n');
+  
   const payload = {
     name:    document.getElementById('cust-company').value.trim(),
     customer_no: document.getElementById('cust-customer-no').value.trim(),
@@ -25846,7 +25944,16 @@ async function saveCustomer() {
     accounting_email: document.getElementById('cust-accounting-email').value.trim(),
     email_cc: document.getElementById('cust-email-cc').value.trim(),
     accounting_email_cc: document.getElementById('cust-accounting-email-cc').value.trim(),
-    bill_address: document.getElementById('cust-bill-addr').value.trim(),
+    bill_address: billAddrLegacy,  // 자동 합성 (호환성)
+    // 구조화된 Bill To 필드
+    bill_company_name:  document.getElementById('cust-bill-company').value.trim() || null,
+    bill_contact_name:  document.getElementById('cust-bill-contact').value.trim() || null,
+    bill_phone:         document.getElementById('cust-bill-phone').value.trim() || null,
+    bill_address_line1: billAddr1 || null,
+    bill_address_line2: billAddr2 || null,
+    bill_city:          billCity || null,
+    bill_state:         billState || null,
+    bill_zip:           billZip || null,
     ship_address: document.getElementById('cust-ship-addr').value.trim(),
     terms:   getCustomerTermsValue(),
     notes:           document.getElementById('cust-notes').value.trim(),
@@ -43591,4 +43698,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-23T11:35:01Z - terms dropdown + credit/outstanding -->
+
+<!-- Deploy trigger: 2026-04-23T13:49:14Z - structured bill address -->
