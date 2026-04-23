@@ -4022,14 +4022,94 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
         <!-- 레거시 Ship To 필드 (숨김) — 호환성 유지용 -->
         <input type="hidden" id="cust-ship-addr"/>
-<div class="ff"><label>Payment Terms</label><input class="fi" id="cust-terms" value="N30" placeholder="N30"/></div>         <div class="ff"><label>Credit Limit ($)</label><input class="fi" id="cust-credit-limit" type="number" min="0" step="100" value="0" placeholder="0 = 무제한"/></div>
+<div class="ff"><label>Payment Terms</label>
+          <select class="fsel" id="cust-terms" style="width:100%;" onchange="onTermsChange()">
+            <option value="N15">N15 (Net 15일)</option>
+            <option value="N30" selected>N30 (Net 30일)</option>
+            <option value="N45">N45 (Net 45일)</option>
+            <option value="N60">N60 (Net 60일)</option>
+            <option value="N90">N90 (Net 90일)</option>
+            <option value="COD">COD (Cash on Delivery)</option>
+            <option value="Credit Card">Credit Card</option>
+            <option value="Prepay">Prepay (선결제)</option>
+            <option value="Other">Other (직접 입력)</option>
+          </select>
+          <input type="text" class="fi" id="cust-terms-other" placeholder="N5, 2/10 N30 등 특수 term" style="margin-top:4px;display:none;"/>
+        </div>         <div class="ff" id="cust-credit-limit-wrap"><label>Credit Limit ($) <span style="font-size:10px;color:#6b7280;font-weight:400;">(0 또는 공란 = 무제한 아님! 명확히 설정)</span></label><input class="fi" id="cust-credit-limit" type="number" min="0" step="100" value="0" placeholder="0"/></div>
         <div class="ff"><label>Aliases (별칭, 쉼표 구분)</label><input class="fi" id="cust-aliases" placeholder="Concept 360, LRC LLC..."/></div>         <div class="ff"><label>우선 배송 창고</label>
           <select class="fsel" id="cust-pref-wh" style="width:100%">
             <option value="SC">SC 우선 (Sumter, SC)</option>
             <option value="CA">CA 우선 (Eastvale, CA)</option>
             <option value="AUTO">No Preference (거래처 가까운 쪽 자동)</option>
           </select></div>
-        <div class="ff"><label>Notes</label><input class="fi" id="cust-notes" placeholder="특이사항..."/></div>
+        <!-- 💳 PAYMENT METHOD -->
+        <div class="ff" style="grid-column:1/-1;border-top:1px solid #e5e7eb;padding-top:10px;margin-top:4px;">
+          <label style="display:flex;align-items:center;gap:6px;">
+            💳 Payment Method
+            <span style="color:#9ca3af;font-weight:400;font-size:10px;">(Credit Card는 마지막 4자리만 저장 — PCI 안전)</span>
+          </label>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:4px;">
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">PAYMENT TYPE</label>
+              <select class="fsel" id="cust-payment-method" style="width:100%;" onchange="onPaymentMethodChange()">
+                <option value="">—</option>
+                <option value="Net">Net (Invoice)</option>
+                <option value="Credit Card">Credit Card</option>
+                <option value="ACH">ACH / Bank Transfer</option>
+                <option value="Check">Check</option>
+                <option value="Wire">Wire Transfer</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div id="cust-cc-type-wrap">
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">CARD TYPE</label>
+              <select class="fsel" id="cust-cc-type" style="width:100%;">
+                <option value="">—</option>
+                <option value="Visa">Visa</option>
+                <option value="Mastercard">Mastercard</option>
+                <option value="Amex">American Express</option>
+                <option value="Discover">Discover</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div id="cust-cc-last4-wrap">
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">LAST 4 DIGITS</label>
+              <input class="fi" id="cust-cc-last4" placeholder="4242" maxlength="4" style="width:100%;"/>
+            </div>
+            <div id="cust-cc-expires-wrap">
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">EXPIRES</label>
+              <input class="fi" id="cust-cc-expires" placeholder="12/2028" style="width:100%;"/>
+            </div>
+          </div>
+          <div id="cust-cc-extra" style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:8px;margin-top:6px;">
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">CARDHOLDER NAME</label>
+              <input class="fi" id="cust-cc-cardholder" placeholder="Laurie Lambe" style="width:100%;"/>
+            </div>
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">BILLING ZIP</label>
+              <input class="fi" id="cust-cc-billing-zip" placeholder="84115" style="width:100%;"/>
+            </div>
+            <div>
+              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:2px;">CARD NOTES</label>
+              <input class="fi" id="cust-cc-notes" placeholder="금고 1번함, Primary card 등" style="width:100%;"/>
+            </div>
+          </div>
+          <div style="background:#fef9c3;border:1px solid #fde68a;border-radius:5px;padding:6px 10px;margin-top:6px;font-size:10px;color:#92400e;">
+            🔒 <strong>보안 안내:</strong> 전체 카드 번호와 CVV는 <u>절대 저장하지 않습니다</u> (PCI DSS 규정). 실제 카드 번호는 금고/안전한 곳에 물리적으로 보관하세요.
+          </div>
+        </div>
+
+        <!-- 📦 SHIPPING ACCOUNTS -->
+        <div class="ff" style="grid-column:1/-1;border-top:1px solid #e5e7eb;padding-top:10px;margin-top:4px;">
+          <label style="display:flex;align-items:center;justify-content:space-between;">
+            <span>📦 Shipping Accounts <span style="color:#9ca3af;font-weight:400;font-size:10px;">(UPS/FedEx/DHL 등 — 여러 개 등록 가능)</span></span>
+            <button type="button" class="btn btn-sm" onclick="addShippingAccount()" style="font-size:11px;padding:3px 10px;background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;">+ Account 추가</button>
+          </label>
+          <div id="shipping-accounts-list" style="border:1px solid #e5e7eb;border-radius:6px;min-height:40px;background:#fafafa;padding:6px;"></div>
+        </div>
+
+        <div class="ff" style="grid-column:1/-1;"><label>Notes</label><input class="fi" id="cust-notes" placeholder="특이사항..."/></div>
       </div>
     </div>
     <div class="modal-foot" style="justify-content:space-between;flex-shrink:0;">
@@ -6863,7 +6943,9 @@ async function _doSaveInvoice() {
   var _creditInfo = {};
   if (custSelId) {
     const custObj = customers.find(c => c.id === custSelId);
-    if (custObj && custObj.credit_limit > 0) {
+    // COD / Credit Card / Prepay는 신용 체크 안 함 (현금/카드 결제)
+    const noCreditCheck = custObj && ['COD', 'Credit Card', 'Prepay'].includes((custObj.terms || '').trim());
+    if (custObj && !noCreditCheck && custObj.credit_limit > 0) {
       const { data: openOrders } = await db.from('orders')
         .select('total_amount')
         .eq('customer_id', custSelId)
@@ -25436,24 +25518,76 @@ async function loadCustomers() {
     document.getElementById('customers-table-wrap').innerHTML = '<div class="empty">거래처 없음. Add Customer로 추가하세요.</div>';
     return;
   }
+  
+  // Outstanding AR 계산 — 각 customer의 open orders 합계
+  const { data: openOrders } = await db.from('orders')
+    .select('customer_id, total_amount, status')
+    .not('status', 'in', '(cancelled,paid)');
+  const outstandingByCustomer = {};
+  (openOrders || []).forEach(o => {
+    if (!o.customer_id) return;
+    outstandingByCustomer[o.customer_id] = (outstandingByCustomer[o.customer_id] || 0) + (o.total_amount || 0);
+  });
 
-  const rows = customers.map(c => `
+  const rows = customers.map(c => {
+    const terms = (c.terms || '').trim();
+    const noCreditNeeded = ['COD', 'Credit Card', 'Prepay'].includes(terms);
+    
+    // Credit limit 표시 포맷
+    const cl = Number(c.credit_limit) || 0;
+    let clDisplay, clColor;
+    if (noCreditNeeded) {
+      clDisplay = '—';
+      clColor = '#9ca3af';
+    } else if (cl === 0) {
+      clDisplay = '<span style="color:#dc2626;">⚠ $0</span>';
+      clColor = '#dc2626';
+    } else if (cl >= 999999) {
+      clDisplay = '무제한';
+      clColor = '#059669';
+    } else {
+      clDisplay = '$' + cl.toLocaleString();
+      clColor = '#0f2744';
+    }
+    
+    // Outstanding 표시
+    const outstanding = outstandingByCustomer[c.id] || 0;
+    let osDisplay = outstanding > 0 ? '$' + outstanding.toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) : '—';
+    let osColor = '#6b7280';
+    // 한도 대비 사용률 표시
+    if (!noCreditNeeded && cl > 0 && cl < 999999 && outstanding > 0) {
+      const pct = Math.round((outstanding / cl) * 100);
+      if (pct >= 100) { osColor = '#dc2626'; osDisplay += ` <span style="font-size:9px;">(${pct}% ⚠)</span>`; }
+      else if (pct >= 80) { osColor = '#ea580c'; osDisplay += ` <span style="font-size:9px;">(${pct}%)</span>`; }
+      else { osColor = '#0f2744'; osDisplay += ` <span style="font-size:9px;color:#6b7280;">(${pct}%)</span>`; }
+    }
+    
+    // Terms 색상
+    let termsColor = '#0f2744';
+    if (terms === 'COD') termsColor = '#059669';
+    else if (terms === 'Credit Card') termsColor = '#7c3aed';
+    else if (terms === 'Prepay') termsColor = '#0891b2';
+    
+    return `
     <tr>
-      <td style="font-weight:600;cursor:pointer;" onclick="openEditCustomer('${c.id}')">${c.name}</td>
-      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${c.contact_name || '—'}</td>
-      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${c.phone || '—'}</td>
-      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${c.email || '—'}</td>
-      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;" onclick="openEditCustomer('${c.id}')">${c.terms || '—'}</td>
-      <td style="max-width:200px;white-space:pre-wrap;font-size:11px;cursor:pointer;" onclick="openEditCustomer('${c.id}')">${(c.bill_address || '').replace(/\n/g,', ')}</td>
-      <td style="font-size:11px;color:var(--text3);cursor:pointer;" onclick="openEditCustomer('${c.id}')">${c.notes || ''}</td>
+      <td style="font-weight:600;cursor:pointer;" onclick="openEditCustomer('${c.id}')">${escapeHtml(c.name)}</td>
+      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${escapeHtml(c.contact_name) || '—'}</td>
+      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${escapeHtml(c.phone) || '—'}</td>
+      <td onclick="openEditCustomer('${c.id}')" style="cursor:pointer;">${escapeHtml(c.email) || '—'}</td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;color:${termsColor};font-weight:600;" onclick="openEditCustomer('${c.id}')">${escapeHtml(terms) || '—'}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:${clColor};cursor:pointer;white-space:nowrap;" onclick="openEditCustomer('${c.id}')">${clDisplay}</td>
+      <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${osColor};cursor:pointer;white-space:nowrap;" onclick="openEditCustomer('${c.id}')">${osDisplay}</td>
+      <td style="max-width:200px;white-space:pre-wrap;font-size:11px;cursor:pointer;" onclick="openEditCustomer('${c.id}')">${escapeHtml((c.bill_address || '').replace(/\n/g,', '))}</td>
+      <td style="font-size:11px;color:var(--text3);cursor:pointer;" onclick="openEditCustomer('${c.id}')">${escapeHtml(c.notes) || ''}</td>
       <td><button class="btn btn-sm" style="background:#f0f7ff;color:#1a56a0;border-color:#93c5fd;white-space:nowrap;" onclick="openPriceSheet('${c.id}','${(c.name||'').replace(/'/g,"\\'")}')">💲 Price Sheet</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   document.getElementById('customers-table-wrap').innerHTML = `
     <table class="tbl">
       <thead><tr>
         <th>Company</th><th>Contact</th><th>Phone</th><th>Email</th>
-        <th>Terms</th><th>Bill To</th><th>Notes</th><th></th>
+        <th>Terms</th><th style="text-align:right;">Credit Limit</th><th style="text-align:right;">Outstanding</th><th>Bill To</th><th>Notes</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -25463,11 +25597,21 @@ function openAddCustomer() {
   document.getElementById('cust-edit-id').value = '';
   document.getElementById('cust-modal-title').textContent = '+ Add Customer';
   document.getElementById('cust-delete-btn').style.display = 'none';
-  ['cust-company','cust-contact','cust-phone','cust-email','cust-email-cc','cust-accounting-email','cust-accounting-email-cc','cust-bill-addr','cust-ship-addr','cust-notes','cust-customer-no','cust-salesperson','cust-aliases'].forEach(id => {
+  ['cust-company','cust-contact','cust-phone','cust-email','cust-email-cc','cust-accounting-email','cust-accounting-email-cc','cust-bill-addr','cust-ship-addr','cust-notes','cust-customer-no','cust-salesperson','cust-aliases','cust-cc-last4','cust-cc-expires','cust-cc-cardholder','cust-cc-billing-zip','cust-cc-notes'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
   document.getElementById('cust-terms').value = 'N30';
+  // Terms Other input 초기화
+  const termsOtherEl = document.getElementById('cust-terms-other');
+  if (termsOtherEl) termsOtherEl.value = '';
+  onTermsChange();
+  // Payment method 초기화
+  const pmEl = document.getElementById('cust-payment-method');
+  if (pmEl) pmEl.value = '';
+  const ccTypeEl = document.getElementById('cust-cc-type');
+  if (ccTypeEl) ccTypeEl.value = '';
+  onPaymentMethodChange();  // CC 필드 숨김
   // Credit Limit 초기화
   const clEl = document.getElementById('cust-credit-limit');
   if (clEl) clEl.value = '0';
@@ -25479,9 +25623,11 @@ function openAddCustomer() {
   // 자동 채우기 박스 다시 표시
   const autofillEl = document.getElementById('cust-po-autofill');
   if (autofillEl) autofillEl.style.display = 'flex';
-  // Ship addresses 초기화 (빈 배열)
+  // Ship addresses + Shipping accounts 초기화
   _currentShipAddresses = [];
   renderShipAddressesList();
+  _currentShippingAccounts = [];
+  renderShippingAccountsList();
   openModal('modal-customer');
 }
 
@@ -25668,13 +25814,23 @@ function openEditCustomer(id) {
   document.getElementById('cust-accounting-email-cc').value = c.accounting_email_cc || '';
   document.getElementById('cust-bill-addr').value = c.bill_address || '';
   document.getElementById('cust-ship-addr').value = c.ship_address || '';
-  document.getElementById('cust-terms').value = c.terms || 'N30';
+  setCustomerTermsValue(c.terms || 'N30');
   document.getElementById('cust-notes').value = c.notes || '';
   document.getElementById('cust-aliases').value = c.aliases || '';
   document.getElementById('cust-credit-limit').value = c.credit_limit || 0;
   document.getElementById('cust-pref-wh').value = c.preferred_warehouse || 'SC';
-  // Ship addresses DB에서 로드
+  // Payment method + Credit Card 필드 로드
+  document.getElementById('cust-payment-method').value = c.payment_method || '';
+  document.getElementById('cust-cc-type').value = c.cc_type || '';
+  document.getElementById('cust-cc-last4').value = c.cc_last4 || '';
+  document.getElementById('cust-cc-expires').value = c.cc_expires || '';
+  document.getElementById('cust-cc-cardholder').value = c.cc_cardholder || '';
+  document.getElementById('cust-cc-billing-zip').value = c.cc_billing_zip || '';
+  document.getElementById('cust-cc-notes').value = c.cc_notes || '';
+  onPaymentMethodChange();  // Credit Card 아니면 필드 숨김
+  // Ship addresses + Shipping accounts DB에서 로드
   loadShipAddressesForCustomer(c.id);
+  loadShippingAccountsForCustomer(c.id);
   openModal('modal-customer');
 }
 
@@ -25692,12 +25848,26 @@ async function saveCustomer() {
     accounting_email_cc: document.getElementById('cust-accounting-email-cc').value.trim(),
     bill_address: document.getElementById('cust-bill-addr').value.trim(),
     ship_address: document.getElementById('cust-ship-addr').value.trim(),
-    terms:   document.getElementById('cust-terms').value.trim(),
+    terms:   getCustomerTermsValue(),
     notes:           document.getElementById('cust-notes').value.trim(),
     aliases: document.getElementById('cust-aliases').value.trim(),     credit_limit: parseFloat(document.getElementById('cust-credit-limit').value) || 0,     preferred_warehouse: document.getElementById('cust-pref-wh').value || 'SC',
+    // Payment method + Credit Card (마지막 4자리만 — PCI 안전)
+    payment_method:  document.getElementById('cust-payment-method').value || null,
+    cc_type:         document.getElementById('cust-cc-type').value || null,
+    cc_last4:        document.getElementById('cust-cc-last4').value.trim() || null,
+    cc_expires:      document.getElementById('cust-cc-expires').value.trim() || null,
+    cc_cardholder:   document.getElementById('cust-cc-cardholder').value.trim() || null,
+    cc_billing_zip:  document.getElementById('cust-cc-billing-zip').value.trim() || null,
+    cc_notes:        document.getElementById('cust-cc-notes').value.trim() || null,
     updated_at:      new Date().toISOString()
   };
   if (!payload.name) { alert('Company Name은 필수입니다.'); return; }
+  
+  // cc_last4 검증 (입력된 경우 숫자 4자리)
+  if (payload.cc_last4 && !/^\d{4}$/.test(payload.cc_last4)) {
+    alert('Last 4 Digits는 숫자 4자리여야 합니다.');
+    return;
+  }
 
   let error;
   let customerId = id;
@@ -25711,9 +25881,10 @@ async function saveCustomer() {
   }
   if (error) { alert('Error: ' + error.message); return; }
   
-  // Ship addresses 동기화 (신규/수정/삭제)
+  // Ship addresses + Shipping accounts 동기화 (신규/수정/삭제)
   if (customerId) {
     await syncShipAddresses(customerId);
+    await syncShippingAccounts(customerId);
   }
   
   closeModal('modal-customer');
@@ -25827,88 +25998,138 @@ function openShipAddressEditor(idx) {
   const isNew = idx === -1;
   const addr = isNew ? {} : _currentShipAddresses[idx];
   
-  // 간단한 prompt 대신 inline modal 띄우기
+  // 간단한 prompt 대신 inline modal 띄우기 (드래그 가능)
   const modalHTML = `
-    <div id="ship-addr-editor" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;">
-      <div style="background:#fff;border-radius:8px;padding:0;width:550px;max-width:95vw;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;">
-        <div style="background:#0f2744;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;">
-          <span style="font-weight:700;font-size:14px;">${isNew ? '➕ 배송지 추가' : '✏️ 배송지 편집'}</span>
-          <button onclick="closeShipAddressEditor()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">×</button>
-        </div>
-        <div style="padding:16px;overflow-y:auto;flex:1;">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
-            <div>
-              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">LABEL (별명)</label>
-              <input class="fi" id="sa-label" placeholder="HQ, Warehouse, Imagine Printworks..." value="${escapeHtml(addr.label || '')}" style="width:100%;"/>
-            </div>
-            <div>
-              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">COMPANY NAME (배송지 회사명)</label>
-              <input class="fi" id="sa-company" placeholder="Imagine Printworks" value="${escapeHtml(addr.company_name || '')}" style="width:100%;"/>
-            </div>
-            <div>
-              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">CONTACT NAME</label>
-              <input class="fi" id="sa-contact" placeholder="John Smith" value="${escapeHtml(addr.contact_name || '')}" style="width:100%;"/>
-            </div>
-            <div>
-              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">PHONE</label>
-              <input class="fi" id="sa-phone" placeholder="(312) 555-0000" value="${escapeHtml(addr.phone || '')}" style="width:100%;"/>
-            </div>
-          </div>
-          <div style="margin-bottom:10px;">
-            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ADDRESS LINE 1 *</label>
-            <input class="fi" id="sa-addr1" placeholder="1430 Pioneer St" value="${escapeHtml(addr.address_line1 || '')}" style="width:100%;"/>
-          </div>
-          <div style="margin-bottom:10px;">
-            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ADDRESS LINE 2 (선택)</label>
-            <input class="fi" id="sa-addr2" placeholder="Suite 200" value="${escapeHtml(addr.address_line2 || '')}" style="width:100%;"/>
-          </div>
-          <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-bottom:10px;">
-            <div>
-              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">CITY</label>
-              <input class="fi" id="sa-city" placeholder="Brea" value="${escapeHtml(addr.city || '')}" style="width:100%;"/>
-            </div>
-            <div>
-              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">STATE</label>
-              <input class="fi" id="sa-state" placeholder="CA" maxlength="2" value="${escapeHtml(addr.state || '')}" style="width:100%;text-transform:uppercase;"/>
-            </div>
-            <div>
-              <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ZIP</label>
-              <input class="fi" id="sa-zip" placeholder="92821" value="${escapeHtml(addr.zip || '')}" style="width:100%;"/>
-            </div>
-          </div>
-          <div style="margin-bottom:10px;">
-            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">NOTES</label>
-            <input class="fi" id="sa-notes" placeholder="특이사항..." value="${escapeHtml(addr.notes || '')}" style="width:100%;"/>
+    <div id="ship-addr-editor-backdrop" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.3);z-index:9999;" onclick="closeShipAddressEditor()"></div>
+    <div id="ship-addr-editor" style="position:fixed;top:10%;left:50%;transform:translateX(-50%);z-index:10000;background:#fff;border-radius:8px;width:550px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div id="ship-addr-editor-header" style="background:#0f2744;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;cursor:move;user-select:none;">
+        <span style="font-weight:700;font-size:14px;">${isNew ? '➕ 배송지 추가' : '✏️ 배송지 편집'} <span style="font-size:10px;opacity:0.6;margin-left:8px;">🖱 드래그로 이동</span></span>
+        <button onclick="closeShipAddressEditor()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">×</button>
+      </div>
+      <div style="padding:16px;overflow-y:auto;flex:1;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">LABEL (별명)</label>
+            <input class="fi" id="sa-label" placeholder="HQ, Warehouse, Imagine Printworks..." value="${escapeHtml(addr.label || '')}" style="width:100%;"/>
           </div>
           <div>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
-              <input type="checkbox" id="sa-default" ${addr.is_default ? 'checked' : ''}/>
-              <span>⭐ 기본 배송지로 설정</span>
-            </label>
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">COMPANY NAME (배송지 회사명)</label>
+            <input class="fi" id="sa-company" placeholder="Imagine Printworks" value="${escapeHtml(addr.company_name || '')}" style="width:100%;"/>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">CONTACT NAME</label>
+            <input class="fi" id="sa-contact" placeholder="John Smith" value="${escapeHtml(addr.contact_name || '')}" style="width:100%;"/>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">PHONE</label>
+            <input class="fi" id="sa-phone" placeholder="(312) 555-0000" value="${escapeHtml(addr.phone || '')}" style="width:100%;"/>
           </div>
         </div>
-        <div style="padding:12px 16px;background:#f9fafb;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
-          <button class="btn" onclick="closeShipAddressEditor()">Cancel</button>
-          <button class="btn btn-primary" onclick="saveShipAddressInline(${idx})">✓ 저장</button>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ADDRESS LINE 1 *</label>
+          <input class="fi" id="sa-addr1" placeholder="1430 Pioneer St" value="${escapeHtml(addr.address_line1 || '')}" style="width:100%;"/>
         </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ADDRESS LINE 2 (선택)</label>
+          <input class="fi" id="sa-addr2" placeholder="Suite 200" value="${escapeHtml(addr.address_line2 || '')}" style="width:100%;"/>
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">CITY</label>
+            <input class="fi" id="sa-city" placeholder="Brea" value="${escapeHtml(addr.city || '')}" style="width:100%;"/>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">STATE</label>
+            <input class="fi" id="sa-state" placeholder="CA" maxlength="2" value="${escapeHtml(addr.state || '')}" style="width:100%;text-transform:uppercase;"/>
+          </div>
+          <div>
+            <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ZIP</label>
+            <input class="fi" id="sa-zip" placeholder="92821" value="${escapeHtml(addr.zip || '')}" style="width:100%;"/>
+          </div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">NOTES</label>
+          <input class="fi" id="sa-notes" placeholder="특이사항..." value="${escapeHtml(addr.notes || '')}" style="width:100%;"/>
+        </div>
+        <div>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+            <input type="checkbox" id="sa-default" ${addr.is_default ? 'checked' : ''}/>
+            <span>⭐ 기본 배송지로 설정</span>
+          </label>
+        </div>
+      </div>
+      <div style="padding:12px 16px;background:#f9fafb;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+        <button class="btn" onclick="closeShipAddressEditor()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveShipAddressInline(${idx})">✓ 저장</button>
       </div>
     </div>
   `;
   
   // 기존 에디터 있으면 제거
-  const existing = document.getElementById('ship-addr-editor');
-  if (existing) existing.remove();
+  closeShipAddressEditor();
   
   document.body.insertAdjacentHTML('beforeend', modalHTML);
   // state는 자동으로 대문자
   const stateEl = document.getElementById('sa-state');
   if (stateEl) stateEl.addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
+  
+  // 드래그 기능 활성화
+  makeShipAddressEditorDraggable();
+}
+
+/** Ship Address 에디터 드래그 가능하게 */
+function makeShipAddressEditorDraggable() {
+  const modal = document.getElementById('ship-addr-editor');
+  const header = document.getElementById('ship-addr-editor-header');
+  if (!modal || !header) return;
+  
+  let isDragging = false;
+  let startX = 0, startY = 0;
+  let startLeft = 0, startTop = 0;
+  
+  header.addEventListener('mousedown', (e) => {
+    // 닫기 버튼 클릭은 제외
+    if (e.target.tagName === 'BUTTON') return;
+    isDragging = true;
+    const rect = modal.getBoundingClientRect();
+    startX = e.clientX;
+    startY = e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    // transform 제거하고 top/left로 위치 잡기
+    modal.style.transform = 'none';
+    modal.style.left = startLeft + 'px';
+    modal.style.top = startTop + 'px';
+    e.preventDefault();
+  });
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    let newLeft = startLeft + dx;
+    let newTop = startTop + dy;
+    // 화면 밖으로 안 나가게
+    const modalRect = modal.getBoundingClientRect();
+    const maxLeft = window.innerWidth - 100;
+    const maxTop = window.innerHeight - 60;
+    newLeft = Math.max(-modalRect.width + 100, Math.min(newLeft, maxLeft));
+    newTop = Math.max(0, Math.min(newTop, maxTop));
+    modal.style.left = newLeft + 'px';
+    modal.style.top = newTop + 'px';
+  });
+  
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
+  });
 }
 
 /** Ship Address 편집기 닫기 */
 function closeShipAddressEditor() {
-  const el = document.getElementById('ship-addr-editor');
-  if (el) el.remove();
+  const backdrop = document.getElementById('ship-addr-editor-backdrop');
+  const editor = document.getElementById('ship-addr-editor');
+  if (backdrop) backdrop.remove();
+  if (editor) editor.remove();
 }
 
 /** Ship Address inline 저장 (_currentShipAddresses에만, DB는 customer 저장 시) */
@@ -26034,6 +26255,343 @@ async function syncShipAddresses(customerId) {
     console.error('[syncShipAddresses] errors:', errors);
     alert('⚠️ 일부 배송지 저장 실패:\n' + errors.join('\n'));
   }
+}
+
+// ══════════════════════════════════════════════════════════════
+// 📦 SHIPPING ACCOUNTS 관리 (UPS/FedEx/DHL 등)
+// ══════════════════════════════════════════════════════════════
+
+let _currentShippingAccounts = [];  // [{id?, carrier, account_number, is_default, notes, _deleted?, _new?, _updated?}]
+
+const CARRIER_OPTIONS = [
+  { value: 'UPS', label: 'UPS', icon: '📦' },
+  { value: 'FedEx', label: 'FedEx', icon: '📦' },
+  { value: 'DHL', label: 'DHL', icon: '📦' },
+  { value: 'USPS', label: 'USPS', icon: '📮' },
+  { value: 'Our Truck', label: '자체 트럭', icon: '🚚' },
+  { value: 'Customer Pickup', label: '고객 픽업', icon: '🚗' },
+  { value: 'Other', label: 'Other', icon: '📦' }
+];
+
+/** Customer 모달 열릴 때 DB에서 shipping_accounts 로드 */
+async function loadShippingAccountsForCustomer(customerId) {
+  _currentShippingAccounts = [];
+  if (!customerId) {
+    renderShippingAccountsList();
+    return;
+  }
+  const { data, error } = await db.from('shipping_accounts')
+    .select('*')
+    .eq('customer_id', customerId)
+    .order('is_default', { ascending: false })
+    .order('created_at', { ascending: true });
+  if (error) {
+    console.error('[loadShippingAccounts] error:', error);
+    _currentShippingAccounts = [];
+  } else {
+    _currentShippingAccounts = data || [];
+  }
+  renderShippingAccountsList();
+}
+
+/** Shipping Accounts 리스트 렌더링 */
+function renderShippingAccountsList() {
+  const container = document.getElementById('shipping-accounts-list');
+  if (!container) return;
+  
+  const visible = _currentShippingAccounts.filter(a => !a._deleted);
+  
+  if (visible.length === 0) {
+    container.innerHTML = `<div style="padding:12px;text-align:center;color:#9ca3af;font-size:11px;">등록된 Shipping Account가 없습니다. "+ Account 추가"를 클릭하세요.</div>`;
+    return;
+  }
+  
+  container.innerHTML = visible.map((a) => {
+    const realIdx = _currentShippingAccounts.indexOf(a);
+    const isDefault = a.is_default;
+    const carrierInfo = CARRIER_OPTIONS.find(c => c.value === a.carrier) || { icon: '📦', label: a.carrier };
+    
+    return `<div style="background:#fff;border:1px solid ${isDefault ? '#fbbf24' : '#e5e7eb'};border-radius:5px;padding:6px 10px;margin-bottom:4px;${isDefault ? 'box-shadow:0 0 0 2px #fef3c7;' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div style="flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-size:12px;">
+          <span style="font-size:14px;">${carrierInfo.icon}</span>
+          <span style="font-weight:700;color:#0f2744;">${escapeHtml(carrierInfo.label)}</span>
+          ${a.account_number ? `<span style="font-family:'IBM Plex Mono',monospace;color:#374151;">${escapeHtml(a.account_number)}</span>` : '<span style="color:#9ca3af;font-style:italic;">(no account #)</span>'}
+          ${isDefault ? '<span style="background:#fef3c7;color:#b45309;padding:1px 6px;border-radius:3px;font-size:9px;">DEFAULT</span>' : ''}
+          ${a.notes ? `<span style="color:#6b7280;font-size:10px;font-style:italic;">— ${escapeHtml(a.notes)}</span>` : ''}
+        </div>
+        <div style="display:flex;gap:3px;flex-shrink:0;">
+          ${!isDefault ? `<button type="button" class="btn btn-sm" onclick="setDefaultShippingAccount(${realIdx})" style="font-size:10px;padding:2px 6px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;">⭐</button>` : ''}
+          <button type="button" class="btn btn-sm" onclick="editShippingAccount(${realIdx})" style="font-size:10px;padding:2px 6px;">Edit</button>
+          <button type="button" class="btn btn-sm" onclick="deleteShippingAccount(${realIdx})" style="font-size:10px;padding:2px 6px;color:#dc2626;">✕</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/** 새 Shipping Account 추가 */
+function addShippingAccount() {
+  openShippingAccountEditor(-1);
+}
+
+/** 기존 Shipping Account 편집 */
+function editShippingAccount(idx) {
+  openShippingAccountEditor(idx);
+}
+
+/** Shipping Account 편집 모달 (드래그 가능) */
+function openShippingAccountEditor(idx) {
+  const isNew = idx === -1;
+  const acc = isNew ? {} : _currentShippingAccounts[idx];
+  
+  const carrierOptions = CARRIER_OPTIONS.map(c => 
+    `<option value="${c.value}" ${c.value === acc.carrier ? 'selected' : ''}>${c.icon} ${c.label}</option>`
+  ).join('');
+  
+  const modalHTML = `
+    <div id="shipacc-editor-backdrop" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.3);z-index:9999;" onclick="closeShippingAccountEditor()"></div>
+    <div id="shipacc-editor" style="position:fixed;top:15%;left:50%;transform:translateX(-50%);z-index:10000;background:#fff;border-radius:8px;width:450px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div id="shipacc-editor-header" style="background:#0369a1;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;cursor:move;user-select:none;">
+        <span style="font-weight:700;font-size:14px;">${isNew ? '➕ Shipping Account 추가' : '✏️ Shipping Account 편집'} <span style="font-size:10px;opacity:0.6;margin-left:8px;">🖱 드래그</span></span>
+        <button onclick="closeShippingAccountEditor()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">×</button>
+      </div>
+      <div style="padding:16px;overflow-y:auto;flex:1;">
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">CARRIER *</label>
+          <select class="fsel" id="sacc-carrier" style="width:100%;">
+            <option value="">— 선택 —</option>
+            ${carrierOptions}
+          </select>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">ACCOUNT NUMBER</label>
+          <input class="fi" id="sacc-account-number" placeholder="12345AB (없으면 비워두세요)" value="${escapeHtml(acc.account_number || '')}" style="width:100%;"/>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;color:#6b7280;display:block;margin-bottom:3px;">NOTES</label>
+          <input class="fi" id="sacc-notes" placeholder="매주 화요일 픽업, Third party billing 등" value="${escapeHtml(acc.notes || '')}" style="width:100%;"/>
+        </div>
+        <div>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;">
+            <input type="checkbox" id="sacc-default" ${acc.is_default ? 'checked' : ''}/>
+            <span>⭐ 기본 Shipping Account로 설정</span>
+          </label>
+        </div>
+      </div>
+      <div style="padding:12px 16px;background:#f9fafb;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+        <button class="btn" onclick="closeShippingAccountEditor()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveShippingAccountInline(${idx})">✓ 저장</button>
+      </div>
+    </div>
+  `;
+  
+  closeShippingAccountEditor();
+  document.body.insertAdjacentHTML('beforeend', modalHTML);
+  makeShippingAccountEditorDraggable();
+}
+
+function makeShippingAccountEditorDraggable() {
+  const modal = document.getElementById('shipacc-editor');
+  const header = document.getElementById('shipacc-editor-header');
+  if (!modal || !header) return;
+  
+  let isDragging = false;
+  let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+  
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+    isDragging = true;
+    const rect = modal.getBoundingClientRect();
+    startX = e.clientX;
+    startY = e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    modal.style.transform = 'none';
+    modal.style.left = startLeft + 'px';
+    modal.style.top = startTop + 'px';
+    e.preventDefault();
+  });
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const modalRect = modal.getBoundingClientRect();
+    let newLeft = Math.max(-modalRect.width + 100, Math.min(startLeft + dx, window.innerWidth - 100));
+    let newTop = Math.max(0, Math.min(startTop + dy, window.innerHeight - 60));
+    modal.style.left = newLeft + 'px';
+    modal.style.top = newTop + 'px';
+  });
+  
+  document.addEventListener('mouseup', () => { isDragging = false; });
+}
+
+function closeShippingAccountEditor() {
+  const b = document.getElementById('shipacc-editor-backdrop');
+  const e = document.getElementById('shipacc-editor');
+  if (b) b.remove();
+  if (e) e.remove();
+}
+
+function saveShippingAccountInline(idx) {
+  const isNew = idx === -1;
+  const acc = {
+    carrier: document.getElementById('sacc-carrier').value,
+    account_number: document.getElementById('sacc-account-number').value.trim(),
+    notes: document.getElementById('sacc-notes').value.trim(),
+    is_default: document.getElementById('sacc-default').checked,
+  };
+  
+  if (!acc.carrier) {
+    alert('Carrier를 선택해주세요.');
+    return;
+  }
+  
+  // Default 설정하면 다른 것들 해제
+  if (acc.is_default) {
+    _currentShippingAccounts.forEach(a => { 
+      if (a.is_default) { 
+        a.is_default = false; 
+        if (a.id) a._updated = true;
+      }
+    });
+  }
+  
+  if (isNew) {
+    acc._new = true;
+    _currentShippingAccounts.push(acc);
+  } else {
+    Object.assign(_currentShippingAccounts[idx], acc);
+    if (_currentShippingAccounts[idx].id) {
+      _currentShippingAccounts[idx]._updated = true;
+    }
+  }
+  
+  closeShippingAccountEditor();
+  renderShippingAccountsList();
+}
+
+function deleteShippingAccount(idx) {
+  const acc = _currentShippingAccounts[idx];
+  if (!acc) return;
+  const carrierInfo = CARRIER_OPTIONS.find(c => c.value === acc.carrier) || { label: acc.carrier };
+  if (!confirm(`${carrierInfo.label} ${acc.account_number || ''} 삭제할까요?`)) return;
+  
+  if (acc.id) {
+    acc._deleted = true;
+  } else {
+    _currentShippingAccounts.splice(idx, 1);
+  }
+  renderShippingAccountsList();
+}
+
+function setDefaultShippingAccount(idx) {
+  _currentShippingAccounts.forEach((a, i) => {
+    a.is_default = (i === idx);
+    if (a.id) a._updated = true;
+  });
+  renderShippingAccountsList();
+}
+
+/** Customer 저장 후 shipping_accounts DB 동기화 */
+async function syncShippingAccounts(customerId) {
+  if (!customerId) return;
+  
+  const errors = [];
+  
+  for (const acc of _currentShippingAccounts) {
+    if (acc._deleted && acc.id) {
+      const { error } = await db.from('shipping_accounts').delete().eq('id', acc.id);
+      if (error) errors.push('Delete: ' + error.message);
+    } else if (acc._new) {
+      const payload = {
+        customer_id: customerId,
+        carrier: acc.carrier,
+        account_number: acc.account_number || null,
+        is_default: !!acc.is_default,
+        notes: acc.notes || null,
+      };
+      const { error } = await db.from('shipping_accounts').insert(payload);
+      if (error) errors.push('Insert: ' + error.message);
+    } else if (acc._updated && acc.id) {
+      const payload = {
+        carrier: acc.carrier,
+        account_number: acc.account_number || null,
+        is_default: !!acc.is_default,
+        notes: acc.notes || null,
+        updated_at: new Date().toISOString(),
+      };
+      const { error } = await db.from('shipping_accounts').update(payload).eq('id', acc.id);
+      if (error) errors.push('Update: ' + error.message);
+    }
+  }
+  
+  if (errors.length > 0) {
+    console.error('[syncShippingAccounts] errors:', errors);
+    alert('⚠️ 일부 Shipping Account 저장 실패:\n' + errors.join('\n'));
+  }
+}
+
+/** Payment Method 변경 시 Credit Card 필드들 보이기/숨기기 */
+function onPaymentMethodChange() {
+  const method = document.getElementById('cust-payment-method').value;
+  const isCC = method === 'Credit Card';
+  ['cust-cc-type-wrap', 'cust-cc-last4-wrap', 'cust-cc-expires-wrap', 'cust-cc-extra'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = isCC ? '' : 'none';
+  });
+}
+
+/** Payment Terms 변경 시 Credit Limit 필드 보이기/숨기기 + Other 처리 */
+function onTermsChange() {
+  const termsEl = document.getElementById('cust-terms');
+  const otherEl = document.getElementById('cust-terms-other');
+  const creditLimitWrap = document.getElementById('cust-credit-limit-wrap');
+  if (!termsEl) return;
+  
+  const terms = termsEl.value;
+  
+  // Other 선택 시 직접 입력 필드 표시
+  if (otherEl) {
+    otherEl.style.display = (terms === 'Other') ? 'block' : 'none';
+  }
+  
+  // COD / Credit Card / Prepay → Credit Limit 필요 없음 (숨김)
+  if (creditLimitWrap) {
+    const noCreditNeeded = ['COD', 'Credit Card', 'Prepay'].includes(terms);
+    creditLimitWrap.style.display = noCreditNeeded ? 'none' : '';
+  }
+}
+
+/** Customer 저장용 실제 terms 값 반환 (Other면 text input 값) */
+function getCustomerTermsValue() {
+  const termsEl = document.getElementById('cust-terms');
+  const otherEl = document.getElementById('cust-terms-other');
+  if (!termsEl) return 'N30';
+  if (termsEl.value === 'Other' && otherEl && otherEl.value.trim()) {
+    return otherEl.value.trim();
+  }
+  return termsEl.value || 'N30';
+}
+
+/** Customer 모달 열 때 terms 값 설정 (dropdown + other 처리) */
+function setCustomerTermsValue(val) {
+  const termsEl = document.getElementById('cust-terms');
+  const otherEl = document.getElementById('cust-terms-other');
+  if (!termsEl) return;
+  const normalized = (val || 'N30').trim();
+  // dropdown의 option에 있으면 선택
+  const options = Array.from(termsEl.options).map(o => o.value);
+  if (options.includes(normalized)) {
+    termsEl.value = normalized;
+    if (otherEl) otherEl.value = '';
+  } else {
+    // 없으면 Other + text input에 값
+    termsEl.value = 'Other';
+    if (otherEl) otherEl.value = normalized;
+  }
+  onTermsChange();
 }
 
 // HELPERS
@@ -43029,4 +43587,8 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-23T02:12:14Z - multiple ship addresses -->
+
+
+
+
+<!-- Deploy trigger: 2026-04-23T11:35:01Z - terms dropdown + credit/outstanding -->
