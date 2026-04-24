@@ -10955,9 +10955,20 @@ async function previewInventoryImport() {
       if (parsed.isSs) sku_id += '+ss';
       if (parsed.suffix) sku_id += '+' + parsed.suffix;  // +ER, +HT 등
 
+      // 1차 매칭: colorCode6 기반
       if (!skuSet.has(sku_id)) {
-        unmatched.push({ ...parsed, sku_id });
-        continue;
+        // 2차 매칭 (fallback): Davinci Item Code 자체를 SKU로 시도
+        // 사용자가 SKU Import 시 커스텀 색상 코드 (| 사용 등)를 쓴 경우 대비
+        // 예: "Washed Teal" → colorCode6 = "washed" 인데 DB에는 "teal"로 커스텀 등록됨
+        //     Davinci Item Code "1650TEALM" 소문자 = "1650tealm" ← 이걸로 매칭
+        const itemCodeLower = (parsed.itemRaw || '').toLowerCase().trim();
+        if (itemCodeLower && skuSet.has(itemCodeLower)) {
+          // Item Code 매칭 성공! sku_id 교체
+          sku_id = itemCodeLower;
+        } else {
+          unmatched.push({ ...parsed, sku_id });
+          continue;
+        }
       }
 
       const ppb = pcsPerBox(parsed.size, ppbSmall, ppbLarge);
@@ -11004,8 +11015,13 @@ async function previewInventoryImport() {
             ${unmatched.slice(0, 30).map(u => `<tr><td style="padding:3px 6px;">${u.itemRaw}</td><td style="padding:3px 6px;">${u.color}</td><td style="padding:3px 6px;">${u.size}</td><td style="padding:3px 6px;color:#dc2626;">${u.sku_id}</td><td style="padding:3px 6px;">${u.location}</td></tr>`).join('')}
           </table>
           ${unmatched.length > 30 ? `<div style="padding:4px;color:#6b7280;font-size:10px;">...외 ${unmatched.length-30}개</div>` : ''}
-          <div style="margin-top:6px;padding:6px;background:#fff;border-radius:3px;font-size:11px;color:#7f1d1d;">
-            💡 이 row들은 업로드되지 않습니다. 매칭 실패 = SKU가 등록되지 않음 → SKU Import에서 먼저 색상을 등록하거나, 색상 매핑 테이블 수정 필요.
+          <div style="margin-top:8px;padding:10px;background:#fff;border:2px solid #dc2626;border-radius:4px;font-size:11px;color:#7f1d1d;line-height:1.6;">
+            <strong style="font-size:12px;">⛔ 이 row들은 절대로 업로드되지 않습니다 (자동 생성 금지)</strong><br>
+            <strong>왜?</strong> 자동으로 새 SKU를 만들면 같은 상품이 여러 SKU로 저장되어 재고 계산이 틀어집니다.<br><br>
+            <strong>해결 방법:</strong><br>
+            1️⃣ <strong>SKU Import 탭</strong>에서 먼저 이 색상들을 등록하세요<br>
+            2️⃣ 또는 DaVinci Excel의 Item Code가 DB의 sku_id와 일치하는지 확인<br>
+            3️⃣ 색상 이름이 다르면 DaVinci에서 수정 후 다시 업로드
           </div>
         </details>
       `;
@@ -11162,7 +11178,7 @@ async function executeInventoryImport() {
       const qtyBefore = existing?.qty_on_hand || 0;
       const binsBefore = existing ? (existingBinsMap[existing.id] || []) : [];
       
-      // inventory 업데이트 또는 생성
+      // inventory 업데이트 (자리 예약된 SKU만)
       const { data: updData, error: updErr } = await db.from('inventory')
         .update({ qty_on_hand: group.totalQty, location: primaryBin })
         .eq('warehouse_id', whId)
@@ -11176,21 +11192,12 @@ async function executeInventoryImport() {
         inventoryId = updData[0].id;
         action = 'update';
       } else {
-        // 자리 예약 안 된 SKU — 새로 만듦
-        const { data: insData, error: insErr } = await db.from('inventory').insert({
-          warehouse_id: whId,
-          style_id: styleId,
-          style_number: _invImportData.styleNum,
-          sku_id,
-          color: group.color,
-          size: group.size,
-          location: primaryBin,
-          qty_on_hand: group.totalQty,
-          qty_committed: 0
-        }).select('id').single();
-        if (insErr) { notFound.push(sku_id); continue; }
-        inventoryId = insData.id;
-        action = 'create';
+        // ⚠️ 자리 예약 안 된 SKU → 자동 생성 금지! Skip
+        // 이렇게 하지 않으면 중복 SKU가 생겨서 재고 계산 엉망이 됨
+        // 사용자는 SKU Import로 먼저 등록해야 함
+        console.warn(`[INV IMPORT] SKU "${sku_id}" not found in inventory — skipping. User must register via SKU Import first.`);
+        notFound.push(sku_id);
+        continue;
       }
       
       // inventory_bins 저장
@@ -11265,7 +11272,7 @@ async function executeInventoryImport() {
       });
     } catch(e) {}
 
-    alert(`✅ 업로드 완료!\n\nTransaction: TXN-${txnNumber}\n${updated}개 SKU가 ${_invImportData.whCode} 창고에 업데이트되었습니다.\n📍 Bin 위치 ${binsCreated}개 저장.\n\n실수 시 Transactions 탭에서 TXN-${txnNumber}을 검색해서 Reverse 가능합니다.` + (notFound.length > 0 ? `\n\n⚠️ 자리 예약 없어서 새로 만든 SKU ${notFound.length}개` : ''));
+    alert(`✅ 업로드 완료!\n\nTransaction: TXN-${txnNumber}\n${updated}개 SKU가 ${_invImportData.whCode} 창고에 업데이트되었습니다.\n📍 Bin 위치 ${binsCreated}개 저장.\n\n실수 시 Transactions 탭에서 TXN-${txnNumber}을 검색해서 Reverse 가능합니다.` + (notFound.length > 0 ? `\n\n⛔ Skip된 SKU ${notFound.length}개 (자동 생성 금지):\n${notFound.slice(0, 5).join(', ')}${notFound.length > 5 ? '\n...' : ''}\n\n💡 이 SKU들은 먼저 SKU Import에서 등록해야 업로드 가능합니다.` : ''));
 
     // 리셋
     _invImportData = null;
@@ -44693,4 +44700,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-24T14:11:18Z - bin code styled (color + size) -->
+
+
+<!-- Deploy trigger: 2026-04-24T14:32:32Z - no auto-create SKU in inventory import (prevents duplicates) -->
