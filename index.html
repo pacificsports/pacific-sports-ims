@@ -610,10 +610,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <option value="box">Boxes (case)</option>
             </select></div>
 <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STATUS</label>
-            <select class="fsel" id="inv-filter-status" onchange="filterInventory()" style="width:100%">
-              <option value="">All</option>
+            <select class="fsel" id="inv-filter-status" onchange="onInvStatusChange()" style="width:100%">
+              <option value="">All (재고 있는것만)</option>
               <option value="low">Low Stock</option>
               <option value="out">Out of Stock</option>
+              <option value="all-with-empty">전체 (빈 SKU 포함) 🐢</option>
             </select></div>
           <div style="display:flex;align-items:flex-end;">
             <button class="btn btn-primary" onclick="filterInventory()" style="width:100%;height:34px;font-size:13px;">🔍 Search</button>
@@ -8257,16 +8258,20 @@ function renderColorGrid(color, data, showTubular, showSs, style) {
 }
 
 // ──────────────────────────────────────────────────────
-async function loadInventory() {
-  document.getElementById('inventory-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
+async function loadInventory(includeEmpty = false) {
+  document.getElementById('inventory-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div> Loading...' + (includeEmpty ? ' (전체 SKU — 시간 소요)' : '') + '</div>';
+  window._invLoadedWithEmpty = includeEmpty;  // 현재 로드 모드 기억
   let allData = [];
   let _aFrom = 0;
   while (true) {
-    const { data: _aChunk, error } = await db.from('inventory')
+    let query = db.from('inventory')
       .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box), skus(variant)')
-      .gt('qty_on_hand', 0)   // 🚀 성능: 재고 있는 row만 로드 (qty=0 자리예약 제외)
       .order('id', {ascending: true})
       .range(_aFrom, _aFrom + 999);
+    if (!includeEmpty) {
+      query = query.gt('qty_on_hand', 0);  // 🚀 성능: 재고 있는 row만
+    }
+    const { data: _aChunk, error } = await query;
     if (error) {
       console.error('[loadInventory] error:', error);
       break;
@@ -8311,6 +8316,24 @@ async function loadInventory() {
   allInventory = allData;
   renderInventoryTable(allInventory);
 }
+/** Status 변경 시 호출 — 전체 SKU 모드로 전환 시 loadInventory 재실행 */
+function onInvStatusChange() {
+  const status = document.getElementById('inv-filter-status')?.value || '';
+  const currentMode = window._invLoadedWithEmpty === true;
+  const wantsEmpty = (status === 'all-with-empty' || status === 'out');
+  
+  if (wantsEmpty && !currentMode) {
+    // 전체 로드로 전환 (qty=0 포함)
+    loadInventory(true);
+  } else if (!wantsEmpty && currentMode) {
+    // 재고 있는것만 로드로 전환
+    loadInventory(false);
+  } else {
+    // 모드 동일 → 필터만
+    filterInventory();
+  }
+}
+
 function filterInventory() {
     const style = (document.getElementById('inv-filter-style')?.value || '').toLowerCase();
     const color = (document.getElementById('inv-filter-color')?.value || '').toLowerCase();
@@ -8330,6 +8353,7 @@ function filterInventory() {
     if (size && !i.size?.toLowerCase().includes(size)) return false;
     if (status === 'low' && !(i.qty_on_hand <= i.reorder_point && i.qty_on_hand > 0)) return false;
     if (status === 'out' && i.qty_on_hand !== 0) return false;
+    // 'all-with-empty'는 필터 없음 (모든 SKU 표시)
     return true;
   });
   renderInventoryTable(filtered);
@@ -8479,15 +8503,21 @@ function renderInventoryTable(data) {
       const locDisplay = (d.loc && d.loc !== '—') ? d.loc : '<em style="color:#9ca3af;">(no bin)</em>';
       const qtyDisplay = toUnit(d.qty, r.ppb).toLocaleString();
       
-      // 창고별 컬럼에 qty 배치 — SC는 7번째, SC-PCR은 8번째, CA는 9번째, CA-PCR은 10번째
+      // 창고별 컬럼에 qty 배치 — SC(7), SC-PCR(8), CA(9), CA-PCR(10)
       const scCell    = d.wh === 'SC'     ? `<td class="num" style="font-size:11px;color:var(--sc);font-weight:700;">${qtyDisplay}</td>` : '<td></td>';
       const scPcrCell = d.wh === 'SC-PCR' ? `<td class="num" style="font-size:11px;color:#c2410c;font-weight:700;">${qtyDisplay}</td>` : '<td></td>';
       const caCell    = d.wh === 'CA'     ? `<td class="num" style="font-size:11px;color:var(--ca);font-weight:700;">${qtyDisplay}</td>` : '<td></td>';
       const caPcrCell = d.wh === 'CA-PCR' ? `<td class="num" style="font-size:11px;color:#7c2d12;font-weight:700;">${qtyDisplay}</td>` : '<td></td>';
       
+      // 컬럼 순서: Style(1) | SKU(2) | Desc(3) | Color(4) | Size(5) | Variant(6) | SC(7) | SC-PCR(8) | CA(9) | CA-PCR(10) | Total(11) | Available(12) | Status(13)
+      // → bin 이름을 Variant 컬럼(6번) 밑으로 정렬
       return `<tr class="detail-${idx}" style="display:none;background:#f8fafc;cursor:pointer;" onclick="event.stopPropagation();editInventoryItem('${d.id}')">
         <td></td>
-        <td colspan="5" style="font-size:11px;color:var(--text3);padding-left:28px;">↳ ${whBadge} <span style="font-family:'IBM Plex Mono',monospace;">${locDisplay}</span></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td style="font-size:11px;color:var(--text3);padding-left:6px;">↳ ${whBadge} <span style="font-family:'IBM Plex Mono',monospace;">${locDisplay}</span></td>
         ${scCell}
         ${scPcrCell}
         ${caCell}
@@ -44653,4 +44683,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-24T13:59:38Z - bin rows aligned to warehouse columns -->
+
+<!-- Deploy trigger: 2026-04-24T14:07:46Z - bin under Variant + all-with-empty toggle -->
