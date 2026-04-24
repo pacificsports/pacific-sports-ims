@@ -5193,55 +5193,117 @@ async function loadScInventory() {
   caPcrInventory = {};
   window.binInventory = { 'SC':{}, 'SC-PCR':{}, 'CA':{}, 'CA-PCR':{} };
 
+  // 1. inventory 테이블 (qty 합산 정보)
   const { data: allInv } = await db.from('inventory')
     .select('id, qty_on_hand, qty_committed, sku, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)');
+  
+  // 2. inventory_bins 테이블 (각 bin별 상세) — 여러 bin 지원!
+  const { data: allBins } = await db.from('inventory_bins')
+    .select('inventory_id, bin_code, qty, received_date');
+  
+  // inv_id → bins[] 맵
+  const binsByInvId = {};
+  (allBins || []).forEach(b => {
+    if (!binsByInvId[b.inventory_id]) binsByInvId[b.inventory_id] = [];
+    binsByInvId[b.inventory_id].push(b);
+  });
+  
   allInv.forEach(row => {
     if (!row.warehouses) return;
     const normColor = (row.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
     const styleNum = row.styles?.style_number || row.style_number || '';
     const isSS = (row.sku||'').toLowerCase().endsWith('+ss');
-    // +ss 재고는 별도 키로 관리: styleNum|COLOR|SIZE|SS
     const key = isSS
       ? `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}|SS`
       : `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-    const qty = Math.max(0, (row.qty_on_hand || 0) - (row.qty_committed || 0)); // available qty
-    const loc = row.location || '';
+    const totalQty = row.qty_on_hand || 0;
+    const committed = row.qty_committed || 0;
+    const availQty = Math.max(0, totalQty - committed);
     const rcvDate = row.received_date || (row.created_at ? row.created_at.slice(0,10) : null);
-    const entry = { qty, location: loc || '—' };
+    const entry = { qty: availQty, location: row.location || '—' };
     const wh = row.warehouses.code;
 
+    // 창고별 총합 맵
     if (wh === 'SC') {
-      if (!scInventory[key]) scInventory[key] = entry; else scInventory[key].qty += qty;
+      if (!scInventory[key]) scInventory[key] = entry; else scInventory[key].qty += availQty;
     } else if (wh === 'SC-PCR') {
-      if (!pcrInventory[key]) pcrInventory[key] = entry; else pcrInventory[key].qty += qty;
+      if (!pcrInventory[key]) pcrInventory[key] = entry; else pcrInventory[key].qty += availQty;
     } else if (wh === 'CA') {
-      if (!caInventory[key]) caInventory[key] = entry; else caInventory[key].qty += qty;
+      if (!caInventory[key]) caInventory[key] = entry; else caInventory[key].qty += availQty;
     } else if (wh === 'CA-PCR') {
-      if (!caPcrInventory[key]) caPcrInventory[key] = entry; else caPcrInventory[key].qty += qty;
+      if (!caPcrInventory[key]) caPcrInventory[key] = entry; else caPcrInventory[key].qty += availQty;
       const colorSizeKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
       if (colorSizeKey !== key) {
-        if (!caPcrInventory[colorSizeKey]) caPcrInventory[colorSizeKey] = {qty, location: loc||'—'};
-        else caPcrInventory[colorSizeKey].qty += qty;
+        if (!caPcrInventory[colorSizeKey]) caPcrInventory[colorSizeKey] = {qty: availQty, location: row.location||'—'};
+        else caPcrInventory[colorSizeKey].qty += availQty;
       }
     }
 
-    // bin별 상세 (Location picker용)
-    if (window.binInventory[wh] !== undefined && loc) {
-      // 메인 key로 저장
-      if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
-      const existing = window.binInventory[wh][key].find(b => b.bin === loc);
-      if (existing) { existing.qty += qty; }
-      else { window.binInventory[wh][key].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
-
-      // PCR은 color+size fallback key에도 저장 (style_number 불일치 대비 — DB 리셋 전 임시)
-      if (wh === 'SC-PCR' || wh === 'CA-PCR') {
-        const csKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-        if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
-        const exCs = window.binInventory[wh][csKey].find(b => b.bin === loc);
-        if (exCs) { exCs.qty += qty; }
-        else { window.binInventory[wh][csKey].push({ bin: loc, qty, committed: row.qty_committed||0, inv_id: row.id, received_date: rcvDate }); }
+    // bin별 상세 — inventory_bins 테이블 우선, 없으면 location fallback
+    if (window.binInventory[wh] !== undefined) {
+      const bins = binsByInvId[row.id] || [];
+      
+      if (bins.length > 0) {
+        // inventory_bins에 데이터 있음 → 여러 bin 지원!
+        // committed는 inventory row 전체 값 → bin별로 비례 분배
+        const totalBinQty = bins.reduce((s,b) => s + (b.qty || 0), 0);
+        bins.forEach(b => {
+          if (!b.bin_code || !b.qty) return;
+          // 이 bin의 committed 추정 (전체 committed × bin_qty/total_bin_qty)
+          const binCommitted = totalBinQty > 0 ? Math.round(committed * (b.qty / totalBinQty)) : 0;
+          const binAvailQty = Math.max(0, b.qty - binCommitted);
+          
+          if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
+          window.binInventory[wh][key].push({ 
+            bin: b.bin_code, 
+            qty: binAvailQty, 
+            committed: binCommitted,
+            inv_id: row.id, 
+            bin_id: b.id,
+            received_date: b.received_date || rcvDate 
+          });
+          
+          // PCR fallback key
+          if (wh === 'SC-PCR' || wh === 'CA-PCR') {
+            const csKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+            if (csKey !== key) {
+              if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
+              window.binInventory[wh][csKey].push({ 
+                bin: b.bin_code, 
+                qty: binAvailQty, 
+                committed: binCommitted,
+                inv_id: row.id, 
+                bin_id: b.id,
+                received_date: b.received_date || rcvDate 
+              });
+            }
+          }
+        });
+      } else if (row.location) {
+        // Fallback: inventory_bins에 없으면 기존 location 사용 (1 bin)
+        if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
+        window.binInventory[wh][key].push({ 
+          bin: row.location, 
+          qty: availQty, 
+          committed: committed, 
+          inv_id: row.id, 
+          received_date: rcvDate 
+        });
+        
+        if (wh === 'SC-PCR' || wh === 'CA-PCR') {
+          const csKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+          if (csKey !== key) {
+            if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
+            window.binInventory[wh][csKey].push({ 
+              bin: row.location, 
+              qty: availQty, 
+              committed: committed, 
+              inv_id: row.id, 
+              received_date: rcvDate 
+            });
+          }
+        }
       }
-
     }
   });
 
@@ -8203,6 +8265,21 @@ async function loadInventory() {
     _aFrom += 1000;
   }
   console.log(`[loadInventory] Loaded ${allData.length} rows`);
+  
+  // inventory_bins 로드 → inv_id 기준으로 맵
+  const { data: allBins } = await db.from('inventory_bins')
+    .select('id, inventory_id, bin_code, qty, received_date');
+  const binsByInvId = {};
+  (allBins || []).forEach(b => {
+    if (!binsByInvId[b.inventory_id]) binsByInvId[b.inventory_id] = [];
+    binsByInvId[b.inventory_id].push(b);
+  });
+  // 각 row에 bins 배열 붙이기
+  allData.forEach(r => {
+    r.bins = binsByInvId[r.id] || [];
+  });
+  console.log(`[loadInventory] Loaded ${allBins?.length || 0} bins across ${Object.keys(binsByInvId).length} inventory rows`);
+  
   // 창고별 개수 확인
   const whCounts = {};
   allData.forEach(i => {
@@ -8287,7 +8364,33 @@ function renderInventoryTable(data) {
     g.total += qty;
     g.committed += (i.qty_committed || 0);
     if (!g.ppb) g.ppb = i.styles?.pcs_per_box || i.pcs_per_box || 72;
-    g.details.push({ wh, loc: i.location || '—', qty, id: i.id, committed: i.qty_committed || 0 });
+    
+    // details: inventory_bins에 데이터 있으면 각 bin별로 row, 없으면 location 1개로 fallback
+    const rowCommitted = i.qty_committed || 0;
+    if (i.bins && i.bins.length > 0) {
+      // bin별로 detail row — 각 bin의 qty와 비례 committed
+      const totalBinQty = i.bins.reduce((s, b) => s + (b.qty || 0), 0);
+      i.bins.forEach(b => {
+        const binCommitted = totalBinQty > 0 ? Math.round(rowCommitted * (b.qty / totalBinQty)) : 0;
+        g.details.push({ 
+          wh, 
+          loc: b.bin_code || '—', 
+          qty: b.qty || 0, 
+          id: i.id, 
+          bin_id: b.id,
+          committed: binCommitted 
+        });
+      });
+    } else {
+      // Fallback: bins 없으면 location 1개
+      g.details.push({ 
+        wh, 
+        loc: i.location || '—', 
+        qty, 
+        id: i.id, 
+        committed: rowCommitted 
+      });
+    }
   });
 
   // 정렬: style → color → variant (Tubular 먼저) → size
@@ -11092,6 +11195,15 @@ async function executeInventoryImport() {
     btn.style.display = 'none';
     document.getElementById('imp-inv-file').value = '';
     document.getElementById('imp-inv-preview').innerHTML = '';
+    
+    // Inventory 탭 자동 새로고침 (binInventory 포함)
+    if (typeof loadInventory === 'function') {
+      loadInventory();
+    }
+    // Bin inventory도 다시 로드 (오더 시스템에서 쓰임)
+    if (typeof window._invLoading !== 'undefined') {
+      window._invLoading = null;  // 강제 다시 로드
+    }
 
   } catch(e) {
     console.error('[INV IMPORT]', e);
@@ -44498,4 +44610,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-24T13:45:35Z - Transaction system + Davinci Import wrapped -->
+
+
+<!-- Deploy trigger: 2026-04-24T13:54:44Z - show multiple bins per SKU in Inventory tab -->
