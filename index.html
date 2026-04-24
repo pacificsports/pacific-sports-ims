@@ -590,9 +590,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div id="inv-view-list" style="display:block;">
 <div class="inv-filter" style="grid-template-columns:repeat(8,1fr);">
 <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">STYLE #</label>
-            <input class="fi" id="inv-filter-style" placeholder="e.g. 1368 or 1368abyssm" onkeydown="if(event.key==='Enter')filterInventory()"/></div>
+            <input class="fi" id="inv-filter-style" placeholder="e.g. 1368 or 1368abyssm" oninput="filterInventory()"/></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">COLOR</label>
-            <input class="fi" id="inv-filter-color" placeholder="Color..." onkeydown="if(event.key==='Enter')filterInventory()"/></div>
+            <input class="fi" id="inv-filter-color" placeholder="Color..." oninput="filterInventory()"/></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">WAREHOUSE</label>
             <select class="fsel" id="inv-filter-wh" onchange="filterInventory()" style="width:100%">
               <option value="">All (CA + SC + PCR)</option>
@@ -602,7 +602,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <option value="CA-PCR">CA-PCR — Pcs Room</option>
             </select></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">SIZE</label>
-           <input class="fi" id="inv-filter-size" placeholder="Size..." onkeydown="if(event.key==='Enter')filterInventory()"/></div>
+           <input class="fi" id="inv-filter-size" placeholder="Size..." oninput="filterInventory()"/></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">UNIT</label>
             <select class="fsel" id="inv-unit-toggle" onchange="filterInventory()" style="width:100%">
               <option value="pcs">Pieces (pcs)</option>
@@ -615,7 +615,10 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <option value="out">Out of Stock</option>
             </select></div>
           <div style="display:flex;align-items:flex-end;">
-            <button class="btn btn-primary" onclick="filterInventory()" style="width:100%;height:34px;font-size:13px;">🔍 Search</button>
+            <button class="btn" onclick="clearInventoryFilters()" style="width:100%;height:34px;font-size:13px;">✕ Clear</button>
+          </div>
+          <div style="display:flex;align-items:flex-end;">
+            <button class="btn btn-primary" onclick="openInventoryImport()" style="width:100%;height:34px;font-size:13px;background:#059669;border-color:#047857;">📥 Import</button>
           </div>
         </div>
         <div id="inventory-table-wrap">
@@ -4215,7 +4218,79 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 <!-- ══════════════════════════════════
      BIN 배분 모달 (SC/CA 통합)
 ══════════════════════════════════ -->
-<div class="modal-overlay" id="modal-alloc">
+<!-- ══════════════════════════════════
+     📥 INVENTORY IMPORT (DaVinci → New)
+     ══════════════════════════════════ -->
+<div class="modal-overlay" id="modal-inventory-import">
+  <div class="modal" style="width:1200px;max-width:98vw;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;">
+    <div class="modal-head" style="flex-shrink:0;">
+      <span class="modal-title">📥 Inventory Import (DaVinci → 새 시스템)</span>
+      <button class="modal-close" onclick="closeModal('modal-inventory-import')">×</button>
+    </div>
+    <div class="modal-body" style="overflow-y:auto;flex:1;padding:16px;">
+      <!-- Step 1: 창고 선택 + 파일 업로드 -->
+      <div id="inv-import-step1" style="padding:14px;background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border:2px dashed #86efac;border-radius:8px;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:200px;">
+            <label style="font-size:11px;font-weight:700;color:#065f46;display:block;margin-bottom:4px;">1️⃣ 창고 선택 *</label>
+            <select class="fsel" id="inv-import-wh" style="width:100%;padding:8px 10px;border:1px solid #86efac;border-radius:5px;font-size:13px;">
+              <option value="">— 창고 선택 —</option>
+              <option value="SC">SC (Sumter, SC)</option>
+              <option value="SC-PCR">SC-PCR (Sumter Pieces Room)</option>
+              <option value="CA">CA (Eastvale, CA)</option>
+              <option value="CA-PCR">CA-PCR (Eastvale Pieces Room)</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:200px;">
+            <label style="font-size:11px;font-weight:700;color:#065f46;display:block;margin-bottom:4px;">2️⃣ DaVinci Excel 파일 *</label>
+            <input type="file" id="inv-import-file" accept=".xlsx,.xls,.csv" onchange="parseInventoryImportFile()" style="width:100%;padding:6px;border:1px solid #86efac;border-radius:5px;background:#fff;font-size:12px;"/>
+          </div>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:#047857;">
+          💡 예상 컬럼: <code>Location</code> | <code>Item Code</code> | <code>Lot Code</code> | <code>Sublot Code</code> | <code>Qty</code> (또는 <code>Available Qty</code>)
+        </div>
+      </div>
+      
+      <!-- Step 2: Preview 테이블 (파일 업로드 후 표시) -->
+      <div id="inv-import-preview" style="display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:8px 12px;background:#f9fafb;border-radius:6px;">
+          <div id="inv-import-summary" style="font-size:12px;color:#374151;"></div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-sm" onclick="toggleInventoryImportShowOnlyMatched()" id="inv-import-filter-btn" style="font-size:11px;">✅ Matched만 보기</button>
+            <button class="btn btn-sm" onclick="cancelInventoryImport()" style="font-size:11px;">↺ 다시 선택</button>
+          </div>
+        </div>
+        
+        <div style="max-height:50vh;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;">
+          <table class="tbl" style="font-size:12px;">
+            <thead style="position:sticky;top:0;background:#f3f4f6;z-index:1;">
+              <tr>
+                <th style="width:30px;text-align:center;padding:6px;">#</th>
+                <th style="width:180px;padding:6px;">Item Code (DaVinci)</th>
+                <th style="width:80px;padding:6px;">Location</th>
+                <th style="width:70px;padding:6px;">Color</th>
+                <th style="width:60px;padding:6px;">Size</th>
+                <th style="width:80px;text-align:right;padding:6px;">Qty</th>
+                <th style="padding:6px;">Match Status</th>
+                <th style="width:60px;text-align:center;padding:6px;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="inv-import-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot" style="flex-shrink:0;justify-content:space-between;">
+      <div id="inv-import-status" style="font-size:12px;color:#6b7280;"></div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="closeModal('modal-inventory-import')">Cancel</button>
+        <button class="btn btn-primary" id="inv-import-confirm-btn" onclick="confirmInventoryImport()" disabled style="opacity:0.4;">✓ Import 확인 (0개)</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
   <div class="modal" style="width:520px;max-width:96vw;display:flex;flex-direction:column;max-height:88vh;overflow:hidden;">
     <div class="modal-head" id="alloc-modal-head" style="flex-shrink:0;">
       <span class="modal-title" id="alloc-modal-title">📍 Bin 배분</span>
@@ -8226,7 +8301,7 @@ function filterInventory() {
       const skuMatch = (i.sku_id || '').toLowerCase().includes(style);
       if (!styleMatch && !skuMatch) return false;
     }
-    if (color && i.color?.toLowerCase() !== color) return false;
+    if (color && !i.color?.toLowerCase().includes(color)) return false;
     if (wh && i.warehouses?.code !== wh) return false;
     if (size && !i.size?.toLowerCase().includes(size)) return false;
     if (status === 'low' && !(i.qty_on_hand <= i.reorder_point && i.qty_on_hand > 0)) return false;
@@ -8234,6 +8309,306 @@ function filterInventory() {
     return true;
   });
   renderInventoryTable(filtered);
+}
+
+// ══════════════════════════════════════════════════════════════
+// 📥 INVENTORY IMPORT (DaVinci → 새 시스템)
+// ══════════════════════════════════════════════════════════════
+
+let _invImportRows = [];  // 파싱된 Excel rows (매칭 포함)
+let _invImportShowOnlyMatched = false;
+
+/** Inventory Import 모달 열기 */
+function openInventoryImport() {
+  // 초기화
+  document.getElementById('inv-import-wh').value = '';
+  document.getElementById('inv-import-file').value = '';
+  document.getElementById('inv-import-preview').style.display = 'none';
+  document.getElementById('inv-import-summary').innerHTML = '';
+  document.getElementById('inv-import-tbody').innerHTML = '';
+  document.getElementById('inv-import-status').textContent = '';
+  const confirmBtn = document.getElementById('inv-import-confirm-btn');
+  confirmBtn.disabled = true;
+  confirmBtn.style.opacity = '0.4';
+  confirmBtn.textContent = '✓ Import 확인 (0개)';
+  _invImportRows = [];
+  _invImportShowOnlyMatched = false;
+  openModal('modal-inventory-import');
+}
+
+/** Excel 파싱 + SKU 매칭 */
+async function parseInventoryImportFile() {
+  const fileEl = document.getElementById('inv-import-file');
+  const whEl = document.getElementById('inv-import-wh');
+  const whCode = whEl.value;
+  
+  if (!whCode) {
+    alert('먼저 창고를 선택해주세요.');
+    fileEl.value = '';
+    return;
+  }
+  const file = fileEl.files[0];
+  if (!file) return;
+  
+  const statusEl = document.getElementById('inv-import-status');
+  statusEl.textContent = '⏳ 파일 읽는 중...';
+  statusEl.style.color = '#ea580c';
+  
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    
+    if (data.length === 0) {
+      alert('빈 파일입니다.');
+      statusEl.textContent = '';
+      return;
+    }
+    
+    // 컬럼 찾기 (다양한 이름 허용)
+    const firstRow = data[0];
+    const keys = Object.keys(firstRow);
+    const findKey = (candidates) => {
+      for (const k of keys) {
+        const lower = k.toLowerCase().trim();
+        if (candidates.some(c => lower === c.toLowerCase() || lower.includes(c.toLowerCase()))) return k;
+      }
+      return null;
+    };
+    
+    const itemCodeKey = findKey(['item code', 'itemcode', 'sku', 'item']);
+    const locationKey = findKey(['location', 'bin', 'loc']);
+    const lotKey = findKey(['lot code', 'lot', 'color']);
+    const sublotKey = findKey(['sublot code', 'sublot', 'size']);
+    const qtyKey = findKey(['available qty', 'qty', 'quantity', 'on hand']);
+    
+    if (!itemCodeKey || !qtyKey) {
+      alert('필수 컬럼을 찾을 수 없습니다:\n- Item Code\n- Qty (또는 Available Qty)\n\n현재 컬럼: ' + keys.join(', '));
+      statusEl.textContent = '';
+      return;
+    }
+    
+    // warehouse_id 찾기
+    const wh = warehouses.find(w => w.code === whCode);
+    if (!wh) {
+      alert(`창고 코드 ${whCode}를 찾을 수 없습니다.`);
+      statusEl.textContent = '';
+      return;
+    }
+    
+    // 현재 창고의 모든 inventory rows 한번에 가져오기 (매칭용)
+    statusEl.textContent = '⏳ DB에서 SKU 매칭 중...';
+    const { data: existingInv } = await db.from('inventory')
+      .select('id, sku, qty_on_hand, location, style_id, color, size, styles(style_number, description)')
+      .eq('warehouse_id', wh.id);
+    
+    const existingBySkuMap = {};
+    (existingInv || []).forEach(r => {
+      if (r.sku) existingBySkuMap[r.sku.toLowerCase()] = r;
+    });
+    
+    // 각 row 매칭
+    _invImportRows = data.map((row, idx) => {
+      const itemCode = String(row[itemCodeKey] || '').trim();
+      const location = String(row[locationKey] || '').trim();
+      const color = String(row[lotKey] || '').trim();
+      const size = String(row[sublotKey] || '').trim();
+      const qty = parseInt(row[qtyKey]) || 0;
+      const skuLower = itemCode.toLowerCase();
+      const match = existingBySkuMap[skuLower] || null;
+      
+      return {
+        idx: idx + 1,
+        itemCode,
+        skuLower,
+        location,
+        color,
+        size,
+        qty,
+        match,  // 기존 inventory row
+        matched: !!match,
+        skip: false,
+      };
+    }).filter(r => r.itemCode);  // itemCode 없는 row 제외
+    
+    renderInventoryImportPreview();
+    
+    statusEl.textContent = '';
+    document.getElementById('inv-import-preview').style.display = 'block';
+    
+  } catch (err) {
+    console.error('[parseInventoryImportFile]', err);
+    alert('파일 읽기 실패: ' + err.message);
+    statusEl.textContent = '';
+  }
+}
+
+/** Preview 테이블 렌더링 */
+function renderInventoryImportPreview() {
+  const tbody = document.getElementById('inv-import-tbody');
+  const summary = document.getElementById('inv-import-summary');
+  const confirmBtn = document.getElementById('inv-import-confirm-btn');
+  
+  const total = _invImportRows.length;
+  const matched = _invImportRows.filter(r => r.matched && !r.skip).length;
+  const unmatched = _invImportRows.filter(r => !r.matched).length;
+  const skipped = _invImportRows.filter(r => r.skip).length;
+  
+  summary.innerHTML = `📊 Total: <strong>${total}</strong> rows · 
+    <span style="color:#059669;">✅ Matched: ${matched}</span> · 
+    <span style="color:#ea580c;">⚠️ Unmatched: ${unmatched}</span>
+    ${skipped > 0 ? ` · <span style="color:#9ca3af;">⏭ Skipped: ${skipped}</span>` : ''}`;
+  
+  // 필터링
+  const visible = _invImportShowOnlyMatched 
+    ? _invImportRows.filter(r => r.matched)
+    : _invImportRows;
+  
+  tbody.innerHTML = visible.map(r => {
+    let statusHtml, rowBg;
+    if (r.skip) {
+      statusHtml = `<span style="color:#9ca3af;font-weight:600;">⏭ Skipped</span>`;
+      rowBg = '#f9fafb';
+    } else if (r.matched) {
+      const m = r.match;
+      const currentQty = m.qty_on_hand || 0;
+      const qtyDiff = r.qty - currentQty;
+      const diffText = qtyDiff !== 0 
+        ? `<span style="color:${qtyDiff > 0 ? '#059669' : '#dc2626'};font-size:10px;"> (${qtyDiff > 0 ? '+' : ''}${qtyDiff})</span>`
+        : '';
+      const locChanged = m.location && m.location !== r.location && r.location;
+      statusHtml = `<span style="color:#059669;font-weight:600;">✅ Matched</span>: 
+        ${m.styles?.style_number || '?'} · ${m.color} · ${m.size}
+        <br><span style="font-size:10px;color:#6b7280;">
+          Current: ${currentQty} → New: ${r.qty}${diffText}
+          ${locChanged ? ` · <span style="color:#7c3aed;">Bin: ${m.location || '—'} → ${r.location}</span>` : ''}
+        </span>`;
+      rowBg = '#f0fdf4';
+    } else {
+      statusHtml = `<span style="color:#ea580c;font-weight:600;">⚠️ Not in system</span>
+        <br><span style="font-size:10px;color:#6b7280;">SKU가 등록 안 됨. Skip됩니다.</span>`;
+      rowBg = '#fff7ed';
+    }
+    
+    return `<tr style="background:${rowBg};border-bottom:1px solid #f0f0f0;">
+      <td style="text-align:center;padding:5px;color:#9ca3af;">${r.idx}</td>
+      <td style="padding:5px;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">${escapeHtml(r.itemCode)}</td>
+      <td style="padding:5px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7c3aed;">${escapeHtml(r.location) || '—'}</td>
+      <td style="padding:5px;font-size:11px;">${escapeHtml(r.color) || '—'}</td>
+      <td style="padding:5px;font-size:11px;">${escapeHtml(r.size) || '—'}</td>
+      <td style="padding:5px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;">${r.qty.toLocaleString()}</td>
+      <td style="padding:5px;">${statusHtml}</td>
+      <td style="text-align:center;padding:5px;">
+        ${r.matched ? `
+          <button class="btn btn-sm" onclick="toggleInventoryImportSkip(${_invImportRows.indexOf(r)})" 
+            style="font-size:10px;padding:2px 6px;${r.skip ? 'background:#fef3c7;color:#b45309;' : 'color:#dc2626;'}">
+            ${r.skip ? '↺' : '✕'}
+          </button>
+        ` : '—'}
+      </td>
+    </tr>`;
+  }).join('');
+  
+  // Confirm 버튼 상태
+  const willImport = _invImportRows.filter(r => r.matched && !r.skip).length;
+  confirmBtn.textContent = `✓ Import 확인 (${willImport}개)`;
+  confirmBtn.disabled = willImport === 0;
+  confirmBtn.style.opacity = willImport === 0 ? '0.4' : '1';
+}
+
+/** Skip 토글 */
+function toggleInventoryImportSkip(idx) {
+  if (_invImportRows[idx]) {
+    _invImportRows[idx].skip = !_invImportRows[idx].skip;
+    renderInventoryImportPreview();
+  }
+}
+
+/** Matched만 보기 토글 */
+function toggleInventoryImportShowOnlyMatched() {
+  _invImportShowOnlyMatched = !_invImportShowOnlyMatched;
+  const btn = document.getElementById('inv-import-filter-btn');
+  btn.textContent = _invImportShowOnlyMatched ? '👁 전체 보기' : '✅ Matched만 보기';
+  btn.style.background = _invImportShowOnlyMatched ? '#dcfce7' : '';
+  btn.style.color = _invImportShowOnlyMatched ? '#047857' : '';
+  renderInventoryImportPreview();
+}
+
+/** 다시 선택 (파일 초기화) */
+function cancelInventoryImport() {
+  document.getElementById('inv-import-file').value = '';
+  document.getElementById('inv-import-preview').style.display = 'none';
+  document.getElementById('inv-import-tbody').innerHTML = '';
+  _invImportRows = [];
+}
+
+/** Confirm — DB에 일괄 업데이트 */
+async function confirmInventoryImport() {
+  const toProcess = _invImportRows.filter(r => r.matched && !r.skip);
+  if (toProcess.length === 0) return;
+  
+  if (!confirm(`${toProcess.length}개 inventory row를 업데이트 합니다.\n\n- qty_on_hand: Excel의 값으로 덮어쓰기\n- location: Excel의 bin code로 업데이트\n\n계속하시겠습니까?`)) return;
+  
+  const statusEl = document.getElementById('inv-import-status');
+  const confirmBtn = document.getElementById('inv-import-confirm-btn');
+  confirmBtn.disabled = true;
+  confirmBtn.style.opacity = '0.5';
+  statusEl.style.color = '#ea580c';
+  
+  let success = 0;
+  let errors = [];
+  
+  for (let i = 0; i < toProcess.length; i++) {
+    const r = toProcess[i];
+    statusEl.textContent = `⏳ 저장 중... ${i+1}/${toProcess.length}`;
+    
+    try {
+      const { error } = await db.from('inventory').update({
+        qty_on_hand: r.qty,
+        location: r.location || null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', r.match.id);
+      
+      if (error) {
+        errors.push(`${r.itemCode}: ${error.message}`);
+      } else {
+        success++;
+        // inventory_logs에 기록
+        try {
+          await db.from('inventory_logs').insert({
+            inventory_id: r.match.id,
+            changed_by: _currentEmployee?.name || 'system',
+            change_type: 'davinci_import',
+            qty_before: r.match.qty_on_hand || 0,
+            qty_after: r.qty,
+            notes: `DaVinci Import: loc ${r.match.location || '—'} → ${r.location || '—'}`,
+          });
+        } catch (logErr) { /* log 실패는 무시 */ }
+      }
+    } catch (err) {
+      errors.push(`${r.itemCode}: ${err.message}`);
+    }
+  }
+  
+  // 결과
+  if (errors.length === 0) {
+    statusEl.style.color = '#059669';
+    statusEl.textContent = `✅ ${success}개 업데이트 완료!`;
+    setTimeout(() => {
+      closeModal('modal-inventory-import');
+      loadInventory();  // 새로고침
+      showToast(`📥 Inventory Import 완료: ${success}개`);
+    }, 1500);
+  } else {
+    statusEl.style.color = '#dc2626';
+    statusEl.textContent = `⚠️ ${success}개 성공, ${errors.length}개 실패`;
+    console.error('[Inventory Import errors]', errors);
+    alert(`${success}개 성공\n${errors.length}개 실패\n\n실패 목록 (콘솔 참조):\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...' : ''}`);
+    confirmBtn.disabled = false;
+    confirmBtn.style.opacity = '1';
+  }
 }
 
 function sizeOrder(s) {
@@ -43931,4 +44306,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-23T17:27:50Z - Add Adult V-Neck S/S category -->
+
+
+<!-- Deploy trigger: 2026-04-24T02:07:15Z - DaVinci Inventory Import -->
