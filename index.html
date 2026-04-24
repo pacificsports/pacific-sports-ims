@@ -5193,13 +5193,24 @@ async function loadScInventory() {
   caPcrInventory = {};
   window.binInventory = { 'SC':{}, 'SC-PCR':{}, 'CA':{}, 'CA-PCR':{} };
 
-  // 1. inventory 테이블 (qty 합산 정보)
+  // 1. inventory 테이블 (qty 합산 정보) — qty>0만 로드해서 성능 개선
   const { data: allInv } = await db.from('inventory')
-    .select('id, qty_on_hand, qty_committed, sku, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)');
+    .select('id, qty_on_hand, qty_committed, sku, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)')
+    .gt('qty_on_hand', 0);
   
-  // 2. inventory_bins 테이블 (각 bin별 상세) — 여러 bin 지원!
-  const { data: allBins } = await db.from('inventory_bins')
-    .select('inventory_id, bin_code, qty, received_date');
+  // 2. inventory_bins 테이블 (각 bin별 상세) — 로드된 inventory 의 bins만
+  const loadedInvIds = (allInv || []).map(r => r.id);
+  let allBins = [];
+  if (loadedInvIds.length > 0) {
+    // 1000개씩 chunk로 IN 쿼리 (Supabase 제한 대비)
+    for (let i = 0; i < loadedInvIds.length; i += 500) {
+      const chunk = loadedInvIds.slice(i, i + 500);
+      const { data: binChunk } = await db.from('inventory_bins')
+        .select('id, inventory_id, bin_code, qty, received_date')
+        .in('inventory_id', chunk);
+      if (binChunk) allBins = allBins.concat(binChunk);
+    }
+  }
   
   // inv_id → bins[] 맵
   const binsByInvId = {};
@@ -8253,6 +8264,7 @@ async function loadInventory() {
   while (true) {
     const { data: _aChunk, error } = await db.from('inventory')
       .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box), skus(variant)')
+      .gt('qty_on_hand', 0)   // 🚀 성능: 재고 있는 row만 로드 (qty=0 자리예약 제외)
       .order('id', {ascending: true})
       .range(_aFrom, _aFrom + 999);
     if (error) {
@@ -8266,11 +8278,20 @@ async function loadInventory() {
   }
   console.log(`[loadInventory] Loaded ${allData.length} rows`);
   
-  // inventory_bins 로드 → inv_id 기준으로 맵
-  const { data: allBins } = await db.from('inventory_bins')
-    .select('id, inventory_id, bin_code, qty, received_date');
+  // inventory_bins 로드 → inv_id 기준으로 맵 (로드된 inventory만)
+  const loadedInvIds = allData.map(r => r.id);
+  let allBins = [];
+  if (loadedInvIds.length > 0) {
+    for (let i = 0; i < loadedInvIds.length; i += 500) {
+      const chunk = loadedInvIds.slice(i, i + 500);
+      const { data: binChunk } = await db.from('inventory_bins')
+        .select('id, inventory_id, bin_code, qty, received_date')
+        .in('inventory_id', chunk);
+      if (binChunk) allBins = allBins.concat(binChunk);
+    }
+  }
   const binsByInvId = {};
-  (allBins || []).forEach(b => {
+  allBins.forEach(b => {
     if (!binsByInvId[b.inventory_id]) binsByInvId[b.inventory_id] = [];
     binsByInvId[b.inventory_id].push(b);
   });
@@ -8443,18 +8464,36 @@ function renderInventoryTable(data) {
     // 창고별 드릴다운 (기본 접힘, 메인 row 클릭 시 펼침)
     // 창고 순서: SC → SC-PCR → CA → CA-PCR (컬럼 헤더와 일치)
     const whOrder = { 'SC': 1, 'SC-PCR': 2, 'CA': 3, 'CA-PCR': 4 };
-    const sortedDetails = [...r.details].sort((a, b) => (whOrder[a.wh] || 99) - (whOrder[b.wh] || 99));
+    const sortedDetails = [...r.details]
+      .filter(d => (d.qty || 0) > 0)  // qty=0 bin은 숨김 (깔끔)
+      .sort((a, b) => {
+        const wo = (whOrder[a.wh] || 99) - (whOrder[b.wh] || 99);
+        if (wo !== 0) return wo;
+        return (a.loc || '').localeCompare(b.loc || '');
+      });
     const detailRows = sortedDetails.map(d => {
       const whBadge = d.wh === 'CA' ? '<span class="loc-ca">CA</span>' :
                       d.wh === 'SC-PCR' ? '<span class="loc-sc" style="background:#c2410c">SC-PCR</span>' :
                       d.wh === 'CA-PCR' ? '<span class="loc-ca" style="background:#7c2d12">CA-PCR</span>' :
                       '<span class="loc-sc">SC</span>';
       const locDisplay = (d.loc && d.loc !== '—') ? d.loc : '<em style="color:#9ca3af;">(no bin)</em>';
+      const qtyDisplay = toUnit(d.qty, r.ppb).toLocaleString();
+      
+      // 창고별 컬럼에 qty 배치 — SC는 7번째, SC-PCR은 8번째, CA는 9번째, CA-PCR은 10번째
+      const scCell    = d.wh === 'SC'     ? `<td class="num" style="font-size:11px;color:var(--sc);font-weight:700;">${qtyDisplay}</td>` : '<td></td>';
+      const scPcrCell = d.wh === 'SC-PCR' ? `<td class="num" style="font-size:11px;color:#c2410c;font-weight:700;">${qtyDisplay}</td>` : '<td></td>';
+      const caCell    = d.wh === 'CA'     ? `<td class="num" style="font-size:11px;color:var(--ca);font-weight:700;">${qtyDisplay}</td>` : '<td></td>';
+      const caPcrCell = d.wh === 'CA-PCR' ? `<td class="num" style="font-size:11px;color:#7c2d12;font-weight:700;">${qtyDisplay}</td>` : '<td></td>';
+      
       return `<tr class="detail-${idx}" style="display:none;background:#f8fafc;cursor:pointer;" onclick="event.stopPropagation();editInventoryItem('${d.id}')">
-        <td colspan="6" style="font-size:11px;color:var(--text3);padding-left:36px;">↳ ${whBadge} <span style="font-family:'IBM Plex Mono',monospace;">${locDisplay}</span></td>
-        <td class="num" style="font-size:11px;color:var(--text3);" colspan="4">Qty: ${toUnit(d.qty,r.ppb).toLocaleString()}</td>
-        <td class="num" style="font-size:11px;color:var(--text3);">${toUnit(d.qty,r.ppb).toLocaleString()}</td>
-        <td class="num" style="font-size:11px;color:var(--text3);">${toUnit(d.qty - d.committed,r.ppb).toLocaleString()}</td>
+        <td></td>
+        <td colspan="5" style="font-size:11px;color:var(--text3);padding-left:28px;">↳ ${whBadge} <span style="font-family:'IBM Plex Mono',monospace;">${locDisplay}</span></td>
+        ${scCell}
+        ${scPcrCell}
+        ${caCell}
+        ${caPcrCell}
+        <td></td>
+        <td></td>
         <td></td>
       </tr>`;
     }).join('');
@@ -44612,4 +44651,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-24T13:54:44Z - show multiple bins per SKU in Inventory tab -->
+
+
+<!-- Deploy trigger: 2026-04-24T13:59:38Z - bin rows aligned to warehouse columns -->
