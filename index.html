@@ -10886,44 +10886,107 @@ async function executeInventoryImport() {
     if (styleErr || !style) throw new Error(`스타일 ${_invImportData.styleNum}을 찾을 수 없습니다`);
     const styleId = style.id;
 
-    // 2. 기존 데이터 모두 0으로 리셋 후 업데이트 (자리는 유지)
-    //    (자리 예약된 row들이 있으니 delete 하지 않고 update만)
+    // 2. 기존 데이터 리셋: inventory qty 0 + 기존 inventory_bins 삭제
     btn.textContent = '⏳ 기존 재고 리셋...';
     const { error: resetErr } = await db.from('inventory')
       .update({ qty_on_hand: 0, location: null })
       .eq('warehouse_id', whId)
       .eq('style_id', styleId);
     if (resetErr) throw resetErr;
+    
+    // 해당 창고+스타일의 inventory IDs 가져옴
+    const { data: invIds } = await db.from('inventory')
+      .select('id')
+      .eq('warehouse_id', whId)
+      .eq('style_id', styleId);
+    const invIdList = (invIds || []).map(r => r.id);
+    
+    // 기존 inventory_bins 전부 삭제 (CASCADE로 FK 때문에 inventory 자체는 유지)
+    if (invIdList.length > 0) {
+      const { error: binDelErr } = await db.from('inventory_bins')
+        .delete()
+        .in('inventory_id', invIdList);
+      if (binDelErr) throw binDelErr;
+    }
 
-    // 3. Davinci 데이터로 업데이트 (row별로 update)
+    // 3. Davinci 데이터를 SKU별로 그룹핑 (같은 SKU의 여러 bin 합산)
     btn.textContent = '⏳ 업로드 중...';
+    const bySku = {};  // { sku_id: { totalQty, bins: [{bin, qty, received_date}], color, size } }
+    for (const r of _invImportData.matched) {
+      if (!bySku[r.sku_id]) {
+        bySku[r.sku_id] = {
+          totalQty: 0,
+          bins: [],
+          color: r.color,
+          size: r.size
+        };
+      }
+      bySku[r.sku_id].totalQty += r.qty_on_hand;
+      bySku[r.sku_id].bins.push({
+        bin_code: r.location,
+        qty: r.qty_on_hand,
+        received_date: r.received_date || null
+      });
+    }
+    
+    const skuList = Object.keys(bySku);
     let updated = 0;
     let notFound = [];
-    for (const r of _invImportData.matched) {
-      const { data, error } = await db.from('inventory')
-        .update({ qty_on_hand: r.qty_on_hand, location: r.location })
+    let binsCreated = 0;
+    
+    for (const sku_id of skuList) {
+      const group = bySku[sku_id];
+      const primaryBin = group.bins[0]?.bin_code || null;  // 첫 번째 bin = 대표
+      
+      // inventory 업데이트 또는 생성
+      const { data: updData, error: updErr } = await db.from('inventory')
+        .update({ qty_on_hand: group.totalQty, location: primaryBin })
         .eq('warehouse_id', whId)
-        .eq('sku_id', r.sku_id)
+        .eq('sku_id', sku_id)
         .select('id');
-      if (error) throw error;
-      if (!data || data.length === 0) {
+      if (updErr) throw updErr;
+      
+      let inventoryId;
+      if (updData && updData.length > 0) {
+        inventoryId = updData[0].id;
+      } else {
         // 자리 예약 안 된 SKU — 새로 만듦
-        const { error: insErr } = await db.from('inventory').insert({
+        const { data: insData, error: insErr } = await db.from('inventory').insert({
           warehouse_id: whId,
           style_id: styleId,
           style_number: _invImportData.styleNum,
-          sku_id: r.sku_id,
-          color: r.color,
-          size: r.size,
-          location: r.location,
-          qty_on_hand: r.qty_on_hand,
+          sku_id,
+          color: group.color,
+          size: group.size,
+          location: primaryBin,
+          qty_on_hand: group.totalQty,
           qty_committed: 0
-        });
-        if (insErr) notFound.push(r.sku_id);
+        }).select('id').single();
+        if (insErr) { notFound.push(sku_id); continue; }
+        inventoryId = insData.id;
       }
+      
+      // inventory_bins 저장 (여러 bin 지원!)
+      if (inventoryId && group.bins.length > 0) {
+        const binsToInsert = group.bins
+          .filter(b => b.bin_code && b.bin_code.trim())
+          .map(b => ({
+            inventory_id: inventoryId,
+            bin_code: b.bin_code.trim(),
+            qty: b.qty,
+            received_date: b.received_date
+          }));
+        if (binsToInsert.length > 0) {
+          const { error: binInsErr } = await db.from('inventory_bins')
+            .insert(binsToInsert);
+          if (binInsErr) console.error('[inventory_bins insert]', binInsErr);
+          else binsCreated += binsToInsert.length;
+        }
+      }
+      
       updated++;
-      if (updated % 100 === 0) {
-        btn.textContent = `⏳ 업로드 중... ${updated}/${_invImportData.matched.length}`;
+      if (updated % 50 === 0) {
+        btn.textContent = `⏳ 업로드 중... ${updated}/${skuList.length} SKUs`;
       }
     }
 
@@ -10936,7 +10999,7 @@ async function executeInventoryImport() {
       });
     } catch(e) {}
 
-    alert(`✅ 업로드 완료!\n\n${updated}개 재고 row가 ${_invImportData.whCode} 창고에 업데이트되었습니다.` + (notFound.length > 0 ? `\n\n⚠️ 자리 예약 없어서 새로 만든 SKU ${notFound.length}개` : ''));
+    alert(`✅ 업로드 완료!\n\n${updated}개 SKU가 ${_invImportData.whCode} 창고에 업데이트되었습니다.\n📍 Bin 위치 ${binsCreated}개 저장.` + (notFound.length > 0 ? `\n\n⚠️ 자리 예약 없어서 새로 만든 SKU ${notFound.length}개` : ''));
 
     // 리셋
     _invImportData = null;
@@ -43955,4 +44018,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-24T02:26:25Z - SKU suffix (+ER, etc) handling in Inventory Import -->
+
+
+<!-- Deploy trigger: 2026-04-24T13:12:34Z - Phase 2 complete: inventory_bins + multi-bin import -->
