@@ -14085,12 +14085,19 @@ async function openProcessBatch(batchId, batchNumber) {
     _processItems = [];
     if (palletIds.length > 0) {
       const { data: bins } = await db.from('inventory_bins')
-        .select('id, pallet_id, bin_code, qty, inventory!inner(id, sku_id, style_number, color, size, warehouse_id, warehouses(code))')
+        .select('id, pallet_id, bin_code, qty, inventory!inner(id, sku_id, style_number, color, size, warehouse_id, warehouses(code), styles(pcs_per_box, pcs_per_box_large))')
         .in('pallet_id', palletIds);
       
       (bins || []).forEach(b => {
         const pallet = palletMap[b.pallet_id];
-        // 기본값: 분할 없음, 단일 split으로 시작
+        const size = b.inventory?.size || '';
+        const isLarge = ['3XL', '4XL', '5XL'].includes(size);
+        const ppb = isLarge 
+          ? (b.inventory?.styles?.pcs_per_box_large || 48)
+          : (b.inventory?.styles?.pcs_per_box || 72);
+        
+        // 기본값: 분할 없음, 단일 split으로 시작 (target_location: 도착 창고)
+        const defaultLocation = batch.to_warehouse === '3rd_party' ? '3rd_party' : (batch.to_warehouse || 'SC');
         _processItems.push({
           bin_id: b.id,
           inventory_id: b.inventory?.id,
@@ -14098,13 +14105,13 @@ async function openProcessBatch(batchId, batchNumber) {
           style_number: b.inventory?.style_number,
           color: b.inventory?.color,
           size: b.inventory?.size,
+          ppb: ppb,
           total_qty: b.qty,
           original_bin_code: b.bin_code,
           original_pallet_code: pallet?.pallet_code,
           original_warehouse: pallet?.warehouse_code,
-          // splits: 각 분할된 부분. 기본은 전체를 Keep
           splits: [
-            { qty: b.qty, action: 'keep', target_bin: '', target_pallet_code: '', target_warehouse: batch.to_warehouse }
+            { qty: b.qty, target_location: defaultLocation, target_value: '' }
           ]
         });
       });
@@ -14138,17 +14145,16 @@ function renderProcessItems() {
     html += `
       <div style="margin-bottom:16px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
         <div style="background:#f3f4f6;padding:8px 14px;font-size:12px;font-weight:700;color:#374151;display:flex;justify-content:space-between;">
-          <span>📦 Pallet <span style="font-family:'IBM Plex Mono',monospace;color:#92400e;">${escapeHtml(palletCode)}</span> (${items.length} SKUs · ${palletQty.toLocaleString()} pcs)</span>
+          <span>📦 Pallet <span style="font-family:'IBM Plex Mono',monospace;color:#92400e;">${escapeHtml(palletCode)}</span> (${items.length} SKUs · ${items.reduce((s,i) => s + (i.total_qty/i.ppb), 0).toFixed(items.every(i => i.total_qty % i.ppb === 0) ? 0 : 1)} boxes · ${palletQty.toLocaleString()} pcs)</span>
         </div>
         <table style="width:100%;font-size:11px;">
           <thead>
             <tr style="background:#fafafa;border-bottom:1px solid #e5e7eb;">
               <th style="padding:6px 8px;text-align:left;width:110px;">SKU</th>
               <th style="padding:6px 8px;text-align:left;width:140px;">Color / Size</th>
-              <th style="padding:6px 8px;text-align:right;width:60px;">Total</th>
-              <th style="padding:6px 8px;text-align:right;width:70px;">Qty</th>
-              <th style="padding:6px 8px;text-align:left;width:90px;">Action</th>
-              <th style="padding:6px 8px;text-align:left;">Target</th>
+              <th style="padding:6px 8px;text-align:right;width:80px;">Total</th>
+              <th style="padding:6px 8px;text-align:right;width:90px;">Boxes</th>
+              <th style="padding:6px 8px;text-align:left;">📍 어디로?</th>
               <th style="padding:6px 8px;width:60px;text-align:center;">⚙️</th>
             </tr>
           </thead>
@@ -14160,7 +14166,11 @@ function renderProcessItems() {
               
               return item.splits.map((split, spIdx) => {
                 const isFirst = spIdx === 0;
-                const bgColor = split.action === 'return' ? '#fef3c7' : split.action === 'skip' ? '#f3f4f6' : '#f0fdf4';
+                // 색상: 3rd_party는 노란, 우리 창고는 초록
+                const bgColor = split.target_location === '3rd_party' ? '#fef3c7' : '#f0fdf4';
+                const placeholder = split.target_location === '3rd_party' 
+                  ? 'Pallet (예: H3001)' 
+                  : 'Bin (예: J05A)';
                 
                 return `<tr style="border-bottom:1px solid #f3f4f6;background:${bgColor};">
                   ${isFirst ? `
@@ -14170,41 +14180,37 @@ function renderProcessItems() {
                     <td rowspan="${item.splits.length}" style="padding:6px 8px;vertical-align:top;background:#fff;border-right:1px solid #e5e7eb;">
                       ${escapeHtml(item.color || '')} / <strong>${escapeHtml(item.size || '')}</strong>
                     </td>
-                    <td rowspan="${item.splits.length}" style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;vertical-align:top;background:#fff;border-right:1px solid #e5e7eb;">
-                      ${item.total_qty.toLocaleString()}
-                      ${remaining > 0 ? `<div style="font-size:9px;color:#92400e;background:#fef3c7;border-radius:3px;padding:2px 4px;margin-top:3px;font-weight:700;">남음 ${remaining}<br><span style="font-weight:400;">(원위치 유지)</span></div>` : ''}
-                      ${remaining < 0 ? `<div style="font-size:9px;color:#991b1b;background:#fee2e2;border-radius:3px;padding:2px 4px;margin-top:3px;font-weight:700;">⚠️ 초과 ${-remaining}</div>` : ''}
+                    <td rowspan="${item.splits.length}" style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;vertical-align:top;background:#fff;border-right:1px solid #e5e7eb;">
+                      <div style="font-size:13px;font-weight:800;color:#1f2937;">${(item.total_qty / item.ppb).toFixed(item.total_qty % item.ppb === 0 ? 0 : 1)} box</div>
+                      <div style="font-size:10px;color:#6b7280;font-weight:400;margin-top:1px;">${item.total_qty.toLocaleString()} pcs</div>
+                      <div style="font-size:9px;color:#9ca3af;margin-top:2px;">${item.ppb}/box</div>
+                      ${remaining > 0 ? `<div style="font-size:9px;color:#92400e;background:#fef3c7;border-radius:3px;padding:2px 4px;margin-top:3px;font-weight:700;">남음 ${(remaining/item.ppb).toFixed(remaining % item.ppb === 0 ? 0 : 1)}box<br><span style="font-weight:400;">(원위치 유지)</span></div>` : ''}
+                      ${remaining < 0 ? `<div style="font-size:9px;color:#991b1b;background:#fee2e2;border-radius:3px;padding:2px 4px;margin-top:3px;font-weight:700;">⚠️ 초과</div>` : ''}
                     </td>
                   ` : ''}
                   <td style="padding:6px 8px;text-align:right;">
-                    <input type="number" value="${split.qty}" min="0" max="${item.total_qty}" oninput="updateSplitField(${item._idx}, ${spIdx}, 'qty', Math.min(${item.total_qty}, parseInt(this.value)||0))" style="width:75px;height:24px;border:1px solid #d1d5db;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:right;font-weight:700;">
+                    <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end;">
+                      <input type="number" value="${(split.qty / item.ppb).toFixed(split.qty % item.ppb === 0 ? 0 : 2)}" min="0" max="${(item.total_qty / item.ppb).toFixed(2)}" step="1" oninput="updateSplitField(${item._idx}, ${spIdx}, 'qty', Math.min(${item.total_qty}, Math.round((parseFloat(this.value)||0) * ${item.ppb})))" style="width:55px;height:26px;border:1px solid #d1d5db;border-radius:3px;padding:0 4px;font-size:13px;font-family:'IBM Plex Mono',monospace;text-align:right;font-weight:800;">
+                      <span style="font-size:10px;color:#6b7280;font-weight:700;">box</span>
+                    </div>
+                    <div style="font-size:9px;color:#9ca3af;margin-top:1px;text-align:right;">(${split.qty.toLocaleString()} pcs)</div>
                   </td>
                   <td style="padding:6px 8px;">
-                    <select onchange="updateSplitField(${item._idx}, ${spIdx}, 'action', this.value)" style="width:100%;height:24px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;padding:0 2px;">
-                      <option value="keep" ${split.action === 'keep' ? 'selected' : ''}>✓ Keep</option>
-                      <option value="return" ${split.action === 'return' ? 'selected' : ''}>🚚 Return</option>
-                      <option value="skip" ${split.action === 'skip' ? 'selected' : ''}>— Skip</option>
-                    </select>
-                  </td>
-                  <td style="padding:6px 8px;">
-                    ${split.action === 'keep' 
-                      ? `<input value="${escapeHtml(split.target_bin)}" oninput="updateSplitField(${item._idx}, ${spIdx}, 'target_bin', this.value)" placeholder="새 Bin (예: J05A)" style="width:100%;height:24px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;padding:0 6px;font-family:'IBM Plex Mono',monospace;">`
-                      : split.action === 'return'
-                      ? `<div style="display:flex;gap:3px;">
-                           <select onchange="updateSplitField(${item._idx}, ${spIdx}, 'target_warehouse', this.value)" style="height:24px;border:1px solid #d1d5db;border-radius:3px;font-size:10px;padding:0 2px;">
-                             <option value="3rd_party" ${split.target_warehouse === '3rd_party' ? 'selected' : ''}>🚚 3rd</option>
-                             <option value="SC" ${split.target_warehouse === 'SC' ? 'selected' : ''}>🏢 SC</option>
-                             <option value="CA" ${split.target_warehouse === 'CA' ? 'selected' : ''}>🏢 CA</option>
-                           </select>
-                           <input value="${escapeHtml(split.target_pallet_code)}" oninput="updateSplitField(${item._idx}, ${spIdx}, 'target_pallet_code', this.value)" placeholder="Pallet/Bin" style="flex:1;height:24px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;padding:0 6px;font-family:'IBM Plex Mono',monospace;">
-                         </div>`
-                      : `<em style="color:#9ca3af;">변경 없음</em>`
-                    }
+                    <div style="display:flex;gap:5px;">
+                      <select onchange="updateSplitField(${item._idx}, ${spIdx}, 'target_location', this.value)" style="height:28px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;padding:0 4px;font-weight:700;background:#fff;">
+                        <option value="SC" ${split.target_location === 'SC' ? 'selected' : ''}>🏢 SC</option>
+                        <option value="SC-PCR" ${split.target_location === 'SC-PCR' ? 'selected' : ''}>🏢 SC-PCR</option>
+                        <option value="CA" ${split.target_location === 'CA' ? 'selected' : ''}>🏢 CA</option>
+                        <option value="CA-PCR" ${split.target_location === 'CA-PCR' ? 'selected' : ''}>🏢 CA-PCR</option>
+                        <option value="3rd_party" ${split.target_location === '3rd_party' ? 'selected' : ''}>🚚 3rd Party</option>
+                      </select>
+                      <input value="${escapeHtml(split.target_value || '')}" oninput="updateSplitField(${item._idx}, ${spIdx}, 'target_value', this.value)" placeholder="${placeholder}" style="flex:1;height:28px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;padding:0 8px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+                    </div>
                   </td>
                   <td style="padding:6px 8px;text-align:center;">
                     ${isFirst 
-                      ? `<button onclick="addSplit(${item._idx})" title="Split 추가" style="background:#3b82f6;color:#fff;border:none;border-radius:3px;width:22px;height:22px;font-size:12px;cursor:pointer;font-weight:700;">+</button>`
-                      : `<button onclick="removeSplit(${item._idx}, ${spIdx})" title="이 Split 제거" style="background:#ef4444;color:#fff;border:none;border-radius:3px;width:22px;height:22px;font-size:12px;cursor:pointer;font-weight:700;">✕</button>`
+                      ? `<button onclick="addSplit(${item._idx})" title="Split 추가 (1박스씩)" style="background:#3b82f6;color:#fff;border:none;border-radius:3px;width:24px;height:24px;font-size:13px;cursor:pointer;font-weight:700;">+</button>`
+                      : `<button onclick="removeSplit(${item._idx}, ${spIdx})" title="이 Split 제거" style="background:#ef4444;color:#fff;border:none;border-radius:3px;width:24px;height:24px;font-size:13px;cursor:pointer;font-weight:700;">✕</button>`
                     }
                   </td>
                 </tr>`;
@@ -14224,9 +14230,8 @@ function updateSplitField(itemIdx, splitIdx, field, value) {
   if (!_processItems[itemIdx] || !_processItems[itemIdx].splits[splitIdx]) return;
   _processItems[itemIdx].splits[splitIdx][field] = value;
   
-  // qty 변경 시 전체 re-render (남은 qty 재계산)
-  // action 변경 시 re-render (색상 + target UI 바뀜)
-  if (field === 'action' || field === 'qty') {
+  // qty/target_location 변경 시 re-render (남은 qty + placeholder/색상 바뀜)
+  if (field === 'qty' || field === 'target_location') {
     renderProcessItems();
   } else {
     updateProcessSummary();
@@ -14236,35 +14241,42 @@ function updateSplitField(itemIdx, splitIdx, field, value) {
 function addSplit(itemIdx) {
   const item = _processItems[itemIdx];
   if (!item) return;
+  const ppb = item.ppb || 72;
   const currentSum = item.splits.reduce((s, sp) => s + (sp.qty || 0), 0);
   const remaining = item.total_qty - currentSum;
+  const defaultLoc = item.splits[0]?.target_location || _processBatch.to_warehouse || 'SC';
   
-  // 마지막 split의 qty를 반으로 나누어서 추가 (또는 remaining 사용)
-  if (remaining <= 0) {
+  if (remaining > 0) {
+    // 남은 qty가 있으면 → 1 box 단위로 새 split (1box보다 적으면 통째로)
+    const splitQty = remaining >= ppb ? ppb : remaining;
+    item.splits.push({
+      qty: splitQty,
+      target_location: defaultLoc,
+      target_value: ''
+    });
+  } else {
+    // 남은 qty 없으면 → 마지막 split에서 1박스 빼서 새 split으로
     const last = item.splits[item.splits.length - 1];
-    if (last.qty >= 2) {
+    if (last.qty > ppb) {
+      last.qty = last.qty - ppb;
+      item.splits.push({
+        qty: ppb,
+        target_location: defaultLoc,
+        target_value: ''
+      });
+    } else if (last.qty >= 2) {
+      // 1박스 미만은 절반으로
       const half = Math.floor(last.qty / 2);
       last.qty = last.qty - half;
       item.splits.push({
         qty: half,
-        action: 'keep',
-        target_bin: '',
-        target_pallet_code: '',
-        target_warehouse: item.splits[0].target_warehouse || _processBatch.to_warehouse
+        target_location: defaultLoc,
+        target_value: ''
       });
     } else {
-      alert('이 SKU는 더 이상 나눌 수 없습니다 (qty가 1이거나 초과됨)');
+      alert('이 SKU는 더 이상 나눌 수 없습니다');
       return;
     }
-  } else {
-    // 남은 qty로 새 split
-    item.splits.push({
-      qty: remaining,
-      action: 'keep',
-      target_bin: '',
-      target_pallet_code: '',
-      target_warehouse: item.splits[0].target_warehouse || _processBatch.to_warehouse
-    });
   }
   renderProcessItems();
 }
@@ -14283,60 +14295,65 @@ function removeSplit(itemIdx, splitIdx) {
 }
 
 function updateProcessSummary() {
-  let keep = 0, ret = 0, skip = 0, totalSplits = 0;
+  // Location별 카운트
+  const byLoc = {};
+  let totalSplits = 0;
   _processItems.forEach(item => {
     item.splits.forEach(s => {
       totalSplits++;
-      if (s.action === 'keep') keep++;
-      else if (s.action === 'return') ret++;
-      else if (s.action === 'skip') skip++;
+      const loc = s.target_location || '?';
+      byLoc[loc] = (byLoc[loc] || 0) + 1;
     });
   });
+  const parts = Object.entries(byLoc).map(([loc, cnt]) => {
+    const icon = loc === '3rd_party' ? '🚚' : '🏢';
+    return `${icon}${loc}: ${cnt}`;
+  });
   document.getElementById('process-summary').textContent = 
-    `Keep: ${keep} · Return: ${ret} · Skip: ${skip} / 총 ${totalSplits} splits (${_processItems.length} SKUs)`;
+    `${parts.join(' · ')} / 총 ${totalSplits} splits (${_processItems.length} SKUs)`;
 }
 
 function bulkKeepAll() {
-  const bin = (document.getElementById('bulk-keep-bin').value || '').trim();
-  if (!bin) { alert('Bin 이름을 입력해주세요'); return; }
+  const val = (document.getElementById('bulk-keep-bin').value || '').trim();
+  if (!val) { alert('Bin 이름을 입력해주세요'); return; }
+  // 기본 도착지 (batch.to_warehouse) 사용, 3rd_party면 SC로 fallback
+  const defaultLoc = (_processBatch?.to_warehouse && _processBatch.to_warehouse !== '3rd_party') 
+    ? _processBatch.to_warehouse : 'SC';
   _processItems.forEach(item => {
-    // 모든 splits → keep, 같은 bin
     item.splits.forEach(s => {
-      s.action = 'keep';
-      s.target_bin = bin;
+      s.target_location = defaultLoc;
+      s.target_value = val;
     });
   });
   renderProcessItems();
-  showToast(`모든 split → Keep to ${bin}`);
+  showToast(`모든 split → ${defaultLoc} bin: ${val}`);
 }
 
 function bulkReturnAll() {
   const pc = (document.getElementById('bulk-return-pallet').value || '').trim();
-  if (!pc) { alert('Return Pallet 이름을 입력해주세요'); return; }
+  if (!pc) { alert('Pallet 이름을 입력해주세요'); return; }
   _processItems.forEach(item => {
     item.splits.forEach(s => {
-      s.action = 'return';
-      s.target_pallet_code = pc;
-      if (!s.target_warehouse) s.target_warehouse = '3rd_party';
+      s.target_location = '3rd_party';
+      s.target_value = pc;
     });
   });
   renderProcessItems();
-  showToast(`모든 split → Return to ${pc}`);
+  showToast(`모든 split → 🚚 3rd Party: ${pc}`);
 }
 
 async function submitProcessBatch() {
-  // 1. qty 합계가 total보다 작으면 자동으로 "원래 위치 유지" split 추가
+  // 1. qty 합계가 total보다 작으면 자동으로 "원위치 유지" split 추가
   _processItems.forEach(item => {
     const splitSum = item.splits.reduce((s, sp) => s + (sp.qty || 0), 0);
     const remaining = item.total_qty - splitSum;
     if (remaining > 0) {
-      // 나머지는 원래 bin/pallet에 그대로 둠 (skip = 변경 없음)
+      // 나머지는 원래 위치 (원래 pallet 코드 또는 bin)
+      const isOrigThirdParty = (item.original_pallet_code || '').toUpperCase().startsWith('H');
       item.splits.push({
         qty: remaining,
-        action: 'skip',
-        target_bin: '',
-        target_pallet_code: '',
-        target_warehouse: _processBatch?.to_warehouse || ''
+        target_location: isOrigThirdParty ? '3rd_party' : (item.original_warehouse || 'SC'),
+        target_value: item.original_pallet_code || item.original_bin_code || ''
       });
     }
   });
@@ -14352,11 +14369,9 @@ async function submitProcessBatch() {
       if (s.qty < 0) {
         errors.push(`${item.sku_id} split #${spIdx+1}: qty는 0 이상이어야 함`);
       }
-      if (s.qty > 0 && s.action === 'keep' && !s.target_bin.trim()) {
-        errors.push(`${item.sku_id} split #${spIdx+1}: Keep bin 이름 필요`);
-      }
-      if (s.qty > 0 && s.action === 'return' && !s.target_pallet_code.trim()) {
-        errors.push(`${item.sku_id} split #${spIdx+1}: Return pallet 이름 필요`);
+      if (s.qty > 0 && !(s.target_value || '').trim()) {
+        const isPallet = s.target_location === '3rd_party';
+        errors.push(`${item.sku_id} split #${spIdx+1}: ${isPallet ? 'Pallet' : 'Bin'} 이름 필요`);
       }
     });
   });
@@ -14365,72 +14380,55 @@ async function submitProcessBatch() {
     return;
   }
   
-  // 통계
-  let keepCnt = 0, retCnt = 0, skipCnt = 0, skipQty = 0;
+  // 통계 — Location별 카운트 + qty
+  const byLoc = {};  // { 'SC': {splits: 0, qty: 0}, ... }
   _processItems.forEach(item => {
     item.splits.forEach(s => {
-      if (s.action === 'keep') keepCnt++;
-      else if (s.action === 'return') retCnt++;
-      else if (s.action === 'skip') {
-        skipCnt++;
-        skipQty += (s.qty || 0);
-      }
+      const loc = s.target_location;
+      if (!byLoc[loc]) byLoc[loc] = { splits: 0, qty: 0 };
+      byLoc[loc].splits++;
+      byLoc[loc].qty += (s.qty || 0);
     });
   });
   
-  let confirmMsg = `TRB-${_processBatch.batch_number} Processing 완료:\n\n` +
-                   `✓ Keep: ${keepCnt}개 split\n` +
-                   `🚚 Return: ${retCnt}개 split\n`;
-  if (skipCnt > 0) {
-    confirmMsg += `— 원래 위치 유지: ${skipCnt}개 split (${skipQty.toLocaleString()} pcs)\n`;
-  }
+  let confirmMsg = `TRB-${_processBatch.batch_number} Processing 완료:\n\n`;
+  Object.entries(byLoc).forEach(([loc, info]) => {
+    const icon = loc === '3rd_party' ? '🚚' : '🏢';
+    confirmMsg += `${icon} ${loc}: ${info.splits}개 split (${info.qty.toLocaleString()} pcs)\n`;
+  });
   confirmMsg += `\n진행하시겠습니까?`;
   
   if (!confirm(confirmMsg)) return;
   
   // 🧪 TEST MODE
   if (window.TEST_MODE) {
-    // 시뮬레이션 상세 로깅
     let summary = `🧪 [TEST MODE] Process 시뮬레이션 완료\n\n`;
-    summary += `Batch: TRB-${_processBatch.batch_number}\n`;
-    summary += `처리 요약:\n`;
-    summary += `  ✓ Keep: ${keepCnt} splits\n`;
-    summary += `  🚚 Return: ${retCnt} splits\n\n`;
+    summary += `Batch: TRB-${_processBatch.batch_number}\n\n`;
     summary += `만약 실제 실행했다면:\n`;
     
-    const keepBins = {};
-    const returnPallets = {};
+    // Location별 그룹핑
+    const byTarget = {};  // "loc / value" → qty
     _processItems.forEach(item => {
       item.splits.forEach(s => {
-        if (s.action === 'keep') {
-          keepBins[s.target_bin] = (keepBins[s.target_bin] || 0) + s.qty;
-        } else if (s.action === 'return') {
-          const key = `${s.target_warehouse}/${s.target_pallet_code}`;
-          returnPallets[key] = (returnPallets[key] || 0) + s.qty;
-        }
+        if (!s.target_value) return;
+        const key = `${s.target_location} / ${s.target_value}`;
+        byTarget[key] = (byTarget[key] || 0) + s.qty;
       });
     });
     
-    if (Object.keys(keepBins).length > 0) {
-      summary += `\n  Keep 대상 bins:\n`;
-      Object.entries(keepBins).forEach(([bin, qty]) => {
-        summary += `    ${bin}: ${qty.toLocaleString()} pcs\n`;
-      });
-    }
-    if (Object.keys(returnPallets).length > 0) {
-      summary += `\n  Return 대상 pallets (새로 생성):\n`;
-      Object.entries(returnPallets).forEach(([pc, qty]) => {
-        summary += `    ${pc}: ${qty.toLocaleString()} pcs\n`;
-      });
-    }
+    Object.entries(byTarget).forEach(([key, qty]) => {
+      const [loc] = key.split(' / ');
+      const icon = loc === '3rd_party' ? '🚚' : '🏢';
+      summary += `  ${icon} ${key}: ${qty.toLocaleString()} pcs\n`;
+    });
     summary += `\n실제 DB는 변경되지 않았습니다.`;
     
     // Test log
     tdbLog('INSERT', 'inventory_transactions', { type: 'pallet_process', batch: _processBatch.batch_number });
     _processItems.forEach(item => {
       item.splits.forEach(s => {
-        tdbLog(s.action === 'keep' ? 'UPDATE' : 'INSERT_OR_UPDATE', 'inventory_bins', {
-          sku: item.sku_id, qty: s.qty, action: s.action, target: s.action === 'keep' ? s.target_bin : `${s.target_warehouse}/${s.target_pallet_code}`
+        tdbLog('UPDATE_OR_INSERT', 'inventory_bins', {
+          sku: item.sku_id, qty: s.qty, target_location: s.target_location, target_value: s.target_value
         });
       });
     });
@@ -14443,7 +14441,6 @@ async function submitProcessBatch() {
       if (batch) {
         batch.status = 'completed';
         batch.completed_at = new Date().toISOString();
-        // pallet 메모리 status 정리
         (batch.pallet_ids || []).forEach(pid => {
           window._testPalletStatus[pid] = { status: 'processed' };
         });
@@ -14479,36 +14476,34 @@ async function submitProcessBatch() {
     if (txnErr) throw txnErr;
     txnId = txn.id;
     
-    // Return splits용 새 pallet 생성
-    const uniqueReturnPallets = {};
+    // 3rd_party split들의 새 pallet 생성
+    const uniquePallets = {};  // pallet_code → { warehouse_code, location_type }
     _processItems.forEach(item => {
-      item.splits.filter(s => s.action === 'return').forEach(s => {
-        const key = `${s.target_pallet_code}|${s.target_warehouse}`;
-        if (!uniqueReturnPallets[key]) {
-          uniqueReturnPallets[key] = {
-            pallet_code: s.target_pallet_code,
-            warehouse_code: s.target_warehouse === '3rd_party' 
-              ? (_processBatch.to_warehouse || 'SC')
-              : s.target_warehouse,
-            location_type: s.target_warehouse === '3rd_party' ? '3rd_party' : 'in_house'
+      item.splits.filter(s => s.target_location === '3rd_party' && s.qty > 0 && s.target_value.trim()).forEach(s => {
+        const code = s.target_value.trim();
+        if (!uniquePallets[code]) {
+          uniquePallets[code] = {
+            pallet_code: code,
+            warehouse_code: item.original_warehouse || _processBatch.to_warehouse || 'SC',
+            location_type: '3rd_party'
           };
         }
       });
     });
     
-    const newPalletCodeToId = {};
-    for (const key of Object.keys(uniqueReturnPallets)) {
-      const pdata = uniqueReturnPallets[key];
+    const palletCodeToId = {};
+    for (const code of Object.keys(uniquePallets)) {
+      const pdata = uniquePallets[code];
       const { data: existing } = await db.from('pallets')
         .select('id')
-        .eq('pallet_code', pdata.pallet_code)
+        .eq('pallet_code', code)
         .maybeSingle();
       if (existing) {
-        newPalletCodeToId[key] = existing.id;
+        palletCodeToId[code] = existing.id;
       } else {
         const { data: created, error: pErr } = await db.from('pallets').insert(pdata).select('id').single();
         if (pErr) throw pErr;
-        newPalletCodeToId[key] = created.id;
+        palletCodeToId[code] = created.id;
       }
     }
     
@@ -14520,46 +14515,45 @@ async function submitProcessBatch() {
     // 각 item 처리 (splits 기반)
     let processedSplits = 0;
     for (const item of _processItems) {
-      const hasSplit = item.splits.length > 1;
+      const validSplits = item.splits.filter(s => s.qty > 0);
+      if (validSplits.length === 0) continue;
       
-      if (!hasSplit) {
-        // 분할 없음 — 기존 bin 직접 업데이트
-        const s = item.splits[0];
-        if (s.action === 'skip') continue;
+      let isFirst = true;
+      for (const s of validSplits) {
+        const targetVal = s.target_value.trim();
+        const isThirdParty = s.target_location === '3rd_party';
+        const newPalletId = isThirdParty ? palletCodeToId[targetVal] : null;
+        const targetWh = isThirdParty ? item.original_warehouse : s.target_location;
+        const targetWhId = whCodeToId[targetWh] || null;
         
-        if (s.action === 'keep') {
+        // bin_code = pallet_code (3rd party) or 그냥 bin name
+        const newBinCode = targetVal;
+        
+        if (isFirst) {
+          // 첫 split: 기존 inventory_bins row 업데이트
           await db.from('inventory_bins').update({
-            bin_code: s.target_bin.trim(),
-            qty: s.qty,
-            pallet_id: null
-          }).eq('id', item.bin_id);
-          
-          if (item.inventory_id) {
-            await db.from('inventory').update({ location: s.target_bin.trim() }).eq('id', item.inventory_id);
-          }
-        } else if (s.action === 'return') {
-          const key = `${s.target_pallet_code}|${s.target_warehouse}`;
-          const newPalletId = newPalletCodeToId[key];
-          
-          await db.from('inventory_bins').update({
-            bin_code: s.target_pallet_code.trim(),
+            bin_code: newBinCode,
             qty: s.qty,
             pallet_id: newPalletId
           }).eq('id', item.bin_id);
           
-          if (item.inventory_id && s.target_warehouse !== '3rd_party') {
-            const newWhId = whCodeToId[s.target_warehouse];
-            if (newWhId) {
-              await db.from('inventory').update({
-                warehouse_id: newWhId,
-                location: s.target_pallet_code.trim()
-              }).eq('id', item.inventory_id);
+          // inventory.warehouse_id 변경 (다른 창고로 이동하는 경우, 3rd party는 원래 창고 유지)
+          if (item.inventory_id) {
+            const updates = { location: newBinCode };
+            if (!isThirdParty && targetWhId && targetWh !== item.original_warehouse) {
+              updates.warehouse_id = targetWhId;
             }
-          } else if (item.inventory_id) {
-            await db.from('inventory').update({ location: s.target_pallet_code.trim() }).eq('id', item.inventory_id);
+            await db.from('inventory').update(updates).eq('id', item.inventory_id);
           }
+        } else {
+          // 추가 split: 새 inventory_bins row INSERT (같은 inventory_id 공유)
+          await db.from('inventory_bins').insert({
+            inventory_id: item.inventory_id,
+            bin_code: newBinCode,
+            qty: s.qty,
+            pallet_id: newPalletId
+          });
         }
-        processedSplits++;
         
         // Transaction detail
         await db.from('inventory_transaction_details').insert({
@@ -14567,86 +14561,18 @@ async function submitProcessBatch() {
           inventory_id: item.inventory_id,
           sku_id: item.sku_id,
           style_number: item.style_number,
-          warehouse_code: s.target_warehouse || _processBatch.to_warehouse,
+          warehouse_code: targetWh,
           color: item.color,
           size: item.size,
-          action: s.action,
-          qty_before: item.total_qty,
+          action: isThirdParty ? 'pallet_return' : 'bin_move',
+          qty_before: isFirst ? item.total_qty : 0,
           qty_after: s.qty,
-          bins_before: [{ bin: item.original_bin_code, qty: item.total_qty }],
-          bins_after: [{ bin: s.action === 'keep' ? s.target_bin : s.target_pallet_code, qty: s.qty }]
+          bins_before: isFirst ? [{ bin: item.original_bin_code, qty: item.total_qty }] : [],
+          bins_after: [{ bin: newBinCode, qty: s.qty, location: s.target_location }]
         });
-      } else {
-        // 분할 있음 — 첫 split은 기존 bin 업데이트, 나머지는 새 inventory_bins 생성
-        let isFirst = true;
-        for (const s of item.splits) {
-          if (s.action === 'skip') {
-            // skip한 split은 기존 bin 유지하고 qty만 줄임
-            if (isFirst) {
-              await db.from('inventory_bins').update({ qty: s.qty }).eq('id', item.bin_id);
-            }
-            isFirst = false;
-            continue;
-          }
-          
-          if (s.action === 'keep') {
-            if (isFirst) {
-              // 첫 split: 기존 bin 업데이트
-              await db.from('inventory_bins').update({
-                bin_code: s.target_bin.trim(),
-                qty: s.qty,
-                pallet_id: null
-              }).eq('id', item.bin_id);
-            } else {
-              // 추가 split: 새 inventory_bin 생성 (같은 inventory_id 공유)
-              await db.from('inventory_bins').insert({
-                inventory_id: item.inventory_id,
-                bin_code: s.target_bin.trim(),
-                qty: s.qty,
-                pallet_id: null
-              });
-            }
-          } else if (s.action === 'return') {
-            const key = `${s.target_pallet_code}|${s.target_warehouse}`;
-            const newPalletId = newPalletCodeToId[key];
-            
-            if (isFirst) {
-              await db.from('inventory_bins').update({
-                bin_code: s.target_pallet_code.trim(),
-                qty: s.qty,
-                pallet_id: newPalletId
-              }).eq('id', item.bin_id);
-            } else {
-              // Return split을 다른 warehouse로 보내는 경우, 별도 inventory row 필요할 수도 있음
-              // 지금은 같은 inventory_id 공유 (3rd party 이동은 창고 같음)
-              // TODO: SC→CA split의 경우 복잡해짐. 일단 같은 inventory로.
-              await db.from('inventory_bins').insert({
-                inventory_id: item.inventory_id,
-                bin_code: s.target_pallet_code.trim(),
-                qty: s.qty,
-                pallet_id: newPalletId
-              });
-            }
-          }
-          
-          await db.from('inventory_transaction_details').insert({
-            transaction_id: txnId,
-            inventory_id: item.inventory_id,
-            sku_id: item.sku_id,
-            style_number: item.style_number,
-            warehouse_code: s.target_warehouse || _processBatch.to_warehouse,
-            color: item.color,
-            size: item.size,
-            action: s.action,
-            qty_before: isFirst ? item.total_qty : 0,
-            qty_after: s.qty,
-            bins_before: isFirst ? [{ bin: item.original_bin_code, qty: item.total_qty }] : [],
-            bins_after: [{ bin: s.action === 'keep' ? s.target_bin : s.target_pallet_code, qty: s.qty }]
-          });
-          
-          isFirst = false;
-          processedSplits++;
-        }
+        
+        isFirst = false;
+        processedSplits++;
       }
     }
     
@@ -46678,4 +46604,7 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-25T15:03:31Z - Process modal: draggable + resizable + minimizable -->
+
+
+
+<!-- Deploy trigger: 2026-04-25T15:28:40Z - Process action: 5 location options (4 warehouses + 3rd) -->
