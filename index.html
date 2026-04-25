@@ -8568,6 +8568,9 @@ function renderInventoryTable(data) {
     return;
   }
 
+  // bin 필터 (있으면 해당 bin의 qty만 계산/표시)
+  const binFilter = (document.getElementById('inv-filter-bin')?.value || '').trim().toLowerCase();
+
   // 합산: SKU 기준 (Tubular와 Side Seam은 다른 SKU로 취급)
   const grouped = {};
   data.forEach(i => {
@@ -8596,20 +8599,66 @@ function renderInventoryTable(data) {
       };
     }
     const g = grouped[key];
-  const qty = i.qty_on_hand || 0;
     const wh = i.warehouses?.code || '';
+    const rowCommitted = i.qty_committed || 0;
+    const hasBins = i.bins && i.bins.length > 0;
+    
+    // 🔍 Bin 필터 적용
+    if (binFilter) {
+      // bin 필터 있을 때: 해당 bin만 표시, qty도 해당 bin의 qty만
+      if (hasBins) {
+        const totalBinQty = i.bins.reduce((s, b) => s + (b.qty || 0), 0);
+        i.bins.forEach(b => {
+          const binCode = (b.bin_code || '').toLowerCase();
+          if (!binCode.includes(binFilter)) return;  // 매칭 안 되는 bin은 skip
+          
+          const binQty = b.qty || 0;
+          const binCommitted = totalBinQty > 0 ? Math.round(rowCommitted * (binQty / totalBinQty)) : 0;
+          
+          // 창고별 합산 (필터된 bin qty만)
+          if (wh === 'SC') g.sc += binQty;
+          else if (wh === 'CA') g.ca += binQty;
+          else if (wh === 'SC-PCR') g.sc_pcr += binQty;
+          else if (wh === 'CA-PCR') g.ca_pcr += binQty;
+          g.total += binQty;
+          g.committed += binCommitted;
+          
+          g.details.push({ 
+            wh, 
+            loc: b.bin_code || '—', 
+            qty: binQty, 
+            id: i.id, 
+            bin_id: b.id,
+            committed: binCommitted 
+          });
+        });
+      } else if (i.location && i.location.toLowerCase().includes(binFilter)) {
+        // bins 없지만 location이 매칭
+        const qty = i.qty_on_hand || 0;
+        if (wh === 'SC') g.sc += qty;
+        else if (wh === 'CA') g.ca += qty;
+        else if (wh === 'SC-PCR') g.sc_pcr += qty;
+        else if (wh === 'CA-PCR') g.ca_pcr += qty;
+        g.total += qty;
+        g.committed += rowCommitted;
+        g.details.push({ wh, loc: i.location, qty, id: i.id, committed: rowCommitted });
+      }
+      // bin 필터 있는데 매칭 없으면 아무것도 추가 안 함
+      if (!g.ppb) g.ppb = i.styles?.pcs_per_box || i.pcs_per_box || 72;
+      return;
+    }
+    
+    // bin 필터 없을 때: 기존 로직 (모든 bin 표시)
+    const qty = i.qty_on_hand || 0;
     if (wh === 'SC') g.sc += qty;
     else if (wh === 'CA') g.ca += qty;
     else if (wh === 'SC-PCR') g.sc_pcr += qty;
     else if (wh === 'CA-PCR') g.ca_pcr += qty;
     g.total += qty;
-    g.committed += (i.qty_committed || 0);
+    g.committed += rowCommitted;
     if (!g.ppb) g.ppb = i.styles?.pcs_per_box || i.pcs_per_box || 72;
     
-    // details: inventory_bins에 데이터 있으면 각 bin별로 row, 없으면 location 1개로 fallback
-    const rowCommitted = i.qty_committed || 0;
-    if (i.bins && i.bins.length > 0) {
-      // bin별로 detail row — 각 bin의 qty와 비례 committed
+    if (hasBins) {
       const totalBinQty = i.bins.reduce((s, b) => s + (b.qty || 0), 0);
       i.bins.forEach(b => {
         const binCommitted = totalBinQty > 0 ? Math.round(rowCommitted * (b.qty / totalBinQty)) : 0;
@@ -8623,7 +8672,6 @@ function renderInventoryTable(data) {
         });
       });
     } else {
-      // Fallback: bins 없으면 location 1개
       g.details.push({ 
         wh, 
         loc: i.location || '—', 
@@ -8633,6 +8681,13 @@ function renderInventoryTable(data) {
       });
     }
   });
+  
+  // bin 필터 있을 때: details 없는 (매칭 안된) group 제거
+  if (binFilter) {
+    Object.keys(grouped).forEach(k => {
+      if (!grouped[k].details || grouped[k].details.length === 0) delete grouped[k];
+    });
+  }
 
   // 정렬: style → color → variant (Tubular 먼저) → size
   const rows = Object.values(grouped);
@@ -11455,35 +11510,35 @@ async function executeInventoryImport() {
         continue;
       }
       
-      // inventory_bins 저장 + H-bin은 pallet 자동 생성/연결
+      // inventory_bins 저장 + 모든 bin을 pallet으로 자동 등록/연결
       const binsAfter = [];
       if (inventoryId && group.bins.length > 0) {
-        // 1. H로 시작하는 bin들의 pallet 자동 생성/조회
-        const hBinCodes = [...new Set(
+        // 1. 모든 고유 bin code 수집
+        const allBinCodes = [...new Set(
           group.bins
             .map(b => (b.bin_code || '').trim())
-            .filter(c => c && c.toUpperCase().startsWith('H'))
+            .filter(c => c)
         )];
         
         const palletMap = {};  // bin_code → pallet_id
-        if (hBinCodes.length > 0) {
-          // 기존 pallet 조회
+        if (allBinCodes.length > 0) {
+          // 기존 pallet 조회 (같은 창고)
           const { data: existingPallets } = await db.from('pallets')
             .select('id, pallet_code')
-            .in('pallet_code', hBinCodes)
+            .in('pallet_code', allBinCodes)
             .eq('warehouse_code', _invImportData.whCode);
           
           (existingPallets || []).forEach(p => {
             palletMap[p.pallet_code] = p.id;
           });
           
-          // 없는 pallet 생성
-          const missingPalletCodes = hBinCodes.filter(c => !palletMap[c]);
+          // 없는 pallet 생성 — H로 시작하면 3rd_party, 아니면 in_house
+          const missingPalletCodes = allBinCodes.filter(c => !palletMap[c]);
           if (missingPalletCodes.length > 0) {
             const newPallets = missingPalletCodes.map(c => ({
               pallet_code: c,
               warehouse_code: _invImportData.whCode,
-              location_type: '3rd_party',
+              location_type: c.toUpperCase().startsWith('H') ? '3rd_party' : 'in_house',
               status: 'active'
             }));
             const { data: created, error: pErr } = await db.from('pallets')
@@ -11506,7 +11561,7 @@ async function executeInventoryImport() {
               bin_code: code,
               qty: b.qty,
               received_date: b.received_date,
-              pallet_id: palletMap[code] || null  // H-bin이면 pallet 연결
+              pallet_id: palletMap[code] || null  // 모든 bin에 pallet 연결
             };
           });
         if (binsToInsert.length > 0) {
@@ -46365,4 +46420,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-25T02:38:27Z - Add Bin/Pallet search field -->
+
+
+<!-- Deploy trigger: 2026-04-25T02:53:33Z - All bins registered as pallets -->
