@@ -4836,6 +4836,8 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY, {
 // ══════════════════════════════════════════════════════════════
 window.TEST_MODE = (localStorage.getItem('pacific_test_mode') === 'true');
 window._testLog = [];  // 시뮬레이션 로그
+window._testBatches = [];   // Test Mode 가짜 batches (메모리)
+window._testPalletStatus = {};  // pallet_id → { status, current_batch_id } (test override)
 
 /** Test Mode 토글 */
 function toggleTestMode() {
@@ -4845,6 +4847,8 @@ function toggleTestMode() {
   
   if (window.TEST_MODE) {
     window._testLog = [];
+    window._testBatches = [];
+    window._testPalletStatus = {};
     const msg = `🧪 TEST MODE 활성화됨
 
 이제 다음 작업들은 실제 DB에 저장되지 않습니다:
@@ -4853,11 +4857,14 @@ function toggleTestMode() {
   • Pallet Process (Keep/Return)
   • Pallet 생성
 
-실제 작업을 하려면 Test Mode를 OFF로 끄세요.
-시뮬레이션 로그는 [🧪 Test Log 보기]로 확인 가능합니다.`;
+가짜 데이터는 메모리에만 저장되어 전체 워크플로우 시뮬레이션 가능합니다.
+
+실제 작업을 하려면 Test Mode를 OFF로 끄세요.`;
     alert(msg);
   } else {
-    alert('✓ Test Mode 비활성화됨\n\n이제 실제 DB에 저장됩니다.');
+    window._testBatches = [];
+    window._testPalletStatus = {};
+    alert('✓ Test Mode 비활성화됨\n\n이제 실제 DB에 저장됩니다.\n시뮬레이션 데이터는 모두 삭제됐습니다.');
   }
 }
 
@@ -13648,12 +13655,40 @@ async function submitCreateBatch() {
     else if (from !== '3rd_party' && to === '3rd_party') batchType = 'send_to_3rd';
     else if (from === to) batchType = 'internal_reorganize';
     
-    const fakeBatchNum = Math.floor(Math.random() * 900) + 100;
+    // 가짜 batch ID + number 생성
+    const fakeBatchId = 'test-batch-' + Date.now();
+    const fakeBatchNum = 9000 + (window._testBatches.length + 1);
+    const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+    
+    // 메모리에 batch 저장
+    window._testBatches.push({
+      id: fakeBatchId,
+      batch_number: fakeBatchNum,
+      batch_type: batchType,
+      status: 'pending',
+      from_warehouse: from,
+      to_warehouse: to,
+      warehouse_code: to,
+      requested_by: performedBy,
+      requested_at: new Date().toISOString(),
+      related_orders: relatedOrders,
+      notes: notes || null,
+      pallet_ids: [...selectedIds]
+    });
+    
+    // pallet 상태 override (메모리)
+    selectedIds.forEach(pid => {
+      window._testPalletStatus[pid] = { 
+        status: 'pending_pull', 
+        current_batch_id: fakeBatchId 
+      };
+    });
+    
     tdbLog('INSERT', 'pallet_transfer_batches', { batch_type: batchType, from_warehouse: from, to_warehouse: to, related_orders: relatedOrders, notes });
-    tdbLog('UPDATE', 'pallets', { current_batch_id: 'simulated', status: 'pending_pull' }, { id: selectedIds });
+    tdbLog('UPDATE', 'pallets', { current_batch_id: fakeBatchId, status: 'pending_pull' }, { id: selectedIds });
     tdbLog('INSERT', 'inventory_transactions', { type: 'pallet_batch_create', affected: selectedIds.length });
     
-    alert(`🧪 [TEST MODE] 시뮬레이션 완료!\n\n만약 실제 실행했다면:\n  • TRB-${fakeBatchNum} 생성\n  • ${selectedIds.length}개 pallet → pending_pull\n  • Transaction 기록\n\n실제 DB는 변경되지 않았습니다.\n\n[🧪 Test Log]에서 자세한 내용 확인 가능합니다.`);
+    showToast(`🧪 TRB-${fakeBatchNum} 생성 (TEST MODE) — Batches 탭에서 다음 단계 진행하세요`);
     
     _selectedPalletIds.clear();
     document.getElementById('create-batch-modal').style.display = 'none';
@@ -13728,7 +13763,12 @@ async function loadBatches() {
       .select('*')
       .order('batch_number', { ascending: false });
     if (error) throw error;
-    _allBatches = data || [];
+    
+    // 실제 + 테스트 batches 합치기
+    const realBatches = data || [];
+    const testBatches = (window.TEST_MODE && window._testBatches) ? window._testBatches : [];
+    _allBatches = [...testBatches, ...realBatches];
+    
     renderBatches();
   } catch (e) {
     console.error('[loadBatches]', e);
@@ -13743,15 +13783,27 @@ async function renderBatches() {
     return;
   }
   
-  // 각 batch의 pallet 수 조회
-  const batchIds = _allBatches.map(b => b.id);
-  const { data: palletsInBatches } = await db.from('pallets')
-    .select('id, pallet_code, current_batch_id')
-    .in('current_batch_id', batchIds);
+  // 각 batch의 pallet 수 조회 (실제 batch는 DB, test batch는 메모리)
+  const realBatchIds = _allBatches.filter(b => !b.id.startsWith('test-batch-')).map(b => b.id);
   const palletsByBatch = {};
-  (palletsInBatches || []).forEach(p => {
-    if (!palletsByBatch[p.current_batch_id]) palletsByBatch[p.current_batch_id] = [];
-    palletsByBatch[p.current_batch_id].push(p);
+  
+  if (realBatchIds.length > 0) {
+    const { data: palletsInBatches } = await db.from('pallets')
+      .select('id, pallet_code, current_batch_id')
+      .in('current_batch_id', realBatchIds);
+    (palletsInBatches || []).forEach(p => {
+      if (!palletsByBatch[p.current_batch_id]) palletsByBatch[p.current_batch_id] = [];
+      palletsByBatch[p.current_batch_id].push(p);
+    });
+  }
+  
+  // Test batches는 메모리의 pallet_ids에서 lookup
+  _allBatches.filter(b => b.id.startsWith('test-batch-')).forEach(b => {
+    const palletIds = b.pallet_ids || [];
+    palletsByBatch[b.id] = palletIds.map(pid => {
+      const p = _allPallets.find(pp => pp.id === pid);
+      return p ? { id: p.id, pallet_code: p.pallet_code, current_batch_id: b.id } : null;
+    }).filter(Boolean);
   });
   
   const statusStyle = {
@@ -13775,9 +13827,14 @@ async function renderBatches() {
     const moreCount = pallets.length > 5 ? ` +${pallets.length - 5}` : '';
     const dateStr = b.requested_at ? new Date(b.requested_at).toLocaleString('en-US', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
     const typeLabel = typeLabels[b.batch_type] || b.batch_type;
+    const isTest = b.id.startsWith('test-batch-');
+    const rowBg = isTest ? 'background:rgba(239,68,68,0.05);' : '';
     
-    return `<tr style="border-bottom:1px solid #f3f4f6;">
-      <td style="padding:8px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1e40af;">TRB-${b.batch_number}</td>
+    return `<tr style="border-bottom:1px solid #f3f4f6;${rowBg}">
+      <td style="padding:8px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1e40af;">
+        TRB-${b.batch_number}
+        ${isTest ? '<div style="font-size:9px;color:#dc2626;font-weight:800;margin-top:2px;">🧪 TEST</div>' : ''}
+      </td>
       <td style="padding:8px;font-size:11px;">${typeLabel}</td>
       <td style="padding:8px;font-size:11px;"><strong>${b.from_warehouse || '—'}</strong> → <strong>${b.to_warehouse || '—'}</strong></td>
       <td style="padding:8px;font-size:11px;"><strong>${pallets.length}</strong> pallets · <span style="font-family:'IBM Plex Mono',monospace;color:#6b7280;">${escapeHtml(palletList)}${moreCount}</span></td>
@@ -13799,13 +13856,33 @@ async function updateBatchStatus(batchId, newStatus) {
   
   // 🧪 TEST MODE
   if (window.TEST_MODE) {
+    const isTestBatch = batchId.startsWith('test-batch-');
+    
+    if (isTestBatch) {
+      // 메모리 batch 업데이트
+      const batch = window._testBatches.find(b => b.id === batchId);
+      if (batch) {
+        batch.status = newStatus;
+        if (newStatus === 'in_transit') batch.shipped_at = new Date().toISOString();
+        else if (newStatus === 'arrived') batch.arrived_at = new Date().toISOString();
+        
+        // pallet status도 메모리 업데이트
+        (batch.pallet_ids || []).forEach(pid => {
+          if (!window._testPalletStatus[pid]) window._testPalletStatus[pid] = {};
+          window._testPalletStatus[pid].status = newStatus;
+        });
+      }
+    }
+    
     tdbLog('UPDATE', 'pallet_transfer_batches', { status: newStatus }, { id: batchId });
     if (newStatus === 'in_transit') {
       tdbLog('UPDATE', 'pallets', { status: 'in_transit', location_type: 'in_transit' }, { current_batch_id: batchId });
     } else if (newStatus === 'arrived') {
       tdbLog('UPDATE', 'pallets', { status: 'arrived', arrived_at: new Date().toISOString() }, { current_batch_id: batchId });
     }
-    alert(`🧪 [TEST MODE] Batch 상태 → '${newStatus}' (시뮬레이션)`);
+    
+    showToast(`🧪 Batch → ${newStatus}`);
+    await loadBatches();
     return;
   }
   
@@ -13835,9 +13912,22 @@ async function cancelBatch(batchId, batchNum) {
   
   // 🧪 TEST MODE
   if (window.TEST_MODE) {
+    const isTestBatch = batchId.startsWith('test-batch-');
+    if (isTestBatch) {
+      // 메모리에서 제거
+      const idx = window._testBatches.findIndex(b => b.id === batchId);
+      if (idx >= 0) {
+        const batch = window._testBatches[idx];
+        (batch.pallet_ids || []).forEach(pid => {
+          delete window._testPalletStatus[pid];
+        });
+        window._testBatches.splice(idx, 1);
+      }
+    }
     tdbLog('UPDATE', 'pallet_transfer_batches', { status: 'cancelled' }, { id: batchId });
     tdbLog('UPDATE', 'pallets', { current_batch_id: null, status: 'active' }, { current_batch_id: batchId });
-    alert(`🧪 [TEST MODE] TRB-${batchNum} 취소 (시뮬레이션)`);
+    showToast(`🧪 TRB-${batchNum} 취소`);
+    await loadBatches();
     return;
   }
   
@@ -13876,19 +13966,32 @@ async function openProcessBatch(batchId, batchNumber) {
   modal.style.display = 'flex';
   
   try {
-    // Batch 정보 + 관련 pallets + 각 pallet의 bins
-    const { data: batch } = await db.from('pallet_transfer_batches').select('*').eq('id', batchId).single();
+    const isTestBatch = batchId.startsWith('test-batch-');
+    let batch, palletIds = [];
+    const palletMap = {};
+    
+    if (isTestBatch) {
+      // 메모리에서 batch + pallets 로드
+      batch = window._testBatches.find(b => b.id === batchId);
+      if (!batch) throw new Error('Test batch not found');
+      palletIds = batch.pallet_ids || [];
+      palletIds.forEach(pid => {
+        const p = _allPallets.find(pp => pp.id === pid);
+        if (p) palletMap[pid] = p;
+      });
+    } else {
+      // 실제 DB
+      const { data: batchData } = await db.from('pallet_transfer_batches').select('*').eq('id', batchId).single();
+      batch = batchData;
+      const { data: pallets } = await db.from('pallets')
+        .select('id, pallet_code, warehouse_code')
+        .eq('current_batch_id', batchId);
+      palletIds = (pallets || []).map(p => p.id);
+      (pallets || []).forEach(p => palletMap[p.id] = p);
+    }
     _processBatch = batch;
     
-    const { data: pallets } = await db.from('pallets')
-      .select('id, pallet_code, warehouse_code')
-      .eq('current_batch_id', batchId);
-    
-    const palletIds = (pallets || []).map(p => p.id);
-    const palletMap = {};
-    (pallets || []).forEach(p => palletMap[p.id] = p);
-    
-    // 각 pallet의 bins + inventory 정보
+    // 각 pallet의 bins + inventory 정보 (DB 읽기는 항상 실제)
     _processItems = [];
     if (palletIds.length > 0) {
       const { data: bins } = await db.from('inventory_bins')
@@ -14172,7 +14275,7 @@ async function submitProcessBatch() {
   // 🧪 TEST MODE
   if (window.TEST_MODE) {
     // 시뮬레이션 상세 로깅
-    let summary = `🧪 [TEST MODE] Process 시뮬레이션\n\n`;
+    let summary = `🧪 [TEST MODE] Process 시뮬레이션 완료\n\n`;
     summary += `Batch: TRB-${_processBatch.batch_number}\n`;
     summary += `처리 요약:\n`;
     summary += `  ✓ Keep: ${keepCnt} splits\n`;
@@ -14218,10 +14321,28 @@ async function submitProcessBatch() {
     tdbLog('UPDATE', 'pallets', { status: 'processed' }, { current_batch_id: _processBatch.id });
     tdbLog('UPDATE', 'pallet_transfer_batches', { status: 'completed' }, { id: _processBatch.id });
     
+    // 메모리 batch 완료 처리
+    if (_processBatch.id.startsWith('test-batch-')) {
+      const batch = window._testBatches.find(b => b.id === _processBatch.id);
+      if (batch) {
+        batch.status = 'completed';
+        batch.completed_at = new Date().toISOString();
+        // pallet 메모리 status 정리
+        (batch.pallet_ids || []).forEach(pid => {
+          window._testPalletStatus[pid] = { status: 'processed' };
+        });
+      }
+    }
+    
     alert(summary);
     document.getElementById('process-batch-modal').style.display = 'none';
     _processBatch = null;
     _processItems = [];
+    
+    // Batches 탭 새로고침해서 completed 상태 보이게
+    if (_palletsActiveTab === 'batches') {
+      await loadBatches();
+    }
     return;
   }
   
@@ -46434,4 +46555,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-25T03:01:10Z - Pallets tabs: SC / CA / Batches -->
+
+<!-- Deploy trigger: 2026-04-25T14:51:41Z - Test Mode end-to-end workflow simulation -->
