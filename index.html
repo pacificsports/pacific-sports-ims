@@ -480,6 +480,10 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <span id="health-check-label">Health</span>
         <span id="health-check-badge" style="background:rgba(255,255,255,0.2);border-radius:10px;padding:1px 6px;font-size:10px;font-weight:900;display:none;">0</span>
       </button>
+      <button id="test-mode-btn" onclick="toggleTestMode()" title="Test Mode — DB 변경 없이 시뮬레이션" style="margin-left:8px;background:rgba(148,163,184,0.25);border:1px solid rgba(148,163,184,0.5);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;color:#cbd5e1;display:flex;align-items:center;gap:5px;">
+        <span id="test-mode-icon">🧪</span>
+        <span id="test-mode-label">Test: OFF</span>
+      </button>
       <button class="logout-btn" onclick="doLogout()">Sign Out</button>
         <button class="btn btn-sm" style="margin-left:8px;font-size:10px;padding:4px 8px;background:var(--bg2);color:var(--text2);border:1px solid var(--border);" onclick="exportAllData()">💾 Backup</button>
     </div>
@@ -4824,6 +4828,188 @@ const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY, {
   realtime: { params: { eventsPerSecond: 10 } }
 });
+
+// ══════════════════════════════════════════════════════════════
+// 🧪 TEST MODE — DB write 시뮬레이션 시스템
+// ══════════════════════════════════════════════════════════════
+window.TEST_MODE = (localStorage.getItem('pacific_test_mode') === 'true');
+window._testLog = [];  // 시뮬레이션 로그
+
+/** Test Mode 토글 */
+function toggleTestMode() {
+  window.TEST_MODE = !window.TEST_MODE;
+  localStorage.setItem('pacific_test_mode', window.TEST_MODE ? 'true' : 'false');
+  updateTestModeUI();
+  
+  if (window.TEST_MODE) {
+    window._testLog = [];
+    const msg = `🧪 TEST MODE 활성화됨
+
+이제 다음 작업들은 실제 DB에 저장되지 않습니다:
+  • Pallet Pull Request (Transfer Batch 생성)
+  • Batch 상태 변경 (Ship, Arrived)
+  • Pallet Process (Keep/Return)
+  • Pallet 생성
+
+실제 작업을 하려면 Test Mode를 OFF로 끄세요.
+시뮬레이션 로그는 [🧪 Test Log 보기]로 확인 가능합니다.`;
+    alert(msg);
+  } else {
+    alert('✓ Test Mode 비활성화됨\n\n이제 실제 DB에 저장됩니다.');
+  }
+}
+
+function updateTestModeUI() {
+  const btn = document.getElementById('test-mode-btn');
+  const icon = document.getElementById('test-mode-icon');
+  const label = document.getElementById('test-mode-label');
+  if (!btn) return;
+  
+  if (window.TEST_MODE) {
+    btn.style.background = 'rgba(239,68,68,0.35)';
+    btn.style.border = '1px solid rgba(239,68,68,0.7)';
+    btn.style.color = '#fca5a5';
+    btn.style.animation = 'pulse 2s ease-in-out infinite';
+    icon.textContent = '🧪';
+    label.textContent = 'Test: ON';
+    // 전체 화면에 배너도 추가
+    showTestModeBanner();
+  } else {
+    btn.style.background = 'rgba(148,163,184,0.25)';
+    btn.style.border = '1px solid rgba(148,163,184,0.5)';
+    btn.style.color = '#cbd5e1';
+    btn.style.animation = '';
+    icon.textContent = '🧪';
+    label.textContent = 'Test: OFF';
+    hideTestModeBanner();
+  }
+}
+
+function showTestModeBanner() {
+  let banner = document.getElementById('test-mode-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'test-mode-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:repeating-linear-gradient(45deg,#ef4444,#ef4444 10px,#dc2626 10px,#dc2626 20px);color:#fff;text-align:center;padding:4px 10px;font-size:11px;font-weight:800;letter-spacing:0.5px;box-shadow:0 2px 8px rgba(0,0,0,0.3);cursor:pointer;';
+    banner.onclick = () => showTestLog();
+    banner.innerHTML = '🧪 TEST MODE — DB 변경 시뮬레이션 중 (클릭하여 로그 보기)';
+    document.body.appendChild(banner);
+    document.body.style.paddingTop = '26px';
+  }
+  banner.style.display = 'block';
+}
+
+function hideTestModeBanner() {
+  const banner = document.getElementById('test-mode-banner');
+  if (banner) banner.style.display = 'none';
+  document.body.style.paddingTop = '';
+}
+
+/** Test Log 보기 */
+function showTestLog() {
+  if (!window._testLog || window._testLog.length === 0) {
+    alert('Test Log가 비어있습니다.\n\nTest Mode에서 작업을 수행하면 여기에 시뮬레이션 기록이 남습니다.');
+    return;
+  }
+  
+  // 모달로 로그 표시
+  let modal = document.getElementById('test-log-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'test-log-modal';
+    modal.style.cssText = 'display:flex;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100003;align-items:center;justify-content:center;';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:14px;width:min(900px,95vw);max-height:90vh;display:flex;flex-direction:column;">
+        <div style="padding:14px 20px;background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border-radius:14px 14px 0 0;display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-weight:800;font-size:14px;">🧪 Test Mode Log (${window._testLog.length} operations)</div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="clearTestLog()" style="background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.5);color:#fff;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;">Clear Log</button>
+            <button onclick="document.getElementById('test-log-modal').style.display='none'" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">✕</button>
+          </div>
+        </div>
+        <div id="test-log-body" style="flex:1;overflow-y:auto;padding:14px 20px;font-family:'IBM Plex Mono',monospace;font-size:11px;"></div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  
+  const body = document.getElementById('test-log-body');
+  body.innerHTML = window._testLog.map((entry, i) => {
+    const opColor = {
+      'INSERT': '#059669',
+      'UPDATE': '#2563eb',
+      'DELETE': '#dc2626',
+      'SELECT': '#6b7280'
+    }[entry.op] || '#374151';
+    return `
+      <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px;margin-bottom:8px;background:#fafafa;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+          <span style="font-weight:800;color:${opColor};font-size:12px;">#${i+1} ${entry.op}</span>
+          <span style="color:#9ca3af;font-size:10px;">${entry.timestamp}</span>
+        </div>
+        <div style="color:#374151;font-size:11px;margin-bottom:4px;">
+          <strong style="color:#1f2937;">Table:</strong> ${entry.table}
+        </div>
+        ${entry.filter ? `<div style="color:#374151;font-size:11px;margin-bottom:4px;"><strong style="color:#1f2937;">Filter:</strong> ${JSON.stringify(entry.filter)}</div>` : ''}
+        ${entry.data ? `<div style="color:#374151;font-size:11px;background:#fff;border:1px solid #e5e7eb;border-radius:4px;padding:6px 8px;margin-top:4px;max-height:200px;overflow:auto;"><pre style="margin:0;white-space:pre-wrap;word-break:break-word;">${JSON.stringify(entry.data, null, 2)}</pre></div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+function clearTestLog() {
+  window._testLog = [];
+  const modal = document.getElementById('test-log-modal');
+  if (modal) modal.style.display = 'none';
+  showToast('Test Log cleared');
+}
+
+/** DB wrapper — Test Mode 시 시뮬레이션 */
+// 실제 db는 그대로 두고, 별도의 dbWrite() 함수를 통해 쓰기 작업 래핑
+// 읽기는 항상 실제 DB, 쓰기만 Test Mode 체크
+function tdbLog(op, table, data, filter) {
+  if (!window.TEST_MODE) return false;  // 실제 DB 실행
+  
+  // Test Mode: 로그만 남기고 가짜 성공 반환
+  window._testLog.push({
+    op,
+    table,
+    data: data || null,
+    filter: filter || null,
+    timestamp: new Date().toLocaleTimeString()
+  });
+  console.log(`[TEST MODE] ${op} ${table}`, { data, filter });
+  return true;  // Test Mode에서는 차단됨
+}
+
+/** Test Mode일 때 가짜 성공 응답 */
+function tdbFakeResponse(sample) {
+  return {
+    data: sample || [{ id: 'test-' + Date.now(), txn_number: Math.floor(Math.random() * 9000) + 1000, batch_number: Math.floor(Math.random() * 900) + 100 }],
+    error: null
+  };
+}
+
+// UI 초기화 (DOMContentLoaded 이후)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', updateTestModeUI);
+} else {
+  setTimeout(updateTestModeUI, 100);
+}
+
+// CSS for pulse animation
+if (!document.getElementById('test-mode-style')) {
+  const style = document.createElement('style');
+  style.id = 'test-mode-style';
+  style.textContent = `
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 let currentUser = null;
 let warehouses = [];
@@ -11092,6 +11278,42 @@ async function executeInventoryImport() {
   );
   if (!confirm1) return;
 
+  // 🧪 TEST MODE
+  if (window.TEST_MODE) {
+    const totalSkus = _invImportData.matched.length;
+    const totalPcs = _invImportData.matched.reduce((s, r) => s + r.qty_on_hand, 0);
+    const uniqueBins = new Set(_invImportData.matched.map(r => r.location).filter(Boolean));
+    const hBins = [..._invImportData.matched.map(r => r.location).filter(b => b && b.toUpperCase().startsWith('H'))];
+    
+    tdbLog('INSERT', 'inventory_transactions', { type: 'davinci_import', style: _invImportData.styleNum, warehouse: _invImportData.whCode });
+    tdbLog('UPDATE', 'inventory', { reset_qty: 0 }, { style: _invImportData.styleNum, warehouse: _invImportData.whCode });
+    tdbLog('DELETE', 'inventory_bins', {}, { style: _invImportData.styleNum, warehouse: _invImportData.whCode });
+    _invImportData.matched.forEach(m => {
+      tdbLog('UPDATE', 'inventory', { qty: m.qty_on_hand, location: m.location }, { sku: m.sku_id });
+      tdbLog('INSERT', 'inventory_bins', { bin: m.location, qty: m.qty_on_hand });
+    });
+    const uniqueHPallets = [...new Set(hBins)];
+    uniqueHPallets.forEach(h => {
+      tdbLog('INSERT_OR_SKIP', 'pallets', { pallet_code: h, warehouse_code: _invImportData.whCode, location_type: '3rd_party' });
+    });
+    
+    alert(`🧪 [TEST MODE] Davinci Import 시뮬레이션\n\n` +
+          `스타일: ${_invImportData.styleNum}\n` +
+          `창고: ${_invImportData.whCode}\n\n` +
+          `만약 실제 실행했다면:\n` +
+          `  • ${totalSkus} SKUs 업데이트\n` +
+          `  • ${totalPcs.toLocaleString()} pcs 재고\n` +
+          `  • ${uniqueBins.size}개 bin 생성\n` +
+          `  • ${uniqueHPallets.length}개 H-pallet 자동 생성/연결\n\n` +
+          `실제 DB는 변경되지 않았습니다.`);
+    
+    _invImportData = null;
+    document.getElementById('imp-inv-save-btn').style.display = 'none';
+    document.getElementById('imp-inv-file').value = '';
+    document.getElementById('imp-inv-preview').innerHTML = '';
+    return;
+  }
+
   const btn = document.getElementById('imp-inv-save-btn');
   btn.disabled = true;
   btn.textContent = '⏳ 업로드 중...';
@@ -12851,6 +13073,16 @@ async function openTransactionDetail(txnId) {
 async function reverseTransaction(txnId, txnNumber) {
   if (!confirm(`TXN-${txnNumber}을 되돌리시겠습니까?\n\n이 transaction이 바꾼 재고가 모두 이전 상태로 복원됩니다.\n\n(새로운 reversal transaction이 생성되어 이력에 남습니다)`)) return;
   
+  // 🧪 TEST MODE
+  if (window.TEST_MODE) {
+    tdbLog('INSERT', 'inventory_transactions', { type: 'reversal', reversed: txnNumber });
+    tdbLog('UPDATE', 'inventory_bins', { restore: 'to previous state' }, { related_txn: txnId });
+    tdbLog('UPDATE', 'inventory_transactions', { status: 'reversed' }, { id: txnId });
+    alert(`🧪 [TEST MODE] TXN-${txnNumber} Reverse 시뮬레이션\n\n실제 DB는 변경되지 않았습니다.`);
+    document.getElementById('txn-detail-modal').style.display = 'none';
+    return;
+  }
+  
   try {
     const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
     
@@ -13328,6 +13560,27 @@ async function submitCreateBatch() {
     return;
   }
   
+  // 🧪 TEST MODE
+  if (window.TEST_MODE) {
+    const relatedOrders = ordersInput ? ordersInput.split(',').map(s => s.trim()).filter(s => s) : [];
+    let batchType = 'warehouse_transfer';
+    if (from === '3rd_party' && to !== '3rd_party') batchType = 'pull_from_3rd';
+    else if (from !== '3rd_party' && to === '3rd_party') batchType = 'send_to_3rd';
+    else if (from === to) batchType = 'internal_reorganize';
+    
+    const fakeBatchNum = Math.floor(Math.random() * 900) + 100;
+    tdbLog('INSERT', 'pallet_transfer_batches', { batch_type: batchType, from_warehouse: from, to_warehouse: to, related_orders: relatedOrders, notes });
+    tdbLog('UPDATE', 'pallets', { current_batch_id: 'simulated', status: 'pending_pull' }, { id: selectedIds });
+    tdbLog('INSERT', 'inventory_transactions', { type: 'pallet_batch_create', affected: selectedIds.length });
+    
+    alert(`🧪 [TEST MODE] 시뮬레이션 완료!\n\n만약 실제 실행했다면:\n  • TRB-${fakeBatchNum} 생성\n  • ${selectedIds.length}개 pallet → pending_pull\n  • Transaction 기록\n\n실제 DB는 변경되지 않았습니다.\n\n[🧪 Test Log]에서 자세한 내용 확인 가능합니다.`);
+    
+    _selectedPalletIds.clear();
+    document.getElementById('create-batch-modal').style.display = 'none';
+    renderPallets();
+    return;
+  }
+  
   try {
     const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
     const relatedOrders = ordersInput ? ordersInput.split(',').map(s => s.trim()).filter(s => s) : [];
@@ -13463,6 +13716,19 @@ async function renderBatches() {
 
 async function updateBatchStatus(batchId, newStatus) {
   if (!confirm(`이 batch의 상태를 '${newStatus}'로 변경하시겠습니까?`)) return;
+  
+  // 🧪 TEST MODE
+  if (window.TEST_MODE) {
+    tdbLog('UPDATE', 'pallet_transfer_batches', { status: newStatus }, { id: batchId });
+    if (newStatus === 'in_transit') {
+      tdbLog('UPDATE', 'pallets', { status: 'in_transit', location_type: 'in_transit' }, { current_batch_id: batchId });
+    } else if (newStatus === 'arrived') {
+      tdbLog('UPDATE', 'pallets', { status: 'arrived', arrived_at: new Date().toISOString() }, { current_batch_id: batchId });
+    }
+    alert(`🧪 [TEST MODE] Batch 상태 → '${newStatus}' (시뮬레이션)`);
+    return;
+  }
+  
   try {
     const update = { status: newStatus };
     if (newStatus === 'in_transit') update.shipped_at = new Date().toISOString();
@@ -13486,6 +13752,15 @@ async function updateBatchStatus(batchId, newStatus) {
 
 async function cancelBatch(batchId, batchNum) {
   if (!confirm(`TRB-${batchNum}을 취소하시겠습니까?\n\n선택된 pallets는 원래 상태로 돌아갑니다.`)) return;
+  
+  // 🧪 TEST MODE
+  if (window.TEST_MODE) {
+    tdbLog('UPDATE', 'pallet_transfer_batches', { status: 'cancelled' }, { id: batchId });
+    tdbLog('UPDATE', 'pallets', { current_batch_id: null, status: 'active' }, { current_batch_id: batchId });
+    alert(`🧪 [TEST MODE] TRB-${batchNum} 취소 (시뮬레이션)`);
+    return;
+  }
+  
   try {
     await db.from('pallet_transfer_batches').update({ status: 'cancelled' }).eq('id', batchId);
     await db.from('pallets').update({
@@ -13813,6 +14088,62 @@ async function submitProcessBatch() {
   });
   
   if (!confirm(`TRB-${_processBatch.batch_number} Processing 완료:\n\n✓ Keep: ${keepCnt}개 split\n🚚 Return: ${retCnt}개 split\n\n진행하시겠습니까?`)) return;
+  
+  // 🧪 TEST MODE
+  if (window.TEST_MODE) {
+    // 시뮬레이션 상세 로깅
+    let summary = `🧪 [TEST MODE] Process 시뮬레이션\n\n`;
+    summary += `Batch: TRB-${_processBatch.batch_number}\n`;
+    summary += `처리 요약:\n`;
+    summary += `  ✓ Keep: ${keepCnt} splits\n`;
+    summary += `  🚚 Return: ${retCnt} splits\n\n`;
+    summary += `만약 실제 실행했다면:\n`;
+    
+    const keepBins = {};
+    const returnPallets = {};
+    _processItems.forEach(item => {
+      item.splits.forEach(s => {
+        if (s.action === 'keep') {
+          keepBins[s.target_bin] = (keepBins[s.target_bin] || 0) + s.qty;
+        } else if (s.action === 'return') {
+          const key = `${s.target_warehouse}/${s.target_pallet_code}`;
+          returnPallets[key] = (returnPallets[key] || 0) + s.qty;
+        }
+      });
+    });
+    
+    if (Object.keys(keepBins).length > 0) {
+      summary += `\n  Keep 대상 bins:\n`;
+      Object.entries(keepBins).forEach(([bin, qty]) => {
+        summary += `    ${bin}: ${qty.toLocaleString()} pcs\n`;
+      });
+    }
+    if (Object.keys(returnPallets).length > 0) {
+      summary += `\n  Return 대상 pallets (새로 생성):\n`;
+      Object.entries(returnPallets).forEach(([pc, qty]) => {
+        summary += `    ${pc}: ${qty.toLocaleString()} pcs\n`;
+      });
+    }
+    summary += `\n실제 DB는 변경되지 않았습니다.`;
+    
+    // Test log
+    tdbLog('INSERT', 'inventory_transactions', { type: 'pallet_process', batch: _processBatch.batch_number });
+    _processItems.forEach(item => {
+      item.splits.forEach(s => {
+        tdbLog(s.action === 'keep' ? 'UPDATE' : 'INSERT_OR_UPDATE', 'inventory_bins', {
+          sku: item.sku_id, qty: s.qty, action: s.action, target: s.action === 'keep' ? s.target_bin : `${s.target_warehouse}/${s.target_pallet_code}`
+        });
+      });
+    });
+    tdbLog('UPDATE', 'pallets', { status: 'processed' }, { current_batch_id: _processBatch.id });
+    tdbLog('UPDATE', 'pallet_transfer_batches', { status: 'completed' }, { id: _processBatch.id });
+    
+    alert(summary);
+    document.getElementById('process-batch-modal').style.display = 'none';
+    _processBatch = null;
+    _processItems = [];
+    return;
+  }
   
   const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
   let txnId = null;
@@ -46023,4 +46354,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-25T02:25:09Z - Phase 4.5: SKU split by qty + bulk actions -->
+
+<!-- Deploy trigger: 2026-04-25T02:34:24Z - Test Mode (simulation) -->
