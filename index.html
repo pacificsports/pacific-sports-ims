@@ -14082,14 +14082,12 @@ function renderProcessItems() {
                     </td>
                     <td rowspan="${item.splits.length}" style="padding:6px 8px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;vertical-align:top;background:#fff;border-right:1px solid #e5e7eb;">
                       ${item.total_qty.toLocaleString()}
-                      ${remaining !== 0 ? `<div style="font-size:9px;color:${remaining > 0 ? '#dc2626' : '#dc2626'};margin-top:2px;">${remaining > 0 ? `⚠️ 남음 ${remaining}` : `⚠️ 초과 ${-remaining}`}</div>` : ''}
+                      ${remaining > 0 ? `<div style="font-size:9px;color:#92400e;background:#fef3c7;border-radius:3px;padding:2px 4px;margin-top:3px;font-weight:700;">남음 ${remaining}<br><span style="font-weight:400;">(원위치 유지)</span></div>` : ''}
+                      ${remaining < 0 ? `<div style="font-size:9px;color:#991b1b;background:#fee2e2;border-radius:3px;padding:2px 4px;margin-top:3px;font-weight:700;">⚠️ 초과 ${-remaining}</div>` : ''}
                     </td>
                   ` : ''}
                   <td style="padding:6px 8px;text-align:right;">
-                    ${isSplit 
-                      ? `<input type="number" value="${split.qty}" min="1" oninput="updateSplitField(${item._idx}, ${spIdx}, 'qty', parseInt(this.value)||0)" style="width:70px;height:24px;border:1px solid #d1d5db;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:right;">`
-                      : `<span style="font-family:'IBM Plex Mono',monospace;font-weight:700;">${split.qty.toLocaleString()}</span>`
-                    }
+                    <input type="number" value="${split.qty}" min="0" max="${item.total_qty}" oninput="updateSplitField(${item._idx}, ${spIdx}, 'qty', Math.min(${item.total_qty}, parseInt(this.value)||0))" style="width:75px;height:24px;border:1px solid #d1d5db;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-align:right;font-weight:700;">
                   </td>
                   <td style="padding:6px 8px;">
                     <select onchange="updateSplitField(${item._idx}, ${spIdx}, 'action', this.value)" style="width:100%;height:24px;border:1px solid #d1d5db;border-radius:3px;font-size:11px;padding:0 2px;">
@@ -14237,7 +14235,23 @@ function bulkReturnAll() {
 }
 
 async function submitProcessBatch() {
-  // 1. 검증
+  // 1. qty 합계가 total보다 작으면 자동으로 "원래 위치 유지" split 추가
+  _processItems.forEach(item => {
+    const splitSum = item.splits.reduce((s, sp) => s + (sp.qty || 0), 0);
+    const remaining = item.total_qty - splitSum;
+    if (remaining > 0) {
+      // 나머지는 원래 bin/pallet에 그대로 둠 (skip = 변경 없음)
+      item.splits.push({
+        qty: remaining,
+        action: 'skip',
+        target_bin: '',
+        target_pallet_code: '',
+        target_warehouse: _processBatch?.to_warehouse || ''
+      });
+    }
+  });
+  
+  // 2. 검증
   const errors = [];
   _processItems.forEach((item, idx) => {
     const splitSum = item.splits.reduce((s, sp) => s + (sp.qty || 0), 0);
@@ -14245,13 +14259,13 @@ async function submitProcessBatch() {
       errors.push(`${item.sku_id}: Split 합계 ${splitSum} ≠ 전체 ${item.total_qty}`);
     }
     item.splits.forEach((s, spIdx) => {
-      if (s.qty <= 0) {
-        errors.push(`${item.sku_id} split #${spIdx+1}: qty는 1 이상이어야 함`);
+      if (s.qty < 0) {
+        errors.push(`${item.sku_id} split #${spIdx+1}: qty는 0 이상이어야 함`);
       }
-      if (s.action === 'keep' && !s.target_bin.trim()) {
+      if (s.qty > 0 && s.action === 'keep' && !s.target_bin.trim()) {
         errors.push(`${item.sku_id} split #${spIdx+1}: Keep bin 이름 필요`);
       }
-      if (s.action === 'return' && !s.target_pallet_code.trim()) {
+      if (s.qty > 0 && s.action === 'return' && !s.target_pallet_code.trim()) {
         errors.push(`${item.sku_id} split #${spIdx+1}: Return pallet 이름 필요`);
       }
     });
@@ -14262,15 +14276,27 @@ async function submitProcessBatch() {
   }
   
   // 통계
-  let keepCnt = 0, retCnt = 0;
+  let keepCnt = 0, retCnt = 0, skipCnt = 0, skipQty = 0;
   _processItems.forEach(item => {
     item.splits.forEach(s => {
       if (s.action === 'keep') keepCnt++;
       else if (s.action === 'return') retCnt++;
+      else if (s.action === 'skip') {
+        skipCnt++;
+        skipQty += (s.qty || 0);
+      }
     });
   });
   
-  if (!confirm(`TRB-${_processBatch.batch_number} Processing 완료:\n\n✓ Keep: ${keepCnt}개 split\n🚚 Return: ${retCnt}개 split\n\n진행하시겠습니까?`)) return;
+  let confirmMsg = `TRB-${_processBatch.batch_number} Processing 완료:\n\n` +
+                   `✓ Keep: ${keepCnt}개 split\n` +
+                   `🚚 Return: ${retCnt}개 split\n`;
+  if (skipCnt > 0) {
+    confirmMsg += `— 원래 위치 유지: ${skipCnt}개 split (${skipQty.toLocaleString()} pcs)\n`;
+  }
+  confirmMsg += `\n진행하시겠습니까?`;
+  
+  if (!confirm(confirmMsg)) return;
   
   // 🧪 TEST MODE
   if (window.TEST_MODE) {
@@ -46556,4 +46582,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-25T14:51:41Z - Test Mode end-to-end workflow simulation -->
+
+<!-- Deploy trigger: 2026-04-25T14:59:03Z - Process Qty always editable + auto skip remainder -->
