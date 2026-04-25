@@ -13248,7 +13248,7 @@ let _allPallets = [];          // 로드된 pallet
 let _palletContents = {};       // pallet_id → [{sku, qty, color, size, style}]
 let _allBatches = [];           // 로드된 batches
 let _selectedPalletIds = new Set();  // 선택된 pallet
-let _palletsActiveTab = 'list';  // 'list' or 'batches'
+let _palletsActiveTab = 'sc';  // 'sc' | 'ca' | 'batches'
 
 async function openPallets() {
   document.getElementById('pallets-modal').style.display = 'flex';
@@ -13258,26 +13258,40 @@ async function openPallets() {
 
 function switchPalletsTab(tab) {
   _palletsActiveTab = tab;
-  const listTab = document.getElementById('pallets-tab-list');
+  _selectedPalletIds.clear();  // 탭 바꾸면 선택 초기화
+  
+  const scTab = document.getElementById('pallets-tab-sc');
+  const caTab = document.getElementById('pallets-tab-ca');
   const batchTab = document.getElementById('pallets-tab-batches');
   const listContent = document.getElementById('pallets-tab-content-list');
   const batchContent = document.getElementById('pallets-tab-content-batches');
   const filterBar = document.getElementById('pallets-filter-bar');
   
-  if (tab === 'list') {
-    listTab.style.background = '#fff';
-    listTab.style.color = '#92400e';
-    listTab.style.borderColor = '#e5e7eb';
-    batchTab.style.background = 'transparent';
-    batchTab.style.color = '#6b7280';
-    batchTab.style.borderColor = 'transparent';
+  // 모든 탭 기본 스타일
+  [scTab, caTab, batchTab].forEach(t => {
+    if (!t) return;
+    t.style.background = 'transparent';
+    t.style.color = '#6b7280';
+    t.style.borderColor = 'transparent';
+  });
+  
+  if (tab === 'sc') {
+    scTab.style.background = '#fff';
+    scTab.style.color = '#1e40af';
+    scTab.style.borderColor = '#e5e7eb';
     listContent.style.display = 'block';
     batchContent.style.display = 'none';
     filterBar.style.display = 'flex';
+    renderPallets();
+  } else if (tab === 'ca') {
+    caTab.style.background = '#fff';
+    caTab.style.color = '#9a3412';
+    caTab.style.borderColor = '#e5e7eb';
+    listContent.style.display = 'block';
+    batchContent.style.display = 'none';
+    filterBar.style.display = 'flex';
+    renderPallets();
   } else {
-    listTab.style.background = 'transparent';
-    listTab.style.color = '#6b7280';
-    listTab.style.borderColor = 'transparent';
     batchTab.style.background = '#fff';
     batchTab.style.color = '#92400e';
     batchTab.style.borderColor = '#e5e7eb';
@@ -13335,13 +13349,15 @@ async function loadPallets() {
 function renderPallets() {
   const codeFilter = (document.getElementById('pallets-filter-code').value || '').trim().toLowerCase();
   const skuFilter = (document.getElementById('pallets-filter-sku').value || '').trim().toLowerCase();
-  const whFilter = document.getElementById('pallets-filter-wh').value;
   const locTypeFilter = document.getElementById('pallets-filter-loctype').value;
   const statusFilter = document.getElementById('pallets-filter-status').value;
   
+  // 탭에 따른 창고 필터
+  const tabWh = _palletsActiveTab === 'sc' ? 'SC' : _palletsActiveTab === 'ca' ? 'CA' : null;
+  
   const filtered = _allPallets.filter(p => {
+    if (tabWh && p.warehouse_code !== tabWh) return false;
     if (codeFilter && !p.pallet_code.toLowerCase().includes(codeFilter)) return false;
-    if (whFilter && p.warehouse_code !== whFilter) return false;
     if (locTypeFilter && p.location_type !== locTypeFilter) return false;
     if (statusFilter && p.status !== statusFilter) return false;
     if (skuFilter) {
@@ -13361,12 +13377,13 @@ function renderPallets() {
     return s + contents.reduce((ss, c) => ss + (c.qty || 0), 0);
   }, 0);
   
+  const tabLabel = tabWh || '';
   document.getElementById('pallets-count').textContent = 
-    `${filtered.length} / ${_allPallets.length} pallets · ${totalPcs.toLocaleString()} pcs`;
+    `${filtered.length} ${tabLabel} pallets · ${totalPcs.toLocaleString()} pcs`;
   
   const tbody = document.getElementById('pallets-tbody');
   if (filtered.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" style="padding:40px;text-align:center;color:#9ca3af;">No pallets found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:40px;text-align:center;color:#9ca3af;">No pallets found</td></tr>';
     return;
   }
   
@@ -13400,7 +13417,6 @@ function renderPallets() {
         <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="togglePalletSelection('${p.id}', this.checked)">
       </td>
       <td style="padding:6px;font-family:'IBM Plex Mono',monospace;font-weight:800;color:#92400e;font-size:13px;cursor:pointer;" onclick="openPalletDetail('${p.id}')">${escapeHtml(p.pallet_code)}</td>
-      <td style="padding:6px;"><span style="background:${p.warehouse_code==='SC'?'#dbeafe':'#fed7aa'};color:${p.warehouse_code==='SC'?'#1e40af':'#9a3412'};padding:2px 8px;border-radius:4px;font-weight:700;font-size:11px;">${p.warehouse_code}</span></td>
       <td style="padding:6px;"><span style="background:${lt.bg};color:${lt.color};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${lt.label}</span></td>
       <td style="padding:6px;"><span style="background:${st.bg};color:${st.color};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${p.status}</span></td>
       <td style="padding:6px;font-size:11px;color:#374151;">
@@ -13432,13 +13448,13 @@ function togglePalletSelection(palletId, checked) {
 
 function togglePalletsAll(checked) {
   const codeFilter = (document.getElementById('pallets-filter-code').value || '').trim().toLowerCase();
-  const whFilter = document.getElementById('pallets-filter-wh').value;
   const locTypeFilter = document.getElementById('pallets-filter-loctype').value;
   const statusFilter = document.getElementById('pallets-filter-status').value;
+  const tabWh = _palletsActiveTab === 'sc' ? 'SC' : _palletsActiveTab === 'ca' ? 'CA' : null;
   
   const filtered = _allPallets.filter(p => {
+    if (tabWh && p.warehouse_code !== tabWh) return false;
     if (codeFilter && !p.pallet_code.toLowerCase().includes(codeFilter)) return false;
-    if (whFilter && p.warehouse_code !== whFilter) return false;
     if (locTypeFilter && p.location_type !== locTypeFilter) return false;
     if (statusFilter && p.status !== statusFilter) return false;
     return true;
@@ -31203,7 +31219,8 @@ function showCreditHoldFlash(overAmt) {
     
     <!-- Tabs -->
     <div style="padding:0 24px;border-bottom:1px solid #e5e7eb;display:flex;gap:2px;background:#f9fafb;">
-      <button id="pallets-tab-list" onclick="switchPalletsTab('list')" class="pallet-tab active" style="padding:10px 18px;background:#fff;border:1px solid #e5e7eb;border-bottom:none;border-radius:6px 6px 0 0;font-weight:700;font-size:13px;color:#92400e;cursor:pointer;margin-top:8px;">📦 Pallet 목록</button>
+      <button id="pallets-tab-sc" onclick="switchPalletsTab('sc')" class="pallet-tab active" style="padding:10px 18px;background:#fff;border:1px solid #e5e7eb;border-bottom:none;border-radius:6px 6px 0 0;font-weight:700;font-size:13px;color:#1e40af;cursor:pointer;margin-top:8px;">📦 SC Pallets</button>
+      <button id="pallets-tab-ca" onclick="switchPalletsTab('ca')" class="pallet-tab" style="padding:10px 18px;background:transparent;border:1px solid transparent;border-radius:6px 6px 0 0;font-weight:700;font-size:13px;color:#6b7280;cursor:pointer;margin-top:8px;">📦 CA Pallets</button>
       <button id="pallets-tab-batches" onclick="switchPalletsTab('batches')" class="pallet-tab" style="padding:10px 18px;background:transparent;border:1px solid transparent;border-radius:6px 6px 0 0;font-weight:700;font-size:13px;color:#6b7280;cursor:pointer;margin-top:8px;">🚛 Transfer Batches</button>
     </div>
     
@@ -31211,11 +31228,6 @@ function showCreditHoldFlash(overAmt) {
     <div id="pallets-filter-bar" style="padding:10px 24px;border-bottom:1px solid #e5e7eb;display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#f9fafb;">
       <input id="pallets-filter-code" placeholder="Pallet Code (예: H2025)" oninput="renderPallets()" style="height:30px;border:1px solid #d1d5db;border-radius:5px;padding:0 8px;font-size:12px;width:150px;">
       <input id="pallets-filter-sku" placeholder="SKU/Style 검색" oninput="renderPallets()" style="height:30px;border:1px solid #d1d5db;border-radius:5px;padding:0 8px;font-size:12px;width:140px;">
-      <select id="pallets-filter-wh" onchange="renderPallets()" style="height:30px;border:1px solid #d1d5db;border-radius:5px;padding:0 6px;font-size:12px;">
-        <option value="">All Warehouses</option>
-        <option value="SC">SC</option>
-        <option value="CA">CA</option>
-      </select>
       <select id="pallets-filter-loctype" onchange="renderPallets()" style="height:30px;border:1px solid #d1d5db;border-radius:5px;padding:0 6px;font-size:12px;">
         <option value="">All Locations</option>
         <option value="3rd_party">🚚 3rd Party</option>
@@ -31245,7 +31257,6 @@ function showCreditHoldFlash(overAmt) {
             <tr style="background:#f3f4f6;">
               <th style="width:30px;padding:8px;"><input type="checkbox" id="pallets-check-all" onchange="togglePalletsAll(this.checked)"></th>
               <th style="width:110px;padding:8px;">Pallet Code</th>
-              <th style="width:70px;padding:8px;">창고</th>
               <th style="width:100px;padding:8px;">위치</th>
               <th style="width:100px;padding:8px;">상태</th>
               <th style="padding:8px;">내용물 (SKU 수 / 총 Pcs)</th>
@@ -31255,7 +31266,7 @@ function showCreditHoldFlash(overAmt) {
             </tr>
           </thead>
           <tbody id="pallets-tbody">
-            <tr><td colspan="9" style="padding:40px;text-align:center;color:#9ca3af;">Loading...</td></tr>
+            <tr><td colspan="8" style="padding:40px;text-align:center;color:#9ca3af;">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -46422,4 +46433,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-25T02:53:33Z - All bins registered as pallets -->
+
+<!-- Deploy trigger: 2026-04-25T03:01:10Z - Pallets tabs: SC / CA / Batches -->
