@@ -609,6 +609,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             </select></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">SIZE</label>
            <input class="fi" id="inv-filter-size" placeholder="Size..." oninput="filterInventory()"/></div>
+          <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">BIN / PALLET</label>
+           <input class="fi" id="inv-filter-bin" placeholder="e.g. H2025 or J05" oninput="filterInventory()"/></div>
           <div><label style="font-size:10px;color:var(--text3);display:block;margin-bottom:3px">UNIT</label>
             <select class="fsel" id="inv-unit-toggle" onchange="filterInventory()" style="width:100%">
               <option value="pcs">Pieces (pcs)</option>
@@ -8526,6 +8528,7 @@ function filterInventory() {
     const color = (document.getElementById('inv-filter-color')?.value || '').toLowerCase();
     const wh = document.getElementById('inv-filter-wh')?.value || '';
     const size = (document.getElementById('inv-filter-size')?.value || '').toLowerCase();
+    const bin = (document.getElementById('inv-filter-bin')?.value || '').trim().toLowerCase();
     const status = document.getElementById('inv-filter-status')?.value || '';
 
   let filtered = allInventory.filter(i => {
@@ -8538,6 +8541,12 @@ function filterInventory() {
     if (color && !i.color?.toLowerCase().includes(color)) return false;
     if (wh && i.warehouses?.code !== wh) return false;
     if (size && !i.size?.toLowerCase().includes(size)) return false;
+    if (bin) {
+      // bin/pallet 검색 — inventory.location 또는 inventory_bins의 bin_code에서 매칭
+      const locMatch = (i.location || '').toLowerCase().includes(bin);
+      const binsMatch = (i.bins || []).some(b => (b.bin_code || '').toLowerCase().includes(bin));
+      if (!locMatch && !binsMatch) return false;
+    }
     if (status === 'low' && !(i.qty_on_hand <= i.reorder_point && i.qty_on_hand > 0)) return false;
     if (status === 'out' && i.qty_on_hand !== 0) return false;
     // 'all-with-empty'는 필터 없음 (모든 SKU 표시)
@@ -46355,4 +46364,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-25T02:34:24Z - Test Mode (simulation) -->
+
+<!-- Deploy trigger: 2026-04-25T02:38:27Z - Add Bin/Pallet search field -->
