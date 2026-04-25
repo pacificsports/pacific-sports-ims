@@ -13254,8 +13254,16 @@ async function reverseTransaction(txnId, txnNumber) {
 let _allPallets = [];          // 로드된 pallet
 let _palletContents = {};       // pallet_id → [{sku, qty, color, size, style}]
 let _allBatches = [];           // 로드된 batches
-let _selectedPalletIds = new Set();  // 선택된 pallet
+let _selectedPalletIds = new Set();  // 선택된 pallet (Pallet 모드)
 let _palletsActiveTab = 'sc';  // 'sc' | 'ca' | 'batches'
+
+// ── Bin/SKU 모드 (부분 transfer) ──
+// key: `${bin_id}` → { bin_id, inventory_id, sku_id, style_number, color, size,
+//                       bin_code, pallet_id, pallet_code, warehouse_code,
+//                       available_qty, ppb, qty_boxes, qty_pcs }
+let _selectedBinItems = new Map();
+let _binSkuFromWarehouse = 'SC';  // Bin/SKU 모드에서 출발 창고
+let _binSkuSearchResults = [];    // 검색 결과 캐시
 
 async function openPallets() {
   document.getElementById('pallets-modal').style.display = 'flex';
@@ -13752,6 +13760,423 @@ async function submitCreateBatch() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// ── Bin/SKU 모드 Batch 생성 ──────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+
+function openBinSkuBatchDialog() {
+  _selectedBinItems.clear();
+  _binSkuFromWarehouse = 'SC';
+  _binSkuSearchResults = [];
+  
+  const body = document.getElementById('bin-sku-batch-body');
+  body.innerHTML = `
+    <!-- 출발/도착 + 검색 -->
+    <div style="display:grid;grid-template-columns:1fr 30px 1fr;gap:10px;align-items:end;margin-bottom:14px;">
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">FROM (출발 창고)</label>
+        <select id="bin-sku-from" onchange="onBinSkuFromChange()" style="width:100%;height:34px;border:1px solid #d1d5db;border-radius:5px;padding:0 8px;font-size:12px;">
+          <option value="SC">🏢 SC (Sumter)</option>
+          <option value="SC-PCR">🏢 SC-PCR</option>
+          <option value="CA">🏢 CA (Eastvale)</option>
+          <option value="CA-PCR">🏢 CA-PCR</option>
+        </select>
+      </div>
+      <div style="text-align:center;padding-bottom:8px;font-size:18px;color:#6b7280;">→</div>
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">TO (도착 창고)</label>
+        <select id="bin-sku-to" style="width:100%;height:34px;border:1px solid #d1d5db;border-radius:5px;padding:0 8px;font-size:12px;">
+          <option value="CA">🏢 CA (Eastvale)</option>
+          <option value="CA-PCR">🏢 CA-PCR</option>
+          <option value="SC">🏢 SC (Sumter)</option>
+          <option value="SC-PCR">🏢 SC-PCR</option>
+          <option value="3rd_party">🚚 3rd Party</option>
+        </select>
+      </div>
+    </div>
+    
+    <!-- 검색 -->
+    <div style="margin-bottom:12px;">
+      <input id="bin-sku-search" oninput="onBinSkuSearchInput()" placeholder="🔍 SKU / Style / Color / Size / Bin code / Pallet code 검색..." style="width:100%;height:36px;border:2px solid #fde68a;border-radius:6px;padding:0 12px;font-size:13px;font-family:'IBM Plex Mono',monospace;">
+      <div style="font-size:10px;color:#9ca3af;margin-top:4px;">예: "9307" / "royal" / "2P-7" / "2XL"</div>
+    </div>
+    
+    <!-- 결과 + 선택된 아이템 -->
+    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:14px;min-height:380px;">
+      <!-- 검색 결과 (왼쪽) -->
+      <div style="border:1px solid #e5e7eb;border-radius:8px;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="background:#f9fafb;padding:8px 12px;font-size:11px;font-weight:700;color:#374151;border-bottom:1px solid #e5e7eb;">
+          📍 <span id="bin-sku-search-label">SC 재고</span>
+        </div>
+        <div id="bin-sku-results" style="flex:1;overflow-y:auto;max-height:420px;padding:6px;">
+          <div style="padding:40px 20px;text-align:center;color:#9ca3af;font-size:12px;">검색어 입력 또는 ⏎ 빈 검색으로 전체 보기</div>
+        </div>
+      </div>
+      
+      <!-- 선택된 아이템 (오른쪽) -->
+      <div style="border:1px solid #e5e7eb;border-radius:8px;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="background:#fef3c7;padding:8px 12px;font-size:11px;font-weight:700;color:#78350f;border-bottom:1px solid #fde68a;display:flex;justify-content:space-between;">
+          <span>🛒 선택된 아이템</span>
+          <button onclick="clearBinSkuSelection()" style="background:none;border:none;color:#dc2626;font-size:10px;cursor:pointer;font-weight:700;">전체 비우기</button>
+        </div>
+        <div id="bin-sku-selected" style="flex:1;overflow-y:auto;max-height:420px;padding:6px;">
+          <div style="padding:40px 20px;text-align:center;color:#9ca3af;font-size:12px;">아직 선택된 아이템 없음</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Related Orders + Notes -->
+    <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">Related Orders (선택)</label>
+        <input id="bin-sku-orders" placeholder="예: SO-1234, SO-1235" style="width:100%;height:32px;border:1px solid #d1d5db;border-radius:5px;padding:0 10px;font-size:12px;">
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#374151;display:block;margin-bottom:4px;">Notes (선택)</label>
+        <input id="bin-sku-notes" placeholder="특이사항..." style="width:100%;height:32px;border:1px solid #d1d5db;border-radius:5px;padding:0 10px;font-size:12px;">
+      </div>
+    </div>
+  `;
+  
+  document.getElementById('bin-sku-batch-modal').style.display = 'flex';
+  // 초기 빈 검색
+  setTimeout(() => searchBinSku(''), 100);
+}
+
+function onBinSkuFromChange() {
+  _binSkuFromWarehouse = document.getElementById('bin-sku-from').value;
+  document.getElementById('bin-sku-search-label').textContent = `${_binSkuFromWarehouse} 재고`;
+  // 선택된 거 초기화 (창고 바뀌었으니)
+  _selectedBinItems.clear();
+  renderBinSkuSelected();
+  // 재검색
+  searchBinSku(document.getElementById('bin-sku-search').value);
+}
+
+let _binSkuSearchTimer = null;
+function onBinSkuSearchInput() {
+  clearTimeout(_binSkuSearchTimer);
+  _binSkuSearchTimer = setTimeout(() => {
+    searchBinSku(document.getElementById('bin-sku-search').value);
+  }, 250);
+}
+
+async function searchBinSku(query) {
+  const resultsDiv = document.getElementById('bin-sku-results');
+  resultsDiv.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:11px;">⏳ 검색 중...</div>';
+  
+  try {
+    const q = (query || '').trim().toLowerCase();
+    
+    // 출발 창고 ID 가져오기
+    const { data: whData } = await db.from('warehouses').select('id, code').eq('code', _binSkuFromWarehouse).single();
+    if (!whData) {
+      resultsDiv.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:11px;">창고를 찾을 수 없습니다</div>';
+      return;
+    }
+    
+    // qty>0인 bins만, 해당 창고 inventory만
+    let queryBuilder = db.from('inventory_bins')
+      .select(`
+        id, bin_code, qty, pallet_id,
+        inventory!inner(id, sku_id, style_number, color, size, warehouse_id, styles(pcs_per_box, pcs_per_box_large)),
+        pallets(pallet_code, location_type, warehouse_code)
+      `)
+      .eq('inventory.warehouse_id', whData.id)
+      .gt('qty', 0)
+      .limit(100);
+    
+    const { data: bins, error } = await queryBuilder;
+    if (error) throw error;
+    
+    // 클라이언트 측 필터 (검색어 매칭)
+    let filtered = bins || [];
+    if (q) {
+      filtered = filtered.filter(b => {
+        const sku = (b.inventory?.sku_id || '').toLowerCase();
+        const style = (b.inventory?.style_number || '').toLowerCase();
+        const color = (b.inventory?.color || '').toLowerCase();
+        const size = (b.inventory?.size || '').toLowerCase();
+        const binCode = (b.bin_code || '').toLowerCase();
+        const palletCode = (b.pallets?.pallet_code || '').toLowerCase();
+        return sku.includes(q) || style.includes(q) || color.includes(q) 
+          || size.includes(q) || binCode.includes(q) || palletCode.includes(q);
+      });
+    }
+    
+    _binSkuSearchResults = filtered;
+    renderBinSkuResults();
+    
+  } catch (e) {
+    console.error('[searchBinSku]', e);
+    resultsDiv.innerHTML = `<div style="padding:20px;color:#dc2626;font-size:11px;">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderBinSkuResults() {
+  const resultsDiv = document.getElementById('bin-sku-results');
+  if (_binSkuSearchResults.length === 0) {
+    resultsDiv.innerHTML = '<div style="padding:30px;text-align:center;color:#9ca3af;font-size:11px;">결과 없음</div>';
+    return;
+  }
+  
+  resultsDiv.innerHTML = _binSkuSearchResults.map(b => {
+    const inv = b.inventory || {};
+    const size = inv.size || '';
+    const isLarge = ['3XL', '4XL', '5XL'].includes(size);
+    const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+    const totalBoxes = Math.floor(b.qty / ppb);
+    const remainder = b.qty - (totalBoxes * ppb);
+    const isSelected = _selectedBinItems.has(b.id);
+    const palletCode = b.pallets?.pallet_code || b.bin_code;
+    const isPallet = !!b.pallet_id;
+    
+    return `
+      <div style="border:1px solid ${isSelected ? '#fbbf24' : '#e5e7eb'};border-radius:6px;padding:8px 10px;margin-bottom:6px;background:${isSelected ? '#fffbeb' : '#fff'};">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#1f2937;">
+              ${escapeHtml(inv.sku_id || '?')}
+            </div>
+            <div style="font-size:10px;color:#6b7280;margin-top:2px;">
+              ${isPallet ? '📦' : '📍'} <strong>${escapeHtml(palletCode)}</strong> · 
+              ${escapeHtml(inv.color || '')} · ${escapeHtml(size)} · 
+              <strong style="color:#1f2937;">${b.qty.toLocaleString()} pcs</strong>
+              <span style="color:#9ca3af;"> (${totalBoxes} box${remainder ? ` + ${remainder}` : ''} @ ${ppb}/box)</span>
+            </div>
+          </div>
+          <button onclick="addBinSkuItem(${b.id})" ${isSelected ? 'disabled' : ''} style="height:28px;padding:0 10px;background:${isSelected ? '#e5e7eb' : '#10b981'};color:${isSelected ? '#9ca3af' : '#fff'};border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:${isSelected ? 'not-allowed' : 'pointer'};white-space:nowrap;">
+            ${isSelected ? '✓ 추가됨' : '+ 추가'}
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function addBinSkuItem(binId) {
+  const b = _binSkuSearchResults.find(x => x.id === binId);
+  if (!b) return;
+  
+  const inv = b.inventory || {};
+  const size = inv.size || '';
+  const isLarge = ['3XL', '4XL', '5XL'].includes(size);
+  const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+  const totalBoxes = Math.floor(b.qty / ppb);
+  
+  _selectedBinItems.set(b.id, {
+    bin_id: b.id,
+    inventory_id: inv.id,
+    sku_id: inv.sku_id,
+    style_number: inv.style_number,
+    color: inv.color,
+    size: inv.size,
+    bin_code: b.bin_code,
+    pallet_id: b.pallet_id,
+    pallet_code: b.pallets?.pallet_code || b.bin_code,
+    location_type: b.pallets?.location_type || null,
+    warehouse_code: _binSkuFromWarehouse,
+    available_qty: b.qty,
+    available_boxes: totalBoxes,
+    ppb: ppb,
+    qty_boxes: totalBoxes,  // 기본: 전체 박스 보냄
+    qty_pcs: totalBoxes * ppb
+  });
+  
+  renderBinSkuResults();
+  renderBinSkuSelected();
+}
+
+function removeBinSkuItem(binId) {
+  _selectedBinItems.delete(binId);
+  renderBinSkuResults();
+  renderBinSkuSelected();
+}
+
+function updateBinSkuQty(binId, newBoxes) {
+  const item = _selectedBinItems.get(binId);
+  if (!item) return;
+  let n = parseInt(newBoxes, 10);
+  if (isNaN(n) || n < 0) n = 0;
+  if (n > item.available_boxes) n = item.available_boxes;
+  item.qty_boxes = n;
+  item.qty_pcs = n * item.ppb;
+  // 즉시 표시 갱신 (input 값은 그대로 두고 우측 텍스트만)
+  const pcsLabel = document.getElementById(`binsku-pcs-${binId}`);
+  if (pcsLabel) pcsLabel.textContent = `= ${item.qty_pcs.toLocaleString()} pcs`;
+  updateBinSkuSummary();
+}
+
+function clearBinSkuSelection() {
+  if (_selectedBinItems.size === 0) return;
+  if (!confirm('선택을 모두 비우시겠습니까?')) return;
+  _selectedBinItems.clear();
+  renderBinSkuResults();
+  renderBinSkuSelected();
+}
+
+function renderBinSkuSelected() {
+  const div = document.getElementById('bin-sku-selected');
+  if (_selectedBinItems.size === 0) {
+    div.innerHTML = '<div style="padding:40px 20px;text-align:center;color:#9ca3af;font-size:12px;">아직 선택된 아이템 없음<br><span style="font-size:10px;">왼쪽에서 [+ 추가] 클릭</span></div>';
+    updateBinSkuSummary();
+    return;
+  }
+  
+  const items = Array.from(_selectedBinItems.values());
+  div.innerHTML = items.map(it => `
+    <div style="border:1px solid #fde68a;background:#fffbeb;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:6px;margin-bottom:6px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#1f2937;">
+            ${escapeHtml(it.sku_id || '?')}
+          </div>
+          <div style="font-size:9px;color:#6b7280;">
+            📍 ${escapeHtml(it.pallet_code)} · ${escapeHtml(it.color || '')}/${escapeHtml(it.size || '')}
+          </div>
+        </div>
+        <button onclick="removeBinSkuItem(${it.bin_id})" style="background:none;border:none;color:#dc2626;font-size:14px;cursor:pointer;line-height:1;padding:0;">✕</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
+        <span style="color:#374151;font-weight:700;">박스:</span>
+        <input type="number" min="0" max="${it.available_boxes}" value="${it.qty_boxes}" onchange="updateBinSkuQty(${it.bin_id}, this.value)" style="width:55px;height:24px;border:1px solid #d1d5db;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+        <span style="color:#9ca3af;">/ ${it.available_boxes} box</span>
+        <span id="binsku-pcs-${it.bin_id}" style="margin-left:auto;color:#374151;font-weight:700;font-family:'IBM Plex Mono',monospace;">= ${it.qty_pcs.toLocaleString()} pcs</span>
+      </div>
+    </div>
+  `).join('');
+  
+  updateBinSkuSummary();
+}
+
+function updateBinSkuSummary() {
+  const items = Array.from(_selectedBinItems.values()).filter(i => i.qty_boxes > 0);
+  const totalBoxes = items.reduce((s, i) => s + i.qty_boxes, 0);
+  const totalPcs = items.reduce((s, i) => s + i.qty_pcs, 0);
+  const summary = document.getElementById('bin-sku-summary');
+  if (summary) {
+    summary.textContent = `선택됨: ${items.length} items · ${totalBoxes} boxes · ${totalPcs.toLocaleString()} pcs`;
+  }
+  const btn = document.getElementById('bin-sku-submit-btn');
+  if (btn) {
+    btn.disabled = items.length === 0;
+    btn.style.opacity = items.length === 0 ? '0.5' : '1';
+  }
+}
+
+async function submitBinSkuBatch() {
+  const from = document.getElementById('bin-sku-from').value;
+  const to = document.getElementById('bin-sku-to').value;
+  const ordersInput = document.getElementById('bin-sku-orders').value.trim();
+  const notes = document.getElementById('bin-sku-notes').value.trim();
+  
+  const items = Array.from(_selectedBinItems.values()).filter(i => i.qty_boxes > 0);
+  if (items.length === 0) {
+    alert('아이템을 1개 이상 선택해주세요 (박스 수 > 0)');
+    return;
+  }
+  if (from === to) {
+    if (!confirm('From과 To가 같습니다. 내부 재배치(reorganize)인가요?\n계속하시겠습니까?')) return;
+  }
+  
+  const relatedOrders = ordersInput ? ordersInput.split(',').map(s => s.trim()).filter(s => s) : [];
+  let batchType = 'warehouse_transfer';
+  if (from === '3rd_party' && to !== '3rd_party') batchType = 'pull_from_3rd';
+  else if (from !== '3rd_party' && to === '3rd_party') batchType = 'send_to_3rd';
+  else if (from === to) batchType = 'internal_reorganize';
+  
+  // selected_items: jsonb에 저장할 형태
+  const selectedItems = items.map(it => ({
+    bin_id: it.bin_id,
+    inventory_id: it.inventory_id,
+    sku_id: it.sku_id,
+    style_number: it.style_number,
+    color: it.color,
+    size: it.size,
+    bin_code: it.bin_code,
+    pallet_id: it.pallet_id,
+    pallet_code: it.pallet_code,
+    warehouse_code: it.warehouse_code,
+    qty_boxes: it.qty_boxes,
+    qty_pcs: it.qty_pcs,
+    ppb: it.ppb
+  }));
+  
+  // 🧪 TEST MODE
+  if (window.TEST_MODE) {
+    const fakeBatchId = 'test-batch-' + Date.now();
+    const fakeBatchNum = 9000 + (window._testBatches.length + 1);
+    const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+    
+    window._testBatches.push({
+      id: fakeBatchId,
+      batch_number: fakeBatchNum,
+      batch_type: batchType,
+      mode: 'bin_sku',
+      status: 'pending',
+      from_warehouse: from,
+      to_warehouse: to,
+      warehouse_code: to,
+      requested_by: performedBy,
+      requested_at: new Date().toISOString(),
+      related_orders: relatedOrders,
+      notes: notes || null,
+      pallet_ids: [],
+      selected_items: selectedItems
+    });
+    
+    tdbLog('INSERT', 'pallet_transfer_batches', { batch_type: batchType, mode: 'bin_sku', from_warehouse: from, to_warehouse: to, item_count: selectedItems.length });
+    showToast(`🧪 TRB-${fakeBatchNum} (Bin/SKU 모드) 생성 — ${items.length} items`);
+    
+    _selectedBinItems.clear();
+    document.getElementById('bin-sku-batch-modal').style.display = 'none';
+    if (_palletsActiveTab === 'batches') await loadBatches();
+    return;
+  }
+  
+  try {
+    const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+    
+    tdbLog('INSERT', 'pallet_transfer_batches', { batch_type: batchType, mode: 'bin_sku', from_warehouse: from, to_warehouse: to, item_count: selectedItems.length });
+    
+    const { data: batch, error: batchErr } = await db.from('pallet_transfer_batches').insert({
+      batch_type: batchType,
+      mode: 'bin_sku',
+      status: 'pending',
+      warehouse_code: to,
+      from_warehouse: from,
+      to_warehouse: to,
+      requested_by: performedBy,
+      related_orders: relatedOrders,
+      notes: notes || null,
+      selected_items: selectedItems
+    }).select('id, batch_number').single();
+    if (batchErr) throw batchErr;
+    
+    // Transaction 기록
+    try {
+      await db.from('inventory_transactions').insert({
+        transaction_type: 'pallet_batch_create',
+        description: `Transfer Batch TRB-${batch.batch_number} (Bin/SKU mode): ${from} → ${to} (${items.length} items)`,
+        warehouse_code: to,
+        performed_by: performedBy,
+        status: 'active',
+        affected_rows: items.length,
+        metadata: { batch_id: batch.id, batch_number: batch.batch_number, mode: 'bin_sku', item_count: items.length, from, to }
+      });
+    } catch(e) { console.error('[TXN]', e); }
+    
+    alert(`✅ Transfer Batch TRB-${batch.batch_number} 생성!\n\n${items.length}개 아이템이 Pull Request됨.\n(Bin/SKU 모드 - 박스 단위 부분 이동)`);
+    
+    _selectedBinItems.clear();
+    document.getElementById('bin-sku-batch-modal').style.display = 'none';
+    if (_palletsActiveTab === 'batches') await loadBatches();
+  } catch (e) {
+    console.error('[submitBinSkuBatch]', e);
+    alert('❌ Batch 생성 실패: ' + e.message);
+  }
+}
+
 // ── Batches List ───────────────────────────────
 
 async function loadBatches() {
@@ -13834,10 +14259,15 @@ async function renderBatches() {
       <td style="padding:8px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1e40af;">
         TRB-${b.batch_number}
         ${isTest ? '<div style="font-size:9px;color:#dc2626;font-weight:800;margin-top:2px;">🧪 TEST</div>' : ''}
+        ${b.mode === 'bin_sku' ? '<div style="font-size:9px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:3px;padding:1px 4px;margin-top:2px;display:inline-block;font-weight:700;">📦 Bin/SKU</div>' : ''}
       </td>
       <td style="padding:8px;font-size:11px;">${typeLabel}</td>
       <td style="padding:8px;font-size:11px;"><strong>${b.from_warehouse || '—'}</strong> → <strong>${b.to_warehouse || '—'}</strong></td>
-      <td style="padding:8px;font-size:11px;"><strong>${pallets.length}</strong> pallets · <span style="font-family:'IBM Plex Mono',monospace;color:#6b7280;">${escapeHtml(palletList)}${moreCount}</span></td>
+      <td style="padding:8px;font-size:11px;">${
+        b.mode === 'bin_sku'
+          ? `<strong>${(b.selected_items || []).length}</strong> items · <span style="color:#6b7280;">${(b.selected_items || []).reduce((s, it) => s + (it.qty_boxes || 0), 0)} boxes</span>`
+          : `<strong>${pallets.length}</strong> pallets · <span style="font-family:'IBM Plex Mono',monospace;color:#6b7280;">${escapeHtml(palletList)}${moreCount}</span>`
+      }</td>
       <td style="padding:8px;font-size:11px;color:#374151;">${(b.related_orders || []).join(', ') || '—'}</td>
       <td style="padding:8px;"><span style="background:${st.bg};color:${st.color};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${b.status}</span></td>
       <td style="padding:8px;font-size:11px;color:#6b7280;">${dateStr}</td>
@@ -14080,41 +14510,82 @@ async function openProcessBatch(batchId, batchNumber) {
       (pallets || []).forEach(p => palletMap[p.id] = p);
     }
     _processBatch = batch;
-    
-    // 각 pallet의 bins + inventory 정보 (DB 읽기는 항상 실제)
     _processItems = [];
-    if (palletIds.length > 0) {
-      const { data: bins } = await db.from('inventory_bins')
-        .select('id, pallet_id, bin_code, qty, inventory!inner(id, sku_id, style_number, color, size, warehouse_id, warehouses(code), styles(pcs_per_box, pcs_per_box_large))')
-        .in('pallet_id', palletIds);
+    
+    const mode = batch.mode || 'pallet';
+    const defaultLocation = batch.to_warehouse === '3rd_party' ? '3rd_party' : (batch.to_warehouse || 'SC');
+    
+    if (mode === 'bin_sku') {
+      // ─────────────── Bin/SKU 모드 ───────────────
+      // selected_items 기반으로 _processItems 구성 (qty는 박스가 아닌 pcs)
+      const selectedItems = batch.selected_items || [];
       
-      (bins || []).forEach(b => {
-        const pallet = palletMap[b.pallet_id];
-        const size = b.inventory?.size || '';
-        const isLarge = ['3XL', '4XL', '5XL'].includes(size);
-        const ppb = isLarge 
-          ? (b.inventory?.styles?.pcs_per_box_large || 48)
-          : (b.inventory?.styles?.pcs_per_box || 72);
-        
-        // 기본값: 분할 없음, 단일 split으로 시작 (target_location: 도착 창고)
-        const defaultLocation = batch.to_warehouse === '3rd_party' ? '3rd_party' : (batch.to_warehouse || 'SC');
+      // 부분 transfer는 도착 시 새 bin/pallet으로 들어가야 함 (원래 bin은 일부만 빠진 거니까)
+      // → bin_id, inventory_id는 "원래 출발지 정보" (transaction 기록용)
+      // → arrival_type: 사용자가 선택 (Pallet/Bin)
+      selectedItems.forEach(it => {
         _processItems.push({
-          bin_id: b.id,
-          inventory_id: b.inventory?.id,
-          sku_id: b.inventory?.sku_id,
-          style_number: b.inventory?.style_number,
-          color: b.inventory?.color,
-          size: b.inventory?.size,
-          ppb: ppb,
-          total_qty: b.qty,
-          original_bin_code: b.bin_code,
-          original_pallet_code: pallet?.pallet_code,
-          original_warehouse: pallet?.warehouse_code,
+          bin_id: it.bin_id,           // 원래 bin (도착지에서는 새로 만들 거)
+          inventory_id: it.inventory_id, // 도착 창고에서는 다른 inventory row 필요할 수도
+          sku_id: it.sku_id,
+          style_number: it.style_number,
+          color: it.color,
+          size: it.size,
+          ppb: it.ppb,
+          total_qty: it.qty_pcs,       // 보낸 수량
+          original_bin_code: it.bin_code,
+          original_pallet_code: it.pallet_code,
+          original_warehouse: it.warehouse_code,
+          is_partial: true,            // ⭐ 부분 transfer 표시
           splits: [
-            { qty: b.qty, target_location: defaultLocation, target_value: '' }
+            { 
+              qty: it.qty_pcs, 
+              target_location: defaultLocation, 
+              target_value: '',
+              arrival_type: defaultLocation === '3rd_party' ? 'pallet' : 'bin'  // ⭐ 도착 형태
+            }
           ]
         });
       });
+    } else {
+      // ─────────────── Pallet 모드 (기존) ───────────────
+      if (palletIds.length > 0) {
+        const { data: bins } = await db.from('inventory_bins')
+          .select('id, pallet_id, bin_code, qty, inventory!inner(id, sku_id, style_number, color, size, warehouse_id, warehouses(code), styles(pcs_per_box, pcs_per_box_large))')
+          .in('pallet_id', palletIds);
+        
+        (bins || []).forEach(b => {
+          const pallet = palletMap[b.pallet_id];
+          const size = b.inventory?.size || '';
+          const isLarge = ['3XL', '4XL', '5XL'].includes(size);
+          const ppb = isLarge 
+            ? (b.inventory?.styles?.pcs_per_box_large || 48)
+            : (b.inventory?.styles?.pcs_per_box || 72);
+          
+          _processItems.push({
+            bin_id: b.id,
+            inventory_id: b.inventory?.id,
+            sku_id: b.inventory?.sku_id,
+            style_number: b.inventory?.style_number,
+            color: b.inventory?.color,
+            size: b.inventory?.size,
+            ppb: ppb,
+            total_qty: b.qty,
+            original_bin_code: b.bin_code,
+            original_pallet_code: pallet?.pallet_code,
+            original_warehouse: pallet?.warehouse_code,
+            is_partial: false,
+            splits: [
+              { 
+                qty: b.qty, 
+                target_location: defaultLocation, 
+                target_value: '',
+                arrival_type: defaultLocation === '3rd_party' ? 'pallet' : 'pallet'  // pallet 모드 default: 통째로
+              }
+            ]
+          });
+        });
+      }
     }
     
     renderProcessItems();
@@ -14155,6 +14626,7 @@ function renderProcessItems() {
               <th style="padding:6px 8px;text-align:right;width:80px;">Total</th>
               <th style="padding:6px 8px;text-align:right;width:90px;">Boxes</th>
               <th style="padding:6px 8px;text-align:left;">📍 어디로?</th>
+              <th style="padding:6px 8px;text-align:left;width:120px;">📦 어떻게?</th>
               <th style="padding:6px 8px;width:60px;text-align:center;">⚙️</th>
             </tr>
           </thead>
@@ -14166,16 +14638,31 @@ function renderProcessItems() {
               
               return item.splits.map((split, spIdx) => {
                 const isFirst = spIdx === 0;
-                // 색상: 3rd_party는 노란, 우리 창고는 초록
-                const bgColor = split.target_location === '3rd_party' ? '#fef3c7' : '#f0fdf4';
-                const placeholder = split.target_location === '3rd_party' 
-                  ? 'Pallet (예: H3001)' 
-                  : 'Bin (예: J05A)';
+                // arrival_type 기본값 보정 (구버전 데이터 호환)
+                if (!split.arrival_type) {
+                  split.arrival_type = split.target_location === '3rd_party' ? 'pallet' : 'bin';
+                }
+                const isThirdParty = split.target_location === '3rd_party';
+                const isPalletArrival = split.arrival_type === 'pallet';
+                
+                // 색상: 3rd_party는 노란, Pallet 도착은 보라, Bin 도착은 초록
+                const bgColor = isThirdParty ? '#fef3c7' : (isPalletArrival ? '#f3e8ff' : '#f0fdf4');
+                
+                // Placeholder: arrival_type에 따라
+                let placeholder;
+                if (isThirdParty) {
+                  placeholder = 'Pallet (예: H3001)';
+                } else if (isPalletArrival) {
+                  placeholder = 'Pallet (예: 2P-7)';
+                } else {
+                  placeholder = 'Bin (예: J05A)';
+                }
                 
                 return `<tr style="border-bottom:1px solid #f3f4f6;background:${bgColor};">
                   ${isFirst ? `
                     <td rowspan="${item.splits.length}" style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-weight:700;vertical-align:top;background:#fff;border-right:1px solid #e5e7eb;">
                       ${escapeHtml(item.sku_id || '—')}
+                      ${item.is_partial ? `<div style="font-size:8px;color:#92400e;background:#fef3c7;border-radius:3px;padding:1px 4px;margin-top:2px;font-weight:700;">📦 부분</div>` : ''}
                     </td>
                     <td rowspan="${item.splits.length}" style="padding:6px 8px;vertical-align:top;background:#fff;border-right:1px solid #e5e7eb;">
                       ${escapeHtml(item.color || '')} / <strong>${escapeHtml(item.size || '')}</strong>
@@ -14207,6 +14694,15 @@ function renderProcessItems() {
                       <input value="${escapeHtml(split.target_value || '')}" oninput="updateSplitField(${item._idx}, ${spIdx}, 'target_value', this.value)" placeholder="${placeholder}" style="flex:1;height:28px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;padding:0 8px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
                     </div>
                   </td>
+                  <td style="padding:6px 8px;">
+                    ${isThirdParty 
+                      ? `<div style="font-size:11px;color:#92400e;font-weight:700;text-align:center;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:5px;">🚚 Pallet<br><span style="font-size:9px;font-weight:400;color:#6b7280;">(자동)</span></div>`
+                      : `<select onchange="updateSplitField(${item._idx}, ${spIdx}, 'arrival_type', this.value)" style="width:100%;height:28px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;padding:0 4px;font-weight:700;background:#fff;">
+                          <option value="bin" ${split.arrival_type === 'bin' ? 'selected' : ''}>📍 Bin (해체)</option>
+                          <option value="pallet" ${split.arrival_type === 'pallet' ? 'selected' : ''}>📦 Pallet (통째)</option>
+                        </select>`
+                    }
+                  </td>
                   <td style="padding:6px 8px;text-align:center;">
                     ${isFirst 
                       ? `<button onclick="addSplit(${item._idx})" title="Split 추가 (1박스씩)" style="background:#3b82f6;color:#fff;border:none;border-radius:3px;width:24px;height:24px;font-size:13px;cursor:pointer;font-weight:700;">+</button>`
@@ -14228,10 +14724,20 @@ function renderProcessItems() {
 
 function updateSplitField(itemIdx, splitIdx, field, value) {
   if (!_processItems[itemIdx] || !_processItems[itemIdx].splits[splitIdx]) return;
-  _processItems[itemIdx].splits[splitIdx][field] = value;
+  const split = _processItems[itemIdx].splits[splitIdx];
+  split[field] = value;
   
-  // qty/target_location 변경 시 re-render (남은 qty + placeholder/색상 바뀜)
-  if (field === 'qty' || field === 'target_location') {
+  // target_location 변경 시 arrival_type 자동 보정
+  if (field === 'target_location') {
+    if (value === '3rd_party') {
+      split.arrival_type = 'pallet';  // 3rd party는 무조건 pallet
+    } else if (!split.arrival_type || split.arrival_type === undefined) {
+      split.arrival_type = 'bin';  // 우리 창고 default = bin
+    }
+  }
+  
+  // qty/target_location/arrival_type 변경 시 re-render (placeholder/색상 바뀜)
+  if (field === 'qty' || field === 'target_location' || field === 'arrival_type') {
     renderProcessItems();
   } else {
     updateProcessSummary();
@@ -14245,6 +14751,7 @@ function addSplit(itemIdx) {
   const currentSum = item.splits.reduce((s, sp) => s + (sp.qty || 0), 0);
   const remaining = item.total_qty - currentSum;
   const defaultLoc = item.splits[0]?.target_location || _processBatch.to_warehouse || 'SC';
+  const defaultArrival = item.splits[0]?.arrival_type || (defaultLoc === '3rd_party' ? 'pallet' : 'bin');
   
   if (remaining > 0) {
     // 남은 qty가 있으면 → 1 box 단위로 새 split (1box보다 적으면 통째로)
@@ -14252,7 +14759,8 @@ function addSplit(itemIdx) {
     item.splits.push({
       qty: splitQty,
       target_location: defaultLoc,
-      target_value: ''
+      target_value: '',
+      arrival_type: defaultArrival
     });
   } else {
     // 남은 qty 없으면 → 마지막 split에서 1박스 빼서 새 split으로
@@ -14262,7 +14770,8 @@ function addSplit(itemIdx) {
       item.splits.push({
         qty: ppb,
         target_location: defaultLoc,
-        target_value: ''
+        target_value: '',
+        arrival_type: defaultArrival
       });
     } else if (last.qty >= 2) {
       // 1박스 미만은 절반으로
@@ -14271,7 +14780,8 @@ function addSplit(itemIdx) {
       item.splits.push({
         qty: half,
         target_location: defaultLoc,
-        target_value: ''
+        target_value: '',
+        arrival_type: defaultArrival
       });
     } else {
       alert('이 SKU는 더 이상 나눌 수 없습니다');
@@ -14349,12 +14859,26 @@ async function submitProcessBatch() {
     const remaining = item.total_qty - splitSum;
     if (remaining > 0) {
       // 나머지는 원래 위치 (원래 pallet 코드 또는 bin)
-      const isOrigThirdParty = (item.original_pallet_code || '').toUpperCase().startsWith('H');
-      item.splits.push({
-        qty: remaining,
-        target_location: isOrigThirdParty ? '3rd_party' : (item.original_warehouse || 'SC'),
-        target_value: item.original_pallet_code || item.original_bin_code || ''
-      });
+      // ⚠️ 부분 transfer (Bin/SKU 모드)는 "원위치 유지" 의미가 다름 - 여기는 도착측 처리이므로 그냥 default 위치 사용
+      if (item.is_partial) {
+        // 부분 모드는 도착 못 받은 거 → 그대로 도착 창고 default
+        const defLoc = _processBatch.to_warehouse === '3rd_party' ? '3rd_party' : (_processBatch.to_warehouse || 'SC');
+        item.splits.push({
+          qty: remaining,
+          target_location: defLoc,
+          target_value: '',
+          arrival_type: defLoc === '3rd_party' ? 'pallet' : 'bin'
+        });
+      } else {
+        // pallet 모드: 원래 위치 유지
+        const isOrigThirdParty = (item.original_pallet_code || '').toUpperCase().startsWith('H');
+        item.splits.push({
+          qty: remaining,
+          target_location: isOrigThirdParty ? '3rd_party' : (item.original_warehouse || 'SC'),
+          target_value: item.original_pallet_code || item.original_bin_code || '',
+          arrival_type: isOrigThirdParty ? 'pallet' : 'pallet'  // 원래 pallet에 다시 (원위치 유지)
+        });
+      }
     }
   });
   
@@ -14370,7 +14894,7 @@ async function submitProcessBatch() {
         errors.push(`${item.sku_id} split #${spIdx+1}: qty는 0 이상이어야 함`);
       }
       if (s.qty > 0 && !(s.target_value || '').trim()) {
-        const isPallet = s.target_location === '3rd_party';
+        const isPallet = s.target_location === '3rd_party' || s.arrival_type === 'pallet';
         errors.push(`${item.sku_id} split #${spIdx+1}: ${isPallet ? 'Pallet' : 'Bin'} 이름 필요`);
       }
     });
@@ -14476,16 +15000,24 @@ async function submitProcessBatch() {
     if (txnErr) throw txnErr;
     txnId = txn.id;
     
-    // 3rd_party split들의 새 pallet 생성
+    // ─── Pallet 생성 대상 수집 ───
+    // 1) 3rd_party split → 무조건 pallet
+    // 2) 우리 창고 + arrival_type='pallet' → 새 pallet
     const uniquePallets = {};  // pallet_code → { warehouse_code, location_type }
     _processItems.forEach(item => {
-      item.splits.filter(s => s.target_location === '3rd_party' && s.qty > 0 && s.target_value.trim()).forEach(s => {
+      item.splits.filter(s => s.qty > 0 && (s.target_value || '').trim()).forEach(s => {
+        const isThirdParty = s.target_location === '3rd_party';
+        const isPalletArrival = isThirdParty || s.arrival_type === 'pallet';
+        if (!isPalletArrival) return;
+        
         const code = s.target_value.trim();
         if (!uniquePallets[code]) {
           uniquePallets[code] = {
             pallet_code: code,
-            warehouse_code: item.original_warehouse || _processBatch.to_warehouse || 'SC',
-            location_type: '3rd_party'
+            warehouse_code: isThirdParty 
+              ? (item.original_warehouse || _processBatch.to_warehouse || 'SC')
+              : s.target_location,
+            location_type: isThirdParty ? '3rd_party' : 'in_house'
           };
         }
       });
@@ -14518,15 +15050,99 @@ async function submitProcessBatch() {
       const validSplits = item.splits.filter(s => s.qty > 0);
       if (validSplits.length === 0) continue;
       
+      // ⭐ 부분 transfer (Bin/SKU 모드)는 원본 bin에서 보낸 만큼 차감 후, 도착측은 새 row INSERT
+      if (item.is_partial) {
+        // 1) 원본 bin에서 보낸 qty만큼 차감 (보낸 양 = total_qty)
+        const { data: origBin } = await db.from('inventory_bins')
+          .select('id, qty')
+          .eq('id', item.bin_id)
+          .maybeSingle();
+        if (origBin) {
+          const newOrigQty = Math.max(0, (origBin.qty || 0) - item.total_qty);
+          if (newOrigQty === 0) {
+            // 비었으면 row 삭제 (또는 qty=0으로 둘지 결정)
+            await db.from('inventory_bins').delete().eq('id', item.bin_id);
+          } else {
+            await db.from('inventory_bins').update({ qty: newOrigQty }).eq('id', item.bin_id);
+          }
+        }
+        
+        // 2) 도착측: 각 split마다 새 inventory_bins row INSERT
+        //    (도착 창고가 다르면 inventory도 새로 만들어야 함 — sku_id+warehouse_id 기준)
+        for (const s of validSplits) {
+          const targetVal = (s.target_value || '').trim();
+          const isThirdParty = s.target_location === '3rd_party';
+          const isPalletArrival = isThirdParty || s.arrival_type === 'pallet';
+          const newPalletId = isPalletArrival ? palletCodeToId[targetVal] : null;
+          const targetWh = isThirdParty ? (item.original_warehouse || _processBatch.to_warehouse || 'SC') : s.target_location;
+          const targetWhId = whCodeToId[targetWh] || null;
+          const newBinCode = targetVal;
+          
+          // 도착 창고의 inventory row 찾기 또는 생성
+          let targetInvId = item.inventory_id;
+          if (targetWhId) {
+            const { data: invRow } = await db.from('inventory')
+              .select('id')
+              .eq('sku_id', item.sku_id)
+              .eq('warehouse_id', targetWhId)
+              .maybeSingle();
+            if (invRow) {
+              targetInvId = invRow.id;
+            } else {
+              // 새 inventory row 생성
+              const { data: newInv, error: invErr } = await db.from('inventory').insert({
+                sku_id: item.sku_id,
+                style_number: item.style_number,
+                color: item.color,
+                size: item.size,
+                warehouse_id: targetWhId,
+                location: newBinCode,
+                qty: 0  // bins 합계로 계산되므로 0 시작
+              }).select('id').single();
+              if (invErr) console.error('[inventory create]', invErr);
+              else targetInvId = newInv.id;
+            }
+          }
+          
+          // 새 inventory_bins row INSERT
+          await db.from('inventory_bins').insert({
+            inventory_id: targetInvId,
+            bin_code: newBinCode,
+            qty: s.qty,
+            pallet_id: newPalletId
+          });
+          
+          // Transaction detail
+          await db.from('inventory_transaction_details').insert({
+            transaction_id: txnId,
+            inventory_id: targetInvId,
+            sku_id: item.sku_id,
+            style_number: item.style_number,
+            warehouse_code: targetWh,
+            color: item.color,
+            size: item.size,
+            action: isThirdParty ? 'pallet_return' : (isPalletArrival ? 'pallet_arrive' : 'bin_move'),
+            qty_before: 0,
+            qty_after: s.qty,
+            bins_before: [{ bin: item.original_bin_code, qty: item.total_qty, partial: true }],
+            bins_after: [{ bin: newBinCode, qty: s.qty, location: s.target_location, arrival: s.arrival_type }]
+          });
+          processedSplits++;
+        }
+        continue;  // partial 처리 끝, 다음 item
+      }
+      
+      // ─── Pallet 모드 (전체 이동) ───
       let isFirst = true;
       for (const s of validSplits) {
-        const targetVal = s.target_value.trim();
+        const targetVal = (s.target_value || '').trim();
         const isThirdParty = s.target_location === '3rd_party';
-        const newPalletId = isThirdParty ? palletCodeToId[targetVal] : null;
+        const isPalletArrival = isThirdParty || s.arrival_type === 'pallet';
+        const newPalletId = isPalletArrival ? palletCodeToId[targetVal] : null;
         const targetWh = isThirdParty ? item.original_warehouse : s.target_location;
         const targetWhId = whCodeToId[targetWh] || null;
         
-        // bin_code = pallet_code (3rd party) or 그냥 bin name
+        // bin_code = pallet_code (pallet 도착) or bin name (bin 도착)
         const newBinCode = targetVal;
         
         if (isFirst) {
@@ -14564,11 +15180,11 @@ async function submitProcessBatch() {
           warehouse_code: targetWh,
           color: item.color,
           size: item.size,
-          action: isThirdParty ? 'pallet_return' : 'bin_move',
+          action: isThirdParty ? 'pallet_return' : (isPalletArrival ? 'pallet_arrive' : 'bin_move'),
           qty_before: isFirst ? item.total_qty : 0,
           qty_after: s.qty,
           bins_before: isFirst ? [{ bin: item.original_bin_code, qty: item.total_qty }] : [],
-          bins_after: [{ bin: newBinCode, qty: s.qty, location: s.target_location }]
+          bins_after: [{ bin: newBinCode, qty: s.qty, location: s.target_location, arrival: s.arrival_type }]
         });
         
         isFirst = false;
@@ -31409,6 +32025,7 @@ function showCreditHoldFlash(overAmt) {
       <span style="flex:1;"></span>
       <span id="pallets-count" style="font-size:11px;color:#6b7280;"></span>
       <button id="pallets-create-batch-btn" class="btn btn-sm btn-primary" onclick="openCreateBatchDialog()" disabled style="opacity:0.5;font-size:11px;">+ Transfer Batch 생성 (0)</button>
+      <button class="btn btn-sm" onclick="openBinSkuBatchDialog()" style="font-size:11px;background:#fef3c7;color:#78350f;border:1px solid #fde68a;">📦 Bin/SKU로 만들기</button>
     </div>
     
     <!-- Content -->
@@ -31481,6 +32098,24 @@ function showCreditHoldFlash(overAmt) {
     <div style="padding:12px 24px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;">
       <button class="btn" onclick="document.getElementById('create-batch-modal').style.display='none'">Cancel</button>
       <button class="btn btn-primary" onclick="submitCreateBatch()">📥 Batch 생성 & Pull Request</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bin/SKU 모드 Batch 생성 모달 ── -->
+<div id="bin-sku-batch-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100001;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(1100px,98vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);">
+    <div style="padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:14px 14px 0 0;">
+      <div style="font-size:16px;font-weight:800;color:#78350f;">📦 Bin/SKU로 Transfer Batch 만들기</div>
+      <button onclick="document.getElementById('bin-sku-batch-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+    </div>
+    <div id="bin-sku-batch-body" style="flex:1;overflow-y:auto;padding:16px 24px;"></div>
+    <div style="padding:12px 24px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div id="bin-sku-summary" style="font-size:11px;color:#6b7280;">선택됨: 0 items</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn" onclick="document.getElementById('bin-sku-batch-modal').style.display='none'">Cancel</button>
+        <button class="btn btn-primary" onclick="submitBinSkuBatch()" id="bin-sku-submit-btn" disabled style="opacity:0.5;">📥 Batch 생성 & Pull Request</button>
+      </div>
     </div>
   </div>
 </div>
@@ -46607,4 +47242,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-25T15:28:40Z - Process action: 5 location options (4 warehouses + 3rd) -->
+
+<!-- Deploy trigger: 2026-04-25T16:00:32Z - Bin/SKU mode + arrival_type (Pallet/Bin) -->
