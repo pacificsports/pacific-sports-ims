@@ -14006,38 +14006,183 @@ function renderBinSkuResults() {
     return;
   }
   
-  resultsDiv.innerHTML = _binSkuSearchResults.map(b => {
-    const inv = b.inventory || {};
-    const size = inv.size || '';
-    const isLarge = ['3XL', '4XL', '5XL'].includes(size);
-    const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
-    const totalBoxes = Math.floor(b.qty / ppb);
-    const remainder = b.qty - (totalBoxes * ppb);
-    const isSelected = _selectedBinItems.has(b.id);
-    const palletCode = b.pallets?.pallet_code || b.bin_code;
+  // ── Pallet/Bin 코드별로 그룹핑 ──
+  // bin이 pallet에 속해있으면 pallet_code로, 아니면 bin_code로 그룹
+  const groups = new Map();  // groupKey → { code, isPallet, items[] }
+  _binSkuSearchResults.forEach(b => {
+    const palletCode = b.pallets?.pallet_code;
+    const groupKey = palletCode || b.bin_code || 'unknown';
     const isPallet = !!b.pallet_id;
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        code: groupKey,
+        isPallet,
+        location_type: b.pallets?.location_type || null,
+        items: []
+      });
+    }
+    groups.get(groupKey).items.push(b);
+  });
+  
+  const groupArr = Array.from(groups.values());
+  
+  resultsDiv.innerHTML = groupArr.map(g => {
+    // 그룹 통계
+    const totalSKUs = g.items.length;
+    const totalPcs = g.items.reduce((s, b) => s + (b.qty || 0), 0);
+    const totalBoxes = g.items.reduce((s, b) => {
+      const inv = b.inventory || {};
+      const size = inv.size || '';
+      const isLarge = ['3XL', '4XL', '5XL'].includes(size);
+      const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+      return s + Math.floor(b.qty / ppb);
+    }, 0);
+    
+    // 그룹 내 모든 아이템이 추가됐는지 확인
+    const addedCount = g.items.filter(b => _selectedBinItems.has(b.id)).length;
+    const allAdded = addedCount === totalSKUs && totalSKUs > 0;
+    const someAdded = addedCount > 0 && !allAdded;
+    
+    const isThird = g.location_type === '3rd_party';
+    const headerBg = isThird ? '#fef3c7' : '#eff6ff';
+    const codeColor = isThird ? '#78350f' : '#1e40af';
+    const groupCodeEsc = escapeHtml(g.code).replace(/'/g, "\\'");
     
     return `
-      <div style="border:1px solid ${isSelected ? '#fbbf24' : '#e5e7eb'};border-radius:6px;padding:8px 10px;margin-bottom:6px;background:${isSelected ? '#fffbeb' : '#fff'};">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-          <div style="flex:1;min-width:0;">
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#1f2937;">
-              ${escapeHtml(inv.sku_id || '?')}
-            </div>
-            <div style="font-size:10px;color:#6b7280;margin-top:2px;">
-              ${isPallet ? '📦' : '📍'} <strong>${escapeHtml(palletCode)}</strong> · 
-              ${escapeHtml(inv.color || '')} · ${escapeHtml(size)} · 
-              <strong style="color:#1f2937;">${b.qty.toLocaleString()} pcs</strong>
-              <span style="color:#9ca3af;"> (${totalBoxes} box${remainder ? ` + ${remainder}` : ''} @ ${ppb}/box)</span>
-            </div>
+      <div style="border:1px solid ${someAdded || allAdded ? '#fbbf24' : '#e5e7eb'};border-radius:8px;margin-bottom:8px;overflow:hidden;background:#fff;">
+        <!-- Pallet/Bin 그룹 헤더 -->
+        <div style="background:linear-gradient(to right, ${headerBg}, #fff);padding:8px 10px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" 
+                 ${allAdded ? 'checked' : ''} 
+                 onclick="toggleGroupAdd('${groupCodeEsc}', this.checked)"
+                 style="width:16px;height:16px;cursor:pointer;flex-shrink:0;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:800;color:${codeColor};font-size:13px;flex-shrink:0;">
+            ${g.isPallet ? '📦' : '📍'} ${escapeHtml(g.code)}
           </div>
-          <button onclick="addBinSkuItem(${b.id})" ${isSelected ? 'disabled' : ''} style="height:28px;padding:0 10px;background:${isSelected ? '#e5e7eb' : '#10b981'};color:${isSelected ? '#9ca3af' : '#fff'};border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:${isSelected ? 'not-allowed' : 'pointer'};white-space:nowrap;">
-            ${isSelected ? '✓ 추가됨' : '+ 추가'}
+          <div style="flex:1;font-size:10px;color:#6b7280;">
+            ${totalSKUs} SKUs · <strong>${totalBoxes} boxes</strong> · ${totalPcs.toLocaleString()} pcs
+            ${allAdded ? ' · <span style="color:#10b981;font-weight:700;">✓ 전체 선택됨</span>' : ''}
+            ${someAdded ? ` · <span style="color:#f59e0b;font-weight:700;">${addedCount}/${totalSKUs} 선택</span>` : ''}
+          </div>
+          <button onclick="toggleGroupAdd('${groupCodeEsc}', ${!allAdded})" style="height:24px;padding:0 8px;background:${allAdded ? '#dc2626' : '#1e40af'};color:#fff;border:none;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
+            ${allAdded ? '↩ 전체 해제' : '→ 전체 선택'}
           </button>
+        </div>
+        
+        <!-- SKU 리스트 (들여쓰기) -->
+        <div style="padding:4px 8px 4px 30px;background:#fafbfc;">
+          ${g.items.map(b => {
+            const inv = b.inventory || {};
+            const size = inv.size || '';
+            const isLarge = ['3XL', '4XL', '5XL'].includes(size);
+            const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+            const totalBoxesItem = Math.floor(b.qty / ppb);
+            const remainder = b.qty - (totalBoxesItem * ppb);
+            const isSelected = _selectedBinItems.has(b.id);
+            const selectedItem = _selectedBinItems.get(b.id);
+            const currentBoxes = selectedItem ? selectedItem.qty_boxes : totalBoxesItem;
+            
+            return `
+              <div style="display:flex;align-items:center;gap:6px;padding:5px 4px;border-bottom:1px dashed #e5e7eb;font-size:10px;${isSelected ? 'background:#fffbeb;' : ''}">
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1f2937;min-width:120px;font-size:11px;">
+                  ${escapeHtml(inv.sku_id || '?')}
+                </span>
+                <span style="color:#6b7280;flex:1;font-size:9px;">
+                  ${escapeHtml(inv.color || '')} / <strong>${escapeHtml(size)}</strong> · 
+                  ${b.qty.toLocaleString()} pcs (${totalBoxesItem} box${remainder ? `+${remainder}` : ''} @ ${ppb}/box)
+                </span>
+                <span style="color:#374151;font-size:9px;font-weight:700;">박스:</span>
+                <input type="number" 
+                       min="0" 
+                       max="${totalBoxesItem}" 
+                       value="${currentBoxes}" 
+                       onchange="setBinSkuBoxes(${b.id}, this.value)"
+                       style="width:46px;height:22px;border:1px solid #d1d5db;border-radius:3px;padding:0 4px;font-size:10px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+                <span style="color:#9ca3af;font-size:9px;white-space:nowrap;">/ ${totalBoxesItem}</span>
+                <button onclick="addBinSkuItem(${b.id})" ${isSelected ? 'disabled' : ''} style="height:22px;padding:0 8px;background:${isSelected ? '#e5e7eb' : '#10b981'};color:${isSelected ? '#9ca3af' : '#fff'};border:none;border-radius:3px;font-size:9px;font-weight:700;cursor:${isSelected ? 'default' : 'pointer'};white-space:nowrap;">
+                  ${isSelected ? '✓' : '+ 추가'}
+                </button>
+              </div>
+            `;
+          }).join('')}
         </div>
       </div>
     `;
   }).join('');
+}
+
+// ── Pallet/Bin 그룹 전체 선택/해제 ──
+function toggleGroupAdd(groupCode, shouldAdd) {
+  const items = _binSkuSearchResults.filter(b => {
+    const code = b.pallets?.pallet_code || b.bin_code;
+    return code === groupCode;
+  });
+  
+  items.forEach(b => {
+    if (shouldAdd) {
+      if (!_selectedBinItems.has(b.id)) {
+        addBinSkuItem(b.id);  // 박스 전체로 추가
+      }
+    } else {
+      if (_selectedBinItems.has(b.id)) {
+        _selectedBinItems.delete(b.id);
+      }
+    }
+  });
+  
+  renderBinSkuResults();
+  renderBinSkuSelected();
+}
+
+// ── 박스 수 입력 (이미 추가된 거면 수량 갱신, 아니면 자동 추가) ──
+function setBinSkuBoxes(binId, newBoxes) {
+  let n = parseInt(newBoxes, 10);
+  if (isNaN(n) || n < 0) n = 0;
+  
+  const b = _binSkuSearchResults.find(x => x.id === binId);
+  if (!b) return;
+  
+  const inv = b.inventory || {};
+  const size = inv.size || '';
+  const isLarge = ['3XL', '4XL', '5XL'].includes(size);
+  const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+  const maxBoxes = Math.floor(b.qty / ppb);
+  if (n > maxBoxes) n = maxBoxes;
+  
+  if (_selectedBinItems.has(binId)) {
+    // 이미 추가됨 → 수량 갱신 (0이면 제거)
+    if (n === 0) {
+      _selectedBinItems.delete(binId);
+    } else {
+      const item = _selectedBinItems.get(binId);
+      item.qty_boxes = n;
+      item.qty_pcs = n * ppb;
+    }
+    renderBinSkuResults();
+    renderBinSkuSelected();
+  } else if (n > 0) {
+    // 추가 안 된 상태에서 박스 수 입력 → 자동 추가
+    _selectedBinItems.set(binId, {
+      bin_id: binId,
+      inventory_id: inv.id,
+      sku_id: inv.sku_id,
+      style_number: inv.style_number,
+      color: inv.color,
+      size: inv.size,
+      bin_code: b.bin_code,
+      pallet_id: b.pallet_id,
+      pallet_code: b.pallets?.pallet_code || b.bin_code,
+      location_type: b.pallets?.location_type || null,
+      warehouse_code: _binSkuFromWarehouse,
+      available_qty: b.qty,
+      available_boxes: maxBoxes,
+      ppb: ppb,
+      qty_boxes: n,
+      qty_pcs: n * ppb
+    });
+    renderBinSkuResults();
+    renderBinSkuSelected();
+  }
 }
 
 function addBinSkuItem(binId) {
@@ -47680,4 +47825,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T00:56:48Z - Phase B: 6 From/To options + instant transfer (PCR) + work order -->
+
+<!-- Deploy trigger: 2026-04-26T01:14:10Z - Pallet 그룹핑 + 그룹 체크박스 + 박스 수 입력 -->
