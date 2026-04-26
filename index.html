@@ -15787,7 +15787,7 @@ async function openBatchDetail(batchId) {
       batch = data;
     }
     
-    // 관련 transaction 조회 (실제 batch만)
+    // 관련 transaction 조회 (실제 batch만, failed 포함 — 접힌 형태로 표시)
     let transactions = [];
     let txnDetails = [];
     if (!isTestBatch) {
@@ -15924,7 +15924,12 @@ function renderBatchDetail(batch, transactions, txnDetails, isTestBatch) {
   // Transaction details 표시 (실제 batch만)
   let txnSection = '';
   if (!isTestBatch && transactions.length > 0) {
-    const txnRows = transactions.map(t => {
+    // active와 failed 분리
+    const activeTxns = transactions.filter(t => t.status !== 'failed');
+    const failedTxns = transactions.filter(t => t.status === 'failed');
+    
+    // Transaction을 그리는 헬퍼 (active용 / failed용 다르게)
+    const renderTxn = (t, isFailed) => {
       const dt = t.performed_at ? new Date(t.performed_at).toLocaleString('ko-KR') : '—';
       const details = txnDetails.filter(d => d.transaction_id === t.id);
       const detailsHtml = details.length > 0 
@@ -15950,12 +15955,17 @@ function renderBatchDetail(batch, transactions, txnDetails, isTestBatch) {
           }).join('')
         : '<div style="font-size:10px;color:#9ca3af;font-style:italic;margin-top:4px;">상세 내역 없음</div>';
       
+      const bgColor = isFailed ? '#fef2f2' : '#fff';
+      const borderColor = isFailed ? '#fecaca' : '#e5e7eb';
+      const failedBadge = isFailed ? '<span style="font-size:9px;background:#dc2626;color:#fff;padding:1px 6px;border-radius:3px;font-weight:700;margin-left:6px;">⚠️ 실패</span>' : '';
+      
       return `
-        <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px;margin-bottom:8px;background:#fff;">
+        <div style="border:1px solid ${borderColor};border-radius:6px;padding:10px 12px;margin-bottom:8px;background:${bgColor};">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
             <div>
               <span style="font-family:monospace;font-weight:700;color:#5b21b6;font-size:11px;">TXN-${t.txn_number || t.id?.slice(0, 6)}</span>
               <span style="font-size:11px;color:#374151;margin-left:8px;">${escapeHtml(t.transaction_type || '')}</span>
+              ${failedBadge}
             </div>
             <span style="font-size:10px;color:#6b7280;">${dt}</span>
           </div>
@@ -15968,12 +15978,27 @@ function renderBatchDetail(batch, transactions, txnDetails, isTestBatch) {
           ${detailsHtml}
         </div>
       `;
-    }).join('');
+    };
+    
+    const activeHtml = activeTxns.map(t => renderTxn(t, false)).join('');
+    
+    // Failed transactions: 기본 접힌 상태로 (details 토글)
+    const failedHtml = failedTxns.length > 0 ? `
+      <details style="margin-top:10px;">
+        <summary style="cursor:pointer;font-size:11px;color:#9ca3af;padding:8px 12px;background:#fafafa;border:1px dashed #d1d5db;border-radius:5px;user-select:none;">
+          ⚠️ 실패한 시도 ${failedTxns.length}개 (펼쳐서 보기)
+        </summary>
+        <div style="margin-top:8px;opacity:0.7;">
+          ${failedTxns.map(t => renderTxn(t, true)).join('')}
+        </div>
+      </details>
+    ` : '';
     
     txnSection = `
       <div style="margin-top:18px;">
-        <div style="font-size:12px;font-weight:800;color:#374151;margin-bottom:8px;">📜 관련 Transactions (${transactions.length}개)</div>
-        ${txnRows}
+        <div style="font-size:12px;font-weight:800;color:#374151;margin-bottom:8px;">📜 관련 Transactions (${activeTxns.length}개${failedTxns.length > 0 ? ` · 실패 ${failedTxns.length}개` : ''})</div>
+        ${activeHtml}
+        ${failedHtml}
       </div>
     `;
   } else if (isTestBatch) {
@@ -17040,13 +17065,13 @@ async function completeHPalletReceive() {
     const { data: whData } = await db.from('warehouses').select('id, code').eq('code', _hpalletReceiveBatch.to_warehouse).single();
     if (!whData) throw new Error(`Warehouse ${_hpalletReceiveBatch.to_warehouse} 없음`);
     
-    // Transaction 기록
+    // Transaction 기록 (pending으로 시작 — 끝에서 active로 변경)
     const { data: txn } = await db.from('inventory_transactions').insert({
       transaction_type: 'pallet_receive',
       description: `Pull Receive TRB-${_hpalletReceiveBatch.batch_number}: ${_hpalletReceiveBatch.from_warehouse} → ${_hpalletReceiveBatch.to_warehouse} (입고 ${totalToProcess}개${totalAllocated > 0 ? ', 오더 ' + totalAllocated + '개' : ''})`,
       warehouse_code: _hpalletReceiveBatch.to_warehouse,
       performed_by: performedBy,
-      status: 'active',
+      status: 'pending',
       affected_rows: totalToProcess,
       metadata: { batch_id: _hpalletReceiveBatch.id, batch_number: _hpalletReceiveBatch.batch_number, transfer_type: 'pull_3rd_receive' }
     }).select('id').single();
@@ -17174,20 +17199,23 @@ async function completeHPalletReceive() {
           qty: allocated_pcs
         }).eq('id', binId);
         
+        // 원본 bin의 SKU 정보 — selected_items에서 가져오기
+        const origInfo = (_hpalletReceiveBatch.selected_items || []).find(s => s.bin_id === binId) || {};
+        
         if (txnId) {
           await db.from('inventory_transaction_details').insert({
             transaction_id: txnId,
-            inventory_id: fullMoveItem?.inventory_id || null,
-            sku_id: fullMoveItem?.sku_id || '',
-            style_number: fullMoveItem?.style_number || '',
+            inventory_id: origInfo.inventory_id || null,
+            sku_id: origInfo.sku_id || '',
+            style_number: origInfo.style_number || '',
             warehouse_code: _hpalletReceiveBatch.to_warehouse,
-            color: fullMoveItem?.color || '',
-            size: fullMoveItem?.size || '',
+            color: origInfo.color || '',
+            size: origInfo.size || '',
             action: 'pallet_partial_keep',
             qty_before: original_qty,
             qty_after: allocated_pcs,
-            bins_before: [{ bin: 'original', qty: original_qty, type: '3rd_party' }],
-            bins_after: [{ bin: 'original', qty: allocated_pcs, type: '3rd_party', note: 'allocated only — kept for ship' }]
+            bins_before: [{ bin: origInfo.bin_code || origInfo.pallet_code || 'original', qty: original_qty, type: '3rd_party' }],
+            bins_after: [{ bin: origInfo.bin_code || origInfo.pallet_code || 'original', qty: allocated_pcs, type: '3rd_party', note: '오더용으로 유지' }]
           });
         }
       } else if (wasSplit && !hasAllocated) {
@@ -17271,11 +17299,22 @@ async function completeHPalletReceive() {
       selected_items: _hpalletReceiveItems
     }).eq('id', _hpalletReceiveBatch.id);
     
+    // 5. transaction을 active로 마크 (모든 작업 성공)
+    if (txnId) {
+      await db.from('inventory_transactions').update({ status: 'active' }).eq('id', txnId);
+    }
+    
     showToast(`✅ TRB-${_hpalletReceiveBatch.batch_number} 입고 완료 — ${totalToProcess}개${totalAllocated > 0 ? ' + 오더 ' + totalAllocated + '개' : ''}`);
     closeHPalletReceive();
     if (_palletsActiveTab === 'batches') await loadBatches();
   } catch (e) {
     console.error('[completeHPalletReceive]', e);
+    // 실패한 transaction을 failed로 마크
+    try {
+      if (typeof txnId !== 'undefined' && txnId) {
+        await db.from('inventory_transactions').update({ status: 'failed' }).eq('id', txnId);
+      }
+    } catch (e2) { /* ignore */ }
     alert('❌ 입고 처리 실패: ' + e.message);
   }
 }
@@ -50929,4 +50968,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T19:35:23Z - Pallet Management 박스 수 표시 -->
+
+
+<!-- Deploy trigger: 2026-04-26T19:50:26Z - 실패한 transaction 접고 펴는 옵션 -->
