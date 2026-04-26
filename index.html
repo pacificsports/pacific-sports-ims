@@ -16817,56 +16817,64 @@ function applyHPalletLocation() {
     return;
   }
   
-  // 각 체크된 항목 처리 — 분할 여부에 따라 다르게
+  // 통일된 처리: 항상 적용 부분을 새 분할 항목으로 만들고, 원본 항목은 나머지로 업데이트
+  // 만약 사용자가 처음 그 항목 전체 (남은 양 그대로) 적용했으면 → 원본은 0이 되어 사라짐
   checkedIdxs.forEach(i => {
     const it = _hpalletReceiveItems[i];
-    const totalBoxes = it.ppb > 0 ? Math.floor(it.qty_pcs / it.ppb) : 0;
+    const totalBoxesBin = it.ppb > 0 ? Math.floor(it.qty_pcs / it.ppb) : 0;
     const remainingBoxes = it.allocated_pcs > 0 
       ? Math.floor(it.remaining_pcs / it.ppb)
-      : totalBoxes;
+      : totalBoxesBin;
     const splitBoxes = it.split_boxes != null ? it.split_boxes : remainingBoxes;
+    const splitPcs = splitBoxes * it.ppb;
     
-    if (splitBoxes >= remainingBoxes) {
-      // 전체 적용 — 그냥 위치 지정만
-      it.assigned_location = _hpalletLocType;
-      it.assigned_value = locValue;
-      it.checked = false;
-      it.split_boxes = null;
+    // 새 분할 항목 (적용된 부분) 생성
+    const appliedItem = {
+      ...it,
+      qty_pcs: splitPcs,
+      qty_boxes: splitBoxes,
+      allocated_pcs: 0,
+      allocations: [],
+      is_fully_allocated: false,
+      remaining_pcs: splitPcs,
+      assigned_location: _hpalletLocType,
+      assigned_value: locValue,
+      checked: false,
+      split_boxes: null,
+      is_split_part: true,
+      original_bin_id: it.bin_id  // 원본 bin 추적
+    };
+    
+    // 원본 항목 업데이트
+    const remainPcs = (it.allocated_pcs > 0 ? it.remaining_pcs : it.qty_pcs) - splitPcs;
+    if (remainPcs <= 0) {
+      // 다 적용된 경우: 원본 항목 제거 후보 (allocated_pcs만 남았으면 유지, 아니면 제거)
+      if (it.allocated_pcs > 0) {
+        // allocated만 남기기 — qty_pcs를 allocated_pcs로 줄임
+        it.qty_pcs = it.allocated_pcs;
+        it.qty_boxes = it.ppb > 0 ? Math.floor(it.qty_pcs / it.ppb) : 0;
+        it.remaining_pcs = 0;
+        it.is_fully_allocated = true;     // 이제 입고 처리 불필요
+        it.checked = false;
+        it.split_boxes = null;
+      } else {
+        // 다 적용됨 — 제거 표시
+        it._to_remove = true;
+      }
     } else {
-      // 분할 적용 — 항목을 둘로 쪼갬
-      // 1) 적용 부분 (split_boxes 만큼) → 새 항목으로 추가, 위치 지정
-      const splitPcs = splitBoxes * it.ppb;
-      const remainPcs = (it.allocated_pcs > 0 ? it.remaining_pcs : it.qty_pcs) - splitPcs;
-      
-      // 적용된 부분 (새 항목)
-      const appliedItem = {
-        ...it,
-        qty_pcs: splitPcs,
-        qty_boxes: splitBoxes,
-        allocated_pcs: 0,            // 분할된 부분은 오더 매칭 없음 (이미 처리됨)
-        allocations: [],
-        is_fully_allocated: false,
-        remaining_pcs: splitPcs,
-        assigned_location: _hpalletLocType,
-        assigned_value: locValue,
-        checked: false,
-        split_boxes: null,
-        is_split_part: true,         // 표시용
-        original_idx: i
-      };
-      
-      // 원본 항목은 나머지 분량으로 업데이트
-      // allocated_pcs는 그대로 두고, qty_pcs와 remaining_pcs 만 줄임
+      // 일부 남음
       it.qty_pcs = remainPcs + it.allocated_pcs;
       it.qty_boxes = it.ppb > 0 ? Math.floor(it.qty_pcs / it.ppb) : 0;
       it.remaining_pcs = remainPcs;
       it.checked = false;
       it.split_boxes = null;
-      
-      // 적용된 부분을 배열에 추가
-      _hpalletReceiveItems.push(appliedItem);
     }
+    
+    _hpalletReceiveItems.push(appliedItem);
   });
+  
+  // _to_remove 플래그 있는 항목 정리
+  _hpalletReceiveItems = _hpalletReceiveItems.filter(it => !it._to_remove);
   
   inputEl.value = '';
   renderHPalletReceiveBody();
@@ -16996,24 +17004,48 @@ async function completeHPalletReceive() {
     // 반송용 새 H pallet 캐시 (같은 H 코드 여러 번 만들지 않게)
     const returnPalletIdMap = {};  // code → new pallet id
     
-    // 각 bin 처리 — itemsToProcess만 (fully_allocated 제외)
-    // 분할 항목은 새 bin INSERT, 원본 bin은 qty 줄이기
+    // 각 항목 처리:
+    // - is_split_part: true → 새 inventory_bin INSERT (새 위치/pallet)
+    // - is_fully_allocated: true → 원본 bin 그대로 두기 (위치 안 바꿈, qty도 그대로)
+    // - 아닌 경우 (전체를 새 위치로): 원본 bin UPDATE (위치 변경)
     
-    // 1. 분할된 항목들 그룹화 — 같은 원본 bin에서 여러 번 쪼개진 경우 합산
-    const splitFromBin = {};  // bin_id → total_split_pcs
-    itemsToProcess.forEach(it => {
-      if (it.is_split_part) {
-        splitFromBin[it.bin_id] = (splitFromBin[it.bin_id] || 0) + it.qty_pcs;
+    // 원본 bin들이 split된 경우 — 처리 후 qty를 allocated_pcs로 줄여야 함
+    // it.bin_id 별로 — split_part 들의 합이 원본에서 빠진 양
+    const originalBinReductions = {};  // bin_id → { remaining_qty, allocated_pcs, bin_id }
+    
+    // 먼저 batch.selected_items 원본 (입력 시점) 기준으로 각 bin의 원래 qty 저장
+    (_hpalletReceiveBatch.selected_items || []).forEach(orig => {
+      if (orig.bin_id) {
+        originalBinReductions[orig.bin_id] = {
+          original_qty: orig.qty_pcs,
+          remaining_qty: orig.qty_pcs,
+          allocated_pcs: 0
+        };
       }
     });
     
-    // 2. 각 항목 처리
+    // _hpalletReceiveItems의 fully_allocated 항목에서 allocated_pcs 합산 (원본 bin에 남길 양)
+    _hpalletReceiveItems.forEach(it => {
+      if (it.allocated_pcs > 0 && originalBinReductions[it.bin_id]) {
+        originalBinReductions[it.bin_id].allocated_pcs = it.allocated_pcs;
+      }
+    });
+    
+    // 각 split_part가 원본에서 빼간 양
+    itemsToProcess.forEach(it => {
+      if (it.is_split_part && originalBinReductions[it.bin_id]) {
+        originalBinReductions[it.bin_id].remaining_qty -= it.qty_pcs;
+      }
+    });
+    
+    // 1. split_part 항목 → 새 inventory_bin INSERT
     for (const it of itemsToProcess) {
+      if (!it.is_split_part) continue;
+      
       let targetPalletId = null;
-      let targetBinCode = it.assigned_value;
+      const targetBinCode = it.assigned_value;
       
       if (it.assigned_location === 'return') {
-        // 3rd Party 반송: 새 H pallet (3rd_party) 보장
         let newPalletId = returnPalletIdMap[it.assigned_value];
         if (!newPalletId) {
           const { data: newP, error: pErr } = await db.from('pallets').insert({
@@ -17028,36 +17060,15 @@ async function completeHPalletReceive() {
         }
         targetPalletId = newPalletId;
       }
-      // bin: targetPalletId = null (그대로)
       
-      if (it.is_split_part) {
-        // 분할 부분: 새 inventory_bin INSERT
-        await db.from('inventory_bins').insert({
-          inventory_id: it.inventory_id,
-          pallet_id: targetPalletId,
-          bin_code: targetBinCode,
-          qty: it.qty_pcs
-        });
-      } else {
-        // 일반 / 분할 후 원본 항목
-        if (splitFromBin[it.bin_id]) {
-          // 원본 bin: qty 감소 + 위치 변경
-          const origQty = it.qty_pcs;  // 이미 split_part 만큼 빠진 후의 qty
-          await db.from('inventory_bins').update({
-            qty: origQty,
-            bin_code: targetBinCode,
-            pallet_id: targetPalletId
-          }).eq('id', it.bin_id);
-        } else {
-          // 단순 위치 변경
-          await db.from('inventory_bins').update({
-            bin_code: targetBinCode,
-            pallet_id: targetPalletId
-          }).eq('id', it.bin_id);
-        }
-      }
+      await db.from('inventory_bins').insert({
+        inventory_id: it.inventory_id,
+        pallet_id: targetPalletId,
+        bin_code: targetBinCode,
+        qty: it.qty_pcs
+      });
       
-      // Transaction detail
+      // Transaction detail (split part)
       if (txnId) {
         await db.from('inventory_transaction_details').insert({
           transaction_id: txnId,
@@ -17067,13 +17078,102 @@ async function completeHPalletReceive() {
           warehouse_code: _hpalletReceiveBatch.to_warehouse,
           color: it.color,
           size: it.size,
-          action: 'pallet_receive',
-          qty_before: it.qty_pcs,
+          action: 'pallet_split',
+          qty_before: 0,
           qty_after: it.qty_pcs,
-          bins_before: [{ bin: it.bin_code, pallet: it.pallet_code, type: '3rd_party' }],
-          bins_after: [{ bin: it.assigned_value, type: it.assigned_location, source_pallet: it.pallet_code }]
+          bins_before: [{ bin: it.bin_code, pallet: it.pallet_code, type: '3rd_party', note: 'split source' }],
+          bins_after: [{ bin: targetBinCode, type: it.assigned_location, qty: it.qty_pcs }]
         });
       }
+    }
+    
+    // 2. 원본 bin 처리 — split이 있었으면 qty 줄이기, 없었으면 위치만 변경
+    for (const [binId, info] of Object.entries(originalBinReductions)) {
+      const { original_qty, remaining_qty, allocated_pcs } = info;
+      
+      // 이 bin이 split됐는지 (remaining_qty < original_qty)
+      const wasSplit = remaining_qty < original_qty;
+      // 이 bin의 fully_allocated 항목이 있는지 (그러면 원본은 allocated만 남기고 그대로)
+      const hasAllocated = allocated_pcs > 0;
+      // 이 bin의 일반 입고 항목 (split 안 된 채로 위치 변경 — 거의 없을 것)
+      const fullMoveItem = _hpalletReceiveItems.find(it => 
+        it.bin_id === binId && !it.is_split_part && it.assigned_value && !it.is_fully_allocated
+      );
+      
+      if (wasSplit && hasAllocated) {
+        // split됐고 allocated 있음 → 원본 bin은 allocated_pcs만 남기고 위치 그대로 (3rd_party 유지)
+        await db.from('inventory_bins').update({
+          qty: allocated_pcs
+        }).eq('id', binId);
+        
+        if (txnId) {
+          await db.from('inventory_transaction_details').insert({
+            transaction_id: txnId,
+            inventory_id: fullMoveItem?.inventory_id || null,
+            sku_id: fullMoveItem?.sku_id || '',
+            style_number: fullMoveItem?.style_number || '',
+            warehouse_code: _hpalletReceiveBatch.to_warehouse,
+            color: fullMoveItem?.color || '',
+            size: fullMoveItem?.size || '',
+            action: 'pallet_partial_keep',
+            qty_before: original_qty,
+            qty_after: allocated_pcs,
+            bins_before: [{ bin: 'original', qty: original_qty, type: '3rd_party' }],
+            bins_after: [{ bin: 'original', qty: allocated_pcs, type: '3rd_party', note: 'allocated only — kept for ship' }]
+          });
+        }
+      } else if (wasSplit && !hasAllocated) {
+        // split됐고 allocated 없음 → 원본 bin은 remaining만큼 (있으면), 0이면 삭제
+        if (remaining_qty > 0) {
+          await db.from('inventory_bins').update({
+            qty: remaining_qty
+          }).eq('id', binId);
+        } else {
+          // remaining 0 → bin 자체 삭제 (or qty=0)
+          await db.from('inventory_bins').update({ qty: 0 }).eq('id', binId);
+        }
+      } else if (!wasSplit && fullMoveItem) {
+        // split 안 됐고 — 그냥 전체를 새 위치로 (위치만 변경)
+        let targetPalletId = null;
+        if (fullMoveItem.assigned_location === 'return') {
+          let newPalletId = returnPalletIdMap[fullMoveItem.assigned_value];
+          if (!newPalletId) {
+            const { data: newP, error: pErr } = await db.from('pallets').insert({
+              pallet_code: fullMoveItem.assigned_value,
+              warehouse_code: _hpalletReceiveBatch.to_warehouse,
+              location_type: '3rd_party',
+              status: 'active'
+            }).select('id').single();
+            if (pErr) throw new Error(`반송용 pallet ${fullMoveItem.assigned_value} 생성 실패: ${pErr.message}`);
+            newPalletId = newP.id;
+            returnPalletIdMap[fullMoveItem.assigned_value] = newPalletId;
+          }
+          targetPalletId = newPalletId;
+        }
+        
+        await db.from('inventory_bins').update({
+          bin_code: fullMoveItem.assigned_value,
+          pallet_id: targetPalletId
+        }).eq('id', binId);
+        
+        if (txnId) {
+          await db.from('inventory_transaction_details').insert({
+            transaction_id: txnId,
+            inventory_id: fullMoveItem.inventory_id,
+            sku_id: fullMoveItem.sku_id,
+            style_number: fullMoveItem.style_number,
+            warehouse_code: _hpalletReceiveBatch.to_warehouse,
+            color: fullMoveItem.color,
+            size: fullMoveItem.size,
+            action: 'pallet_receive',
+            qty_before: original_qty,
+            qty_after: original_qty,
+            bins_before: [{ bin: fullMoveItem.bin_code, pallet: fullMoveItem.pallet_code, type: '3rd_party' }],
+            bins_after: [{ bin: fullMoveItem.assigned_value, type: fullMoveItem.assigned_location }]
+          });
+        }
+      }
+      // else: split 안 됐고 fullMove도 없음 → fully_allocated만 있는 경우 → 그대로 두기 (아무 작업 안 함)
     }
     
     // 3. 비워진 3rd party pallets 처리 (선택사항: 빈 pallet은 archive로?)
@@ -17083,7 +17183,7 @@ async function completeHPalletReceive() {
     await db.from('pallet_transfer_batches').update({
       status: 'completed',
       completed_at: new Date().toISOString(),
-      selected_items: _hpalletReceiveItems   // location 정보 저장
+      selected_items: _hpalletReceiveItems
     }).eq('id', _hpalletReceiveBatch.id);
     
     showToast(`✅ TRB-${_hpalletReceiveBatch.batch_number} 입고 완료 — ${totalToProcess}개${totalAllocated > 0 ? ' + 오더 ' + totalAllocated + '개' : ''}`);
@@ -50572,4 +50672,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T17:28:43Z - 입고 처리 박스 분할 기능 -->
+
+<!-- Deploy trigger: 2026-04-26T17:53:08Z - 입고 처리 fix: 분할 항목 정확히 처리 (원본 bin은 allocated만 남김) -->
