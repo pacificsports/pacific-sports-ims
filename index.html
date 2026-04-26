@@ -16412,13 +16412,79 @@ async function openHPalletReceive(batchId) {
     _hpalletReceiveBatch = batch;
     titleEl.innerHTML = `📦 TRB-${batch.batch_number} 입고 처리 (${escapeHtml(batch.from_warehouse || '?')} → ${escapeHtml(batch.to_warehouse || '?')})`;
     
-    // selected_items에 location 필드 추가해서 추적
-    _hpalletReceiveItems = (batch.selected_items || []).map(it => ({
-      ...it,
-      assigned_location: null,    // 'bin' or 'hpallet'
-      assigned_value: null,        // bin code or hpallet code
-      checked: false
-    }));
+    // 가져온 pallet들의 코드 모음 (오더 검색용)
+    const palletCodes = [...new Set((batch.selected_items || []).map(it => it.pallet_code).filter(Boolean))];
+    
+    // 활성 오더에서 alloc_detail / alloc_ca_detail에 이 pallet들이 잡혀있는지 검색
+    const allocByPallet = {};  // { palletCode: { sku_id, color, size, qty_committed, order_number, order_id } [] }
+    
+    if (!isTestBatch && palletCodes.length > 0) {
+      try {
+        // 활성 오더 가져오기 (shipped/cancelled/completed 제외)
+        const { data: orders } = await db.from('orders')
+          .select('id, order_number, customer_name, status')
+          .not('status', 'in', '("shipped","cancelled","completed","invoiced")');
+        const activeOrderIds = (orders || []).map(o => o.id);
+        const orderMap = Object.fromEntries((orders || []).map(o => [o.id, o]));
+        
+        if (activeOrderIds.length > 0) {
+          const { data: lines } = await db.from('order_lines')
+            .select('id, order_id, color, size, alloc_detail, alloc_ca_detail, styles(style_number), warehouse_id, warehouses(code)')
+            .in('order_id', activeOrderIds);
+          
+          // 각 line의 alloc_detail/alloc_ca_detail에서 pallet_code 매칭
+          (lines || []).forEach(l => {
+            const allocs = [
+              ...(l.alloc_detail ? Object.entries(l.alloc_detail) : []),
+              ...(l.alloc_ca_detail ? Object.entries(l.alloc_ca_detail) : [])
+            ];
+            allocs.forEach(([locKey, val]) => {
+              if (locKey.includes('TRANSFER|')) return;
+              const pcs = typeof val === 'object' ? (val.pcs || 0) : (val || 0);
+              if (pcs <= 0) return;
+              // locKey가 pallet code와 매칭되는지 (정확히 일치)
+              if (palletCodes.includes(locKey)) {
+                if (!allocByPallet[locKey]) allocByPallet[locKey] = [];
+                const order = orderMap[l.order_id];
+                allocByPallet[locKey].push({
+                  order_id: l.order_id,
+                  order_number: order?.order_number || '?',
+                  customer_name: order?.customer_name || '',
+                  line_id: l.id,
+                  style_number: l.styles?.style_number || '',
+                  color: l.color,
+                  size: l.size,
+                  qty_committed: pcs
+                });
+              }
+            });
+          });
+        }
+      } catch (e) { console.warn('[allocByPallet]', e); }
+    }
+    
+    // selected_items 처리: 각 item에 대해 "오더에 잡힌 분량"을 매칭
+    _hpalletReceiveItems = (batch.selected_items || []).map(it => {
+      // 이 SKU/color/size에 잡힌 오더가 있는지 (같은 pallet 내에서)
+      const allocations = (allocByPallet[it.pallet_code] || []).filter(a => 
+        (a.color || '').toUpperCase() === (it.color || '').toUpperCase() &&
+        (a.size || '').toUpperCase() === (it.size || '').toUpperCase() &&
+        (it.style_number ? a.style_number === it.style_number : true)
+      );
+      const totalAllocated = allocations.reduce((s, a) => s + a.qty_committed, 0);
+      const remainingPcs = Math.max(0, it.qty_pcs - totalAllocated);
+      
+      return {
+        ...it,
+        allocations: allocations,            // 매칭된 오더 정보
+        allocated_pcs: totalAllocated,        // 총 잡힌 분량 (pcs)
+        remaining_pcs: remainingPcs,          // 입고 대상 분량 (pcs)
+        is_fully_allocated: totalAllocated >= it.qty_pcs,  // 전체 다 잡힘
+        assigned_location: null,
+        assigned_value: null,
+        checked: false
+      };
+    });
     
     renderHPalletReceiveBody();
     updateHPalletReceiveSummary();
@@ -16448,7 +16514,14 @@ function onHPalletLocTypeChange() {
   
   const inputEl = document.getElementById('hpallet-loc-input');
   if (inputEl) {
-    inputEl.placeholder = _hpalletLocType === 'bin' ? '예: 1A-05' : '예: H9001 (새 H Pallet code)';
+    if (_hpalletLocType === 'bin') {
+      inputEl.placeholder = '예: 1A-05';
+    } else if (_hpalletLocType === 'hpallet') {
+      inputEl.placeholder = '예: H9001 (새 H Pallet code)';
+    } else {
+      // return: 새 H pallet code 입력 (반송용)
+      inputEl.placeholder = '예: H8888 (반송용 새 H Pallet code, 또는 비우면 원래 pallet 유지)';
+    }
   }
 }
 
@@ -16466,36 +16539,88 @@ function renderHPalletReceiveBody() {
   });
   
   body.innerHTML = Array.from(groups.values()).map(g => {
-    const itemsHtml = g.items.map(it => {
-      const isAssigned = !!it.assigned_value;
-      const assignedLabel = isAssigned 
-        ? `<span style="background:#dcfce7;color:#065f46;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">${it.assigned_location === 'bin' ? '📍' : '📦'} ${escapeHtml(it.assigned_value)}</span>`
-        : '<span style="color:#9ca3af;font-size:10px;">위치 미지정</span>';
-      
-      return `
-        <div style="display:grid;grid-template-columns:30px 110px 1fr 100px 90px;gap:10px;padding:7px 10px;border-bottom:1px solid #f3f4f6;align-items:center;font-size:11px;${isAssigned ? 'background:#f0fdf4;' : ''}">
-          <input type="checkbox" ${it.checked ? 'checked' : ''} onchange="toggleHPalletItemCheck(${it._idx}, this.checked)" style="width:16px;height:16px;cursor:pointer;">
-          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">${escapeHtml(it.sku_id)}</span>
-          <span style="color:#374151;">
-            <strong>${escapeHtml(it.style_number || '')}</strong> · 
-            ${escapeHtml(it.color || '')}/<strong>${escapeHtml(it.size || '')}</strong> · 
-            <span style="color:#78350f;font-weight:700;background:#fef3c7;padding:1px 6px;border-radius:3px;">${it.qty_boxes} box</span>
-            <span style="color:#9ca3af;font-size:10px;">${it.qty_pcs.toLocaleString()} pcs</span>
-          </span>
-          <div style="text-align:right;">${assignedLabel}</div>
-          <div style="text-align:right;">
-            ${isAssigned ? `<button onclick="clearHPalletItemLoc(${it._idx})" style="background:none;border:none;color:#dc2626;font-size:10px;cursor:pointer;font-weight:700;">↩ 해제</button>` : ''}
-          </div>
+    // 잡힌 항목과 일반 항목 분리
+    const allocatedItems = g.items.filter(it => it.allocated_pcs > 0);
+    const generalItems = g.items.filter(it => !it.is_fully_allocated);  // 부분 잡힌 거나 안 잡힌 거
+    
+    // 잡힌 항목 영역 (정보용 — 입고 처리 안 함)
+    const allocatedHtml = allocatedItems.length === 0 ? '' : `
+      <div style="background:#fff7ed;border-bottom:2px solid #fdba74;">
+        <div style="padding:8px 14px;background:#fed7aa;font-size:11px;font-weight:800;color:#9a3412;display:flex;align-items:center;gap:8px;">
+          🔥 오더에 잡힌 항목 (${allocatedItems.length}) — <span style="font-weight:400;font-style:italic;">입고 처리 안 함, 직원이 바로 픽 → Ship 시 자동 차감</span>
         </div>
-      `;
-    }).join('');
+        ${allocatedItems.map(it => {
+          const allocList = (it.allocations || []).map(a => 
+            `<span style="background:#fff;border:1px solid #fdba74;color:#9a3412;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-right:4px;">${escapeHtml(a.order_number)} (${a.qty_committed}pcs)</span>`
+          ).join('');
+          return `
+            <div style="display:grid;grid-template-columns:110px 1fr 200px;gap:10px;padding:7px 14px;border-bottom:1px dashed #fed7aa;align-items:center;font-size:11px;">
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">${escapeHtml(it.sku_id)}</span>
+              <span style="color:#374151;">
+                <strong>${escapeHtml(it.style_number || '')}</strong> · 
+                ${escapeHtml(it.color || '')}/<strong>${escapeHtml(it.size || '')}</strong> · 
+                <span style="color:#78350f;font-weight:700;background:#fef3c7;padding:1px 6px;border-radius:3px;">총 ${it.qty_boxes} box</span>
+                <span style="color:#9a3412;font-weight:700;margin-left:6px;">→ 잡힘: ${it.allocated_pcs.toLocaleString()} pcs</span>
+                ${it.remaining_pcs > 0 ? `<span style="color:#6b7280;margin-left:6px;">(나머지 ${it.remaining_pcs} pcs는 아래에서 위치 지정)</span>` : ''}
+              </span>
+              <div style="font-size:10px;">${allocList}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+    
+    // 일반 입고 항목 (부분 잡힌 거 + 안 잡힌 거)
+    const generalHtml = generalItems.length === 0 ? `
+      <div style="padding:14px;text-align:center;color:#9ca3af;font-size:11px;font-style:italic;">
+        ${allocatedItems.length > 0 ? '✅ 모든 항목이 오더에 잡혀있어 일반 입고할 항목이 없습니다.' : '항목 없음'}
+      </div>
+    ` : `
+      <div style="padding:7px 12px;background:#f9fafb;font-size:10px;font-weight:700;color:#374151;border-bottom:1px solid #e5e7eb;">
+        📥 일반 입고 (${generalItems.length}) — 위치 지정 필요
+      </div>
+      ${generalItems.map(it => {
+        const isAssigned = !!it.assigned_value;
+        const assignedLabel = isAssigned 
+          ? `<span style="background:#dcfce7;color:#065f46;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">${it.assigned_location === 'bin' ? '📍' : it.assigned_location === 'hpallet' ? '📦' : '🚚'} ${escapeHtml(it.assigned_value)}</span>`
+          : '<span style="color:#9ca3af;font-size:10px;">위치 미지정</span>';
+        const displayPcs = it.is_fully_allocated ? 0 : (it.allocated_pcs > 0 ? it.remaining_pcs : it.qty_pcs);
+        const displayBoxes = it.ppb > 0 ? Math.floor(displayPcs / it.ppb) : 0;
+        const partial = displayPcs % (it.ppb || 1);
+        
+        return `
+          <div style="display:grid;grid-template-columns:30px 110px 1fr 100px 90px;gap:10px;padding:7px 10px;border-bottom:1px solid #f3f4f6;align-items:center;font-size:11px;${isAssigned ? 'background:#f0fdf4;' : ''}">
+            <input type="checkbox" ${it.checked ? 'checked' : ''} onchange="toggleHPalletItemCheck(${it._idx}, this.checked)" style="width:16px;height:16px;cursor:pointer;">
+            <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">${escapeHtml(it.sku_id)}</span>
+            <span style="color:#374151;">
+              <strong>${escapeHtml(it.style_number || '')}</strong> · 
+              ${escapeHtml(it.color || '')}/<strong>${escapeHtml(it.size || '')}</strong> · 
+              <span style="color:#78350f;font-weight:700;background:#fef3c7;padding:1px 6px;border-radius:3px;">${displayBoxes} box${partial > 0 ? ` + ${partial}pcs` : ''}</span>
+              <span style="color:#9ca3af;font-size:10px;">${displayPcs.toLocaleString()} pcs</span>
+              ${it.allocated_pcs > 0 ? `<span style="color:#9a3412;font-size:9px;margin-left:6px;font-style:italic;">(${it.allocated_pcs} pcs는 오더 잡힘)</span>` : ''}
+            </span>
+            <div style="text-align:right;">${assignedLabel}</div>
+            <div style="text-align:right;">
+              ${isAssigned ? `<button onclick="clearHPalletItemLoc(${it._idx})" style="background:none;border:none;color:#dc2626;font-size:10px;cursor:pointer;font-weight:700;">↩ 해제</button>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    `;
+    
+    const totalAllocated = allocatedItems.reduce((s, it) => s + it.allocated_pcs, 0);
+    const totalGeneral = generalItems.reduce((s, it) => s + it.remaining_pcs, 0);
     
     return `
       <div style="border:1px solid #e5e7eb;border-radius:8px;margin-bottom:10px;overflow:hidden;background:#fff;">
         <div style="padding:8px 12px;background:#fffbeb;border-bottom:1px solid #fde68a;font-family:'IBM Plex Mono',monospace;font-weight:800;color:#78350f;font-size:13px;">
-          📦 ${escapeHtml(g.pallet_code)} <span style="font-size:10px;color:#92400e;font-weight:400;">(${g.items.length} items)</span>
+          📦 ${escapeHtml(g.pallet_code)} 
+          <span style="font-size:10px;color:#92400e;font-weight:400;">(${g.items.length} items)</span>
+          ${totalAllocated > 0 ? `<span style="font-size:10px;color:#9a3412;font-weight:700;background:#fed7aa;padding:1px 6px;border-radius:3px;margin-left:6px;">🔥 오더 ${totalAllocated.toLocaleString()} pcs</span>` : ''}
+          ${totalGeneral > 0 ? `<span style="font-size:10px;color:#374151;font-weight:700;background:#e0e7ff;padding:1px 6px;border-radius:3px;margin-left:4px;">📥 입고 ${totalGeneral.toLocaleString()} pcs</span>` : ''}
         </div>
-        <div>${itemsHtml}</div>
+        ${allocatedHtml}
+        ${generalHtml}
       </div>
     `;
   }).join('');
@@ -16519,10 +16644,15 @@ function clearHPalletItemLoc(idx) {
 
 function applyHPalletLocation() {
   const inputEl = document.getElementById('hpallet-loc-input');
-  const locValue = inputEl.value.trim().toUpperCase();
-  if (!locValue) {
+  let locValue = inputEl.value.trim().toUpperCase();
+  
+  // return 옵션은 빈 값도 허용 (원래 pallet 유지 = 그대로 반송)
+  if (_hpalletLocType !== 'return' && !locValue) {
     alert('위치를 입력해주세요');
     return;
+  }
+  if (_hpalletLocType === 'return' && !locValue) {
+    locValue = 'KEEP_ORIGINAL';  // 마커
   }
   
   const checkedIdxs = _hpalletReceiveItems.map((it, i) => it.checked ? i : null).filter(i => i !== null);
@@ -16535,7 +16665,7 @@ function applyHPalletLocation() {
   checkedIdxs.forEach(i => {
     _hpalletReceiveItems[i].assigned_location = _hpalletLocType;
     _hpalletReceiveItems[i].assigned_value = locValue;
-    _hpalletReceiveItems[i].checked = false;  // 적용 후 체크 해제
+    _hpalletReceiveItems[i].checked = false;
   });
   
   inputEl.value = '';
@@ -16544,16 +16674,23 @@ function applyHPalletLocation() {
 }
 
 function updateHPalletReceiveSummary() {
-  const total = _hpalletReceiveItems.length;
-  const assigned = _hpalletReceiveItems.filter(it => it.assigned_value).length;
-  const checked = _hpalletReceiveItems.filter(it => it.checked).length;
+  // fully_allocated 항목은 입고 처리 안 해도 됨 (오더가 처리)
+  const itemsNeedingLoc = _hpalletReceiveItems.filter(it => !it.is_fully_allocated);
+  const total = itemsNeedingLoc.length;
+  const assigned = itemsNeedingLoc.filter(it => it.assigned_value).length;
+  const checked = _hpalletReceiveItems.filter(it => it.checked && !it.is_fully_allocated).length;
+  const allocatedCount = _hpalletReceiveItems.filter(it => it.allocated_pcs > 0).length;
   
   const summaryEl = document.getElementById('hpallet-receive-summary');
   const completeBtn = document.getElementById('hpallet-receive-complete-btn');
   const applyBtn = document.getElementById('hpallet-apply-btn');
   
   if (summaryEl) {
-    summaryEl.innerHTML = `위치 지정됨: <strong>${assigned}</strong> / ${total} items${checked > 0 ? ` · 체크됨: <strong>${checked}</strong>` : ''}`;
+    summaryEl.innerHTML = `위치 지정됨: <strong>${assigned}</strong> / ${total} items${
+      checked > 0 ? ` · 체크됨: <strong>${checked}</strong>` : ''
+    }${
+      allocatedCount > 0 ? ` · <span style="color:#9a3412;">🔥 오더 잡힘 ${allocatedCount}개 (자동)</span>` : ''
+    }`;
   }
   if (applyBtn) {
     applyBtn.textContent = `✓ 선택 항목에 적용 (${checked})`;
@@ -16562,25 +16699,42 @@ function updateHPalletReceiveSummary() {
     applyBtn.style.cursor = checked === 0 ? 'not-allowed' : 'pointer';
   }
   if (completeBtn) {
-    const allDone = total > 0 && assigned === total;
+    const allDone = total === 0 || assigned === total;
     completeBtn.disabled = !allDone;
     completeBtn.style.opacity = allDone ? '1' : '0.4';
     completeBtn.style.cursor = allDone ? 'pointer' : 'not-allowed';
-    completeBtn.textContent = allDone ? `📦 입고 완료 (${total} items)` : `📦 입고 완료 (${assigned}/${total})`;
+    completeBtn.textContent = allDone 
+      ? `📦 입고 완료 (${total}${allocatedCount > 0 ? ' + ' + allocatedCount + ' 오더' : ''})` 
+      : `📦 입고 완료 (${assigned}/${total})`;
   }
 }
 
 async function completeHPalletReceive() {
   if (!_hpalletReceiveBatch) return;
   
-  const allDone = _hpalletReceiveItems.every(it => it.assigned_value);
+  // fully_allocated는 입고 처리 안 함 (오더가 처리)
+  const itemsToProcess = _hpalletReceiveItems.filter(it => !it.is_fully_allocated);
+  const itemsAllocated = _hpalletReceiveItems.filter(it => it.allocated_pcs > 0);
+  
+  const allDone = itemsToProcess.every(it => it.assigned_value);
   if (!allDone) {
-    alert('모든 항목에 위치를 지정해주세요.');
+    alert('일반 입고 항목에 모두 위치를 지정해주세요.');
     return;
   }
   
-  const summary = _hpalletReceiveItems.length;
-  if (!confirm(`📦 ${summary}개 항목 입고 처리?\n\n각 항목이 지정된 위치로 이동되어 in_house 상태로 전환됩니다.\n\n계속하시겠습니까?`)) return;
+  const totalToProcess = itemsToProcess.length;
+  const totalAllocated = itemsAllocated.length;
+  
+  let confirmMsg = `📦 입고 처리?\n\n`;
+  if (totalAllocated > 0) {
+    confirmMsg += `🔥 오더에 잡힌 항목 ${totalAllocated}개 → 시스템 변경 없음 (직원이 직접 픽)\n`;
+  }
+  if (totalToProcess > 0) {
+    confirmMsg += `📥 일반 입고 ${totalToProcess}개 → 지정된 위치로 이동\n`;
+  }
+  confirmMsg += `\n계속하시겠습니까?`;
+  
+  if (!confirm(confirmMsg)) return;
   
   const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
   const isTestBatch = _hpalletReceiveBatch.id.startsWith('test-batch-');
@@ -16591,12 +16745,15 @@ async function completeHPalletReceive() {
     _hpalletReceiveBatch.completed_at = new Date().toISOString();
     _hpalletReceiveBatch.selected_items = _hpalletReceiveItems;
     
-    _hpalletReceiveItems.forEach(it => {
+    itemsToProcess.forEach(it => {
       tdbLog('UPDATE', 'inventory_bins', { new_location: it.assigned_value, type: it.assigned_location }, { id: it.bin_id });
       tdbLog('UPDATE', 'pallets', { location_type: 'in_house' }, { id: it.pallet_id });
     });
+    if (totalAllocated > 0) {
+      tdbLog('NOTE', '오더 잡힌 항목', { count: totalAllocated, action: '시스템 변경 없음 — Ship 시 자동 차감' });
+    }
     
-    showToast(`🧪 ✅ TRB-${_hpalletReceiveBatch.batch_number} 입고 완료 — ${summary} items`);
+    showToast(`🧪 ✅ TRB-${_hpalletReceiveBatch.batch_number} 입고 완료 — ${totalToProcess}개 + 오더 ${totalAllocated}개`);
     closeHPalletReceive();
     if (_palletsActiveTab === 'batches') await loadBatches();
     return;
@@ -16605,23 +16762,21 @@ async function completeHPalletReceive() {
   // 실제 DB 처리
   try {
     // 각 item별로 위치 적용
-    // - bin location: 그 위치를 가진 새 bin으로 이동 (또는 기존 bin에 추가)
-    // - h pallet: 새 pallet 만들고 그 안에 bin들 옮기기
+    // 단, fully_allocated (오더에 잡힌) 항목은 건드리지 않음 — Ship 시 자동 처리
     
-    // pallet 별로 그룹핑하여 처리 (location_type을 in_house로 변경하기 위해)
+    // pallet 별로 그룹핑하여 처리
     const palletsToInHouse = new Set();
     const newPalletsToCreate = new Map();  // hpallet code → { items[] }
     
-    for (const it of _hpalletReceiveItems) {
+    for (const it of itemsToProcess) {
       if (it.assigned_location === 'hpallet') {
-        // 새 H pallet에 들어감
         if (!newPalletsToCreate.has(it.assigned_value)) {
           newPalletsToCreate.set(it.assigned_value, { code: it.assigned_value, items: [] });
         }
         newPalletsToCreate.get(it.assigned_value).items.push(it);
+      } else if (it.assigned_location === 'return') {
+        // 3rd Party 반송: 별도 처리 (아래 참조)
       } else {
-        // 기존 bin으로 이동
-        // 그 pallet이 더 이상 사용 안 되는지 확인 후 in_house 처리
         palletsToInHouse.add(it.pallet_id);
       }
     }
@@ -16633,11 +16788,11 @@ async function completeHPalletReceive() {
     // Transaction 기록
     const { data: txn } = await db.from('inventory_transactions').insert({
       transaction_type: 'pallet_receive',
-      description: `Pull Receive TRB-${_hpalletReceiveBatch.batch_number}: ${_hpalletReceiveBatch.from_warehouse} → ${_hpalletReceiveBatch.to_warehouse} (${summary} items)`,
+      description: `Pull Receive TRB-${_hpalletReceiveBatch.batch_number}: ${_hpalletReceiveBatch.from_warehouse} → ${_hpalletReceiveBatch.to_warehouse} (입고 ${totalToProcess}개${totalAllocated > 0 ? ', 오더 ' + totalAllocated + '개' : ''})`,
       warehouse_code: _hpalletReceiveBatch.to_warehouse,
       performed_by: performedBy,
       status: 'active',
-      affected_rows: summary,
+      affected_rows: totalToProcess,
       metadata: { batch_id: _hpalletReceiveBatch.id, batch_number: _hpalletReceiveBatch.batch_number, transfer_type: 'pull_3rd_receive' }
     }).select('id').single();
     const txnId = txn?.id;
@@ -16655,18 +16810,39 @@ async function completeHPalletReceive() {
       newPalletIdMap[code] = newPallet.id;
     }
     
-    // 2. 각 bin 처리
-    for (const it of _hpalletReceiveItems) {
+    // 2. 각 bin 처리 — itemsToProcess만 (fully_allocated 제외)
+    for (const it of itemsToProcess) {
       if (it.assigned_location === 'hpallet') {
-        // 새 H pallet으로 옮기기 (bin의 pallet_id 변경 + bin_code도 새 pallet code로)
+        // 새 H pallet으로 옮기기
         await db.from('inventory_bins').update({
           pallet_id: newPalletIdMap[it.assigned_value],
           bin_code: it.assigned_value
         }).eq('id', it.bin_id);
+      } else if (it.assigned_location === 'return') {
+        // 3rd Party 반송: 기본은 원래 pallet 유지, 새 코드 입력했으면 새 pallet 생성
+        if (it.assigned_value === 'KEEP_ORIGINAL') {
+          // 그대로 두기 — 아무것도 안 함 (3rd_party 그대로)
+        } else {
+          // 새 H pallet (3rd_party type) 만들고 그쪽으로 이동
+          let newPalletId = newPalletIdMap[it.assigned_value];
+          if (!newPalletId) {
+            const { data: newP, error: pErr } = await db.from('pallets').insert({
+              pallet_code: it.assigned_value,
+              warehouse_code: _hpalletReceiveBatch.to_warehouse,
+              location_type: '3rd_party',  // 반송이라 3rd_party
+              status: 'active'
+            }).select('id').single();
+            if (pErr) throw new Error(`반송용 pallet ${it.assigned_value} 생성 실패: ${pErr.message}`);
+            newPalletId = newP.id;
+            newPalletIdMap[it.assigned_value] = newPalletId;
+          }
+          await db.from('inventory_bins').update({
+            pallet_id: newPalletId,
+            bin_code: it.assigned_value
+          }).eq('id', it.bin_id);
+        }
       } else {
-        // 기존 bin으로: bin_code 변경 + pallet 분리 (in_house bin)
-        // 만약 그 bin code가 이미 in_house pallet에 속해 있으면 → 거기 합침
-        // 단순화: bin_code 변경 + pallet_id null (또는 in_house pallet 자동 생성)
+        // 기존 bin: bin_code 변경 + pallet_id null (in_house bin)
         await db.from('inventory_bins').update({
           bin_code: it.assigned_value,
           pallet_id: null
@@ -16702,7 +16878,7 @@ async function completeHPalletReceive() {
       selected_items: _hpalletReceiveItems   // location 정보 저장
     }).eq('id', _hpalletReceiveBatch.id);
     
-    showToast(`✅ TRB-${_hpalletReceiveBatch.batch_number} 입고 완료 — ${summary} items`);
+    showToast(`✅ TRB-${_hpalletReceiveBatch.batch_number} 입고 완료 — ${totalToProcess}개${totalAllocated > 0 ? ' + 오더 ' + totalAllocated + '개' : ''}`);
     closeHPalletReceive();
     if (_palletsActiveTab === 'batches') await loadBatches();
   } catch (e) {
@@ -34935,9 +35111,10 @@ function showCreditHoldFlash(overAmt) {
       <button onclick="closeHPalletReceive()" style="background:rgba(255,255,255,0.5);border:1px solid rgba(0,0,0,0.1);border-radius:4px;width:30px;height:30px;cursor:pointer;font-size:16px;color:#1e40af;font-weight:700;">✕</button>
     </div>
     
-    <div style="padding:12px 24px;border-bottom:1px solid #e5e7eb;background:#eff6ff;font-size:11px;color:#1e3a8a;line-height:1.5;">
-      💡 받은 박스에 ☑ 체크 → 위치 입력 → <strong>[적용]</strong> → 다음 묶음 ☑ 체크 → 다른 위치 → ...<br>
-      모든 항목 위치 지정 후 <strong>[입고 완료]</strong> 클릭 → 재고 반영
+    <div style="padding:12px 24px;border-bottom:1px solid #e5e7eb;background:#eff6ff;font-size:11px;color:#1e3a8a;line-height:1.6;">
+      💡 <strong>두 가지 영역:</strong><br>
+      🔥 <strong>오더에 잡힌 항목</strong> — 입고 처리 안 함 (시스템 변경 없음). 직원이 박스에서 바로 픽 → Ship 시 자동 차감.<br>
+      📥 <strong>일반 입고</strong> — ☑ 체크 → 위치 입력 (기존 Bin / 새 H Pallet / 3rd Party 반송) → <strong>[적용]</strong>
     </div>
     
     <!-- 위치 입력 영역 -->
@@ -34951,6 +35128,10 @@ function showCreditHoldFlash(overAmt) {
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
           <input type="radio" name="hpallet-loc-type" value="hpallet" onchange="onHPalletLocTypeChange()" style="cursor:pointer;">
           📦 새 H Pallet
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
+          <input type="radio" name="hpallet-loc-type" value="return" onchange="onHPalletLocTypeChange()" style="cursor:pointer;">
+          🚚 3rd Party 반송
         </label>
         <input id="hpallet-loc-input" placeholder="예: 1A-05" 
                style="flex:1;min-width:160px;height:32px;border:2px solid #93c5fd;border-radius:5px;padding:0 10px;font-size:13px;font-family:'IBM Plex Mono',monospace;font-weight:700;text-transform:uppercase;">
@@ -50179,4 +50360,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T14:16:56Z - Pull Request 후 Transfer Batches 탭 자동 이동 -->
+
+<!-- Deploy trigger: 2026-04-26T15:29:22Z - H-Pallet 입고: 오더 잡힌 항목 자동 분리 + 3rd Party 반송 옵션 -->
