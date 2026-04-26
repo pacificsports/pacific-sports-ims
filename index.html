@@ -16626,12 +16626,10 @@ function onHPalletLocTypeChange() {
   const inputEl = document.getElementById('hpallet-loc-input');
   if (inputEl) {
     if (_hpalletLocType === 'bin') {
-      inputEl.placeholder = '예: 1A-05';
-    } else if (_hpalletLocType === 'hpallet') {
-      inputEl.placeholder = '예: H9001 (새 H Pallet code)';
+      inputEl.placeholder = '예: 1A-05 (우리 창고 bin 위치)';
     } else {
-      // return: 새 H pallet code 입력 (반송용)
-      inputEl.placeholder = '예: H8888 (반송용 새 H Pallet code, 또는 비우면 원래 pallet 유지)';
+      // return: 새 H pallet code 필수 입력 (반송용)
+      inputEl.placeholder = '예: H5000 (3rd Party 반송용 새 H Pallet 코드)';
     }
   }
 }
@@ -16695,7 +16693,7 @@ function renderHPalletReceiveBody() {
       ${generalItems.map(it => {
         const isAssigned = !!it.assigned_value;
         const assignedLabel = isAssigned 
-          ? `<span style="background:#dcfce7;color:#065f46;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">${it.assigned_location === 'bin' ? '📍' : it.assigned_location === 'hpallet' ? '📦' : '🚚'} ${escapeHtml(it.assigned_value)}</span>`
+          ? `<span style="background:#dcfce7;color:#065f46;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">${it.assigned_location === 'bin' ? '📍' : '🚚'} ${escapeHtml(it.assigned_value)}</span>`
           : '<span style="color:#9ca3af;font-size:10px;">위치 미지정</span>';
         const displayPcs = it.is_fully_allocated ? 0 : (it.allocated_pcs > 0 ? it.remaining_pcs : it.qty_pcs);
         const displayBoxes = it.ppb > 0 ? Math.floor(displayPcs / it.ppb) : 0;
@@ -16759,13 +16757,14 @@ function applyHPalletLocation() {
   const inputEl = document.getElementById('hpallet-loc-input');
   let locValue = inputEl.value.trim().toUpperCase();
   
-  // return 옵션은 빈 값도 허용 (원래 pallet 유지 = 그대로 반송)
-  if (_hpalletLocType !== 'return' && !locValue) {
-    alert('위치를 입력해주세요');
+  if (!locValue) {
+    if (_hpalletLocType === 'return') {
+      alert('반송용 H Pallet 코드를 입력해주세요 (예: H5000)');
+    } else {
+      alert('Bin 위치를 입력해주세요');
+    }
+    inputEl.focus();
     return;
-  }
-  if (_hpalletLocType === 'return' && !locValue) {
-    locValue = 'KEEP_ORIGINAL';  // 마커
   }
   
   const checkedIdxs = _hpalletReceiveItems.map((it, i) => it.checked ? i : null).filter(i => i !== null);
@@ -16877,21 +16876,14 @@ async function completeHPalletReceive() {
     // 각 item별로 위치 적용
     // 단, fully_allocated (오더에 잡힌) 항목은 건드리지 않음 — Ship 시 자동 처리
     
-    // pallet 별로 그룹핑하여 처리
+    // pallet 별로 그룹핑하여 처리 — hpallet 옵션 제거됨, bin / return 만 있음
     const palletsToInHouse = new Set();
-    const newPalletsToCreate = new Map();  // hpallet code → { items[] }
     
     for (const it of itemsToProcess) {
-      if (it.assigned_location === 'hpallet') {
-        if (!newPalletsToCreate.has(it.assigned_value)) {
-          newPalletsToCreate.set(it.assigned_value, { code: it.assigned_value, items: [] });
-        }
-        newPalletsToCreate.get(it.assigned_value).items.push(it);
-      } else if (it.assigned_location === 'return') {
-        // 3rd Party 반송: 별도 처리 (아래 참조)
-      } else {
+      if (it.assigned_location === 'bin') {
         palletsToInHouse.add(it.pallet_id);
       }
+      // 'return'은 아래 메인 루프에서 처리
     }
     
     // wh ID
@@ -16910,50 +16902,29 @@ async function completeHPalletReceive() {
     }).select('id').single();
     const txnId = txn?.id;
     
-    // 1. 새 H pallet 만들기
-    const newPalletIdMap = {};  // code → new pallet id
-    for (const [code, p] of newPalletsToCreate) {
-      const { data: newPallet, error: pErr } = await db.from('pallets').insert({
-        pallet_code: code,
-        warehouse_code: _hpalletReceiveBatch.to_warehouse,
-        location_type: 'in_house',
-        status: 'active'
-      }).select('id').single();
-      if (pErr) throw new Error(`새 pallet ${code} 생성 실패: ${pErr.message}`);
-      newPalletIdMap[code] = newPallet.id;
-    }
+    // 반송용 새 H pallet 캐시 (같은 H 코드 여러 번 만들지 않게)
+    const returnPalletIdMap = {};  // code → new pallet id
     
-    // 2. 각 bin 처리 — itemsToProcess만 (fully_allocated 제외)
+    // 각 bin 처리 — itemsToProcess만 (fully_allocated 제외)
     for (const it of itemsToProcess) {
-      if (it.assigned_location === 'hpallet') {
-        // 새 H pallet으로 옮기기
+      if (it.assigned_location === 'return') {
+        // 3rd Party 반송: 새 H pallet (3rd_party type) 만들기
+        let newPalletId = returnPalletIdMap[it.assigned_value];
+        if (!newPalletId) {
+          const { data: newP, error: pErr } = await db.from('pallets').insert({
+            pallet_code: it.assigned_value,
+            warehouse_code: _hpalletReceiveBatch.to_warehouse,
+            location_type: '3rd_party',
+            status: 'active'
+          }).select('id').single();
+          if (pErr) throw new Error(`반송용 pallet ${it.assigned_value} 생성 실패: ${pErr.message}`);
+          newPalletId = newP.id;
+          returnPalletIdMap[it.assigned_value] = newPalletId;
+        }
         await db.from('inventory_bins').update({
-          pallet_id: newPalletIdMap[it.assigned_value],
+          pallet_id: newPalletId,
           bin_code: it.assigned_value
         }).eq('id', it.bin_id);
-      } else if (it.assigned_location === 'return') {
-        // 3rd Party 반송: 기본은 원래 pallet 유지, 새 코드 입력했으면 새 pallet 생성
-        if (it.assigned_value === 'KEEP_ORIGINAL') {
-          // 그대로 두기 — 아무것도 안 함 (3rd_party 그대로)
-        } else {
-          // 새 H pallet (3rd_party type) 만들고 그쪽으로 이동
-          let newPalletId = newPalletIdMap[it.assigned_value];
-          if (!newPalletId) {
-            const { data: newP, error: pErr } = await db.from('pallets').insert({
-              pallet_code: it.assigned_value,
-              warehouse_code: _hpalletReceiveBatch.to_warehouse,
-              location_type: '3rd_party',  // 반송이라 3rd_party
-              status: 'active'
-            }).select('id').single();
-            if (pErr) throw new Error(`반송용 pallet ${it.assigned_value} 생성 실패: ${pErr.message}`);
-            newPalletId = newP.id;
-            newPalletIdMap[it.assigned_value] = newPalletId;
-          }
-          await db.from('inventory_bins').update({
-            pallet_id: newPalletId,
-            bin_code: it.assigned_value
-          }).eq('id', it.bin_id);
-        }
       } else {
         // 기존 bin: bin_code 변경 + pallet_id null (in_house bin)
         await db.from('inventory_bins').update({
@@ -34983,7 +34954,7 @@ function showCreditHoldFlash(overAmt) {
       <span style="flex:1;"></span>
       <span id="pallets-count" style="font-size:11px;color:#6b7280;"></span>
       <button class="btn btn-sm" onclick="openPcrTransfer()" style="font-size:11px;background:#10b981;color:#fff;border:none;font-weight:700;padding:6px 12px;">📦 PCR로 박스 옮기기</button>
-      <button class="btn btn-sm" onclick="openHPallet()" style="font-size:11px;background:#f59e0b;color:#fff;border:none;font-weight:700;padding:6px 12px;">📥 H-Pallet 가져오기</button>
+      <button class="btn btn-sm" onclick="openHPallet()" style="font-size:11px;background:#f59e0b;color:#fff;border:none;font-weight:700;padding:6px 12px;">📥 3rd Party Warehouse 가져오기</button>
       <button class="btn btn-sm" onclick="openBinSkuBatchDialog()" style="font-size:11px;background:#9ca3af;color:#fff;border:none;opacity:0.6;" title="옛 통합 모달">🛠 [임시] 통합 모달</button>
     </div>
     
@@ -35148,7 +35119,7 @@ function showCreditHoldFlash(overAmt) {
   <div id="hpallet-window" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:14px;width:min(1700px,90vw);height:min(950px,85vh);display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);pointer-events:auto;resize:both;overflow:hidden;min-width:800px;min-height:400px;">
     <div id="hpallet-header" style="padding:14px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:14px 14px 0 0;cursor:move;user-select:none;">
       <div>
-        <div style="font-size:16px;font-weight:800;color:#92400e;">📥 H-Pallet 가져오기 (3rd Party Pull Request)</div>
+        <div style="font-size:16px;font-weight:800;color:#92400e;">📥 3rd Party Warehouse 가져오기 (Pull Request)</div>
         <div style="font-size:10px;color:#b45309;margin-top:2px;">🖱️ 헤더 드래그로 이동 · ↘ 우측 하단 드래그로 크기 조절</div>
       </div>
       <button onclick="closeHPallet()" style="background:rgba(255,255,255,0.5);border:1px solid rgba(0,0,0,0.1);border-radius:4px;width:30px;height:30px;cursor:pointer;font-size:16px;color:#92400e;font-weight:700;">✕</button>
@@ -35227,7 +35198,7 @@ function showCreditHoldFlash(overAmt) {
     <div style="padding:12px 24px;border-bottom:1px solid #e5e7eb;background:#eff6ff;font-size:11px;color:#1e3a8a;line-height:1.6;">
       💡 <strong>두 가지 영역:</strong><br>
       🔥 <strong>오더에 잡힌 항목</strong> — 입고 처리 안 함 (시스템 변경 없음). 직원이 박스에서 바로 픽 → Ship 시 자동 차감.<br>
-      📥 <strong>일반 입고</strong> — ☑ 체크 → 위치 입력 (기존 Bin / 새 H Pallet / 3rd Party 반송) → <strong>[적용]</strong>
+      📥 <strong>일반 입고</strong> — ☑ 체크 → 위치 입력 (기존 Bin / 3rd Party 반송) → <strong>[적용]</strong>
     </div>
     
     <!-- 위치 입력 영역 -->
@@ -35239,12 +35210,8 @@ function showCreditHoldFlash(overAmt) {
           📍 기존 Bin
         </label>
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
-          <input type="radio" name="hpallet-loc-type" value="hpallet" onchange="onHPalletLocTypeChange()" style="cursor:pointer;">
-          📦 새 H Pallet
-        </label>
-        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
           <input type="radio" name="hpallet-loc-type" value="return" onchange="onHPalletLocTypeChange()" style="cursor:pointer;">
-          🚚 3rd Party 반송
+          🚚 3rd Party 반송 (H 코드)
         </label>
         <input id="hpallet-loc-input" placeholder="예: 1A-05" 
                style="flex:1;min-width:160px;height:32px;border:2px solid #93c5fd;border-radius:5px;padding:0 10px;font-size:13px;font-family:'IBM Plex Mono',monospace;font-weight:700;text-transform:uppercase;">
@@ -50478,4 +50445,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T16:27:07Z - 거래처명 자르지 않고 다 표시 -->
+
+
+<!-- Deploy trigger: 2026-04-26T16:36:19Z - 버튼/타이틀 '3rd Party Warehouse 가져오기'로 변경 -->
