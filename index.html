@@ -14863,14 +14863,68 @@ function showWorkOrderPreview(batchNum, from, to, items, rule) {
 // ── 📦 PCR로 박스 옮기기 (단순한 즉시 처리) ─────────────────
 // ══════════════════════════════════════════════════════════════
 
+// ─── 재사용 가능한 드래그/리사이즈 모달 헬퍼 ───
+// 모든 모달이 자유롭게 옮길 수 있도록.
+// 사용: makeDraggableModal('내모달-window', '내모달-header')
+function makeDraggableModal(windowId, headerId) {
+  const win = document.getElementById(windowId);
+  const header = document.getElementById(headerId);
+  if (!win || !header) {
+    console.warn('[makeDraggableModal] not found:', windowId, headerId);
+    return;
+  }
+  if (header._dragInitialized) return;  // 중복 방지
+  header._dragInitialized = true;
+  
+  let isDragging = false;
+  let startX, startY, startLeft, startTop;
+  
+  header.addEventListener('mousedown', (e) => {
+    // 헤더 안의 버튼/입력 클릭 시 드래그 비활성화
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    
+    // 현재 위치 (transform 풀어서 절대 좌표로)
+    const rect = win.getBoundingClientRect();
+    win.style.transform = '';
+    win.style.left = rect.left + 'px';
+    win.style.top = rect.top + 'px';
+    win.style.margin = '0';  // flex auto-margin 제거
+    startLeft = rect.left;
+    startTop = rect.top;
+    
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const newLeft = Math.max(0, Math.min(window.innerWidth - 100, startLeft + dx));
+    const newTop = Math.max(0, Math.min(window.innerHeight - 50, startTop + dy));
+    win.style.left = newLeft + 'px';
+    win.style.top = newTop + 'px';
+  });
+  
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      document.body.style.userSelect = '';
+    }
+  });
+}
+
 let _pcrSearchTimer = null;
 let _pcrSearchResults = [];
 let _pcrTargetWh = 'SC-PCR';  // SC-PCR 또는 CA-PCR
-let _pcrSelectedQty = {};  // bin_id → 박스 수
+let _pcrCart = {};  // bin_id → cart item (sku, color, size, qty_boxes, qty_pcs, ppb, max_boxes, ...)
 
 function openPcrTransfer() {
   _pcrSearchResults = [];
-  _pcrSelectedQty = {};
+  _pcrCart = {};
   _pcrTargetWh = 'SC-PCR';
   
   // radio 초기화 (NodeList → Array)
@@ -14881,16 +14935,33 @@ function openPcrTransfer() {
   document.getElementById('pcr-from-label').innerHTML = '출발: <strong>SC</strong>';
   document.getElementById('pcr-results').innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">검색어 입력 시 결과가 표시됩니다</div>';
   
-  // summary 초기화
+  // 카트도 초기화
+  if (typeof renderPcrCart === 'function') renderPcrCart();
   if (typeof updatePcrSummary === 'function') updatePcrSummary();
   
-  document.getElementById('pcr-transfer-modal').style.display = 'flex';
+  // 모달 위치 초기화
+  resetPcrModalPosition();
+  
+  document.getElementById('pcr-transfer-modal').style.display = 'block';
+  
+  // 드래그 활성화 (한 번만)
+  makeDraggableModal('pcr-transfer-window', 'pcr-transfer-header');
+  
   setTimeout(() => document.getElementById('pcr-search').focus(), 100);
+}
+
+function resetPcrModalPosition() {
+  const win = document.getElementById('pcr-transfer-window');
+  if (!win) return;
+  win.style.left = '';
+  win.style.top = '';
+  win.style.margin = '';
+  win.style.transform = '';
 }
 
 function closePcrTransfer() {
   document.getElementById('pcr-transfer-modal').style.display = 'none';
-  _pcrSelectedQty = {};  // 다음 열 때 깨끗하게
+  _pcrCart = {};
 }
 
 function onPcrTargetChange() {
@@ -14966,7 +15037,6 @@ function renderPcrResults() {
   const div = document.getElementById('pcr-results');
   if (_pcrSearchResults.length === 0) {
     div.innerHTML = '<div style="padding:30px;text-align:center;color:#9ca3af;font-size:11px;">결과 없음</div>';
-    updatePcrSummary();
     return;
   }
   
@@ -14977,93 +15047,185 @@ function renderPcrResults() {
     const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
     const totalBoxes = Math.floor(b.qty / ppb);
     const palletCode = b.pallets?.pallet_code || b.bin_code;
-    // 이전 입력값 유지 (검색 다시 했을 때)
-    const prevBoxes = _pcrSelectedQty[b.id] || 0;
+    const inCart = _pcrCart[b.id];
+    const initialBoxes = inCart ? inCart.qty_boxes : 1;
     
     return `
-      <div style="border:1px solid ${prevBoxes > 0 ? '#86efac' : '#e5e7eb'};border-radius:8px;padding:10px 14px;margin-bottom:6px;background:${prevBoxes > 0 ? '#f0fdf4' : '#fff'};display:flex;align-items:center;gap:12px;">
-        <div style="flex:1;min-width:0;">
-          <div style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;color:#1f2937;">
+      <div style="border:1px solid ${inCart ? '#86efac' : '#e5e7eb'};border-radius:8px;padding:9px 12px;margin-bottom:6px;background:${inCart ? '#f0fdf4' : '#fff'};">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:#1f2937;">
             ${escapeHtml(inv.sku_id || '?')}
           </div>
-          <div style="font-size:10px;color:#6b7280;margin-top:3px;">
-            📍 <strong>${escapeHtml(palletCode)}</strong> · 
-            ${escapeHtml(inv.color || '')} / <strong>${escapeHtml(size)}</strong> · 
-            <strong style="color:#1f2937;">${b.qty.toLocaleString()} pcs</strong>
-            <span style="color:#9ca3af;"> (${totalBoxes} box @ ${ppb}/box)</span>
-          </div>
+          ${inCart ? '<span style="background:#10b981;color:#fff;padding:1px 7px;border-radius:10px;font-size:9px;font-weight:700;">✓ 카트</span>' : ''}
         </div>
-        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+        <div style="font-size:10px;color:#6b7280;margin-bottom:6px;">
+          📍 <strong>${escapeHtml(palletCode)}</strong> · 
+          ${escapeHtml(inv.color || '')} / <strong>${escapeHtml(size)}</strong> · 
+          <strong style="color:#1f2937;">${b.qty.toLocaleString()} pcs</strong>
+          <span style="color:#9ca3af;"> (${totalBoxes} box @ ${ppb}/box)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
           <span style="font-size:10px;color:#374151;font-weight:700;">박스:</span>
-          <button onclick="adjustPcrBoxes(${idx}, -1)" style="width:26px;height:30px;border:1px solid #d1d5db;background:#f9fafb;border-radius:4px 0 0 4px;cursor:pointer;font-weight:700;font-size:14px;">−</button>
-          <input id="pcr-boxes-${idx}" type="number" min="0" max="${totalBoxes}" value="${prevBoxes}" 
-                 oninput="updatePcrQty(${idx}, this.value)"
-                 style="width:54px;height:30px;border:1px solid #d1d5db;border-left:none;border-right:none;padding:0 4px;font-size:13px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;">
-          <button onclick="adjustPcrBoxes(${idx}, 1)" style="width:26px;height:30px;border:1px solid #d1d5db;background:#f9fafb;border-radius:0 4px 4px 0;cursor:pointer;font-weight:700;font-size:14px;">+</button>
-          <span style="font-size:10px;color:#9ca3af;margin-left:4px;">/ ${totalBoxes}</span>
+          <button onclick="adjustPcrSearchBoxes(${idx}, -1)" style="width:24px;height:26px;border:1px solid #d1d5db;background:#f9fafb;border-radius:4px 0 0 4px;cursor:pointer;font-weight:700;font-size:13px;">−</button>
+          <input id="pcr-search-boxes-${idx}" type="number" min="1" max="${totalBoxes}" value="${initialBoxes}" 
+                 style="width:48px;height:26px;border:1px solid #d1d5db;border-left:none;border-right:none;padding:0 4px;font-size:12px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+          <button onclick="adjustPcrSearchBoxes(${idx}, 1)" style="width:24px;height:26px;border:1px solid #d1d5db;background:#f9fafb;border-radius:0 4px 4px 0;cursor:pointer;font-weight:700;font-size:13px;">+</button>
+          <span style="font-size:9px;color:#9ca3af;">/ ${totalBoxes}</span>
+          <span style="flex:1;"></span>
+          <button onclick="addToPcrCart(${idx})" style="height:26px;padding:0 12px;background:${inCart ? '#f59e0b' : '#10b981'};color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">
+            ${inCart ? '🔄 갱신' : '+ 카트'}
+          </button>
         </div>
       </div>
     `;
   }).join('');
-  
-  updatePcrSummary();
 }
 
-function updatePcrQty(idx, val) {
+function adjustPcrSearchBoxes(idx, delta) {
+  const inputEl = document.getElementById(`pcr-search-boxes-${idx}`);
+  if (!inputEl) return;
+  const cur = parseInt(inputEl.value, 10) || 1;
+  const max = parseInt(inputEl.max, 10) || 1;
+  const newVal = Math.max(1, Math.min(max, cur + delta));
+  inputEl.value = newVal;
+}
+
+function addToPcrCart(idx) {
   const b = _pcrSearchResults[idx];
   if (!b) return;
+  
+  const inputEl = document.getElementById(`pcr-search-boxes-${idx}`);
+  let boxes = parseInt(inputEl?.value, 10) || 1;
+  if (boxes < 1) {
+    alert('박스 수를 1 이상 입력해주세요');
+    return;
+  }
+  
   const inv = b.inventory || {};
   const size = inv.size || '';
   const isLarge = ['3XL', '4XL', '5XL'].includes(size);
   const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
   const maxBoxes = Math.floor(b.qty / ppb);
+  if (boxes > maxBoxes) boxes = maxBoxes;
   
-  let n = parseInt(val, 10);
-  if (isNaN(n) || n < 0) n = 0;
-  if (n > maxBoxes) n = maxBoxes;
+  const palletCode = b.pallets?.pallet_code || b.bin_code;
   
-  _pcrSelectedQty[b.id] = n;
+  // 카트에 담기 (이미 있으면 수량만 갱신)
+  _pcrCart[b.id] = {
+    bin_id: b.id,
+    bin_qty: b.qty,
+    bin_code: b.bin_code,
+    pallet_code: palletCode,
+    inventory_id: inv.id,
+    sku_id: inv.sku_id,
+    style_number: inv.style_number,
+    color: inv.color,
+    size: inv.size,
+    ppb: ppb,
+    max_boxes: maxBoxes,
+    qty_boxes: boxes,
+    qty_pcs: boxes * ppb
+  };
   
-  // 행 시각 업데이트 (배경색)
-  const rows = document.getElementById('pcr-results').children;
-  if (rows[idx]) {
-    rows[idx].style.borderColor = n > 0 ? '#86efac' : '#e5e7eb';
-    rows[idx].style.background = n > 0 ? '#f0fdf4' : '#fff';
-  }
-  
+  renderPcrResults();
+  renderPcrCart();
   updatePcrSummary();
 }
 
-function adjustPcrBoxes(idx, delta) {
-  const inputEl = document.getElementById(`pcr-boxes-${idx}`);
-  if (!inputEl) return;
-  const cur = parseInt(inputEl.value, 10) || 0;
-  const max = parseInt(inputEl.max, 10) || 0;
-  const newVal = Math.max(0, Math.min(max, cur + delta));
-  inputEl.value = newVal;
-  updatePcrQty(idx, newVal);
+function removeFromPcrCart(binId) {
+  delete _pcrCart[binId];
+  renderPcrResults();
+  renderPcrCart();
+  updatePcrSummary();
+}
+
+function adjustPcrCartBoxes(binId, delta) {
+  const item = _pcrCart[binId];
+  if (!item) return;
+  const newVal = Math.max(1, Math.min(item.max_boxes, item.qty_boxes + delta));
+  item.qty_boxes = newVal;
+  item.qty_pcs = newVal * item.ppb;
+  renderPcrCart();
+  updatePcrSummary();
+  // 검색 결과에도 반영 (배지)
+  renderPcrResults();
+}
+
+function updatePcrCartBoxesByInput(binId, val) {
+  const item = _pcrCart[binId];
+  if (!item) return;
+  let n = parseInt(val, 10);
+  if (isNaN(n) || n < 1) n = 1;
+  if (n > item.max_boxes) n = item.max_boxes;
+  item.qty_boxes = n;
+  item.qty_pcs = n * item.ppb;
+  renderPcrCart();
+  updatePcrSummary();
+  renderPcrResults();
+}
+
+function clearPcrCart() {
+  if (Object.keys(_pcrCart).length === 0) return;
+  if (!confirm('카트를 모두 비우시겠습니까?')) return;
+  _pcrCart = {};
+  renderPcrResults();
+  renderPcrCart();
+  updatePcrSummary();
+}
+
+function renderPcrCart() {
+  const div = document.getElementById('pcr-cart');
+  const items = Object.values(_pcrCart);
+  
+  if (items.length === 0) {
+    div.innerHTML = `
+      <div style="padding:30px 14px;text-align:center;color:#9ca3af;font-size:11px;line-height:1.6;">
+        아직 카트가 비어있습니다.<br>
+        왼쪽에서 검색 후 <strong>[+ 카트]</strong> 버튼을 눌러주세요.
+      </div>
+    `;
+    return;
+  }
+  
+  div.innerHTML = items.map(it => `
+    <div style="border:1px solid #fde68a;background:#fff;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:6px;margin-bottom:5px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;color:#1f2937;">
+            ${escapeHtml(it.sku_id || '?')}
+          </div>
+          <div style="font-size:9px;color:#6b7280;margin-top:2px;">
+            📍 ${escapeHtml(it.pallet_code)} · ${escapeHtml(it.color || '')}/<strong>${escapeHtml(it.size || '')}</strong>
+          </div>
+        </div>
+        <button onclick="removeFromPcrCart('${it.bin_id}')" style="background:none;border:none;color:#dc2626;font-size:14px;cursor:pointer;line-height:1;padding:0;">✕</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;font-size:10px;">
+        <span style="color:#374151;font-weight:700;">박스:</span>
+        <button onclick="adjustPcrCartBoxes('${it.bin_id}', -1)" style="width:22px;height:22px;border:1px solid #d1d5db;background:#fff;border-radius:3px 0 0 3px;cursor:pointer;font-weight:700;font-size:12px;">−</button>
+        <input type="number" min="1" max="${it.max_boxes}" value="${it.qty_boxes}" 
+               onchange="updatePcrCartBoxesByInput('${it.bin_id}', this.value)"
+               style="width:40px;height:22px;border:1px solid #d1d5db;border-left:none;border-right:none;padding:0 3px;font-size:11px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+        <button onclick="adjustPcrCartBoxes('${it.bin_id}', 1)" style="width:22px;height:22px;border:1px solid #d1d5db;background:#fff;border-radius:0 3px 3px 0;cursor:pointer;font-weight:700;font-size:12px;">+</button>
+        <span style="color:#9ca3af;">/ ${it.max_boxes}</span>
+        <span style="flex:1;"></span>
+        <span style="color:#374151;font-weight:700;font-family:'IBM Plex Mono',monospace;">= ${it.qty_pcs.toLocaleString()} pcs</span>
+      </div>
+    </div>
+  `).join('');
 }
 
 function updatePcrSummary() {
-  // 선택된 항목 합계
-  let totalSkus = 0, totalBoxes = 0, totalPcs = 0;
-  _pcrSearchResults.forEach(b => {
-    const boxes = _pcrSelectedQty[b.id] || 0;
-    if (boxes > 0) {
-      const inv = b.inventory || {};
-      const size = inv.size || '';
-      const isLarge = ['3XL', '4XL', '5XL'].includes(size);
-      const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
-      totalSkus++;
-      totalBoxes += boxes;
-      totalPcs += boxes * ppb;
-    }
-  });
+  // 카트 합계
+  const items = Object.values(_pcrCart);
+  const totalSkus = items.length;
+  const totalBoxes = items.reduce((s, it) => s + it.qty_boxes, 0);
+  const totalPcs = items.reduce((s, it) => s + it.qty_pcs, 0);
   
   const summaryEl = document.getElementById('pcr-summary');
   const btnEl = document.getElementById('pcr-submit-all-btn');
   if (summaryEl) {
-    summaryEl.innerHTML = `선택됨: <strong>${totalSkus}</strong> SKUs · <strong>${totalBoxes}</strong> boxes · <strong>${totalPcs.toLocaleString()}</strong> pcs`;
+    summaryEl.innerHTML = `🛒 카트: <strong>${totalSkus}</strong> SKUs · <strong>${totalBoxes}</strong> boxes · <strong>${totalPcs.toLocaleString()}</strong> pcs`;
   }
   if (btnEl) {
     btnEl.disabled = totalSkus === 0;
@@ -15074,34 +15236,11 @@ function updatePcrSummary() {
 }
 
 async function submitPcrTransferAll() {
-  // 선택된 항목 모으기
-  const items = [];
-  _pcrSearchResults.forEach(b => {
-    const boxes = _pcrSelectedQty[b.id] || 0;
-    if (boxes > 0) {
-      const inv = b.inventory || {};
-      const size = inv.size || '';
-      const isLarge = ['3XL', '4XL', '5XL'].includes(size);
-      const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
-      items.push({
-        bin_id: b.id,
-        bin_qty: b.qty,
-        bin_code: b.bin_code,
-        pallet_code: b.pallets?.pallet_code || b.bin_code,
-        inventory_id: inv.id,
-        sku_id: inv.sku_id,
-        style_number: inv.style_number,
-        color: inv.color,
-        size: inv.size,
-        ppb: ppb,
-        qty_boxes: boxes,
-        qty_pcs: boxes * ppb
-      });
-    }
-  });
+  // 카트에서 항목 가져오기
+  const items = Object.values(_pcrCart);
   
   if (items.length === 0) {
-    alert('박스 수를 1 이상 입력해주세요.');
+    alert('카트가 비어있습니다. 먼저 [+ 카트] 버튼으로 옮길 항목을 추가하세요.');
     return;
   }
   
@@ -15149,7 +15288,9 @@ async function submitPcrTransferAll() {
       const b = _pcrSearchResults.find(x => x.id === it.bin_id);
       if (b) b.qty -= it.qty_pcs;
     });
-    _pcrSelectedQty = {};
+    _pcrCart = {};
+    renderPcrCart();
+    updatePcrSummary();
     // 검색 다시 (qty 0인 거 빠짐)
     searchPcrSource();
     return;
@@ -15248,7 +15389,9 @@ async function submitPcrTransferAll() {
     // 작업 지시서 (모든 항목 1장)
     showPcrWorkOrderMulti(batch.batch_number, fromWh, _pcrTargetWh, items);
     
-    _pcrSelectedQty = {};
+    _pcrCart = {};
+    renderPcrCart();
+    updatePcrSummary();
     searchPcrSource();
   } catch (e) {
     console.error('[submitPcrTransferAll]', e);
@@ -33314,47 +33457,70 @@ function showCreditHoldFlash(overAmt) {
 <!-- ══════════════════════════════════════════════════════════════ -->
 <!-- ── 📦 PCR로 박스 옮기기 모달 (단순) ──                          -->
 <!-- ══════════════════════════════════════════════════════════════ -->
-<div id="pcr-transfer-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100001;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:14px;width:min(900px,96vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);">
-    <div style="padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#dcfce7,#bbf7d0);border-radius:14px 14px 0 0;">
-      <div style="font-size:16px;font-weight:800;color:#065f46;">📦 PCR로 박스 옮기기</div>
-      <button onclick="closePcrTransfer()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+<div id="pcr-transfer-modal" style="display:none;position:fixed;inset:0;background:transparent;z-index:100001;pointer-events:none;">
+  <div id="pcr-transfer-window" style="position:absolute;top:60px;left:50%;transform:translateX(-50%);background:#fff;border-radius:14px;width:min(1100px,98vw);max-height:calc(100vh - 80px);display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);pointer-events:auto;resize:both;overflow:hidden;min-width:700px;min-height:400px;">
+    <div id="pcr-transfer-header" style="padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#dcfce7,#bbf7d0);border-radius:14px 14px 0 0;cursor:move;user-select:none;">
+      <div>
+        <div style="font-size:16px;font-weight:800;color:#065f46;">📦 PCR로 박스 옮기기</div>
+        <div style="font-size:10px;color:#059669;margin-top:2px;">🖱️ 헤더 드래그로 이동 · 우측 하단 ↘ 드래그로 크기 조절</div>
+      </div>
+      <button onclick="closePcrTransfer()" style="background:rgba(255,255,255,0.4);border:1px solid rgba(0,0,0,0.1);border-radius:4px;width:30px;height:30px;cursor:pointer;font-size:16px;color:#065f46;font-weight:700;">✕</button>
     </div>
-    <div style="padding:16px 24px;border-bottom:1px solid #e5e7eb;background:#f0fdf4;">
-      <div style="font-size:11px;color:#065f46;line-height:1.6;">
-        💡 박스를 옮기면 <strong>즉시 처리</strong>됩니다 (출발 bin -1 box, 도착 PCR +pcs).<br>
-        창고 직원에게 줄 <strong>📄 작업 지시서가 자동 출력</strong>됩니다.
+    
+    <div style="padding:12px 24px;border-bottom:1px solid #e5e7eb;background:#f0fdf4;display:flex;justify-content:space-between;align-items:center;gap:14px;">
+      <div style="font-size:11px;color:#065f46;line-height:1.5;flex:1;">
+        💡 여러 SKU를 검색해서 카트에 담은 후 <strong>한 번에</strong> 옮길 수 있습니다.<br>
+        검색 → 박스 수 입력 → <strong>[+ 카트]</strong> → 다시 검색 → ... → 최종 <strong>[모두 옮김]</strong>
+      </div>
+      <div style="display:flex;gap:14px;align-items:center;flex-shrink:0;">
+        <div style="font-size:12px;font-weight:700;color:#374151;">어디로?</div>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
+          <input type="radio" name="pcr-target" value="SC-PCR" checked onchange="onPcrTargetChange()" style="cursor:pointer;">
+          SC PCR
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
+          <input type="radio" name="pcr-target" value="CA-PCR" onchange="onPcrTargetChange()" style="cursor:pointer;">
+          CA PCR
+        </label>
+        <span id="pcr-from-label" style="font-size:11px;color:#6b7280;">출발: <strong>SC</strong></span>
       </div>
     </div>
     
-    <div style="padding:16px 24px;display:flex;gap:14px;align-items:center;border-bottom:1px solid #e5e7eb;">
-      <div style="font-size:12px;font-weight:700;color:#374151;">어디로?</div>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:700;">
-        <input type="radio" name="pcr-target" value="SC-PCR" checked onchange="onPcrTargetChange()" style="cursor:pointer;">
-        🏢 SC PCR
-      </label>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:700;">
-        <input type="radio" name="pcr-target" value="CA-PCR" onchange="onPcrTargetChange()" style="cursor:pointer;">
-        🏢 CA PCR
-      </label>
-      <span style="flex:1;"></span>
-      <span id="pcr-from-label" style="font-size:11px;color:#6b7280;">출발: <strong>SC</strong></span>
-    </div>
-    
-    <div style="padding:14px 24px 8px;">
-      <input id="pcr-search" oninput="onPcrSearchInput()" placeholder="🔍 SKU / Style / Color / Size / Bin code 검색..." 
-             style="width:100%;height:38px;border:2px solid #86efac;border-radius:6px;padding:0 12px;font-size:13px;font-family:'IBM Plex Mono',monospace;">
-      <div style="font-size:10px;color:#9ca3af;margin-top:4px;">예: "9307" / "royal" / "2P-7" / "2XL"</div>
-    </div>
-    
-    <div id="pcr-results" style="flex:1;overflow-y:auto;padding:8px 16px 16px;min-height:300px;">
-      <div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">검색어 입력 시 결과가 표시됩니다</div>
+    <!-- 메인 영역: 좌(검색) + 우(카트) -->
+    <div style="flex:1;display:flex;overflow:hidden;min-height:300px;">
+      
+      <!-- 왼쪽: 검색 영역 -->
+      <div style="flex:1.4;display:flex;flex-direction:column;border-right:1px solid #e5e7eb;min-width:0;">
+        <div style="padding:12px 18px 8px;">
+          <input id="pcr-search" oninput="onPcrSearchInput()" placeholder="🔍 SKU / Style / Color / Size / Bin code 검색..." 
+                 style="width:100%;height:36px;border:2px solid #86efac;border-radius:6px;padding:0 12px;font-size:13px;font-family:'IBM Plex Mono',monospace;">
+          <div style="font-size:10px;color:#9ca3af;margin-top:3px;">예: "9307" / "royal" / "2P-7" / "2XL"</div>
+        </div>
+        <div id="pcr-results" style="flex:1;overflow-y:auto;padding:4px 14px 14px;">
+          <div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">검색어 입력 시 결과가 표시됩니다</div>
+        </div>
+      </div>
+      
+      <!-- 오른쪽: 카트 영역 -->
+      <div style="flex:1;display:flex;flex-direction:column;background:#fffbeb;min-width:0;">
+        <div style="padding:10px 14px;background:#fef3c7;border-bottom:1px solid #fde68a;display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:12px;font-weight:800;color:#78350f;">🛒 카트 (옮길 것)</div>
+          <button onclick="clearPcrCart()" style="background:none;border:none;color:#dc2626;font-size:10px;cursor:pointer;font-weight:700;">전체 비우기</button>
+        </div>
+        <div id="pcr-cart" style="flex:1;overflow-y:auto;padding:8px;">
+          <div style="padding:30px 14px;text-align:center;color:#9ca3af;font-size:11px;line-height:1.6;">
+            아직 카트가 비어있습니다.<br>
+            왼쪽에서 검색 후 <strong>[+ 카트]</strong> 버튼을 눌러주세요.
+          </div>
+        </div>
+      </div>
+      
     </div>
     
     <!-- 하단: 합계 + 모두 옮김 버튼 -->
     <div style="padding:14px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;border-radius:0 0 14px 14px;">
       <div id="pcr-summary" style="font-size:12px;color:#374151;">
-        선택됨: <strong>0</strong> SKUs · <strong>0</strong> boxes · <strong>0</strong> pcs
+        🛒 카트: <strong>0</strong> SKUs · <strong>0</strong> boxes · <strong>0</strong> pcs
       </div>
       <button id="pcr-submit-all-btn" onclick="submitPcrTransferAll()" disabled
               style="background:#10b981;color:#fff;border:none;border-radius:6px;padding:11px 20px;font-size:13px;font-weight:700;cursor:not-allowed;opacity:0.4;">
@@ -48500,4 +48666,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T02:39:47Z - PCR 박스 옮김: 일괄 처리 [모두 옮김] 버튼 -->
+
+
+<!-- Deploy trigger: 2026-04-26T02:48:36Z - PCR 박스 옮김: 카트 시스템 (검색 바뀌어도 유지) -->
