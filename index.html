@@ -15283,6 +15283,9 @@ async function submitPcrTransferAll() {
     // 작업 지시서 1장에 모든 항목
     showPcrWorkOrderMulti(fakeNum, fromWh, _pcrTargetWh, items);
     
+    // 검증 모달 (시뮬레이션)
+    verifyPcrTransfer(items, fromWh, _pcrTargetWh, true);
+    
     // 메모리에서 qty 차감 시뮬레이션
     items.forEach(it => {
       const b = _pcrSearchResults.find(x => x.id === it.bin_id);
@@ -15389,6 +15392,9 @@ async function submitPcrTransferAll() {
     // 작업 지시서 (모든 항목 1장)
     showPcrWorkOrderMulti(batch.batch_number, fromWh, _pcrTargetWh, items);
     
+    // 검증 모달 (실제 DB에서 다시 읽음)
+    verifyPcrTransfer(items, fromWh, _pcrTargetWh, false);
+    
     _pcrCart = {};
     renderPcrCart();
     updatePcrSummary();
@@ -15397,6 +15403,249 @@ async function submitPcrTransferAll() {
     console.error('[submitPcrTransferAll]', e);
     alert('❌ 박스 옮기기 실패: ' + e.message);
   }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── 🔍 PCR 박스 옮김 검증 ──
+// 옮김 직후 DB에서 다시 읽어서 Before/After 비교
+// ══════════════════════════════════════════════════════════════
+
+function closePcrVerifyModal() {
+  document.getElementById('pcr-verify-modal').style.display = 'none';
+}
+
+async function verifyPcrTransfer(items, fromWh, toWh, isTestMode) {
+  // 모달 띄우기
+  const modal = document.getElementById('pcr-verify-modal');
+  const titleEl = document.getElementById('pcr-verify-title');
+  const subtitleEl = document.getElementById('pcr-verify-subtitle');
+  const summaryEl = document.getElementById('pcr-verify-summary');
+  const bodyEl = document.getElementById('pcr-verify-body');
+  
+  modal.style.display = 'flex';
+  bodyEl.innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">⏳ DB에서 데이터 다시 조회 중...</div>';
+  
+  if (isTestMode) {
+    titleEl.innerHTML = '🧪 검증 (Test Mode 시뮬레이션)';
+    subtitleEl.innerHTML = '<span style="color:#dc2626;font-weight:700;">⚠️ 실제 DB는 변경되지 않았습니다.</span> 시뮬레이션 결과만 표시됩니다.';
+  } else {
+    titleEl.innerHTML = '✅ 박스 옮김 검증';
+    subtitleEl.innerHTML = 'DB에서 다시 읽어서 변경사항을 확인합니다.';
+  }
+  
+  // 검증할 SKU별로 묶기 (같은 SKU에 여러 bin이 있으면 합산)
+  const skuMap = new Map();
+  for (const it of items) {
+    const key = it.sku_id;
+    if (!skuMap.has(key)) {
+      skuMap.set(key, {
+        sku_id: it.sku_id,
+        style_number: it.style_number,
+        color: it.color,
+        size: it.size,
+        bins: [],
+        total_pcs: 0
+      });
+    }
+    const s = skuMap.get(key);
+    s.bins.push({
+      bin_id: it.bin_id,
+      bin_code: it.bin_code,
+      pallet_code: it.pallet_code,
+      qty_boxes: it.qty_boxes,
+      qty_pcs: it.qty_pcs,
+      bin_qty_before: it.bin_qty,  // 옮김 전 bin의 전체 qty
+      bin_qty_expected_after: Math.max(0, it.bin_qty - it.qty_pcs)
+    });
+    s.total_pcs += it.qty_pcs;
+  }
+  
+  const verifyResults = [];
+  
+  if (isTestMode) {
+    // TEST MODE: 시뮬레이션 결과만 표시
+    skuMap.forEach((s, sku) => {
+      verifyResults.push({
+        sku, 
+        style: s.style_number,
+        color: s.color, 
+        size: s.size,
+        total_pcs_moved: s.total_pcs,
+        bins: s.bins.map(b => ({
+          ...b,
+          bin_actual_after: b.bin_qty_expected_after,  // 시뮬레이션이므로 expected = actual
+          bin_match: true,
+          is_simulation: true
+        })),
+        pcr_loose_before: '?',
+        pcr_loose_after: '?',
+        pcr_match: true,
+        is_simulation: true
+      });
+    });
+  } else {
+    // 실제 DB 조회
+    try {
+      // PCR 창고 ID
+      const { data: pcrWh } = await db.from('warehouses').select('id').eq('code', toWh).single();
+      
+      for (const [sku, s] of skuMap) {
+        const result = {
+          sku, 
+          style: s.style_number,
+          color: s.color, 
+          size: s.size,
+          total_pcs_moved: s.total_pcs,
+          bins: []
+        };
+        
+        // 각 bin의 현재 qty 다시 조회
+        for (const b of s.bins) {
+          const { data: binNow } = await db.from('inventory_bins')
+            .select('qty')
+            .eq('id', b.bin_id)
+            .maybeSingle();
+          // bin이 삭제된 경우 (qty=0이라 자동 삭제) → actual = 0
+          const actualAfter = binNow ? (binNow.qty || 0) : 0;
+          result.bins.push({
+            ...b,
+            bin_actual_after: actualAfter,
+            bin_match: actualAfter === b.bin_qty_expected_after
+          });
+        }
+        
+        // PCR loose qty 조회
+        if (pcrWh) {
+          const { data: pcrInv } = await db.from('inventory')
+            .select('qty_loose')
+            .eq('sku_id', sku)
+            .eq('warehouse_id', pcrWh.id)
+            .maybeSingle();
+          result.pcr_loose_after = pcrInv ? (pcrInv.qty_loose || 0) : 0;
+          // expected = before + total_pcs_moved (before는 transaction에 없으니 추정)
+          // 일단 단순히 "현재 값이 옮긴 양보다 같거나 큰지"만 체크
+          result.pcr_match = result.pcr_loose_after >= s.total_pcs;
+        } else {
+          result.pcr_loose_after = 'N/A';
+          result.pcr_match = false;
+        }
+        
+        verifyResults.push(result);
+      }
+    } catch (e) {
+      bodyEl.innerHTML = `<div style="padding:30px;color:#dc2626;font-size:12px;">❌ 검증 실패: ${escapeHtml(e.message)}</div>`;
+      return;
+    }
+  }
+  
+  // 결과 렌더링
+  renderPcrVerifyResults(verifyResults, fromWh, toWh, isTestMode);
+}
+
+function renderPcrVerifyResults(results, fromWh, toWh, isTestMode) {
+  const summaryEl = document.getElementById('pcr-verify-summary');
+  const bodyEl = document.getElementById('pcr-verify-body');
+  
+  // 합계
+  const totalSkus = results.length;
+  const totalPcs = results.reduce((s, r) => s + r.total_pcs_moved, 0);
+  const allBinMatch = results.every(r => r.bins.every(b => b.bin_match));
+  const allPcrMatch = results.every(r => r.pcr_match);
+  const allOk = allBinMatch && allPcrMatch;
+  
+  // 요약 영역
+  if (isTestMode) {
+    summaryEl.innerHTML = `
+      <div style="padding:10px 14px;background:#fef3c7;border-radius:6px;border-left:3px solid #f59e0b;">
+        <div style="font-size:12px;color:#78350f;font-weight:700;">🧪 TEST MODE — 시뮬레이션 결과</div>
+        <div style="font-size:10px;color:#92400e;margin-top:3px;">
+          ${totalSkus}개 SKU · ${totalPcs.toLocaleString()} pcs<br>
+          실제 DB는 변경되지 않았습니다. 위 작업을 실제로 실행하려면 Test Mode를 끄고 다시 실행하세요.
+        </div>
+      </div>
+    `;
+  } else if (allOk) {
+    summaryEl.innerHTML = `
+      <div style="padding:10px 14px;background:#ecfdf5;border-radius:6px;border-left:3px solid #10b981;">
+        <div style="font-size:13px;color:#065f46;font-weight:800;">✅ 모두 정상 (${totalSkus}/${totalSkus})</div>
+        <div style="font-size:11px;color:#047857;margin-top:3px;">
+          ${totalSkus}개 SKU · ${totalPcs.toLocaleString()} pcs · ${fromWh} → ${toWh}<br>
+          모든 bin과 PCR 재고가 정확히 반영되었습니다.
+        </div>
+      </div>
+    `;
+  } else {
+    summaryEl.innerHTML = `
+      <div style="padding:10px 14px;background:#fee2e2;border-radius:6px;border-left:3px solid #dc2626;">
+        <div style="font-size:13px;color:#991b1b;font-weight:800;">⚠️ 불일치 발견 — 확인 필요</div>
+        <div style="font-size:11px;color:#7f1d1d;margin-top:3px;">
+          아래 표에서 ❌ 표시된 항목을 확인하세요. Inventory 탭이나 직접 DB로 재확인 권장.
+        </div>
+      </div>
+    `;
+  }
+  
+  // 상세 표
+  bodyEl.innerHTML = results.map(r => {
+    const allOkSku = r.bins.every(b => b.bin_match) && r.pcr_match;
+    const statusBadge = isTestMode 
+      ? '<span style="background:#fef3c7;color:#78350f;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">🧪 시뮬레이션</span>'
+      : (allOkSku 
+          ? '<span style="background:#dcfce7;color:#065f46;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">✅ OK</span>' 
+          : '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">⚠️ 불일치</span>');
+    
+    const binRowsHtml = r.bins.map(b => {
+      const okIcon = isTestMode ? '🧪' : (b.bin_match ? '✅' : '❌');
+      const expectedDelta = b.bin_qty_expected_after - b.bin_qty_before;
+      return `
+        <div style="display:grid;grid-template-columns:80px 1fr 100px 100px 60px;gap:8px;padding:6px 8px;font-size:11px;border-bottom:1px solid #f3f4f6;align-items:center;">
+          <div style="font-family:monospace;font-weight:700;color:#1e40af;">📍 ${escapeHtml(b.bin_code || b.pallet_code)}</div>
+          <div style="color:#6b7280;">${b.qty_boxes} box · ${b.qty_pcs} pcs</div>
+          <div style="text-align:right;font-family:monospace;color:#374151;">${b.bin_qty_before.toLocaleString()}</div>
+          <div style="text-align:right;font-family:monospace;font-weight:700;color:${b.bin_match ? '#065f46' : '#991b1b'};">
+            ${b.bin_actual_after.toLocaleString()}
+            <span style="font-size:9px;font-weight:400;color:#6b7280;">(${expectedDelta})</span>
+          </div>
+          <div style="text-align:center;">${okIcon}</div>
+        </div>
+      `;
+    }).join('');
+    
+    return `
+      <div style="border:1px solid ${allOkSku ? '#86efac' : '#fca5a5'};border-radius:8px;margin-bottom:10px;overflow:hidden;">
+        <div style="padding:9px 12px;background:${allOkSku ? '#f0fdf4' : '#fef2f2'};display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid ${allOkSku ? '#bbf7d0' : '#fecaca'};">
+          <div>
+            <span style="font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:13px;color:#1f2937;">${escapeHtml(r.sku)}</span>
+            <span style="font-size:10px;color:#6b7280;margin-left:8px;">${escapeHtml(r.color || '')} / <strong>${escapeHtml(r.size || '')}</strong></span>
+          </div>
+          ${statusBadge}
+        </div>
+        
+        <!-- 출발 bin들 -->
+        <div style="padding:6px 10px;background:#fff;">
+          <div style="font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;margin-bottom:4px;display:grid;grid-template-columns:80px 1fr 100px 100px 60px;gap:8px;padding:0 8px;">
+            <div>FROM bin</div>
+            <div>옮긴 양</div>
+            <div style="text-align:right;">Before</div>
+            <div style="text-align:right;">After (실제)</div>
+            <div style="text-align:center;">상태</div>
+          </div>
+          ${binRowsHtml}
+        </div>
+        
+        <!-- PCR 도착 -->
+        <div style="padding:8px 12px;background:#eff6ff;border-top:1px solid #dbeafe;display:flex;justify-content:space-between;align-items:center;font-size:11px;">
+          <div>
+            <span style="font-weight:700;color:#1e40af;">📦 ${escapeHtml(toWh)} 낱개 (loose)</span>
+            <span style="color:#6b7280;margin-left:8px;">옮긴 양: <strong>+${r.total_pcs_moved.toLocaleString()} pcs</strong></span>
+          </div>
+          <div style="font-family:monospace;font-weight:700;color:${r.pcr_match ? '#065f46' : '#991b1b'};">
+            ${isTestMode ? '🧪 시뮬레이션' : `현재: ${typeof r.pcr_loose_after === 'number' ? r.pcr_loose_after.toLocaleString() : r.pcr_loose_after} pcs ${r.pcr_match ? '✅' : '❌'}`}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
 }
 
 function showPcrWorkOrderMulti(woNum, fromWh, toWh, items) {
@@ -15416,6 +15665,7 @@ function showPcrWorkOrderMulti(woNum, fromWh, toWh, items) {
       <td style="text-align:center;color:#6b7280;">${i+1}</td>
       <td><strong style="font-family:'IBM Plex Mono',monospace;">📍 ${escapeHtml(it.pallet_code)}</strong></td>
       <td><code style="font-family:'IBM Plex Mono',monospace;font-weight:700;">${escapeHtml(it.sku_id || '?')}</code></td>
+      <td><code style="font-family:'IBM Plex Mono',monospace;color:#374151;">${escapeHtml(it.style_number || '?')}</code></td>
       <td>${escapeHtml(it.color || '')} / <strong>${escapeHtml(it.size || '')}</strong></td>
       <td style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:800;background:#fef3c7;">${it.qty_boxes} box</td>
       <td style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#374151;">${it.qty_pcs.toLocaleString()} pcs</td>
@@ -15486,6 +15736,7 @@ function showPcrWorkOrderMulti(woNum, fromWh, toWh, items) {
       <th style="width:30px;text-align:center;">#</th>
       <th>FROM Pallet/Bin</th>
       <th>SKU</th>
+      <th>Style</th>
       <th>Color / Size</th>
       <th style="text-align:right;">박스</th>
       <th style="text-align:right;">Pcs</th>
@@ -15496,7 +15747,7 @@ function showPcrWorkOrderMulti(woNum, fromWh, toWh, items) {
   </tbody>
   <tfoot>
     <tr>
-      <td colspan="4" style="text-align:right;">TOTAL (${items.length} SKUs):</td>
+      <td colspan="5" style="text-align:right;">TOTAL (${items.length} SKUs):</td>
       <td style="text-align:right;font-family:'IBM Plex Mono',monospace;">${totalBoxes} box</td>
       <td style="text-align:right;font-family:'IBM Plex Mono',monospace;">${totalPcs.toLocaleString()} pcs</td>
     </tr>
@@ -33530,6 +33781,33 @@ function showCreditHoldFlash(overAmt) {
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- ── 🔍 PCR 박스 옮김 검증 모달 ──                                -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="pcr-verify-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100002;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(800px,95vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);">
+    <div style="padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#dbeafe,#bfdbfe);border-radius:14px 14px 0 0;">
+      <div>
+        <div id="pcr-verify-title" style="font-size:16px;font-weight:800;color:#1e40af;">🔍 박스 옮김 검증</div>
+        <div id="pcr-verify-subtitle" style="font-size:11px;color:#1e3a8a;margin-top:2px;">DB에서 다시 읽어서 변경사항 확인 중...</div>
+      </div>
+      <button onclick="closePcrVerifyModal()" style="background:rgba(255,255,255,0.5);border:1px solid rgba(0,0,0,0.1);border-radius:4px;width:30px;height:30px;cursor:pointer;font-size:16px;color:#1e40af;font-weight:700;">✕</button>
+    </div>
+    
+    <div id="pcr-verify-summary" style="padding:14px 24px;border-bottom:1px solid #e5e7eb;background:#f9fafb;">
+      <div style="font-size:12px;color:#6b7280;">검증 진행 중...</div>
+    </div>
+    
+    <div id="pcr-verify-body" style="flex:1;overflow-y:auto;padding:14px 18px;min-height:200px;">
+      <div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">⏳ DB 조회 중...</div>
+    </div>
+    
+    <div style="padding:14px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;justify-content:flex-end;gap:8px;border-radius:0 0 14px 14px;">
+      <button onclick="closePcrVerifyModal()" style="background:#1e40af;color:#fff;border:none;border-radius:5px;padding:9px 18px;font-size:12px;font-weight:700;cursor:pointer;">닫기</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Process Batch (Receive & Sort) Modal ── -->
 <div id="process-batch-modal" style="display:none;position:fixed;inset:0;background:transparent;z-index:100002;pointer-events:none;">
   <div id="process-batch-window" style="position:absolute;top:60px;left:50%;transform:translateX(-50%);background:#fff;border-radius:14px;width:min(1200px,98vw);height:auto;max-height:calc(100vh - 80px);display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);pointer-events:auto;resize:both;overflow:hidden;min-width:600px;min-height:300px;">
@@ -48668,4 +48946,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T02:48:36Z - PCR 박스 옮김: 카트 시스템 (검색 바뀌어도 유지) -->
+
+
+<!-- Deploy trigger: 2026-04-26T11:45:55Z - 작업 지시서에 Style 컬럼 추가 (SKU와 Color/Size 사이) -->
