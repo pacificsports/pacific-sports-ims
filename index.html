@@ -17049,14 +17049,31 @@ async function completeHPalletReceive() {
       if (it.assigned_location === 'return') {
         let newPalletId = returnPalletIdMap[it.assigned_value];
         if (!newPalletId) {
-          const { data: newP, error: pErr } = await db.from('pallets').insert({
-            pallet_code: it.assigned_value,
-            warehouse_code: _hpalletReceiveBatch.to_warehouse,
-            location_type: '3rd_party',
-            status: 'active'
-          }).select('id').single();
-          if (pErr) throw new Error(`반송용 pallet ${it.assigned_value} 생성 실패: ${pErr.message}`);
-          newPalletId = newP.id;
+          // 먼저 같은 코드 pallet 있는지 확인 (재사용)
+          const { data: existingP } = await db.from('pallets')
+            .select('id, location_type, status')
+            .eq('pallet_code', it.assigned_value)
+            .eq('warehouse_code', _hpalletReceiveBatch.to_warehouse)
+            .maybeSingle();
+          
+          if (existingP) {
+            newPalletId = existingP.id;
+            if (existingP.location_type !== '3rd_party' || existingP.status !== 'active') {
+              await db.from('pallets').update({
+                location_type: '3rd_party',
+                status: 'active'
+              }).eq('id', existingP.id);
+            }
+          } else {
+            const { data: newP, error: pErr } = await db.from('pallets').insert({
+              pallet_code: it.assigned_value,
+              warehouse_code: _hpalletReceiveBatch.to_warehouse,
+              location_type: '3rd_party',
+              status: 'active'
+            }).select('id').single();
+            if (pErr) throw new Error(`반송용 pallet ${it.assigned_value} 생성 실패: ${pErr.message}`);
+            newPalletId = newP.id;
+          }
           returnPalletIdMap[it.assigned_value] = newPalletId;
         }
         targetPalletId = newPalletId;
@@ -17139,14 +17156,31 @@ async function completeHPalletReceive() {
         if (fullMoveItem.assigned_location === 'return') {
           let newPalletId = returnPalletIdMap[fullMoveItem.assigned_value];
           if (!newPalletId) {
-            const { data: newP, error: pErr } = await db.from('pallets').insert({
-              pallet_code: fullMoveItem.assigned_value,
-              warehouse_code: _hpalletReceiveBatch.to_warehouse,
-              location_type: '3rd_party',
-              status: 'active'
-            }).select('id').single();
-            if (pErr) throw new Error(`반송용 pallet ${fullMoveItem.assigned_value} 생성 실패: ${pErr.message}`);
-            newPalletId = newP.id;
+            // 같은 코드 pallet 있으면 재사용
+            const { data: existingP } = await db.from('pallets')
+              .select('id, location_type, status')
+              .eq('pallet_code', fullMoveItem.assigned_value)
+              .eq('warehouse_code', _hpalletReceiveBatch.to_warehouse)
+              .maybeSingle();
+            
+            if (existingP) {
+              newPalletId = existingP.id;
+              if (existingP.location_type !== '3rd_party' || existingP.status !== 'active') {
+                await db.from('pallets').update({
+                  location_type: '3rd_party',
+                  status: 'active'
+                }).eq('id', existingP.id);
+              }
+            } else {
+              const { data: newP, error: pErr } = await db.from('pallets').insert({
+                pallet_code: fullMoveItem.assigned_value,
+                warehouse_code: _hpalletReceiveBatch.to_warehouse,
+                location_type: '3rd_party',
+                status: 'active'
+              }).select('id').single();
+              if (pErr) throw new Error(`반송용 pallet ${fullMoveItem.assigned_value} 생성 실패: ${pErr.message}`);
+              newPalletId = newP.id;
+            }
             returnPalletIdMap[fullMoveItem.assigned_value] = newPalletId;
           }
           targetPalletId = newPalletId;
@@ -50842,4 +50876,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T18:03:24Z - Reverse Completed Batch 기능 + 분할 처리 fix -->
+
+<!-- Deploy trigger: 2026-04-26T19:22:02Z - 같은 H pallet 코드 재사용 (duplicate key 에러 fix) -->
