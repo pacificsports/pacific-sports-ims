@@ -16505,7 +16505,7 @@ async function openHPalletReceive(batchId) {
       try {
         // 활성 오더 가져오기 (shipped/cancelled/completed 제외)
         const { data: orders } = await db.from('orders')
-          .select('id, order_number, customer_name, status')
+          .select('id, order_number, customer_name, customer_po, status')
           .not('status', 'in', '("shipped","cancelled","completed","invoiced")');
         const activeOrderIds = (orders || []).map(o => o.id);
         const orderMap = Object.fromEntries((orders || []).map(o => [o.id, o]));
@@ -16533,6 +16533,7 @@ async function openHPalletReceive(batchId) {
                   order_id: l.order_id,
                   order_number: order?.order_number || '?',
                   customer_name: order?.customer_name || '',
+                  customer_po: order?.customer_po || '',
                   line_id: l.id,
                   style_number: l.styles?.style_number || '',
                   color: l.color,
@@ -16633,11 +16634,13 @@ function renderHPalletReceiveBody() {
           🔥 오더에 잡힌 항목 (${allocatedItems.length}) — <span style="font-weight:400;font-style:italic;">입고 처리 안 함, 직원이 바로 픽 → Ship 시 자동 차감</span>
         </div>
         ${allocatedItems.map(it => {
-          const allocList = (it.allocations || []).map(a => 
-            `<span style="background:#fff;border:1px solid #fdba74;color:#9a3412;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-right:4px;">${escapeHtml(a.order_number)} (${a.qty_committed}pcs)</span>`
-          ).join('');
+          const allocList = (it.allocations || []).map(a => {
+            const cust = a.customer_name ? escapeHtml(a.customer_name.length > 20 ? a.customer_name.slice(0, 20) + '…' : a.customer_name) : '?';
+            const po = a.customer_po ? `<span style="color:#7c2d12;font-weight:400;"> / PO#${escapeHtml(a.customer_po)}</span>` : '';
+            return `<span style="background:#fff;border:1px solid #fdba74;color:#9a3412;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;margin-right:4px;display:inline-block;margin-bottom:2px;">${cust}${po} <span style="color:#6b7280;font-weight:400;">(${a.qty_committed}pcs)</span></span>`;
+          }).join('');
           return `
-            <div style="display:grid;grid-template-columns:110px 1fr 200px;gap:10px;padding:7px 14px;border-bottom:1px dashed #fed7aa;align-items:center;font-size:11px;">
+            <div style="display:grid;grid-template-columns:110px 1fr 320px;gap:10px;padding:7px 14px;border-bottom:1px dashed #fed7aa;align-items:center;font-size:11px;">
               <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">${escapeHtml(it.sku_id)}</span>
               <span style="color:#374151;">
                 <strong>${escapeHtml(it.style_number || '')}</strong> · 
@@ -16646,7 +16649,7 @@ function renderHPalletReceiveBody() {
                 <span style="color:#9a3412;font-weight:700;margin-left:6px;">→ 잡힘: ${it.allocated_pcs.toLocaleString()} pcs</span>
                 ${it.remaining_pcs > 0 ? `<span style="color:#6b7280;margin-left:6px;">(나머지 ${it.remaining_pcs} pcs는 아래에서 위치 지정)</span>` : ''}
               </span>
-              <div style="font-size:10px;">${allocList}</div>
+              <div style="font-size:10px;text-align:right;">${allocList}</div>
             </div>
           `;
         }).join('')}
@@ -50445,4 +50448,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T15:59:50Z - quickAddLine 함수 추가 (PO 입력 빠른 라인 추가) -->
+
+<!-- Deploy trigger: 2026-04-26T16:13:08Z - 입고 모달: 거래처명 + PO# 표시 -->
