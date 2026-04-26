@@ -14032,8 +14032,10 @@ function renderBinSkuResults() {
   });
   
   const groupArr = Array.from(groups.values());
+  // 그룹 인덱스 기반 매칭을 위해 글로벌 변수 저장
+  window._binSkuGroupArr = groupArr;
   
-  resultsDiv.innerHTML = groupArr.map(g => {
+  resultsDiv.innerHTML = groupArr.map((g, gIdx) => {
     // 그룹 통계
     const totalSKUs = g.items.length;
     const totalPcs = g.items.reduce((s, b) => s + (b.qty || 0), 0);
@@ -14053,7 +14055,6 @@ function renderBinSkuResults() {
     const isThird = g.location_type === '3rd_party';
     const headerBg = isThird ? '#fef3c7' : '#eff6ff';
     const codeColor = isThird ? '#78350f' : '#1e40af';
-    const groupCodeEsc = escapeHtml(g.code).replace(/'/g, "\\'");
     
     return `
       <div style="border:1px solid ${someAdded || allAdded ? '#fbbf24' : '#e5e7eb'};border-radius:8px;margin-bottom:8px;overflow:hidden;background:#fff;">
@@ -14061,7 +14062,7 @@ function renderBinSkuResults() {
         <div style="background:linear-gradient(to right, ${headerBg}, #fff);padding:8px 10px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:8px;">
           <input type="checkbox" 
                  ${allAdded ? 'checked' : ''} 
-                 onclick="toggleGroupAdd('${groupCodeEsc}', this.checked)"
+                 onclick="toggleGroupAddByIdx(${gIdx}, this.checked)"
                  style="width:16px;height:16px;cursor:pointer;flex-shrink:0;">
           <div style="font-family:'IBM Plex Mono',monospace;font-weight:800;color:${codeColor};font-size:13px;flex-shrink:0;">
             ${g.isPallet ? '📦' : '📍'} ${escapeHtml(g.code)}
@@ -14071,7 +14072,7 @@ function renderBinSkuResults() {
             ${allAdded ? ' · <span style="color:#10b981;font-weight:700;">✓ 전체 선택됨</span>' : ''}
             ${someAdded ? ` · <span style="color:#f59e0b;font-weight:700;">${addedCount}/${totalSKUs} 선택</span>` : ''}
           </div>
-          <button onclick="toggleGroupAdd('${groupCodeEsc}', ${!allAdded})" style="height:24px;padding:0 8px;background:${allAdded ? '#dc2626' : '#1e40af'};color:#fff;border:none;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          <button onclick="toggleGroupAddByIdx(${gIdx}, ${!allAdded})" style="height:24px;padding:0 8px;background:${allAdded ? '#dc2626' : '#1e40af'};color:#fff;border:none;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
             ${allAdded ? '↩ 전체 해제' : '→ 전체 선택'}
           </button>
         </div>
@@ -14120,7 +14121,32 @@ function renderBinSkuResults() {
   }).join('');
 }
 
-// ── Pallet/Bin 그룹 전체 선택/해제 ──
+// ── Pallet/Bin 그룹 전체 선택/해제 (인덱스 기반 - 더 안정적) ──
+function toggleGroupAddByIdx(gIdx, shouldAdd) {
+  const groupArr = window._binSkuGroupArr || [];
+  const g = groupArr[gIdx];
+  if (!g) {
+    console.error('[toggleGroupAddByIdx] group not found:', gIdx);
+    return;
+  }
+  
+  g.items.forEach(b => {
+    if (shouldAdd) {
+      if (!_selectedBinItems.has(b.id)) {
+        addBinSkuItem(b.id);  // 박스 전체로 추가
+      }
+    } else {
+      if (_selectedBinItems.has(b.id)) {
+        _selectedBinItems.delete(b.id);
+      }
+    }
+  });
+  
+  renderBinSkuResults();
+  renderBinSkuSelected();
+}
+
+// ── (구버전 호환) ──
 function toggleGroupAdd(groupCode, shouldAdd) {
   const items = _binSkuSearchResults.filter(b => {
     const code = b.pallets?.pallet_code || b.bin_code;
@@ -14130,7 +14156,7 @@ function toggleGroupAdd(groupCode, shouldAdd) {
   items.forEach(b => {
     if (shouldAdd) {
       if (!_selectedBinItems.has(b.id)) {
-        addBinSkuItem(b.id);  // 박스 전체로 추가
+        addBinSkuItem(b.id);
       }
     } else {
       if (_selectedBinItems.has(b.id)) {
@@ -14195,8 +14221,16 @@ function setBinSkuBoxes(binId, newBoxes) {
 }
 
 function addBinSkuItem(binId) {
+  console.log('[addBinSkuItem] called with binId:', binId, typeof binId);
+  console.log('[addBinSkuItem] _binSkuSearchResults length:', _binSkuSearchResults?.length);
+  
   const b = _binSkuSearchResults.find(x => x.id === binId);
-  if (!b) return;
+  console.log('[addBinSkuItem] found b:', b);
+  if (!b) {
+    console.error('[addBinSkuItem] bin not found in search results! Available IDs:', _binSkuSearchResults.map(x => x.id));
+    alert('Error: bin을 찾을 수 없습니다 (ID: ' + binId + '). 콘솔(F12)을 확인하세요.');
+    return;
+  }
   
   const inv = b.inventory || {};
   const size = inv.size || '';
@@ -14207,12 +14241,15 @@ function addBinSkuItem(binId) {
   // input에서 사용자가 입력한 박스 수를 우선 읽음 (id로 직접)
   let qtyBoxes = totalBoxes;
   const inputEl = document.getElementById(`binsku-input-${binId}`);
+  console.log('[addBinSkuItem] input element:', inputEl, 'value:', inputEl?.value);
   if (inputEl) {
     const v = parseInt(inputEl.value, 10);
     if (!isNaN(v) && v >= 0 && v <= totalBoxes) {
       qtyBoxes = v;
     }
   }
+  
+  console.log('[addBinSkuItem] qtyBoxes:', qtyBoxes, 'totalBoxes:', totalBoxes);
   
   // 0이면 추가 안 함 (보호)
   if (qtyBoxes === 0) {
@@ -47853,4 +47890,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T01:27:03Z - + 추가 버튼이 input 박스수 직접 읽도록 수정 -->
+
+
+<!-- Deploy trigger: 2026-04-26T01:55:11Z - 인덱스 기반 그룹 매칭으로 변경 (escape 문제 우회) -->
