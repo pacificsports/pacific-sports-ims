@@ -15824,7 +15824,8 @@ function renderBatchDetail(batch, transactions, txnDetails, isTestBatch) {
     'in_transit': { bg: '#fce7f3', color: '#9f1239' },
     'arrived': { bg: '#dbeafe', color: '#1e40af' },
     'completed': { bg: '#dcfce7', color: '#065f46' },
-    'cancelled': { bg: '#f3f4f6', color: '#6b7280' }
+    'cancelled': { bg: '#f3f4f6', color: '#6b7280' },
+    'reversed': { bg: '#fee2e2', color: '#991b1b' }
   };
   const sc = statusColors[batch.status] || { bg: '#f3f4f6', color: '#374151' };
   
@@ -17382,7 +17383,8 @@ async function renderBatches() {
     'in_transit': { bg: '#fce7f3', color: '#9f1239' },
     'arrived':    { bg: '#dbeafe', color: '#1e40af' },
     'completed':  { bg: '#dcfce7', color: '#065f46' },
-    'cancelled':  { bg: '#f3f4f6', color: '#6b7280' }
+    'cancelled':  { bg: '#f3f4f6', color: '#6b7280' },
+    'reversed':   { bg: '#fee2e2', color: '#991b1b' }
   };
   const typeLabels = {
     'pull_from_3rd': '🚚→🏢 Pull from 3rd',
@@ -17429,6 +17431,7 @@ async function renderBatches() {
         ${b.status === 'arrived' ? `<button class="btn btn-sm" onclick="openProcessBatch('${b.id}', ${b.batch_number})" style="font-size:10px;padding:3px 6px;background:#dcfce7;color:#065f46;">📦 Process</button>` : ''}
         ${(b.status === 'pending' || b.status === 'in_transit') ? `<button class="btn btn-sm" onclick="cancelBatch('${b.id}', ${b.batch_number})" style="font-size:10px;padding:3px 6px;color:#dc2626;">✕ Cancel</button>` : ''}
         ${b.status === 'completed' ? `<button class="btn btn-sm" onclick="openBatchDetail('${b.id}')" style="font-size:10px;padding:3px 6px;background:#ede9fe;color:#5b21b6;">🔍 상세</button>` : ''}
+        ${b.status === 'completed' && b.batch_type === 'pull_3rd' ? `<button class="btn btn-sm" onclick="reverseCompletedBatch('${b.id}', ${b.batch_number})" style="font-size:10px;padding:3px 6px;color:#92400e;background:#fef3c7;border-color:#fcd34d;">↩ Reverse</button>` : ''}
       </td>
     </tr>`;
   }).join('');
@@ -17526,6 +17529,171 @@ async function cancelBatch(batchId, batchNum) {
     showToast(`Batch TRB-${batchNum} 취소됨`);
   } catch (e) {
     alert('❌ ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ↩ REVERSE COMPLETED BATCH — 입고 처리 완료된 batch 되돌리기
+// ══════════════════════════════════════════════════════════════
+async function reverseCompletedBatch(batchId, batchNum) {
+  if (!confirm(`⚠️ TRB-${batchNum} 입고 처리를 되돌리시겠습니까?\n\n다음 작업이 일어납니다:\n- 새로 만든 inventory_bins 삭제\n- 원본 pallet의 qty 복원\n- 새로 만든 pallets (H 코드) 비활성화\n- batch status: completed → reversed\n\n오더 alloc_detail은 영향 없습니다.\n\n계속하시겠습니까?`)) return;
+  
+  // 한 번 더 확인 (실수 방지)
+  const confirmTxt = prompt(`확실하시면 "REVERSE" 라고 입력해주세요:`);
+  if (confirmTxt !== 'REVERSE') {
+    alert('취소되었습니다.');
+    return;
+  }
+  
+  if (window.TEST_MODE) {
+    alert('TEST MODE에서는 reverse 사용 안 됨 (메모리 batch는 그냥 새로고침하면 사라짐)');
+    return;
+  }
+  
+  try {
+    // 1. batch 정보 조회
+    const { data: batch, error: bErr } = await db.from('pallet_transfer_batches')
+      .select('*').eq('id', batchId).single();
+    if (bErr) throw bErr;
+    if (batch.status !== 'completed') {
+      alert(`이 batch는 status가 '${batch.status}' 입니다. completed인 batch만 reverse 가능합니다.`);
+      return;
+    }
+    
+    const items = batch.selected_items || [];
+    if (items.length === 0) {
+      alert('selected_items 정보가 없어 reverse할 수 없습니다.');
+      return;
+    }
+    
+    // 2. 원본 bin 식별 — batch에 들어간 시점의 원본 bin들
+    // selected_items 중 is_split_part가 아닌 것들의 bin_id가 원본
+    // (split_part는 새로 만들어진 bin이라 ID가 그 시점엔 없었음 — INSERT 후 생긴 거)
+    
+    // 원본 bin들의 원래 qty 복원 (batch 들어간 시점의 qty_pcs)
+    const originalItems = items.filter(it => !it.is_split_part);
+    
+    // 새로 INSERT된 bin들 — split_part 항목들의 위치/qty
+    // 이걸 찾으려면: 같은 inventory_id + bin_code 매칭
+    
+    let restoredCount = 0;
+    let deletedBinCount = 0;
+    let deletedPalletCount = 0;
+    
+    // === 1) 새로 INSERT된 inventory_bins 삭제 ===
+    // split_part 항목들 → bin_code + inventory_id로 찾아서 삭제
+    const splitParts = items.filter(it => it.is_split_part);
+    for (const sp of splitParts) {
+      const { data: matchBins } = await db.from('inventory_bins')
+        .select('id, qty')
+        .eq('inventory_id', sp.inventory_id)
+        .eq('bin_code', sp.assigned_value)
+        .eq('qty', sp.qty_pcs);
+      
+      if (matchBins && matchBins.length > 0) {
+        // 첫 번째 매칭만 삭제 (안전)
+        await db.from('inventory_bins').delete().eq('id', matchBins[0].id);
+        deletedBinCount++;
+      }
+    }
+    
+    // === 2) 원본 bin들 qty 복원 ===
+    // selected_items의 원본 항목 — 그 bin_id에 원래 qty_pcs 복원
+    // 단, batch.selected_items의 원본 데이터가 변형된 후이므로
+    // 정확한 원본 qty를 알기 위해선 transaction details 또는 추정
+    
+    // 여기서는 단순화: 원본 bin들에 대해 모든 split_part 합 + 현재 qty = 원래 qty
+    // splitParts를 inventory_id별로 합쳐서 원본 bin에 더해주기
+    const splitsByInvId = {};
+    splitParts.forEach(sp => {
+      if (!splitsByInvId[sp.inventory_id]) splitsByInvId[sp.inventory_id] = 0;
+      splitsByInvId[sp.inventory_id] += sp.qty_pcs;
+    });
+    
+    // 원본 bin 가져와서 qty 복원
+    for (const orig of originalItems) {
+      if (!orig.bin_id) continue;
+      
+      // 원본 bin의 현재 qty 확인
+      const { data: currBin } = await db.from('inventory_bins')
+        .select('id, qty, bin_code, pallet_id')
+        .eq('id', orig.bin_id)
+        .single();
+      
+      if (!currBin) continue;
+      
+      const splitOut = splitsByInvId[orig.inventory_id] || 0;
+      const restoredQty = (currBin.qty || 0) + splitOut;
+      
+      // 원본 위치/pallet 찾기 — orig.pallet_id 가 batch 시점의 원본 pallet
+      const updates = { qty: restoredQty };
+      
+      // 원본 bin code/pallet 도 복원 (위치가 바뀌었으면)
+      if (orig.bin_code && currBin.bin_code !== orig.bin_code) {
+        updates.bin_code = orig.bin_code;
+      }
+      if (orig.pallet_id && currBin.pallet_id !== orig.pallet_id) {
+        updates.pallet_id = orig.pallet_id;
+      }
+      
+      await db.from('inventory_bins').update(updates).eq('id', orig.bin_id);
+      restoredCount++;
+    }
+    
+    // === 3) 빈 새 pallets 정리 ===
+    // assigned_value (H5000, H5001 등) — 이게 새로 만들어진 pallet 코드
+    const newPalletCodes = [...new Set(splitParts.map(sp => sp.assigned_value).filter(Boolean))];
+    for (const code of newPalletCodes) {
+      // 그 pallet 정보 조회
+      const { data: palData } = await db.from('pallets')
+        .select('id, pallet_code')
+        .eq('pallet_code', code)
+        .eq('warehouse_code', batch.to_warehouse);
+      
+      if (palData && palData.length > 0) {
+        for (const pal of palData) {
+          // 그 pallet에 다른 bin이 남아있는지 확인
+          const { count } = await db.from('inventory_bins')
+            .select('id', { count: 'exact', head: true })
+            .eq('pallet_id', pal.id);
+          
+          if (!count || count === 0) {
+            // 빈 pallet → 삭제
+            await db.from('pallets').delete().eq('id', pal.id);
+            deletedPalletCount++;
+          } else {
+            // 다른 bin 있음 → status만 inactive
+            await db.from('pallets').update({ status: 'inactive' }).eq('id', pal.id);
+          }
+        }
+      }
+    }
+    
+    // === 4) batch status → 'reversed' ===
+    await db.from('pallet_transfer_batches').update({
+      status: 'reversed',
+      completed_at: null  // completed 정보 제거 (다시 pending처럼)
+    }).eq('id', batchId);
+    
+    // === 5) transaction 로그 (역방향 기록) ===
+    const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+    try {
+      await db.from('inventory_transactions').insert({
+        transaction_type: 'pallet_receive_reverse',
+        description: `Reverse TRB-${batch.batch_number}: 입고 처리 되돌림 (bin ${restoredCount}개 복원, bin ${deletedBinCount}개 삭제, pallet ${deletedPalletCount}개 삭제)`,
+        warehouse_code: batch.to_warehouse,
+        performed_by: performedBy,
+        status: 'active',
+        affected_rows: restoredCount + deletedBinCount,
+        metadata: { batch_id: batchId, batch_number: batch.batch_number, action: 'reverse' }
+      });
+    } catch (e) { console.warn('[reverse txn]', e); }
+    
+    showToast(`✅ TRB-${batchNum} 되돌림 완료 — bin ${restoredCount}개 복원, ${deletedBinCount}개 삭제, pallet ${deletedPalletCount}개 정리`);
+    await loadBatches();
+  } catch (e) {
+    console.error('[reverseCompletedBatch]', e);
+    alert('❌ Reverse 실패: ' + e.message);
   }
 }
 
@@ -50673,4 +50841,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T17:53:08Z - 입고 처리 fix: 분할 항목 정확히 처리 (원본 bin은 allocated만 남김) -->
+
+<!-- Deploy trigger: 2026-04-26T18:03:24Z - Reverse Completed Batch 기능 + 분할 처리 fix -->
