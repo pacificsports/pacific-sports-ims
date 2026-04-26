@@ -6401,6 +6401,89 @@ function parseBulkPaste() {
   if (added > 0) alert(`✅ ${added}개 라인 추가됨`);
 }
 
+// ── 빠른 라인 추가: SKU 코드 입력 → 자동으로 style/color/size 분리
+async function quickAddLine() {
+  const codeInput = document.getElementById('quick-code');
+  const qtyInput = document.getElementById('quick-qty');
+  const priceInput = document.getElementById('quick-price');
+  
+  const rawCode = (codeInput?.value || '').trim();
+  const qty = parseInt(qtyInput?.value || 0);
+  const price = parseFloat(priceInput?.value || 0);
+  
+  if (!rawCode) { alert('Item Code를 입력해주세요'); codeInput?.focus(); return; }
+  if (!qty || qty <= 0) { alert('Qty를 입력해주세요'); qtyInput?.focus(); return; }
+  
+  const code = rawCode.toLowerCase();
+  
+  try {
+    // skus 테이블에서 검색 — case-insensitive
+    const { data: skus, error } = await db.from('skus')
+      .select('sku_id, style_number, color, size, styles(pcs_per_box, pcs_per_box_large, description)')
+      .ilike('sku_id', code)
+      .limit(1);
+    
+    if (error) throw error;
+    if (!skus || skus.length === 0) {
+      alert(`SKU "${rawCode}" 를 찾을 수 없습니다.\n\nSKU 마스터에 등록되어 있는지 확인하세요.`);
+      return;
+    }
+    
+    const sku = skus[0];
+    const ppb = sku.styles?.pcs_per_box || 72;
+    const cases = Math.floor(qty / ppb);
+    const loose = qty % ppb;
+    
+    // poLines가 정의되어 있는지 확인
+    if (typeof poLines === 'undefined') {
+      alert('PO 라인 배열이 초기화되지 않았습니다. PO 입력 폼을 다시 열어주세요.');
+      return;
+    }
+    
+    // 중복 체크 (같은 SKU 이미 있으면 합치거나 경고)
+    const existIdx = poLines.findIndex(l => (l.code || '').toLowerCase() === sku.sku_id.toLowerCase());
+    if (existIdx >= 0) {
+      if (!confirm(`"${sku.sku_id}" 가 이미 라인에 있습니다. 수량을 합칠까요?\n\n기존: ${poLines[existIdx].qty} pcs\n추가: ${qty} pcs\n합계: ${poLines[existIdx].qty + qty} pcs`)) return;
+      poLines[existIdx].qty += qty;
+      poLines[existIdx].cases = Math.floor(poLines[existIdx].qty / ppb);
+      poLines[existIdx].loose = poLines[existIdx].qty % ppb;
+      if (price > 0) poLines[existIdx].price = price;
+    } else {
+      // 새 라인 추가
+      poLines.push({
+        code: sku.sku_id,
+        styleNum: sku.style_number,
+        color: sku.color || '',
+        size: sku.size || '',
+        qty: qty,
+        price: price || 0,
+        ppb: ppb,
+        cases: cases,
+        loose: loose,
+        wh: 'SC',
+        allocSC: {},
+        allocCA: {},
+        pcrQty: null,
+        pcrTransfersPending: [],
+        caPcrTransfersPending: [],
+        isSideSeam: false
+      });
+    }
+    
+    // 입력 필드 초기화 + 다음 라인 입력 준비
+    codeInput.value = '';
+    qtyInput.value = '';
+    priceInput.value = '';
+    codeInput.focus();
+    
+    renderEntryTable();
+    if (typeof liveRenderDocs === 'function') liveRenderDocs();
+  } catch (e) {
+    console.error('[quickAddLine]', e);
+    alert('❌ 라인 추가 실패: ' + e.message);
+  }
+}
+
 // ── 엔트리 테이블 렌더
 function renderEntryTable() {
 // 사이즈 정렬: 같은 color끼리 묶고, 그 안에서 사이즈 순서대로
@@ -50361,4 +50444,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T15:29:22Z - H-Pallet 입고: 오더 잡힌 항목 자동 분리 + 3rd Party 반송 옵션 -->
+
+<!-- Deploy trigger: 2026-04-26T15:59:50Z - quickAddLine 함수 추가 (PO 입력 빠른 라인 추가) -->
