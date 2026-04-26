@@ -15648,6 +15648,224 @@ function renderPcrVerifyResults(results, fromWh, toWh, isTestMode) {
   }).join('');
 }
 
+// ══════════════════════════════════════════════════════════════
+// ── 🔍 Batch 상세보기 ── (Transfer Batches 탭 행 클릭 시)
+// ══════════════════════════════════════════════════════════════
+
+async function openBatchDetail(batchId) {
+  const modal = document.getElementById('batch-detail-modal');
+  const body = document.getElementById('batch-detail-body');
+  
+  modal.style.display = 'flex';
+  body.innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af;">⏳ Loading...</div>';
+  
+  try {
+    let batch;
+    const isTestBatch = batchId.startsWith('test-batch-') || batchId.startsWith('test-pcr-');
+    
+    if (isTestBatch) {
+      batch = (window._testBatches || []).find(b => b.id === batchId);
+      if (!batch) throw new Error('Test batch not found');
+    } else {
+      const { data, error } = await db.from('pallet_transfer_batches').select('*').eq('id', batchId).single();
+      if (error) throw error;
+      batch = data;
+    }
+    
+    // 관련 transaction 조회 (실제 batch만)
+    let transactions = [];
+    let txnDetails = [];
+    if (!isTestBatch) {
+      const { data: txns } = await db.from('inventory_transactions')
+        .select('*')
+        .or(`metadata->>batch_id.eq.${batchId},metadata->>batch_number.eq.${batch.batch_number}`)
+        .order('performed_at', { ascending: false });
+      transactions = txns || [];
+      
+      if (transactions.length > 0) {
+        const txnIds = transactions.map(t => t.id);
+        const { data: details } = await db.from('inventory_transaction_details')
+          .select('*')
+          .in('transaction_id', txnIds);
+        txnDetails = details || [];
+      }
+    }
+    
+    renderBatchDetail(batch, transactions, txnDetails, isTestBatch);
+  } catch (e) {
+    console.error('[openBatchDetail]', e);
+    body.innerHTML = `<div style="padding:30px;color:#dc2626;font-size:12px;">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function closeBatchDetail() {
+  document.getElementById('batch-detail-modal').style.display = 'none';
+}
+
+function renderBatchDetail(batch, transactions, txnDetails, isTestBatch) {
+  const body = document.getElementById('batch-detail-body');
+  const titleEl = document.getElementById('batch-detail-title');
+  
+  const labelMap = {
+    'to_pcr': '⚡ → PCR (박스 깸)',
+    'pull_3rd': '📥 3rd Party Pull',
+    'send_to_3rd': '📤 3rd Party 보관',
+    'warehouse': '🚛 창고 간 이동',
+    'internal': '🔄 같은 창고 내',
+    'pull_from_3rd': '🚚→🏢 Pull from 3rd',
+    'warehouse_transfer': '🏢↔🏢 WH Transfer',
+    'internal_reorganize': '🔄 Internal'
+  };
+  const typeLabel = labelMap[batch.batch_type] || batch.batch_type;
+  
+  const prefix = batch.is_instant ? 'WO' : 'TRB';
+  titleEl.innerHTML = `${prefix}-${batch.batch_number} <span style="font-size:11px;color:#6b7280;font-weight:400;margin-left:8px;">${typeLabel}</span>`;
+  
+  const statusColors = {
+    'pending': { bg: '#fef3c7', color: '#92400e' },
+    'in_transit': { bg: '#fce7f3', color: '#9f1239' },
+    'arrived': { bg: '#dbeafe', color: '#1e40af' },
+    'completed': { bg: '#dcfce7', color: '#065f46' },
+    'cancelled': { bg: '#f3f4f6', color: '#6b7280' }
+  };
+  const sc = statusColors[batch.status] || { bg: '#f3f4f6', color: '#374151' };
+  
+  // 일자
+  const requestedAt = batch.requested_at ? new Date(batch.requested_at).toLocaleString('ko-KR') : '—';
+  const completedAt = batch.completed_at ? new Date(batch.completed_at).toLocaleString('ko-KR') : '—';
+  
+  // selected_items 표시
+  const items = batch.selected_items || [];
+  const totalBoxes = items.reduce((s, it) => s + (it.qty_boxes || 0), 0);
+  const totalPcs = items.reduce((s, it) => s + (it.qty_pcs || 0), 0);
+  
+  let itemsTable = '';
+  if (items.length > 0) {
+    const rowsHtml = items.map((it, i) => `
+      <tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:6px 8px;text-align:center;color:#6b7280;font-size:11px;">${i+1}</td>
+        <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;color:#1e40af;">📍 ${escapeHtml(it.pallet_code || it.bin_code || '?')}</td>
+        <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;color:#9ca3af;font-size:10px;">${escapeHtml(it.sku_id || '?')}</td>
+        <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-weight:800;font-size:12px;">${escapeHtml(it.style_number || '?')}</td>
+        <td style="padding:6px 8px;font-weight:800;font-size:12px;">${escapeHtml(it.color || '')} / ${escapeHtml(it.size || '')}</td>
+        <td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:800;background:#fef3c7;color:#78350f;">${it.qty_boxes || 0} box</td>
+        <td style="padding:6px 8px;text-align:right;font-family:monospace;color:#6b7280;font-size:11px;">${(it.qty_pcs || 0).toLocaleString()}</td>
+      </tr>
+    `).join('');
+    
+    itemsTable = `
+      <div style="margin-top:14px;">
+        <div style="font-size:12px;font-weight:800;color:#374151;margin-bottom:8px;">📦 옮긴 항목 (${items.length}개)</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <thead>
+            <tr style="background:#1e40af;color:#fff;">
+              <th style="padding:7px 8px;text-align:center;width:30px;">#</th>
+              <th style="padding:7px 8px;text-align:left;">FROM Pallet/Bin</th>
+              <th style="padding:7px 8px;text-align:left;">SKU</th>
+              <th style="padding:7px 8px;text-align:left;">Style</th>
+              <th style="padding:7px 8px;text-align:left;">Color/Size</th>
+              <th style="padding:7px 8px;text-align:right;">박스</th>
+              <th style="padding:7px 8px;text-align:right;">Pcs</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+          <tfoot>
+            <tr style="background:#ecfdf5;font-weight:800;">
+              <td colspan="5" style="padding:8px 10px;text-align:right;">TOTAL (${items.length} items):</td>
+              <td style="padding:8px 10px;text-align:right;font-family:monospace;color:#065f46;">${totalBoxes} box</td>
+              <td style="padding:8px 10px;text-align:right;font-family:monospace;color:#065f46;">${totalPcs.toLocaleString()}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    `;
+  }
+  
+  // Transaction details 표시 (실제 batch만)
+  let txnSection = '';
+  if (!isTestBatch && transactions.length > 0) {
+    const txnRows = transactions.map(t => {
+      const dt = t.performed_at ? new Date(t.performed_at).toLocaleString('ko-KR') : '—';
+      const details = txnDetails.filter(d => d.transaction_id === t.id);
+      const detailsHtml = details.length > 0 
+        ? details.map(d => `
+            <div style="font-size:10px;color:#6b7280;padding:3px 0;border-top:1px dashed #e5e7eb;margin-top:3px;">
+              <strong style="color:#1f2937;">${escapeHtml(d.sku_id || '')}</strong> · 
+              ${escapeHtml(d.color || '')}/${escapeHtml(d.size || '')} · 
+              <span style="color:#dc2626;">Before: ${(d.qty_before ?? '?').toLocaleString?.() ?? d.qty_before}</span> → 
+              <span style="color:#10b981;font-weight:700;">After: ${(d.qty_after ?? '?').toLocaleString?.() ?? d.qty_after}</span>
+              ${d.bins_before ? `<br><span style="color:#9ca3af;">📍 ${JSON.stringify(d.bins_before)} → ${JSON.stringify(d.bins_after)}</span>` : ''}
+            </div>
+          `).join('')
+        : '<div style="font-size:10px;color:#9ca3af;font-style:italic;margin-top:4px;">상세 내역 없음</div>';
+      
+      return `
+        <div style="border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px;margin-bottom:8px;background:#fff;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+            <div>
+              <span style="font-family:monospace;font-weight:700;color:#5b21b6;font-size:11px;">TXN-${t.txn_number || t.id?.slice(0, 6)}</span>
+              <span style="font-size:11px;color:#374151;margin-left:8px;">${escapeHtml(t.transaction_type || '')}</span>
+            </div>
+            <span style="font-size:10px;color:#6b7280;">${dt}</span>
+          </div>
+          <div style="font-size:11px;color:#1f2937;">${escapeHtml(t.description || '')}</div>
+          <div style="font-size:10px;color:#6b7280;margin-top:3px;">
+            👤 ${escapeHtml(t.performed_by || '?')} · 
+            🏢 ${escapeHtml(t.warehouse_code || '?')} · 
+            📊 ${t.affected_rows || 0} rows
+          </div>
+          ${detailsHtml}
+        </div>
+      `;
+    }).join('');
+    
+    txnSection = `
+      <div style="margin-top:18px;">
+        <div style="font-size:12px;font-weight:800;color:#374151;margin-bottom:8px;">📜 관련 Transactions (${transactions.length}개)</div>
+        ${txnRows}
+      </div>
+    `;
+  } else if (isTestBatch) {
+    txnSection = `
+      <div style="margin-top:18px;padding:12px 14px;background:#fef3c7;border-left:3px solid #f59e0b;border-radius:5px;font-size:11px;color:#78350f;">
+        🧪 TEST MODE batch — 실제 DB 변경 없음. Transaction 기록도 없습니다.
+      </div>
+    `;
+  }
+  
+  body.innerHTML = `
+    <!-- Header info -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px;">
+      <div style="background:#f9fafb;padding:8px 10px;border-radius:5px;border:1px solid #e5e7eb;">
+        <div style="font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;">Status</div>
+        <div style="margin-top:3px;"><span style="background:${sc.bg};color:${sc.color};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;">${batch.status}</span></div>
+      </div>
+      <div style="background:#f9fafb;padding:8px 10px;border-radius:5px;border:1px solid #e5e7eb;">
+        <div style="font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;">From → To</div>
+        <div style="font-size:12px;font-weight:800;color:#1f2937;margin-top:3px;">${escapeHtml(batch.from_warehouse || '—')} → ${escapeHtml(batch.to_warehouse || '—')}</div>
+      </div>
+      <div style="background:#f9fafb;padding:8px 10px;border-radius:5px;border:1px solid #e5e7eb;">
+        <div style="font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;">Requested At</div>
+        <div style="font-size:11px;color:#1f2937;margin-top:3px;">${requestedAt}</div>
+      </div>
+      <div style="background:#f9fafb;padding:8px 10px;border-radius:5px;border:1px solid #e5e7eb;">
+        <div style="font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;">Completed</div>
+        <div style="font-size:11px;color:#1f2937;margin-top:3px;">${completedAt}</div>
+      </div>
+    </div>
+    
+    ${batch.requested_by ? `<div style="font-size:11px;color:#6b7280;margin-bottom:6px;">👤 요청자: <strong>${escapeHtml(batch.requested_by)}</strong></div>` : ''}
+    ${batch.notes ? `<div style="font-size:11px;color:#6b7280;margin-bottom:6px;">📝 메모: ${escapeHtml(batch.notes)}</div>` : ''}
+    ${(batch.related_orders || []).length > 0 ? `<div style="font-size:11px;color:#6b7280;margin-bottom:6px;">📦 관련 오더: ${(batch.related_orders || []).map(escapeHtml).join(', ')}</div>` : ''}
+    
+    ${itemsTable}
+    
+    ${txnSection}
+  `;
+}
+
 function showPcrWorkOrderMulti(woNum, fromWh, toWh, items) {
   const w = window.open('', '_blank', 'width=820,height=900');
   if (!w) {
@@ -15858,7 +16076,7 @@ async function renderBatches() {
     const isTest = b.id.startsWith('test-batch-');
     const rowBg = isTest ? 'background:rgba(239,68,68,0.05);' : '';
     
-    return `<tr style="border-bottom:1px solid #f3f4f6;${rowBg}">
+    return `<tr style="border-bottom:1px solid #f3f4f6;${rowBg};cursor:pointer;" onclick="openBatchDetail('${b.id}')" onmouseover="this.style.background='#f9fafb'" onmouseout="this.style.background='${isTest ? 'rgba(239,68,68,0.05)' : 'transparent'}'">
       <td style="padding:8px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1e40af;">
         ${b.is_instant ? 'WO' : 'TRB'}-${b.batch_number}
         ${isTest ? '<div style="font-size:9px;color:#dc2626;font-weight:800;margin-top:2px;">🧪 TEST</div>' : ''}
@@ -15869,17 +16087,18 @@ async function renderBatches() {
       <td style="padding:8px;font-size:11px;"><strong>${b.from_warehouse || '—'}</strong> → <strong>${b.to_warehouse || '—'}</strong></td>
       <td style="padding:8px;font-size:11px;">${
         b.mode === 'bin_sku'
-          ? `<strong>${(b.selected_items || []).length}</strong> items · <span style="color:#6b7280;">${(b.selected_items || []).reduce((s, it) => s + (it.qty_boxes || 0), 0)} boxes</span>`
+          ? `<strong>${(b.selected_items || []).length}</strong> items · <span style="color:#6b7280;">${(b.selected_items || []).reduce((s, it) => s + (it.qty_boxes || 0), 0)} boxes</span> · <span style="color:#1e40af;font-size:10px;">🔍 클릭하여 상세보기</span>`
           : `<strong>${pallets.length}</strong> pallets · <span style="font-family:'IBM Plex Mono',monospace;color:#6b7280;">${escapeHtml(palletList)}${moreCount}</span>`
       }</td>
       <td style="padding:8px;font-size:11px;color:#374151;">${(b.related_orders || []).join(', ') || '—'}</td>
       <td style="padding:8px;"><span style="background:${st.bg};color:${st.color};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${b.status}</span></td>
       <td style="padding:8px;font-size:11px;color:#6b7280;">${dateStr}</td>
-      <td style="padding:8px;text-align:center;">
+      <td style="padding:8px;text-align:center;" onclick="event.stopPropagation();">
         ${b.status === 'pending' ? `<button class="btn btn-sm" onclick="updateBatchStatus('${b.id}', 'in_transit')" style="font-size:10px;padding:3px 6px;background:#fce7f3;color:#9f1239;">🚛 Ship</button>` : ''}
         ${b.status === 'in_transit' ? `<button class="btn btn-sm" onclick="updateBatchStatus('${b.id}', 'arrived')" style="font-size:10px;padding:3px 6px;background:#dbeafe;color:#1e40af;">📍 Arrived</button>` : ''}
         ${b.status === 'arrived' ? `<button class="btn btn-sm" onclick="openProcessBatch('${b.id}', ${b.batch_number})" style="font-size:10px;padding:3px 6px;background:#dcfce7;color:#065f46;">📦 Process</button>` : ''}
         ${(b.status === 'pending' || b.status === 'in_transit') ? `<button class="btn btn-sm" onclick="cancelBatch('${b.id}', ${b.batch_number})" style="font-size:10px;padding:3px 6px;color:#dc2626;">✕ Cancel</button>` : ''}
+        ${b.status === 'completed' ? `<button class="btn btn-sm" onclick="openBatchDetail('${b.id}')" style="font-size:10px;padding:3px 6px;background:#ede9fe;color:#5b21b6;">🔍 상세</button>` : ''}
       </td>
     </tr>`;
   }).join('');
@@ -33787,6 +34006,24 @@ function showCreditHoldFlash(overAmt) {
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════ -->
+<!-- ── 🔍 Batch 상세보기 모달 ──                                    -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="batch-detail-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100002;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(960px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);">
+    <div style="padding:14px 22px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#ede9fe,#ddd6fe);border-radius:14px 14px 0 0;">
+      <div id="batch-detail-title" style="font-size:15px;font-weight:800;color:#5b21b6;font-family:'IBM Plex Mono',monospace;">Loading...</div>
+      <button onclick="closeBatchDetail()" style="background:rgba(255,255,255,0.5);border:1px solid rgba(0,0,0,0.1);border-radius:4px;width:30px;height:30px;cursor:pointer;font-size:16px;color:#5b21b6;font-weight:700;">✕</button>
+    </div>
+    <div id="batch-detail-body" style="flex:1;overflow-y:auto;padding:16px 22px;">
+      <div style="padding:40px;text-align:center;color:#9ca3af;">⏳ Loading...</div>
+    </div>
+    <div style="padding:12px 22px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;justify-content:flex-end;gap:8px;border-radius:0 0 14px 14px;">
+      <button onclick="closeBatchDetail()" style="background:#5b21b6;color:#fff;border:none;border-radius:5px;padding:9px 18px;font-size:12px;font-weight:700;cursor:pointer;">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
 <!-- ── 🔍 PCR 박스 옮김 검증 모달 ──                                -->
 <!-- ══════════════════════════════════════════════════════════════ -->
 <div id="pcr-verify-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100002;align-items:center;justify-content:center;">
@@ -48961,4 +49198,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T12:16:06Z - 작업 지시서 강조: Pallet/Bin, Style, Color/Size, Box 굵게, SKU 회색 -->
+
+<!-- Deploy trigger: 2026-04-26T12:21:07Z - Batch 행 클릭 → 상세보기 모달 (selected_items + transactions) -->
