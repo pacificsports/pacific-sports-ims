@@ -15885,6 +15885,821 @@ function renderBatchDetail(batch, transactions, txnDetails, isTestBatch) {
   `;
 }
 
+// ══════════════════════════════════════════════════════════════
+// ── 📥 H-Pallet 가져오기 (3rd Party Pull Request) ──
+// ══════════════════════════════════════════════════════════════
+
+let _hpalletSearchTimer = null;
+let _hpalletSearchResults = [];      // 단일 SKU 검색 결과 (bin row들)
+let _hpalletPalletResults = [];      // Pallet 단위 검색 결과 (pallet row들)
+let _hpalletTargetWh = 'SC';
+let _hpalletCart = {};                // bin_id → cart item (단일 SKU)
+let _hpalletCartPallets = {};         // pallet_id → { pallet_code, items[] } (Pallet 통째)
+
+function openHPallet() {
+  _hpalletSearchResults = [];
+  _hpalletPalletResults = [];
+  _hpalletCart = {};
+  _hpalletCartPallets = {};
+  _hpalletTargetWh = 'SC';
+  
+  const radios = Array.from(document.getElementsByName('hpallet-target'));
+  radios.forEach(r => { r.checked = (r.value === 'SC'); });
+  
+  document.getElementById('hpallet-search').value = '';
+  document.getElementById('hpallet-from-label').innerHTML = '출발: <strong>SC 3rd Party</strong>';
+  document.getElementById('hpallet-results').innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">검색어 입력 시 결과가 표시됩니다</div>';
+  
+  if (typeof renderHPalletCart === 'function') renderHPalletCart();
+  if (typeof updateHPalletSummary === 'function') updateHPalletSummary();
+  
+  // 모달 위치 리셋
+  const win = document.getElementById('hpallet-window');
+  if (win) {
+    win.style.left = ''; win.style.top = ''; win.style.margin = ''; win.style.transform = ''; win.style.width = ''; win.style.height = '';
+  }
+  
+  document.getElementById('hpallet-modal').style.display = 'block';
+  makeDraggableModal('hpallet-window', 'hpallet-header');
+  
+  setTimeout(() => document.getElementById('hpallet-search').focus(), 100);
+}
+
+function closeHPallet() {
+  document.getElementById('hpallet-modal').style.display = 'none';
+  _hpalletCart = {};
+  _hpalletCartPallets = {};
+}
+
+function onHPalletTargetChange() {
+  const radios = Array.from(document.getElementsByName('hpallet-target'));
+  radios.forEach(r => { if (r.checked) _hpalletTargetWh = r.value; });
+  document.getElementById('hpallet-from-label').innerHTML = `출발: <strong>${_hpalletTargetWh} 3rd Party</strong>`;
+  searchHPalletSource();
+}
+
+function onHPalletSearchInput() {
+  clearTimeout(_hpalletSearchTimer);
+  _hpalletSearchTimer = setTimeout(() => searchHPalletSource(), 250);
+}
+
+async function searchHPalletSource() {
+  const div = document.getElementById('hpallet-results');
+  const query = document.getElementById('hpallet-search').value.trim().toLowerCase();
+  
+  if (!query) {
+    div.innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">검색어 입력 시 결과가 표시됩니다</div>';
+    return;
+  }
+  
+  div.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:11px;">⏳ 검색 중...</div>';
+  
+  try {
+    const { data: whData } = await db.from('warehouses').select('id').eq('code', _hpalletTargetWh).single();
+    if (!whData) {
+      div.innerHTML = `<div style="padding:20px;color:#dc2626;font-size:11px;">${_hpalletTargetWh} 창고 없음</div>`;
+      return;
+    }
+    
+    // 3rd party pallet의 bin들만 가져오기
+    const { data: bins, error } = await db.from('inventory_bins')
+      .select(`
+        id, bin_code, qty, pallet_id,
+        inventory!inner(id, sku_id, style_number, color, size, warehouse_id, styles(pcs_per_box, pcs_per_box_large)),
+        pallets!inner(id, pallet_code, location_type)
+      `)
+      .eq('inventory.warehouse_id', whData.id)
+      .eq('pallets.location_type', '3rd_party')
+      .gt('qty', 0)
+      .limit(500);
+    if (error) throw error;
+    
+    let filtered = bins || [];
+    
+    // 검색어 매칭
+    filtered = filtered.filter(b => {
+      const inv = b.inventory || {};
+      const sku = (inv.sku_id || '').toLowerCase();
+      const style = (inv.style_number || '').toLowerCase();
+      const color = (inv.color || '').toLowerCase();
+      const size = (inv.size || '').toLowerCase();
+      const palletCode = (b.pallets?.pallet_code || '').toLowerCase();
+      return sku.includes(query) || style.includes(query) || color.includes(query) 
+        || size.includes(query) || palletCode.includes(query);
+    });
+    
+    _hpalletSearchResults = filtered;
+    
+    // Pallet 단위로도 그룹핑 (같은 pallet에 든 SKU들)
+    const palletMap = new Map();
+    filtered.forEach(b => {
+      const pid = b.pallet_id;
+      if (!pid) return;
+      if (!palletMap.has(pid)) {
+        palletMap.set(pid, {
+          pallet_id: pid,
+          pallet_code: b.pallets?.pallet_code || '?',
+          items: []
+        });
+      }
+      palletMap.get(pid).items.push(b);
+    });
+    _hpalletPalletResults = Array.from(palletMap.values());
+    
+    renderHPalletResults();
+  } catch (e) {
+    console.error('[searchHPalletSource]', e);
+    div.innerHTML = `<div style="padding:20px;color:#dc2626;font-size:11px;">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderHPalletResults() {
+  const div = document.getElementById('hpallet-results');
+  if (_hpalletSearchResults.length === 0) {
+    div.innerHTML = '<div style="padding:30px;text-align:center;color:#9ca3af;font-size:11px;">결과 없음</div>';
+    return;
+  }
+  
+  // Pallet 그룹별로 표시
+  div.innerHTML = _hpalletPalletResults.map(p => {
+    const totalSkus = p.items.length;
+    const totalPcs = p.items.reduce((s, b) => s + b.qty, 0);
+    const totalBoxes = p.items.reduce((s, b) => {
+      const inv = b.inventory || {};
+      const isLarge = ['3XL', '4XL', '5XL'].includes(inv.size || '');
+      const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+      return s + Math.floor(b.qty / ppb);
+    }, 0);
+    
+    const palletInCart = !!_hpalletCartPallets[p.pallet_id];
+    
+    const itemsHtml = p.items.map((b, idx) => {
+      const inv = b.inventory || {};
+      const isLarge = ['3XL', '4XL', '5XL'].includes(inv.size || '');
+      const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+      const totalBoxesItem = Math.floor(b.qty / ppb);
+      const inCart = !!_hpalletCart[b.id];
+      const initialBoxes = inCart ? _hpalletCart[b.id].qty_boxes : 1;
+      const disabled = palletInCart;  // pallet 통째 추가됐으면 개별 추가 막음
+      
+      return `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-top:1px dashed #f3f4f6;font-size:10px;${inCart ? 'background:#f0fdf4;' : ''}${disabled ? 'opacity:0.5;' : ''}">
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;min-width:120px;font-size:11px;">${escapeHtml(inv.sku_id || '?')}</span>
+          <span style="color:#6b7280;flex:1;font-size:9px;">
+            ${escapeHtml(inv.color || '')} / <strong>${escapeHtml(inv.size || '')}</strong> · 
+            ${b.qty.toLocaleString()} pcs (${totalBoxesItem} box)
+          </span>
+          ${disabled ? '<span style="font-size:9px;color:#92400e;font-weight:700;">📦 통째</span>' : `
+            <button onclick="adjustHPalletSearchBoxes('${b.id}', -1)" style="width:22px;height:24px;border:1px solid #d1d5db;background:#f9fafb;border-radius:3px 0 0 3px;cursor:pointer;font-weight:700;font-size:12px;">−</button>
+            <input id="hpallet-boxes-${b.id}" type="number" min="1" max="${totalBoxesItem}" value="${initialBoxes}" 
+                   style="width:42px;height:24px;border:1px solid #d1d5db;border-left:none;border-right:none;padding:0 3px;font-size:11px;text-align:center;font-family:monospace;font-weight:700;">
+            <button onclick="adjustHPalletSearchBoxes('${b.id}', 1)" style="width:22px;height:24px;border:1px solid #d1d5db;background:#f9fafb;border-radius:0 3px 3px 0;cursor:pointer;font-weight:700;font-size:12px;">+</button>
+            <span style="color:#9ca3af;font-size:9px;">/ ${totalBoxesItem}</span>
+            <button onclick="addHPalletItemToCart('${b.id}')" style="height:24px;padding:0 8px;background:${inCart ? '#f59e0b' : '#10b981'};color:#fff;border:none;border-radius:3px;font-size:9px;font-weight:700;cursor:pointer;">
+              ${inCart ? '🔄 갱신' : '+ 카트'}
+            </button>
+          `}
+        </div>
+      `;
+    }).join('');
+    
+    return `
+      <div style="border:1px solid ${palletInCart ? '#86efac' : '#e5e7eb'};border-radius:8px;margin-bottom:8px;overflow:hidden;background:#fff;">
+        <div style="padding:9px 12px;background:${palletInCart ? '#f0fdf4' : '#fffbeb'};display:flex;align-items:center;gap:10px;border-bottom:1px solid #f3f4f6;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:800;color:#78350f;font-size:14px;flex-shrink:0;">📦 ${escapeHtml(p.pallet_code)}</div>
+          <div style="flex:1;font-size:10px;color:#6b7280;">
+            ${totalSkus} SKUs · <strong>${totalBoxes} boxes</strong> · ${totalPcs.toLocaleString()} pcs
+            ${palletInCart ? ' · <span style="color:#10b981;font-weight:700;">✓ 통째 카트에 담김</span>' : ''}
+          </div>
+          <button onclick="addHPalletWholeToCart('${p.pallet_id}')" style="height:26px;padding:0 12px;background:${palletInCart ? '#dc2626' : '#1e40af'};color:#fff;border:none;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
+            ${palletInCart ? '↩ 카트에서 빼기' : '+ 통째 카트'}
+          </button>
+        </div>
+        <div style="background:#fafbfc;">
+          ${itemsHtml}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function adjustHPalletSearchBoxes(binId, delta) {
+  const inputEl = document.getElementById(`hpallet-boxes-${binId}`);
+  if (!inputEl) return;
+  const cur = parseInt(inputEl.value, 10) || 1;
+  const max = parseInt(inputEl.max, 10) || 1;
+  const newVal = Math.max(1, Math.min(max, cur + delta));
+  inputEl.value = newVal;
+}
+
+function addHPalletItemToCart(binId) {
+  const b = _hpalletSearchResults.find(x => x.id === binId);
+  if (!b) return;
+  
+  // pallet 통째 추가 상태면 막음
+  if (_hpalletCartPallets[b.pallet_id]) {
+    alert('이 pallet은 이미 통째로 카트에 있습니다. 먼저 통째 추가를 해제하세요.');
+    return;
+  }
+  
+  const inputEl = document.getElementById(`hpallet-boxes-${binId}`);
+  let boxes = parseInt(inputEl?.value, 10) || 1;
+  if (boxes < 1) { alert('박스 수를 1 이상 입력해주세요'); return; }
+  
+  const inv = b.inventory || {};
+  const isLarge = ['3XL', '4XL', '5XL'].includes(inv.size || '');
+  const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+  const maxBoxes = Math.floor(b.qty / ppb);
+  if (boxes > maxBoxes) boxes = maxBoxes;
+  
+  _hpalletCart[b.id] = {
+    bin_id: b.id,
+    bin_qty: b.qty,
+    bin_code: b.bin_code,
+    pallet_id: b.pallet_id,
+    pallet_code: b.pallets?.pallet_code,
+    inventory_id: inv.id,
+    sku_id: inv.sku_id,
+    style_number: inv.style_number,
+    color: inv.color,
+    size: inv.size,
+    ppb: ppb,
+    max_boxes: maxBoxes,
+    qty_boxes: boxes,
+    qty_pcs: boxes * ppb,
+    is_pallet_whole: false
+  };
+  
+  renderHPalletResults();
+  renderHPalletCart();
+  updateHPalletSummary();
+}
+
+function addHPalletWholeToCart(palletId) {
+  const p = _hpalletPalletResults.find(x => x.pallet_id === palletId);
+  if (!p) return;
+  
+  // 이미 있으면 빼기
+  if (_hpalletCartPallets[palletId]) {
+    delete _hpalletCartPallets[palletId];
+    renderHPalletResults();
+    renderHPalletCart();
+    updateHPalletSummary();
+    return;
+  }
+  
+  // 그 pallet의 개별 SKU 추가된 게 있으면 모두 제거 (통째로 대체)
+  Object.keys(_hpalletCart).forEach(binId => {
+    if (_hpalletCart[binId].pallet_id === palletId) {
+      delete _hpalletCart[binId];
+    }
+  });
+  
+  // 통째로 추가
+  _hpalletCartPallets[palletId] = {
+    pallet_id: palletId,
+    pallet_code: p.pallet_code,
+    items: p.items.map(b => {
+      const inv = b.inventory || {};
+      const isLarge = ['3XL', '4XL', '5XL'].includes(inv.size || '');
+      const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
+      return {
+        bin_id: b.id,
+        bin_qty: b.qty,
+        bin_code: b.bin_code,
+        pallet_id: b.pallet_id,
+        pallet_code: b.pallets?.pallet_code,
+        inventory_id: inv.id,
+        sku_id: inv.sku_id,
+        style_number: inv.style_number,
+        color: inv.color,
+        size: inv.size,
+        ppb: ppb,
+        max_boxes: Math.floor(b.qty / ppb),
+        qty_boxes: Math.floor(b.qty / ppb),  // 전체 박스
+        qty_pcs: b.qty,  // 전체 pcs
+        is_pallet_whole: true
+      };
+    })
+  };
+  
+  renderHPalletResults();
+  renderHPalletCart();
+  updateHPalletSummary();
+}
+
+function removeHPalletItemFromCart(binId) {
+  delete _hpalletCart[binId];
+  renderHPalletResults();
+  renderHPalletCart();
+  updateHPalletSummary();
+}
+
+function clearHPalletCart() {
+  if (Object.keys(_hpalletCart).length === 0 && Object.keys(_hpalletCartPallets).length === 0) return;
+  if (!confirm('카트를 모두 비우시겠습니까?')) return;
+  _hpalletCart = {};
+  _hpalletCartPallets = {};
+  renderHPalletResults();
+  renderHPalletCart();
+  updateHPalletSummary();
+}
+
+function renderHPalletCart() {
+  const div = document.getElementById('hpallet-cart');
+  const palletsArr = Object.values(_hpalletCartPallets);
+  const itemsArr = Object.values(_hpalletCart);
+  
+  if (palletsArr.length === 0 && itemsArr.length === 0) {
+    div.innerHTML = `
+      <div style="padding:30px 14px;text-align:center;color:#9ca3af;font-size:11px;line-height:1.6;">
+        아직 카트가 비어있습니다.<br>
+        왼쪽에서 검색 후 <strong>[+ 카트]</strong> 버튼을 눌러주세요.
+      </div>
+    `;
+    return;
+  }
+  
+  // Pallet 통째 항목들
+  const palletsHtml = palletsArr.map(p => {
+    const totalBoxes = p.items.reduce((s, it) => s + it.qty_boxes, 0);
+    const totalPcs = p.items.reduce((s, it) => s + it.qty_pcs, 0);
+    return `
+      <div style="border:1px solid #fde68a;background:#fff;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:800;color:#78350f;font-size:12px;">📦 ${escapeHtml(p.pallet_code)} (전체)</div>
+          <button onclick="addHPalletWholeToCart('${p.pallet_id}')" style="background:none;border:none;color:#dc2626;font-size:14px;cursor:pointer;">✕</button>
+        </div>
+        <div style="font-size:10px;color:#6b7280;">${p.items.length} SKUs · ${totalBoxes} boxes · ${totalPcs.toLocaleString()} pcs</div>
+      </div>
+    `;
+  }).join('');
+  
+  // 개별 SKU 항목들
+  const itemsHtml = itemsArr.map(it => `
+    <div style="border:1px solid #fde68a;background:#fff;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:6px;margin-bottom:4px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${escapeHtml(it.sku_id)}</div>
+          <div style="font-size:9px;color:#6b7280;">📦 ${escapeHtml(it.pallet_code)} · ${escapeHtml(it.color)}/<strong>${escapeHtml(it.size)}</strong></div>
+        </div>
+        <button onclick="removeHPalletItemFromCart('${it.bin_id}')" style="background:none;border:none;color:#dc2626;font-size:14px;cursor:pointer;line-height:1;padding:0;">✕</button>
+      </div>
+      <div style="font-size:10px;color:#374151;">박스: <strong>${it.qty_boxes}</strong> / ${it.max_boxes} = ${it.qty_pcs.toLocaleString()} pcs</div>
+    </div>
+  `).join('');
+  
+  div.innerHTML = palletsHtml + itemsHtml;
+}
+
+function updateHPalletSummary() {
+  const palletsArr = Object.values(_hpalletCartPallets);
+  const itemsArr = Object.values(_hpalletCart);
+  
+  let totalItems = itemsArr.length;
+  let totalBoxes = itemsArr.reduce((s, it) => s + it.qty_boxes, 0);
+  let totalPcs = itemsArr.reduce((s, it) => s + it.qty_pcs, 0);
+  
+  palletsArr.forEach(p => {
+    totalItems += p.items.length;
+    totalBoxes += p.items.reduce((s, it) => s + it.qty_boxes, 0);
+    totalPcs += p.items.reduce((s, it) => s + it.qty_pcs, 0);
+  });
+  
+  const summaryEl = document.getElementById('hpallet-summary');
+  const btnEl = document.getElementById('hpallet-submit-btn');
+  if (summaryEl) {
+    summaryEl.innerHTML = `🛒 카트: <strong>${palletsArr.length}</strong> pallets + <strong>${itemsArr.length}</strong> items · <strong>${totalBoxes}</strong> boxes · <strong>${totalPcs.toLocaleString()}</strong> pcs`;
+  }
+  if (btnEl) {
+    btnEl.disabled = totalItems === 0;
+    btnEl.style.opacity = totalItems === 0 ? '0.4' : '1';
+    btnEl.style.cursor = totalItems === 0 ? 'not-allowed' : 'pointer';
+  }
+}
+
+async function submitHPalletPull() {
+  const palletsArr = Object.values(_hpalletCartPallets);
+  const itemsArr = Object.values(_hpalletCart);
+  
+  if (palletsArr.length === 0 && itemsArr.length === 0) {
+    alert('카트가 비어있습니다.');
+    return;
+  }
+  
+  // 모든 항목 평탄화 (통째 pallet의 items + 개별 items)
+  const allItems = [...itemsArr];
+  palletsArr.forEach(p => {
+    p.items.forEach(it => allItems.push(it));
+  });
+  
+  const totalBoxes = allItems.reduce((s, it) => s + it.qty_boxes, 0);
+  const totalPcs = allItems.reduce((s, it) => s + it.qty_pcs, 0);
+  const fromWh = `${_hpalletTargetWh}-3RD`;
+  
+  const summary = palletsArr.length > 0 
+    ? `${palletsArr.length}개 Pallet 통째 + ${itemsArr.length}개 개별 SKU` 
+    : `${itemsArr.length}개 SKU`;
+  
+  if (!confirm(`📥 Pull Request 생성?\n\n${summary}\n총 ${totalBoxes} box (${totalPcs.toLocaleString()} pcs)\n${_hpalletTargetWh} 3rd Party → ${_hpalletTargetWh}\n\n⚠️ 도착 후 Transfer Batches 탭에서 입고 처리하세요.\n\n계속하시겠습니까?`)) return;
+  
+  const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+  
+  // 🧪 TEST MODE
+  if (window.TEST_MODE) {
+    const fakeNum = 9000 + (window._testBatches.length + 1);
+    window._testBatches.push({
+      id: 'test-batch-' + Date.now(),
+      batch_number: fakeNum,
+      batch_type: 'pull_3rd',
+      mode: 'bin_sku',
+      status: 'pending',
+      is_instant: false,
+      transfer_type: 'pull_3rd',
+      from_warehouse: fromWh,
+      to_warehouse: _hpalletTargetWh,
+      warehouse_code: _hpalletTargetWh,
+      requested_by: performedBy,
+      requested_at: new Date().toISOString(),
+      selected_items: allItems
+    });
+    
+    tdbLog('INSERT', 'pallet_transfer_batches', { type: 'pull_3rd', from: fromWh, to: _hpalletTargetWh, items: allItems.length });
+    
+    showToast(`🧪 ✅ TRB-${fakeNum} 생성 (Pull Request) — ${allItems.length}개 항목, ${totalBoxes} box`);
+    
+    closeHPallet();
+    if (_palletsActiveTab === 'batches') await loadBatches();
+    return;
+  }
+  
+  // 실제 DB
+  try {
+    const { data: batch, error: batchErr } = await db.from('pallet_transfer_batches').insert({
+      batch_type: 'pull_3rd',
+      mode: 'bin_sku',
+      status: 'pending',
+      is_instant: false,
+      transfer_type: 'pull_3rd',
+      from_warehouse: fromWh,
+      to_warehouse: _hpalletTargetWh,
+      warehouse_code: _hpalletTargetWh,
+      requested_by: performedBy,
+      selected_items: allItems
+    }).select('id, batch_number').single();
+    if (batchErr) throw batchErr;
+    
+    try {
+      await db.from('inventory_transactions').insert({
+        transaction_type: 'pallet_pull_request',
+        description: `Pull Request TRB-${batch.batch_number}: ${fromWh} → ${_hpalletTargetWh} (${allItems.length} items, ${totalBoxes} box)`,
+        warehouse_code: _hpalletTargetWh,
+        performed_by: performedBy,
+        status: 'active',
+        affected_rows: allItems.length,
+        metadata: { batch_id: batch.id, batch_number: batch.batch_number, transfer_type: 'pull_3rd', from: fromWh, to: _hpalletTargetWh, item_count: allItems.length }
+      });
+    } catch (e) { console.error('[TXN]', e); }
+    
+    showToast(`✅ TRB-${batch.batch_number} 생성 — Pull Request 됨. 도착 후 입고 처리하세요.`);
+    closeHPallet();
+    if (_palletsActiveTab === 'batches') await loadBatches();
+  } catch (e) {
+    console.error('[submitHPalletPull]', e);
+    alert('❌ Pull Request 실패: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ── 📦 H-Pallet 입고 처리 (Step 2: Receive) ──
+// ══════════════════════════════════════════════════════════════
+
+let _hpalletReceiveBatch = null;       // 현재 처리 중인 batch
+let _hpalletReceiveItems = [];         // 입고할 items + assigned_location 추적
+let _hpalletLocType = 'bin';           // 'bin' or 'hpallet'
+
+async function openHPalletReceive(batchId) {
+  const modal = document.getElementById('hpallet-receive-modal');
+  const body = document.getElementById('hpallet-receive-body');
+  const titleEl = document.getElementById('hpallet-receive-title');
+  
+  modal.style.display = 'block';
+  body.innerHTML = '<div style="padding:40px;text-align:center;color:#9ca3af;">⏳ Loading...</div>';
+  
+  // 위치 리셋
+  const win = document.getElementById('hpallet-receive-window');
+  if (win) {
+    win.style.left = ''; win.style.top = ''; win.style.margin = ''; win.style.transform = ''; win.style.width = ''; win.style.height = '';
+  }
+  makeDraggableModal('hpallet-receive-window', 'hpallet-receive-header');
+  
+  try {
+    let batch;
+    const isTestBatch = batchId.startsWith('test-batch-');
+    
+    if (isTestBatch) {
+      batch = (window._testBatches || []).find(b => b.id === batchId);
+      if (!batch) throw new Error('Test batch not found');
+    } else {
+      const { data, error } = await db.from('pallet_transfer_batches').select('*').eq('id', batchId).single();
+      if (error) throw error;
+      batch = data;
+    }
+    
+    _hpalletReceiveBatch = batch;
+    titleEl.innerHTML = `📦 TRB-${batch.batch_number} 입고 처리 (${escapeHtml(batch.from_warehouse || '?')} → ${escapeHtml(batch.to_warehouse || '?')})`;
+    
+    // selected_items에 location 필드 추가해서 추적
+    _hpalletReceiveItems = (batch.selected_items || []).map(it => ({
+      ...it,
+      assigned_location: null,    // 'bin' or 'hpallet'
+      assigned_value: null,        // bin code or hpallet code
+      checked: false
+    }));
+    
+    renderHPalletReceiveBody();
+    updateHPalletReceiveSummary();
+  } catch (e) {
+    console.error('[openHPalletReceive]', e);
+    body.innerHTML = `<div style="padding:30px;color:#dc2626;font-size:12px;">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function closeHPalletReceive() {
+  document.getElementById('hpallet-receive-modal').style.display = 'none';
+  _hpalletReceiveBatch = null;
+  _hpalletReceiveItems = [];
+}
+
+function onHPalletLocTypeChange() {
+  const radios = Array.from(document.getElementsByName('hpallet-loc-type'));
+  radios.forEach(r => { if (r.checked) _hpalletLocType = r.value; });
+  
+  const inputEl = document.getElementById('hpallet-loc-input');
+  if (inputEl) {
+    inputEl.placeholder = _hpalletLocType === 'bin' ? '예: 1A-05' : '예: H9001 (새 H Pallet code)';
+  }
+}
+
+function renderHPalletReceiveBody() {
+  const body = document.getElementById('hpallet-receive-body');
+  
+  // pallet별로 그룹핑
+  const groups = new Map();
+  _hpalletReceiveItems.forEach((it, idx) => {
+    const key = it.pallet_code || it.bin_code || 'unknown';
+    if (!groups.has(key)) {
+      groups.set(key, { pallet_code: key, items: [] });
+    }
+    groups.get(key).items.push({ ...it, _idx: idx });
+  });
+  
+  body.innerHTML = Array.from(groups.values()).map(g => {
+    const itemsHtml = g.items.map(it => {
+      const isAssigned = !!it.assigned_value;
+      const assignedLabel = isAssigned 
+        ? `<span style="background:#dcfce7;color:#065f46;padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">${it.assigned_location === 'bin' ? '📍' : '📦'} ${escapeHtml(it.assigned_value)}</span>`
+        : '<span style="color:#9ca3af;font-size:10px;">위치 미지정</span>';
+      
+      return `
+        <div style="display:grid;grid-template-columns:30px 110px 1fr 100px 90px;gap:10px;padding:7px 10px;border-bottom:1px solid #f3f4f6;align-items:center;font-size:11px;${isAssigned ? 'background:#f0fdf4;' : ''}">
+          <input type="checkbox" ${it.checked ? 'checked' : ''} onchange="toggleHPalletItemCheck(${it._idx}, this.checked)" style="width:16px;height:16px;cursor:pointer;">
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">${escapeHtml(it.sku_id)}</span>
+          <span style="color:#374151;">
+            <strong>${escapeHtml(it.style_number || '')}</strong> · 
+            ${escapeHtml(it.color || '')}/<strong>${escapeHtml(it.size || '')}</strong> · 
+            <span style="color:#78350f;font-weight:700;background:#fef3c7;padding:1px 6px;border-radius:3px;">${it.qty_boxes} box</span>
+            <span style="color:#9ca3af;font-size:10px;">${it.qty_pcs.toLocaleString()} pcs</span>
+          </span>
+          <div style="text-align:right;">${assignedLabel}</div>
+          <div style="text-align:right;">
+            ${isAssigned ? `<button onclick="clearHPalletItemLoc(${it._idx})" style="background:none;border:none;color:#dc2626;font-size:10px;cursor:pointer;font-weight:700;">↩ 해제</button>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+    
+    return `
+      <div style="border:1px solid #e5e7eb;border-radius:8px;margin-bottom:10px;overflow:hidden;background:#fff;">
+        <div style="padding:8px 12px;background:#fffbeb;border-bottom:1px solid #fde68a;font-family:'IBM Plex Mono',monospace;font-weight:800;color:#78350f;font-size:13px;">
+          📦 ${escapeHtml(g.pallet_code)} <span style="font-size:10px;color:#92400e;font-weight:400;">(${g.items.length} items)</span>
+        </div>
+        <div>${itemsHtml}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function toggleHPalletItemCheck(idx, checked) {
+  if (_hpalletReceiveItems[idx]) {
+    _hpalletReceiveItems[idx].checked = checked;
+    updateHPalletReceiveSummary();
+  }
+}
+
+function clearHPalletItemLoc(idx) {
+  if (_hpalletReceiveItems[idx]) {
+    _hpalletReceiveItems[idx].assigned_location = null;
+    _hpalletReceiveItems[idx].assigned_value = null;
+    renderHPalletReceiveBody();
+    updateHPalletReceiveSummary();
+  }
+}
+
+function applyHPalletLocation() {
+  const inputEl = document.getElementById('hpallet-loc-input');
+  const locValue = inputEl.value.trim().toUpperCase();
+  if (!locValue) {
+    alert('위치를 입력해주세요');
+    return;
+  }
+  
+  const checkedIdxs = _hpalletReceiveItems.map((it, i) => it.checked ? i : null).filter(i => i !== null);
+  if (checkedIdxs.length === 0) {
+    alert('체크된 항목이 없습니다');
+    return;
+  }
+  
+  // 적용
+  checkedIdxs.forEach(i => {
+    _hpalletReceiveItems[i].assigned_location = _hpalletLocType;
+    _hpalletReceiveItems[i].assigned_value = locValue;
+    _hpalletReceiveItems[i].checked = false;  // 적용 후 체크 해제
+  });
+  
+  inputEl.value = '';
+  renderHPalletReceiveBody();
+  updateHPalletReceiveSummary();
+}
+
+function updateHPalletReceiveSummary() {
+  const total = _hpalletReceiveItems.length;
+  const assigned = _hpalletReceiveItems.filter(it => it.assigned_value).length;
+  const checked = _hpalletReceiveItems.filter(it => it.checked).length;
+  
+  const summaryEl = document.getElementById('hpallet-receive-summary');
+  const completeBtn = document.getElementById('hpallet-receive-complete-btn');
+  const applyBtn = document.getElementById('hpallet-apply-btn');
+  
+  if (summaryEl) {
+    summaryEl.innerHTML = `위치 지정됨: <strong>${assigned}</strong> / ${total} items${checked > 0 ? ` · 체크됨: <strong>${checked}</strong>` : ''}`;
+  }
+  if (applyBtn) {
+    applyBtn.textContent = `✓ 선택 항목에 적용 (${checked})`;
+    applyBtn.disabled = checked === 0;
+    applyBtn.style.opacity = checked === 0 ? '0.4' : '1';
+    applyBtn.style.cursor = checked === 0 ? 'not-allowed' : 'pointer';
+  }
+  if (completeBtn) {
+    const allDone = total > 0 && assigned === total;
+    completeBtn.disabled = !allDone;
+    completeBtn.style.opacity = allDone ? '1' : '0.4';
+    completeBtn.style.cursor = allDone ? 'pointer' : 'not-allowed';
+    completeBtn.textContent = allDone ? `📦 입고 완료 (${total} items)` : `📦 입고 완료 (${assigned}/${total})`;
+  }
+}
+
+async function completeHPalletReceive() {
+  if (!_hpalletReceiveBatch) return;
+  
+  const allDone = _hpalletReceiveItems.every(it => it.assigned_value);
+  if (!allDone) {
+    alert('모든 항목에 위치를 지정해주세요.');
+    return;
+  }
+  
+  const summary = _hpalletReceiveItems.length;
+  if (!confirm(`📦 ${summary}개 항목 입고 처리?\n\n각 항목이 지정된 위치로 이동되어 in_house 상태로 전환됩니다.\n\n계속하시겠습니까?`)) return;
+  
+  const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+  const isTestBatch = _hpalletReceiveBatch.id.startsWith('test-batch-');
+  
+  if (window.TEST_MODE && isTestBatch) {
+    // 메모리 batch 업데이트
+    _hpalletReceiveBatch.status = 'completed';
+    _hpalletReceiveBatch.completed_at = new Date().toISOString();
+    _hpalletReceiveBatch.selected_items = _hpalletReceiveItems;
+    
+    _hpalletReceiveItems.forEach(it => {
+      tdbLog('UPDATE', 'inventory_bins', { new_location: it.assigned_value, type: it.assigned_location }, { id: it.bin_id });
+      tdbLog('UPDATE', 'pallets', { location_type: 'in_house' }, { id: it.pallet_id });
+    });
+    
+    showToast(`🧪 ✅ TRB-${_hpalletReceiveBatch.batch_number} 입고 완료 — ${summary} items`);
+    closeHPalletReceive();
+    if (_palletsActiveTab === 'batches') await loadBatches();
+    return;
+  }
+  
+  // 실제 DB 처리
+  try {
+    // 각 item별로 위치 적용
+    // - bin location: 그 위치를 가진 새 bin으로 이동 (또는 기존 bin에 추가)
+    // - h pallet: 새 pallet 만들고 그 안에 bin들 옮기기
+    
+    // pallet 별로 그룹핑하여 처리 (location_type을 in_house로 변경하기 위해)
+    const palletsToInHouse = new Set();
+    const newPalletsToCreate = new Map();  // hpallet code → { items[] }
+    
+    for (const it of _hpalletReceiveItems) {
+      if (it.assigned_location === 'hpallet') {
+        // 새 H pallet에 들어감
+        if (!newPalletsToCreate.has(it.assigned_value)) {
+          newPalletsToCreate.set(it.assigned_value, { code: it.assigned_value, items: [] });
+        }
+        newPalletsToCreate.get(it.assigned_value).items.push(it);
+      } else {
+        // 기존 bin으로 이동
+        // 그 pallet이 더 이상 사용 안 되는지 확인 후 in_house 처리
+        palletsToInHouse.add(it.pallet_id);
+      }
+    }
+    
+    // wh ID
+    const { data: whData } = await db.from('warehouses').select('id, code').eq('code', _hpalletReceiveBatch.to_warehouse).single();
+    if (!whData) throw new Error(`Warehouse ${_hpalletReceiveBatch.to_warehouse} 없음`);
+    
+    // Transaction 기록
+    const { data: txn } = await db.from('inventory_transactions').insert({
+      transaction_type: 'pallet_receive',
+      description: `Pull Receive TRB-${_hpalletReceiveBatch.batch_number}: ${_hpalletReceiveBatch.from_warehouse} → ${_hpalletReceiveBatch.to_warehouse} (${summary} items)`,
+      warehouse_code: _hpalletReceiveBatch.to_warehouse,
+      performed_by: performedBy,
+      status: 'active',
+      affected_rows: summary,
+      metadata: { batch_id: _hpalletReceiveBatch.id, batch_number: _hpalletReceiveBatch.batch_number, transfer_type: 'pull_3rd_receive' }
+    }).select('id').single();
+    const txnId = txn?.id;
+    
+    // 1. 새 H pallet 만들기
+    const newPalletIdMap = {};  // code → new pallet id
+    for (const [code, p] of newPalletsToCreate) {
+      const { data: newPallet, error: pErr } = await db.from('pallets').insert({
+        pallet_code: code,
+        warehouse_code: _hpalletReceiveBatch.to_warehouse,
+        location_type: 'in_house',
+        status: 'active'
+      }).select('id').single();
+      if (pErr) throw new Error(`새 pallet ${code} 생성 실패: ${pErr.message}`);
+      newPalletIdMap[code] = newPallet.id;
+    }
+    
+    // 2. 각 bin 처리
+    for (const it of _hpalletReceiveItems) {
+      if (it.assigned_location === 'hpallet') {
+        // 새 H pallet으로 옮기기 (bin의 pallet_id 변경 + bin_code도 새 pallet code로)
+        await db.from('inventory_bins').update({
+          pallet_id: newPalletIdMap[it.assigned_value],
+          bin_code: it.assigned_value
+        }).eq('id', it.bin_id);
+      } else {
+        // 기존 bin으로: bin_code 변경 + pallet 분리 (in_house bin)
+        // 만약 그 bin code가 이미 in_house pallet에 속해 있으면 → 거기 합침
+        // 단순화: bin_code 변경 + pallet_id null (또는 in_house pallet 자동 생성)
+        await db.from('inventory_bins').update({
+          bin_code: it.assigned_value,
+          pallet_id: null
+        }).eq('id', it.bin_id);
+      }
+      
+      // Transaction detail
+      if (txnId) {
+        await db.from('inventory_transaction_details').insert({
+          transaction_id: txnId,
+          inventory_id: it.inventory_id,
+          sku_id: it.sku_id,
+          style_number: it.style_number,
+          warehouse_code: _hpalletReceiveBatch.to_warehouse,
+          color: it.color,
+          size: it.size,
+          action: 'pallet_receive',
+          qty_before: it.qty_pcs,
+          qty_after: it.qty_pcs,
+          bins_before: [{ bin: it.bin_code, pallet: it.pallet_code, type: '3rd_party' }],
+          bins_after: [{ bin: it.assigned_value, type: it.assigned_location, source_pallet: it.pallet_code }]
+        });
+      }
+    }
+    
+    // 3. 비워진 3rd party pallets 처리 (선택사항: 빈 pallet은 archive로?)
+    // 일단 그대로 두기 — 사용자가 수동으로 정리하면 됨
+    
+    // 4. batch 상태 업데이트
+    await db.from('pallet_transfer_batches').update({
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      selected_items: _hpalletReceiveItems   // location 정보 저장
+    }).eq('id', _hpalletReceiveBatch.id);
+    
+    showToast(`✅ TRB-${_hpalletReceiveBatch.batch_number} 입고 완료 — ${summary} items`);
+    closeHPalletReceive();
+    if (_palletsActiveTab === 'batches') await loadBatches();
+  } catch (e) {
+    console.error('[completeHPalletReceive]', e);
+    alert('❌ 입고 처리 실패: ' + e.message);
+  }
+}
+
 function showPcrWorkOrderMulti(woNum, fromWh, toWh, items) {
   const w = window.open('', '_blank', 'width=820,height=900');
   if (!w) {
@@ -16113,7 +16928,8 @@ async function renderBatches() {
       <td style="padding:8px;"><span style="background:${st.bg};color:${st.color};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${b.status}</span></td>
       <td style="padding:8px;font-size:11px;color:#6b7280;">${dateStr}</td>
       <td style="padding:8px;text-align:center;" onclick="event.stopPropagation();">
-        ${b.status === 'pending' ? `<button class="btn btn-sm" onclick="updateBatchStatus('${b.id}', 'in_transit')" style="font-size:10px;padding:3px 6px;background:#fce7f3;color:#9f1239;">🚛 Ship</button>` : ''}
+        ${b.status === 'pending' && b.batch_type === 'pull_3rd' ? `<button class="btn btn-sm" onclick="openHPalletReceive('${b.id}')" style="font-size:10px;padding:3px 6px;background:#fef3c7;color:#78350f;font-weight:700;">🚛 Receive (입고)</button>` : ''}
+        ${b.status === 'pending' && b.batch_type !== 'pull_3rd' ? `<button class="btn btn-sm" onclick="updateBatchStatus('${b.id}', 'in_transit')" style="font-size:10px;padding:3px 6px;background:#fce7f3;color:#9f1239;">🚛 Ship</button>` : ''}
         ${b.status === 'in_transit' ? `<button class="btn btn-sm" onclick="updateBatchStatus('${b.id}', 'arrived')" style="font-size:10px;padding:3px 6px;background:#dbeafe;color:#1e40af;">📍 Arrived</button>` : ''}
         ${b.status === 'arrived' ? `<button class="btn btn-sm" onclick="openProcessBatch('${b.id}', ${b.batch_number})" style="font-size:10px;padding:3px 6px;background:#dcfce7;color:#065f46;">📦 Process</button>` : ''}
         ${(b.status === 'pending' || b.status === 'in_transit') ? `<button class="btn btn-sm" onclick="cancelBatch('${b.id}', ${b.batch_number})" style="font-size:10px;padding:3px 6px;color:#dc2626;">✕ Cancel</button>` : ''}
@@ -33867,7 +34683,7 @@ function showCreditHoldFlash(overAmt) {
       <span style="flex:1;"></span>
       <span id="pallets-count" style="font-size:11px;color:#6b7280;"></span>
       <button class="btn btn-sm" onclick="openPcrTransfer()" style="font-size:11px;background:#10b981;color:#fff;border:none;font-weight:700;padding:6px 12px;">📦 PCR로 박스 옮기기</button>
-      <button id="pallets-create-batch-btn" class="btn btn-sm" onclick="openCreateBatchDialog()" disabled style="opacity:0.4;font-size:11px;background:#9ca3af;color:#fff;">📥 H-Pallet 가져오기 (준비중)</button>
+      <button class="btn btn-sm" onclick="openHPallet()" style="font-size:11px;background:#f59e0b;color:#fff;border:none;font-weight:700;padding:6px 12px;">📥 H-Pallet 가져오기</button>
       <button class="btn btn-sm" onclick="openBinSkuBatchDialog()" style="font-size:11px;background:#9ca3af;color:#fff;border:none;opacity:0.6;" title="옛 통합 모달">🛠 [임시] 통합 모달</button>
     </div>
     
@@ -34025,6 +34841,130 @@ function showCreditHoldFlash(overAmt) {
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════ -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- ── 📥 H-Pallet 가져오기 모달 (Step 1: Pull Request) ──         -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="hpallet-modal" style="display:none;position:fixed;inset:0;background:transparent;z-index:100001;pointer-events:none;">
+  <div id="hpallet-window" style="position:absolute;top:60px;left:50%;transform:translateX(-50%);background:#fff;border-radius:14px;width:min(1100px,98vw);max-height:calc(100vh - 80px);display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);pointer-events:auto;resize:both;overflow:hidden;min-width:700px;min-height:400px;">
+    <div id="hpallet-header" style="padding:14px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:14px 14px 0 0;cursor:move;user-select:none;">
+      <div>
+        <div style="font-size:16px;font-weight:800;color:#92400e;">📥 H-Pallet 가져오기 (3rd Party Pull Request)</div>
+        <div style="font-size:10px;color:#b45309;margin-top:2px;">🖱️ 헤더 드래그로 이동 · ↘ 우측 하단 드래그로 크기 조절</div>
+      </div>
+      <button onclick="closeHPallet()" style="background:rgba(255,255,255,0.5);border:1px solid rgba(0,0,0,0.1);border-radius:4px;width:30px;height:30px;cursor:pointer;font-size:16px;color:#92400e;font-weight:700;">✕</button>
+    </div>
+    
+    <div style="padding:12px 24px;border-bottom:1px solid #e5e7eb;background:#fffbeb;display:flex;justify-content:space-between;align-items:center;gap:14px;">
+      <div style="font-size:11px;color:#78350f;line-height:1.5;flex:1;">
+        💡 외부 보관소 (3rd Party)에서 우리 창고로 가져올 항목을 선택하세요.<br>
+        <strong>Pull Request 생성</strong> → 트럭 도착 후 <strong>Transfer Batches 탭에서 입고 처리</strong>
+      </div>
+      <div style="display:flex;gap:14px;align-items:center;flex-shrink:0;">
+        <div style="font-size:12px;font-weight:700;color:#374151;">어디로?</div>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
+          <input type="radio" name="hpallet-target" value="SC" checked onchange="onHPalletTargetChange()" style="cursor:pointer;">
+          🏢 SC
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
+          <input type="radio" name="hpallet-target" value="CA" onchange="onHPalletTargetChange()" style="cursor:pointer;">
+          🏢 CA
+        </label>
+        <span id="hpallet-from-label" style="font-size:11px;color:#6b7280;">출발: <strong>SC 3rd Party</strong></span>
+      </div>
+    </div>
+    
+    <div style="flex:1;display:flex;overflow:hidden;min-height:300px;">
+      <div style="flex:1.4;display:flex;flex-direction:column;border-right:1px solid #e5e7eb;min-width:0;">
+        <div style="padding:12px 18px 8px;">
+          <input id="hpallet-search" oninput="onHPalletSearchInput()" placeholder="🔍 SKU / Style / Color / Size / Pallet code (H로 시작) 검색..." 
+                 style="width:100%;height:36px;border:2px solid #fde68a;border-radius:6px;padding:0 12px;font-size:13px;font-family:'IBM Plex Mono',monospace;">
+          <div style="font-size:10px;color:#9ca3af;margin-top:3px;">예: "H0001" / "9307" / "royal" — Pallet code로 검색하면 그 pallet 통째 추가도 가능</div>
+        </div>
+        <div id="hpallet-results" style="flex:1;overflow-y:auto;padding:4px 14px 14px;">
+          <div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">검색어 입력 시 결과가 표시됩니다</div>
+        </div>
+      </div>
+      
+      <div style="flex:1;display:flex;flex-direction:column;background:#fef3c7;min-width:0;">
+        <div style="padding:10px 14px;background:#fde68a;border-bottom:1px solid #f59e0b;display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:12px;font-weight:800;color:#78350f;">🛒 가져올 것 (카트)</div>
+          <button onclick="clearHPalletCart()" style="background:none;border:none;color:#dc2626;font-size:10px;cursor:pointer;font-weight:700;">전체 비우기</button>
+        </div>
+        <div id="hpallet-cart" style="flex:1;overflow-y:auto;padding:8px;">
+          <div style="padding:30px 14px;text-align:center;color:#9ca3af;font-size:11px;line-height:1.6;">
+            아직 카트가 비어있습니다.<br>
+            왼쪽에서 검색 후 <strong>[+ 카트]</strong> 버튼을 눌러주세요.
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div style="padding:14px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;border-radius:0 0 14px 14px;">
+      <div id="hpallet-summary" style="font-size:12px;color:#374151;">
+        🛒 카트: <strong>0</strong> items · <strong>0</strong> boxes · <strong>0</strong> pcs
+      </div>
+      <button id="hpallet-submit-btn" onclick="submitHPalletPull()" disabled
+              style="background:#f59e0b;color:#fff;border:none;border-radius:6px;padding:11px 20px;font-size:13px;font-weight:700;cursor:not-allowed;opacity:0.4;">
+        📥 Pull Request 생성
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- ── 📦 H-Pallet 입고 처리 모달 (Step 2: Receive) ──             -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div id="hpallet-receive-modal" style="display:none;position:fixed;inset:0;background:transparent;z-index:100002;pointer-events:none;">
+  <div id="hpallet-receive-window" style="position:absolute;top:40px;left:50%;transform:translateX(-50%);background:#fff;border-radius:14px;width:min(1100px,98vw);max-height:calc(100vh - 60px);display:flex;flex-direction:column;box-shadow:0 25px 70px rgba(0,0,0,0.4);pointer-events:auto;resize:both;overflow:hidden;min-width:700px;min-height:400px;">
+    <div id="hpallet-receive-header" style="padding:14px 24px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#dbeafe,#bfdbfe);border-radius:14px 14px 0 0;cursor:move;user-select:none;">
+      <div>
+        <div id="hpallet-receive-title" style="font-size:16px;font-weight:800;color:#1e40af;">📦 입고 처리</div>
+        <div style="font-size:10px;color:#1e3a8a;margin-top:2px;">🖱️ 헤더 드래그 · ↘ 우측 하단 드래그로 리사이즈</div>
+      </div>
+      <button onclick="closeHPalletReceive()" style="background:rgba(255,255,255,0.5);border:1px solid rgba(0,0,0,0.1);border-radius:4px;width:30px;height:30px;cursor:pointer;font-size:16px;color:#1e40af;font-weight:700;">✕</button>
+    </div>
+    
+    <div style="padding:12px 24px;border-bottom:1px solid #e5e7eb;background:#eff6ff;font-size:11px;color:#1e3a8a;line-height:1.5;">
+      💡 받은 박스에 ☑ 체크 → 위치 입력 → <strong>[적용]</strong> → 다음 묶음 ☑ 체크 → 다른 위치 → ...<br>
+      모든 항목 위치 지정 후 <strong>[입고 완료]</strong> 클릭 → 재고 반영
+    </div>
+    
+    <!-- 위치 입력 영역 -->
+    <div style="padding:12px 24px;border-bottom:1px solid #e5e7eb;background:#f9fafb;">
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+        <div style="font-size:12px;font-weight:700;color:#374151;">새 위치:</div>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
+          <input type="radio" name="hpallet-loc-type" value="bin" checked onchange="onHPalletLocTypeChange()" style="cursor:pointer;">
+          📍 기존 Bin
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;font-weight:700;">
+          <input type="radio" name="hpallet-loc-type" value="hpallet" onchange="onHPalletLocTypeChange()" style="cursor:pointer;">
+          📦 새 H Pallet
+        </label>
+        <input id="hpallet-loc-input" placeholder="예: 1A-05" 
+               style="flex:1;min-width:160px;height:32px;border:2px solid #93c5fd;border-radius:5px;padding:0 10px;font-size:13px;font-family:'IBM Plex Mono',monospace;font-weight:700;text-transform:uppercase;">
+        <button id="hpallet-apply-btn" onclick="applyHPalletLocation()" style="height:32px;padding:0 16px;background:#10b981;color:#fff;border:none;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;">
+          ✓ 선택 항목에 적용 (0)
+        </button>
+      </div>
+    </div>
+    
+    <div id="hpallet-receive-body" style="flex:1;overflow-y:auto;padding:14px 18px;min-height:200px;">
+      <div style="padding:40px;text-align:center;color:#9ca3af;font-size:12px;">⏳ Loading...</div>
+    </div>
+    
+    <div style="padding:14px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;border-radius:0 0 14px 14px;">
+      <div id="hpallet-receive-summary" style="font-size:12px;color:#374151;">
+        위치 지정됨: <strong>0</strong> / 0 items
+      </div>
+      <button id="hpallet-receive-complete-btn" onclick="completeHPalletReceive()" disabled
+              style="background:#10b981;color:#fff;border:none;border-radius:6px;padding:11px 20px;font-size:13px;font-weight:700;cursor:not-allowed;opacity:0.4;">
+        📦 입고 완료
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ── 🔍 Batch 상세보기 모달 ──                                    -->
 <!-- ══════════════════════════════════════════════════════════════ -->
 <div id="batch-detail-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100002;align-items:center;justify-content:center;">
@@ -49219,4 +50159,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T12:28:46Z - Pallet Management 모달 드래그/리사이즈 -->
+
+<!-- Deploy trigger: 2026-04-26T13:17:11Z - H-Pallet 가져오기 (Step 1: Pull Request + Step 2: Receive) -->
