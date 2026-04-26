@@ -13624,6 +13624,10 @@ async function openPalletDetail(palletId) {
     
     const contents = _palletContents[palletId] || [];
     const totalQty = contents.reduce((s, c) => s + (c.qty || 0), 0);
+    const totalBoxes = contents.reduce((s, c) => {
+      const ppb = c.pcs_per_box || 72;
+      return s + Math.floor((c.qty || 0) / ppb);
+    }, 0);
     
     const locTypeStyle = {
       '3rd_party': '#92400e',
@@ -13638,7 +13642,11 @@ async function openPalletDetail(palletId) {
       <div style="background:#f9fafb;padding:12px 16px;border-radius:8px;margin-bottom:14px;display:grid;grid-template-columns:repeat(3, 1fr);gap:10px;">
         <div><div style="font-size:10px;color:#9ca3af;font-weight:700;">LOCATION TYPE</div><div style="font-size:12px;font-weight:700;color:${ltColor};">${pallet.location_type}</div></div>
         <div><div style="font-size:10px;color:#9ca3af;font-weight:700;">STATUS</div><div style="font-size:12px;font-weight:700;">${pallet.status}</div></div>
-        <div><div style="font-size:10px;color:#9ca3af;font-weight:700;">TOTAL QTY</div><div style="font-size:13px;font-weight:800;color:#1f2937;">${totalQty.toLocaleString()} pcs</div></div>
+        <div>
+          <div style="font-size:10px;color:#9ca3af;font-weight:700;">TOTAL</div>
+          <div style="font-size:13px;font-weight:800;color:#78350f;background:#fef3c7;display:inline-block;padding:1px 8px;border-radius:3px;">${totalBoxes.toLocaleString()} box</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px;">${totalQty.toLocaleString()} pcs</div>
+        </div>
         ${pallet.pulled_at ? `<div><div style="font-size:10px;color:#9ca3af;font-weight:700;">PULLED</div><div style="font-size:11px;">${new Date(pallet.pulled_at).toLocaleString()}</div></div>` : ''}
         ${pallet.arrived_at ? `<div><div style="font-size:10px;color:#9ca3af;font-weight:700;">ARRIVED</div><div style="font-size:11px;">${new Date(pallet.arrived_at).toLocaleString()}</div></div>` : ''}
         ${pallet.processed_at ? `<div><div style="font-size:10px;color:#9ca3af;font-weight:700;">PROCESSED</div><div style="font-size:11px;">${new Date(pallet.processed_at).toLocaleString()}</div></div>` : ''}
@@ -13653,19 +13661,27 @@ async function openPalletDetail(palletId) {
               <th style="padding:6px;text-align:left;">Style</th>
               <th style="padding:6px;text-align:left;">Color</th>
               <th style="padding:6px;text-align:left;">Size</th>
-              <th style="padding:6px;text-align:right;">Qty</th>
+              <th style="padding:6px;text-align:right;">Box</th>
+              <th style="padding:6px;text-align:right;">Pcs</th>
             </tr>
           </thead>
           <tbody>
             ${contents.length === 0 
-              ? `<tr><td colspan="5" style="padding:20px;text-align:center;color:#9ca3af;"><em>This pallet is empty</em></td></tr>`
-              : contents.map(c => `<tr style="border-bottom:1px solid #f3f4f6;">
-                <td style="padding:5px 6px;font-family:'IBM Plex Mono',monospace;font-weight:700;">${escapeHtml(c.sku_id || '—')}</td>
-                <td style="padding:5px 6px;font-family:'IBM Plex Mono',monospace;">${escapeHtml(c.style_number || '')}</td>
-                <td style="padding:5px 6px;">${escapeHtml(c.color || '')}</td>
-                <td style="padding:5px 6px;">${escapeHtml(c.size || '')}</td>
-                <td style="padding:5px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;">${(c.qty || 0).toLocaleString()}</td>
-              </tr>`).join('')
+              ? `<tr><td colspan="6" style="padding:20px;text-align:center;color:#9ca3af;"><em>This pallet is empty</em></td></tr>`
+              : contents.map(c => {
+                  const ppb = c.pcs_per_box || 72;
+                  const qty = c.qty || 0;
+                  const boxes = Math.floor(qty / ppb);
+                  const partial = qty % ppb;
+                  return `<tr style="border-bottom:1px solid #f3f4f6;">
+                    <td style="padding:5px 6px;font-family:'IBM Plex Mono',monospace;font-weight:700;">${escapeHtml(c.sku_id || '—')}</td>
+                    <td style="padding:5px 6px;font-family:'IBM Plex Mono',monospace;">${escapeHtml(c.style_number || '')}</td>
+                    <td style="padding:5px 6px;">${escapeHtml(c.color || '')}</td>
+                    <td style="padding:5px 6px;">${escapeHtml(c.size || '')}</td>
+                    <td style="padding:5px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#78350f;">${boxes.toLocaleString()}${partial > 0 ? `<span style="color:#9ca3af;font-weight:400;font-size:10px;"> +${partial}</span>` : ''}</td>
+                    <td style="padding:5px 6px;text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;">${qty.toLocaleString()}</td>
+                  </tr>`;
+                }).join('')
             }
           </tbody>
         </table>
@@ -15796,6 +15812,37 @@ async function openBatchDetail(batchId) {
         .or(`metadata->>batch_id.eq.${batchId},metadata->>batch_number.eq.${batch.batch_number}`)
         .order('performed_at', { ascending: false });
       transactions = txns || [];
+      
+      // 자동 정리: 같은 batch + 같은 transaction_type 안에 active가 여러 개면, 가장 최신 것만 active로 두고 나머지는 failed로
+      const byType = {};
+      transactions.forEach(t => {
+        if (t.status !== 'active') return;
+        const key = t.transaction_type;
+        if (!byType[key]) byType[key] = [];
+        byType[key].push(t);
+      });
+      
+      const toMarkFailed = [];
+      for (const key of Object.keys(byType)) {
+        if (byType[key].length > 1) {
+          // 첫 번째(최신)는 유지, 나머지는 failed
+          for (let i = 1; i < byType[key].length; i++) {
+            toMarkFailed.push(byType[key][i].id);
+          }
+        }
+      }
+      
+      if (toMarkFailed.length > 0) {
+        try {
+          await db.from('inventory_transactions')
+            .update({ status: 'failed' })
+            .in('id', toMarkFailed);
+          // 메모리에서도 status 업데이트
+          transactions.forEach(t => {
+            if (toMarkFailed.includes(t.id)) t.status = 'failed';
+          });
+        } catch (e) { console.warn('[auto mark failed]', e); }
+      }
       
       if (transactions.length > 0) {
         const txnIds = transactions.map(t => t.id);
@@ -50970,4 +51017,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T19:50:26Z - 실패한 transaction 접고 펴는 옵션 -->
+
+
+<!-- Deploy trigger: 2026-04-26T19:57:06Z - Pallet 상세 모달에 박스 수 표시 -->
