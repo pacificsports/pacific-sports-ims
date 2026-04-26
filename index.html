@@ -16688,7 +16688,7 @@ function renderHPalletReceiveBody() {
       </div>
     ` : `
       <div style="padding:7px 12px;background:#f9fafb;font-size:10px;font-weight:700;color:#374151;border-bottom:1px solid #e5e7eb;">
-        📥 일반 입고 (${generalItems.length}) — 위치 지정 필요
+        📥 일반 입고 (${generalItems.length}) — 위치 지정 필요 · <span style="font-weight:400;color:#6b7280;">박스 수 입력 시 일부만 분할 적용 가능</span>
       </div>
       ${generalItems.map(it => {
         const isAssigned = !!it.assigned_value;
@@ -16698,10 +16698,12 @@ function renderHPalletReceiveBody() {
         const displayPcs = it.is_fully_allocated ? 0 : (it.allocated_pcs > 0 ? it.remaining_pcs : it.qty_pcs);
         const displayBoxes = it.ppb > 0 ? Math.floor(displayPcs / it.ppb) : 0;
         const partial = displayPcs % (it.ppb || 1);
+        // 적용할 박스 수 (기본값 = displayBoxes 전체)
+        const splitBoxes = it.split_boxes != null ? it.split_boxes : displayBoxes;
         
         return `
-          <div style="display:grid;grid-template-columns:30px 110px 1fr 100px 90px;gap:10px;padding:7px 10px;border-bottom:1px solid #f3f4f6;align-items:center;font-size:11px;${isAssigned ? 'background:#f0fdf4;' : ''}">
-            <input type="checkbox" ${it.checked ? 'checked' : ''} onchange="toggleHPalletItemCheck(${it._idx}, this.checked)" style="width:16px;height:16px;cursor:pointer;">
+          <div style="display:grid;grid-template-columns:30px 110px 1fr 110px 100px 90px;gap:10px;padding:7px 10px;border-bottom:1px solid #f3f4f6;align-items:center;font-size:11px;${isAssigned ? 'background:#f0fdf4;' : ''}">
+            <input type="checkbox" ${it.checked ? 'checked' : ''} ${isAssigned ? 'disabled' : ''} onchange="toggleHPalletItemCheck(${it._idx}, this.checked)" style="width:16px;height:16px;cursor:pointer;">
             <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">${escapeHtml(it.sku_id)}</span>
             <span style="color:#374151;">
               <strong>${escapeHtml(it.style_number || '')}</strong> · 
@@ -16710,6 +16712,15 @@ function renderHPalletReceiveBody() {
               <span style="color:#9ca3af;font-size:10px;">${displayPcs.toLocaleString()} pcs</span>
               ${it.allocated_pcs > 0 ? `<span style="color:#9a3412;font-size:9px;margin-left:6px;font-style:italic;">(${it.allocated_pcs} pcs는 오더 잡힘)</span>` : ''}
             </span>
+            <div style="display:flex;align-items:center;gap:0;${isAssigned ? 'opacity:0.4;pointer-events:none;' : ''}">
+              <button onclick="adjustHPalletSplit(${it._idx}, -1)" style="width:22px;height:24px;border:1px solid #d1d5db;background:#f9fafb;border-radius:3px 0 0 3px;cursor:pointer;font-weight:700;font-size:12px;">−</button>
+              <input type="number" min="1" max="${displayBoxes}" value="${splitBoxes}" 
+                     onchange="updateHPalletSplit(${it._idx}, this.value)"
+                     onclick="this.select()"
+                     style="width:48px;height:24px;border:1px solid #d1d5db;border-left:none;border-right:none;padding:0 3px;font-size:11px;text-align:center;font-family:monospace;font-weight:700;">
+              <button onclick="adjustHPalletSplit(${it._idx}, 1)" style="width:22px;height:24px;border:1px solid #d1d5db;background:#f9fafb;border-radius:0 3px 3px 0;cursor:pointer;font-weight:700;font-size:12px;">+</button>
+              <span style="font-size:9px;color:#9ca3af;margin-left:4px;">/${displayBoxes}</span>
+            </div>
             <div style="text-align:right;">${assignedLabel}</div>
             <div style="text-align:right;">
               ${isAssigned ? `<button onclick="clearHPalletItemLoc(${it._idx})" style="background:none;border:none;color:#dc2626;font-size:10px;cursor:pointer;font-weight:700;">↩ 해제</button>` : ''}
@@ -16744,6 +16755,36 @@ function toggleHPalletItemCheck(idx, checked) {
   }
 }
 
+// 분할 박스 수 변경 (+/- 버튼)
+function adjustHPalletSplit(idx, delta) {
+  const it = _hpalletReceiveItems[idx];
+  if (!it || it.assigned_value) return;
+  
+  const totalBoxes = it.ppb > 0 ? Math.floor(it.qty_pcs / it.ppb) : 0;
+  const remainingBoxes = it.allocated_pcs > 0 
+    ? Math.floor(it.remaining_pcs / it.ppb)
+    : totalBoxes;
+  
+  const current = it.split_boxes != null ? it.split_boxes : remainingBoxes;
+  const next = Math.max(1, Math.min(remainingBoxes, current + delta));
+  it.split_boxes = next;
+  renderHPalletReceiveBody();
+}
+
+// 분할 박스 수 input 직접 입력
+function updateHPalletSplit(idx, val) {
+  const it = _hpalletReceiveItems[idx];
+  if (!it || it.assigned_value) return;
+  
+  const remainingBoxes = it.allocated_pcs > 0 
+    ? Math.floor(it.remaining_pcs / it.ppb)
+    : Math.floor(it.qty_pcs / (it.ppb || 1));
+  
+  const n = parseInt(val) || 0;
+  it.split_boxes = Math.max(1, Math.min(remainingBoxes, n));
+  renderHPalletReceiveBody();
+}
+
 function clearHPalletItemLoc(idx) {
   if (_hpalletReceiveItems[idx]) {
     _hpalletReceiveItems[idx].assigned_location = null;
@@ -16767,17 +16808,64 @@ function applyHPalletLocation() {
     return;
   }
   
-  const checkedIdxs = _hpalletReceiveItems.map((it, i) => it.checked ? i : null).filter(i => i !== null);
+  const checkedIdxs = _hpalletReceiveItems.map((it, i) => 
+    (it.checked && !it.assigned_value && !it.is_fully_allocated) ? i : null
+  ).filter(i => i !== null);
+  
   if (checkedIdxs.length === 0) {
     alert('체크된 항목이 없습니다');
     return;
   }
   
-  // 적용
+  // 각 체크된 항목 처리 — 분할 여부에 따라 다르게
   checkedIdxs.forEach(i => {
-    _hpalletReceiveItems[i].assigned_location = _hpalletLocType;
-    _hpalletReceiveItems[i].assigned_value = locValue;
-    _hpalletReceiveItems[i].checked = false;
+    const it = _hpalletReceiveItems[i];
+    const totalBoxes = it.ppb > 0 ? Math.floor(it.qty_pcs / it.ppb) : 0;
+    const remainingBoxes = it.allocated_pcs > 0 
+      ? Math.floor(it.remaining_pcs / it.ppb)
+      : totalBoxes;
+    const splitBoxes = it.split_boxes != null ? it.split_boxes : remainingBoxes;
+    
+    if (splitBoxes >= remainingBoxes) {
+      // 전체 적용 — 그냥 위치 지정만
+      it.assigned_location = _hpalletLocType;
+      it.assigned_value = locValue;
+      it.checked = false;
+      it.split_boxes = null;
+    } else {
+      // 분할 적용 — 항목을 둘로 쪼갬
+      // 1) 적용 부분 (split_boxes 만큼) → 새 항목으로 추가, 위치 지정
+      const splitPcs = splitBoxes * it.ppb;
+      const remainPcs = (it.allocated_pcs > 0 ? it.remaining_pcs : it.qty_pcs) - splitPcs;
+      
+      // 적용된 부분 (새 항목)
+      const appliedItem = {
+        ...it,
+        qty_pcs: splitPcs,
+        qty_boxes: splitBoxes,
+        allocated_pcs: 0,            // 분할된 부분은 오더 매칭 없음 (이미 처리됨)
+        allocations: [],
+        is_fully_allocated: false,
+        remaining_pcs: splitPcs,
+        assigned_location: _hpalletLocType,
+        assigned_value: locValue,
+        checked: false,
+        split_boxes: null,
+        is_split_part: true,         // 표시용
+        original_idx: i
+      };
+      
+      // 원본 항목은 나머지 분량으로 업데이트
+      // allocated_pcs는 그대로 두고, qty_pcs와 remaining_pcs 만 줄임
+      it.qty_pcs = remainPcs + it.allocated_pcs;
+      it.qty_boxes = it.ppb > 0 ? Math.floor(it.qty_pcs / it.ppb) : 0;
+      it.remaining_pcs = remainPcs;
+      it.checked = false;
+      it.split_boxes = null;
+      
+      // 적용된 부분을 배열에 추가
+      _hpalletReceiveItems.push(appliedItem);
+    }
   });
   
   inputEl.value = '';
@@ -16858,8 +16946,11 @@ async function completeHPalletReceive() {
     _hpalletReceiveBatch.selected_items = _hpalletReceiveItems;
     
     itemsToProcess.forEach(it => {
-      tdbLog('UPDATE', 'inventory_bins', { new_location: it.assigned_value, type: it.assigned_location }, { id: it.bin_id });
-      tdbLog('UPDATE', 'pallets', { location_type: 'in_house' }, { id: it.pallet_id });
+      if (it.is_split_part) {
+        tdbLog('INSERT', 'inventory_bins', { new_location: it.assigned_value, type: it.assigned_location, split_pcs: it.qty_pcs, sku: it.sku_id }, null);
+      } else {
+        tdbLog('UPDATE', 'inventory_bins', { new_location: it.assigned_value, type: it.assigned_location, qty: it.qty_pcs }, { id: it.bin_id });
+      }
     });
     if (totalAllocated > 0) {
       tdbLog('NOTE', '오더 잡힌 항목', { count: totalAllocated, action: '시스템 변경 없음 — Ship 시 자동 차감' });
@@ -16906,9 +16997,23 @@ async function completeHPalletReceive() {
     const returnPalletIdMap = {};  // code → new pallet id
     
     // 각 bin 처리 — itemsToProcess만 (fully_allocated 제외)
+    // 분할 항목은 새 bin INSERT, 원본 bin은 qty 줄이기
+    
+    // 1. 분할된 항목들 그룹화 — 같은 원본 bin에서 여러 번 쪼개진 경우 합산
+    const splitFromBin = {};  // bin_id → total_split_pcs
+    itemsToProcess.forEach(it => {
+      if (it.is_split_part) {
+        splitFromBin[it.bin_id] = (splitFromBin[it.bin_id] || 0) + it.qty_pcs;
+      }
+    });
+    
+    // 2. 각 항목 처리
     for (const it of itemsToProcess) {
+      let targetPalletId = null;
+      let targetBinCode = it.assigned_value;
+      
       if (it.assigned_location === 'return') {
-        // 3rd Party 반송: 새 H pallet (3rd_party type) 만들기
+        // 3rd Party 반송: 새 H pallet (3rd_party) 보장
         let newPalletId = returnPalletIdMap[it.assigned_value];
         if (!newPalletId) {
           const { data: newP, error: pErr } = await db.from('pallets').insert({
@@ -16921,16 +17026,35 @@ async function completeHPalletReceive() {
           newPalletId = newP.id;
           returnPalletIdMap[it.assigned_value] = newPalletId;
         }
-        await db.from('inventory_bins').update({
-          pallet_id: newPalletId,
-          bin_code: it.assigned_value
-        }).eq('id', it.bin_id);
+        targetPalletId = newPalletId;
+      }
+      // bin: targetPalletId = null (그대로)
+      
+      if (it.is_split_part) {
+        // 분할 부분: 새 inventory_bin INSERT
+        await db.from('inventory_bins').insert({
+          inventory_id: it.inventory_id,
+          pallet_id: targetPalletId,
+          bin_code: targetBinCode,
+          qty: it.qty_pcs
+        });
       } else {
-        // 기존 bin: bin_code 변경 + pallet_id null (in_house bin)
-        await db.from('inventory_bins').update({
-          bin_code: it.assigned_value,
-          pallet_id: null
-        }).eq('id', it.bin_id);
+        // 일반 / 분할 후 원본 항목
+        if (splitFromBin[it.bin_id]) {
+          // 원본 bin: qty 감소 + 위치 변경
+          const origQty = it.qty_pcs;  // 이미 split_part 만큼 빠진 후의 qty
+          await db.from('inventory_bins').update({
+            qty: origQty,
+            bin_code: targetBinCode,
+            pallet_id: targetPalletId
+          }).eq('id', it.bin_id);
+        } else {
+          // 단순 위치 변경
+          await db.from('inventory_bins').update({
+            bin_code: targetBinCode,
+            pallet_id: targetPalletId
+          }).eq('id', it.bin_id);
+        }
       }
       
       // Transaction detail
@@ -50447,4 +50571,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T16:36:19Z - 버튼/타이틀 '3rd Party Warehouse 가져오기'로 변경 -->
+
+<!-- Deploy trigger: 2026-04-26T17:28:43Z - 입고 처리 박스 분할 기능 -->
