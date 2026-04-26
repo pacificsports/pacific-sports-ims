@@ -14414,7 +14414,10 @@ function renderBinSkuSelected() {
   }
   
   const items = Array.from(_selectedBinItems.values());
-  div.innerHTML = items.map(it => `
+  // 인덱스 기반 매칭을 위해 글로벌에 저장
+  window._binSkuSelectedArr = items;
+  
+  div.innerHTML = items.map((it, idx) => `
     <div style="border:1px solid #fde68a;background:#fffbeb;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
       <div style="display:flex;justify-content:space-between;align-items:start;gap:6px;margin-bottom:6px;">
         <div style="flex:1;min-width:0;">
@@ -14422,21 +14425,52 @@ function renderBinSkuSelected() {
             ${escapeHtml(it.sku_id || '?')}
           </div>
           <div style="font-size:9px;color:#6b7280;">
-            📍 ${escapeHtml(it.pallet_code)} · ${escapeHtml(it.color || '')}/${escapeHtml(it.size || '')}
+            📍 ${escapeHtml(it.pallet_code || '')} · ${escapeHtml(it.color || '')}/${escapeHtml(it.size || '')}
           </div>
         </div>
-        <button onclick="removeBinSkuItem(${it.bin_id})" style="background:none;border:none;color:#dc2626;font-size:14px;cursor:pointer;line-height:1;padding:0;">✕</button>
+        <button onclick="removeBinSkuItemByIdx(${idx})" style="background:none;border:none;color:#dc2626;font-size:14px;cursor:pointer;line-height:1;padding:0;">✕</button>
       </div>
       <div style="display:flex;align-items:center;gap:6px;font-size:10px;">
         <span style="color:#374151;font-weight:700;">박스:</span>
-        <input type="number" min="0" max="${it.available_boxes}" value="${it.qty_boxes}" onchange="updateBinSkuQty(${it.bin_id}, this.value)" style="width:55px;height:24px;border:1px solid #d1d5db;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+        <input type="number" min="0" max="${it.available_boxes}" value="${it.qty_boxes}" onchange="updateBinSkuQtyByIdx(${idx}, this.value)" style="width:55px;height:24px;border:1px solid #d1d5db;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;">
         <span style="color:#9ca3af;">/ ${it.available_boxes} box</span>
-        <span id="binsku-pcs-${it.bin_id}" style="margin-left:auto;color:#374151;font-weight:700;font-family:'IBM Plex Mono',monospace;">= ${it.qty_pcs.toLocaleString()} pcs</span>
+        <span style="margin-left:auto;color:#374151;font-weight:700;font-family:'IBM Plex Mono',monospace;">= ${it.qty_pcs.toLocaleString()} pcs</span>
       </div>
     </div>
   `).join('');
   
   updateBinSkuSummary();
+}
+
+// 인덱스 기반 helpers
+function removeBinSkuItemByIdx(idx) {
+  const arr = window._binSkuSelectedArr || [];
+  const it = arr[idx];
+  if (it && _selectedBinItems.has(it.bin_id)) {
+    _selectedBinItems.delete(it.bin_id);
+    renderBinSkuResults();
+    renderBinSkuSelected();
+  }
+}
+
+function updateBinSkuQtyByIdx(idx, newBoxes) {
+  const arr = window._binSkuSelectedArr || [];
+  const it = arr[idx];
+  if (!it) return;
+  let n = parseInt(newBoxes, 10);
+  if (isNaN(n) || n < 0) n = 0;
+  if (n > it.available_boxes) n = it.available_boxes;
+  if (_selectedBinItems.has(it.bin_id)) {
+    if (n === 0) {
+      _selectedBinItems.delete(it.bin_id);
+    } else {
+      const item = _selectedBinItems.get(it.bin_id);
+      item.qty_boxes = n;
+      item.qty_pcs = n * (it.ppb || 72);
+    }
+    renderBinSkuResults();
+    renderBinSkuSelected();
+  }
 }
 
 function updateBinSkuSummary() {
@@ -47892,4 +47926,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T01:55:11Z - 인덱스 기반 그룹 매칭으로 변경 (escape 문제 우회) -->
+
+<!-- Deploy trigger: 2026-04-26T02:01:41Z - 인덱스 기반 매칭 (renderBinSkuSelected) -->
