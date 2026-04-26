@@ -11729,6 +11729,13 @@ async function loadAdjustTable() {
       return;
     }
 
+    // Color → Size(물리적 순서)로 재정렬
+    inv.sort((a, b) => {
+      const colorCmp = (a.color || '').localeCompare(b.color || '');
+      if (colorCmp !== 0) return colorCmp;
+      return sizeOrder(a.size) - sizeOrder(b.size);
+    });
+
     _adjustData = inv;
     _adjustChanges = {};
 
@@ -14093,6 +14100,8 @@ function renderBinSkuResults() {
                 </span>
                 <span style="color:#374151;font-size:9px;font-weight:700;">박스:</span>
                 <input type="number" 
+                       id="binsku-input-${b.id}"
+                       data-bin-id="${b.id}"
                        min="0" 
                        max="${totalBoxesItem}" 
                        value="${currentBoxes}" 
@@ -14195,6 +14204,22 @@ function addBinSkuItem(binId) {
   const ppb = isLarge ? (inv.styles?.pcs_per_box_large || 48) : (inv.styles?.pcs_per_box || 72);
   const totalBoxes = Math.floor(b.qty / ppb);
   
+  // input에서 사용자가 입력한 박스 수를 우선 읽음 (id로 직접)
+  let qtyBoxes = totalBoxes;
+  const inputEl = document.getElementById(`binsku-input-${binId}`);
+  if (inputEl) {
+    const v = parseInt(inputEl.value, 10);
+    if (!isNaN(v) && v >= 0 && v <= totalBoxes) {
+      qtyBoxes = v;
+    }
+  }
+  
+  // 0이면 추가 안 함 (보호)
+  if (qtyBoxes === 0) {
+    alert('박스 수를 1 이상 입력해주세요.');
+    return;
+  }
+  
   _selectedBinItems.set(b.id, {
     bin_id: b.id,
     inventory_id: inv.id,
@@ -14210,8 +14235,8 @@ function addBinSkuItem(binId) {
     available_qty: b.qty,
     available_boxes: totalBoxes,
     ppb: ppb,
-    qty_boxes: totalBoxes,  // 기본: 전체 박스 보냄
-    qty_pcs: totalBoxes * ppb
+    qty_boxes: qtyBoxes,
+    qty_pcs: qtyBoxes * ppb
   });
   
   renderBinSkuResults();
@@ -47826,4 +47851,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T01:14:10Z - Pallet 그룹핑 + 그룹 체크박스 + 박스 수 입력 -->
+
+
+<!-- Deploy trigger: 2026-04-26T01:27:03Z - + 추가 버튼이 input 박스수 직접 읽도록 수정 -->
