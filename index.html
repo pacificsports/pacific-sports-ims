@@ -38177,14 +38177,24 @@ function arSetTab(tab) {
 
 // Refresh — 현재 탭 유지하면서 데이터만 다시 로드
 async function refreshAR() {
-  const currentTab = _arTab || 'aging';
+  // DOM에서 현재 보이는 탭 직접 감지 (변수 의존 X)
+  const tabs = ['aging','invoices','payments','statement','analytics','customers'];
+  const currentTab = tabs.find(t => {
+    const pane = document.getElementById('ar-pane-' + t);
+    return pane && pane.style.display !== 'none';
+  }) || _arTab || 'aging';
+  
+  console.log('[refreshAR] current tab:', currentTab);
+  
   await loadAR();
+  
   // 탭 다시 활성화 (선택된 customer도 유지)
   if (currentTab === 'customers') {
     await loadCustomerMgmt();
     if (_custMgmtSelected) {
       await renderCustMgmtDetail();
     }
+    arSetTab('customers');  // 탭 UI 재활성화
   } else {
     arSetTab(currentTab);
   }
@@ -38294,7 +38304,7 @@ async function renderCustMgmtDetail() {
   if (invoices.length > 0) {
     const orderIds = invoices.map(i => i.id);
     const { data: lines } = await db.from('order_lines')
-      .select('order_id, sku_id, color, size, qty_filled, qty_pieces, unit_price, styles(style_number, description, category)')
+      .select('order_id, style_id, color, size, qty_filled, qty_pieces, unit_price, styles(style_number, description, category)')
       .in('order_id', orderIds);
     purchasedLines = lines || [];
   }
@@ -38304,11 +38314,13 @@ async function renderCustMgmtDetail() {
   purchasedLines.forEach(l => {
     const filled = l.qty_filled || l.qty_pieces || 0;
     if (filled <= 0) return;
-    const key = l.sku_id;
+    // SKU key = style + color + size (style_number 사용)
+    const styleNum = l.styles?.style_number || '';
+    const key = `${styleNum}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
     if (!skuStats[key]) {
       skuStats[key] = {
-        sku_id: l.sku_id,
-        style_number: l.styles?.style_number || '—',
+        sku_id: key.replace(/\|/g, '').toLowerCase(),
+        style_number: styleNum || '—',
         description: l.styles?.description || '',
         category: l.styles?.category || '',
         color: l.color,
@@ -38341,7 +38353,7 @@ async function renderCustMgmtDetail() {
     }
     styleStats[key].qty += filled;
     styleStats[key].amount += filled * (parseFloat(l.unit_price) || 0);
-    styleStats[key].skus.add(l.sku_id);
+    styleStats[key].skus.add(`${l.color || ''}|${l.size || ''}`);
   });
   
   // Top SKUs 정렬
@@ -52271,4 +52283,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T16:43:29Z - AR Refresh 시 현재 탭 유지 + Price Sheet를 Customer Mgmt로 이동 -->
+
+
+<!-- Deploy trigger: 2026-04-27T16:56:55Z - refreshAR DOM 직접 감지 (변수 의존 제거) -->
