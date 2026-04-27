@@ -12723,7 +12723,7 @@ async function loadCompanyInfo() {
 
 /** 1099 등에서 사용할 회사 정보 가져오기 */
 async function getCompanyInfo() {
-  const keys = ['company_name','company_dba','company_ein','company_address1','company_address2','company_city','company_state','company_zip','company_phone','company_contact_name','company_contact_email'];
+  const keys = ['company_name','company_dba','company_ein','company_address1','company_address2','company_city','company_state','company_zip','company_phone','company_contact_name','company_contact_email','payment_info'];
   const { data } = await db.from('company_settings').select('key,value').in('key', keys);
   const map = {};
   (data||[]).forEach(r => map[r.key] = r.value);
@@ -38791,7 +38791,7 @@ async function renderCustMgmtDetail() {
       <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
         ${outstanding > 0 ? `<button class="btn" onclick="openPaymentModal()" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;font-size:12px;">💵 Record Payment</button>` : ''}
         <button class="btn" onclick="openPriceSheet('${c.id}', '${(c.name||'').replace(/'/g,"\\'")}')" style="background:#f0f7ff;color:#1a56a0;border-color:#93c5fd;font-size:12px;">💲 Price Sheet</button>
-        <button class="btn" onclick="arSetTab('statement');setTimeout(()=>{const s=document.getElementById('ar-stmt-customer');if(s){s.value='${c.id}';if(typeof generateStatement==='function')generateStatement();}},100)" style="font-size:12px;">📋 Statement</button>
+        <button class="btn" onclick="arSetTab('statement');setTimeout(()=>{const s=document.getElementById('ar-stmt-customer');if(s){s.value='${c.id}';if(typeof previewStatement==='function')previewStatement();}},100)" style="font-size:12px;">📋 Statement</button>
       </div>
     </div>
   `;
@@ -52266,7 +52266,7 @@ async function voidPayment(pmtId) {
 }
 
 // ── Statement ──
-function previewStatement() {
+async function previewStatement() {
   const custId = document.getElementById('ar-stmt-customer')?.value;
   const asOf = document.getElementById('ar-stmt-date')?.value;
   if (!custId || !asOf) { showToast('Select a customer and date.'); return; }
@@ -52280,6 +52280,19 @@ function previewStatement() {
     document.getElementById('ar-stmt-preview').innerHTML = '<div style="color:#6b7280;text-align:center;padding:40px;">No open invoices for this customer</div>';
     return;
   }
+
+  // 회사 정보 settings에서 가져오기
+  const ci = await getCompanyInfo();
+  const companyLegal = ci.company_name || 'Peace Textile America Inc.';
+  const companyDba = ci.company_dba || 'Pacific Sports';
+  const companyAddr1 = ci.company_address1 || '1605 South Guignard Parkway';
+  const companyAddr2 = ci.company_address2 || '';
+  const companyCity = ci.company_city || 'Sumter';
+  const companyState = ci.company_state || 'SC';
+  const companyZip = ci.company_zip || '29150';
+  const companyPhone = ci.company_phone || '(803) 760-6251';
+  const paymentInfoText = ci.payment_info || 'Hana Commercial Finance\nDept. LA 24406\nPasadena, CA 91185-4406';
+  const paymentInfoLines = paymentInfoText.split('\n').filter(l => l.trim());
 
   const fmt = v => '$' + (v || 0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
   const fmtDate = d => d ? new Date(d).toLocaleDateString('en-US', {month:'2-digit',day:'2-digit',year:'numeric'}) : '—';
@@ -52332,14 +52345,15 @@ function previewStatement() {
   document.getElementById('ar-stmt-preview').innerHTML = `
     <div style="font-family:'Inter',Arial,sans-serif;max-width:920px;margin:0 auto;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
       
-      <!-- Header: Pacific Sports + STATEMENT -->
+      <!-- Header: Company + STATEMENT -->
       <div style="padding:24px 32px;border-bottom:3px solid #0f2744;display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
-          <div style="font-size:22px;font-weight:900;color:#0f2744;letter-spacing:-0.5px;">PACIFIC SPORTS INC</div>
-          <div style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5;">
-            3440 Preserve Court<br>
-            Sumter, SC 29150<br>
-            (803) 760-6251
+          <div style="font-size:20px;font-weight:900;color:#0f2744;letter-spacing:-0.5px;">${escapeHtml(companyLegal).toUpperCase()}</div>
+          ${companyDba ? `<div style="font-size:12px;font-weight:600;color:#6b7280;font-style:italic;margin-top:2px;">DBA ${escapeHtml(companyDba)}</div>` : ''}
+          <div style="font-size:11px;color:#6b7280;margin-top:8px;line-height:1.5;">
+            ${escapeHtml(companyAddr1)}${companyAddr2 ? '<br>' + escapeHtml(companyAddr2) : ''}<br>
+            ${escapeHtml(companyCity)}, ${escapeHtml(companyState)} ${escapeHtml(companyZip)}<br>
+            ${escapeHtml(companyPhone)}
           </div>
         </div>
         <div style="text-align:right;">
@@ -52369,14 +52383,13 @@ function previewStatement() {
         </div>
         <div>
           <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Remit Payment To</div>
-          <div style="font-size:13px;font-weight:800;color:#1f2937;">Hana Commercial Finance</div>
+          <div style="font-size:13px;font-weight:800;color:#1f2937;">${escapeHtml(paymentInfoLines[0] || 'Hana Commercial Finance')}</div>
           <div style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5;">
-            Dept. LA 24406<br>
-            Pasadena, CA 91185-4406
+            ${paymentInfoLines.slice(1).map(l => escapeHtml(l)).join('<br>')}
           </div>
           <div style="font-size:10px;color:#374151;margin-top:6px;padding-top:6px;border-top:1px solid #e5e7eb;">
             <strong>Make checks payable to:</strong><br>
-            Pacific Sports Inc.
+            ${escapeHtml(companyLegal)}
           </div>
         </div>
       </div>
@@ -52454,8 +52467,8 @@ function previewStatement() {
         <div style="font-size:10px;color:#6b7280;line-height:1.6;">
           <div style="font-weight:700;color:#374151;margin-bottom:4px;">Payment Instructions:</div>
           • Please reference invoice number(s) on your remittance.<br>
-          • Make checks payable to <strong>Pacific Sports Inc.</strong> and mail to the address above.<br>
-          • For questions about this statement, please contact us at <strong>(803) 760-6251</strong>.<br>
+          • Make checks payable to <strong>${escapeHtml(companyLegal)}</strong> and mail to the address above.<br>
+          • For questions about this statement, please contact us at <strong>${escapeHtml(companyPhone)}</strong>.<br>
           ${totalBal > 0 ? '• Payment terms: <strong>' + escapeHtml(customer.terms || 'Net 30') + '</strong>. Late payments may incur additional charges.' : ''}
         </div>
       </div>
@@ -52608,4 +52621,7 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T17:47:15Z - AR Statement 새 디자인 (헤더, Bill To/Remit To, Aging, Total Due) -->
+
+
+
+<!-- Deploy trigger: 2026-04-27T17:58:31Z - Statement에서 Settings 회사 정보 자동 사용 -->
