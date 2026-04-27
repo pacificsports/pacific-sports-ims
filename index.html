@@ -27414,6 +27414,155 @@ async function sendInvoiceEmail() {
     console.error('[Invoice status update exception]', stEx);
   }
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // GL Journal Entry 생성 (Sales + COGS 분개)
+  // Dr. 105-000 AR        / Cr. 400-000 Sales
+  // Dr. 430-001 COGS      / Cr. 115-012 Inventory
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  try {
+    const { data: orderForGL } = await db.from('orders')
+      .select('id, order_number, customer_name, po_number, total_amount, wh_code, is_split_warehouse')
+      .eq('id', _invoiceOrderId).single();
+    const { data: linesForGL } = await db.from('order_lines')
+      .select('*, styles(style_number, cost_xs, cost_s, cost_m, cost_l, cost_xl, cost_2xl, cost_3xl, cost_4xl, cost_5xl)')
+      .eq('order_id', _invoiceOrderId);
+    
+    // 이미 분개됐는지 체크 (중복 방지)
+    const { data: existingJE } = await db.from('journal_entries')
+      .select('id')
+      .eq('source', 'ar_invoice')
+      .eq('source_id', _invoiceOrderId)
+      .maybeSingle();
+    
+    if (existingJE) {
+      console.log('[Invoice GL] 이미 분개됨, 건너뜀:', existingJE.id);
+    } else {
+      // size → cost 컬럼 매핑
+      const sizeCostMap = {
+        'XS': 'cost_xs', 'S': 'cost_s', 'M': 'cost_m', 'L': 'cost_l',
+        'XL': 'cost_xl', '2XL': 'cost_2xl', 'XXL': 'cost_2xl',
+        '3XL': 'cost_3xl', 'XXXL': 'cost_3xl',
+        '4XL': 'cost_4xl', '5XL': 'cost_5xl'
+      };
+      
+      // Sales 합계 + COGS 합계 계산 (line별)
+      let totalSales = 0;
+      let totalCOGS = 0;
+      const cogsLines = [];
+      
+      for (const l of (linesForGL || [])) {
+        const filled = l.qty_filled || l.qty_pieces || 0;
+        const lineSales = filled * (parseFloat(l.unit_price) || 0);
+        totalSales += lineSales;
+        
+        // cost 가져오기
+        const sizeKey = (l.size || '').toUpperCase();
+        const costCol = sizeCostMap[sizeKey];
+        const unitCost = costCol ? (parseFloat(l.styles?.[costCol]) || 0) : 0;
+        const lineCOGS = filled * unitCost;
+        totalCOGS += lineCOGS;
+        
+        if (filled > 0) {
+          cogsLines.push({
+            sku: l.sku_id,
+            color: l.color,
+            size: l.size,
+            qty: filled,
+            unit_cost: unitCost,
+            line_cogs: lineCOGS,
+            unit_price: parseFloat(l.unit_price) || 0,
+            line_sales: lineSales
+          });
+        }
+      }
+      
+      console.log('[Invoice GL]', {
+        order: orderForGL?.order_number,
+        totalSales,
+        totalCOGS,
+        cogsLines
+      });
+      
+      if (totalSales > 0) {
+        // JE entry_number 생성
+        const year = new Date().getFullYear();
+        const { data: lastJE } = await db.from('journal_entries')
+          .select('entry_number').like('entry_number', `JE-${year}-%`)
+          .order('entry_number', { ascending: false }).limit(1);
+        const lastNum = lastJE?.[0] ? parseInt(lastJE[0].entry_number.split('-')[2]) || 0 : 0;
+        const jeNum = `JE-${year}-${String(lastNum+1).padStart(4,'0')}`;
+        const today = new Date().toISOString().slice(0, 10);
+        const performedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 
+                            window._invoiceApprovedEmp?.name || 'System';
+        
+        // journal_entries INSERT
+        const { data: je, error: jeErr } = await db.from('journal_entries').insert({
+          entry_number: jeNum,
+          entry_date: today,
+          description: `Invoice: ${orderForGL.order_number} — ${orderForGL.customer_name}${orderForGL.po_number ? ` (PO# ${orderForGL.po_number})` : ''}`,
+          source: 'ar_invoice',
+          source_id: _invoiceOrderId,
+          status: 'posted',
+          created_by: performedBy,
+          created_at: new Date().toISOString()
+        }).select().single();
+        
+        if (jeErr) {
+          console.error('[Invoice GL] JE 생성 실패:', jeErr);
+        } else if (je) {
+          // journal_lines INSERT
+          const jLines = [
+            // 1. Sales 분개
+            {
+              journal_entry_id: je.id,
+              account_code: '105-000',
+              description: `AR: ${orderForGL.order_number} — ${orderForGL.customer_name}`,
+              debit: totalSales,
+              credit: 0
+            },
+            {
+              journal_entry_id: je.id,
+              account_code: '400-000',
+              description: `Sales: ${orderForGL.order_number}`,
+              debit: 0,
+              credit: totalSales
+            }
+          ];
+          
+          // 2. COGS 분개 (cost 있을 때만)
+          if (totalCOGS > 0) {
+            jLines.push(
+              {
+                journal_entry_id: je.id,
+                account_code: '430-001',
+                description: `COGS: ${orderForGL.order_number}`,
+                debit: totalCOGS,
+                credit: 0
+              },
+              {
+                journal_entry_id: je.id,
+                account_code: '115-012',
+                description: `Inventory reduction: ${orderForGL.order_number}`,
+                debit: 0,
+                credit: totalCOGS
+              }
+            );
+          }
+          
+          const { error: jlErr } = await db.from('journal_lines').insert(jLines);
+          if (jlErr) {
+            console.error('[Invoice GL] journal_lines 실패:', jlErr);
+          } else {
+            console.log(`✅ [Invoice GL] ${jeNum} 분개 완료 — Sales $${totalSales.toFixed(2)}, COGS $${totalCOGS.toFixed(2)}`);
+          }
+        }
+      }
+    }
+  } catch(glEx) {
+    console.error('[Invoice GL] 분개 생성 예외:', glEx);
+    // 분개 실패해도 invoice 메인 흐름은 계속
+  }
+
   try {
     const { data: order } = await db.from('orders').select('*').eq('id', _invoiceOrderId).single();
     const { data: allLines } = await db.from('order_lines').select('*, styles(style_number,description)').eq('order_id', _invoiceOrderId);
@@ -51101,4 +51250,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T00:21:49Z - Ship 차감 fix: alloc_detail 기준 inventory_bins + inventory 정확 차감 -->
+
+<!-- Deploy trigger: 2026-04-27T09:15:49Z - Invoice 시 GL 분개 자동 생성 (Sales+COGS) -->
