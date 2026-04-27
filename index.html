@@ -27426,7 +27426,7 @@ async function sendInvoiceEmail() {
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   try {
     const { data: orderForGL } = await db.from('orders')
-      .select('id, order_number, customer_name, customer_po, total_amount, wh_code, is_split_warehouse')
+      .select('id, order_number, customer_name, customer_po, total_amount, wh_code, is_split_warehouse, freight_amount, sc_freight_amount, ca_freight_amount')
       .eq('id', _invoiceOrderId).single();
     const { data: linesForGL } = await db.from('order_lines')
       .select('*, styles(style_number, cost_xs, cost_s, cost_m, cost_l, cost_xl, cost_2xl, cost_3xl, cost_4xl, cost_5xl)')
@@ -27481,8 +27481,19 @@ async function sendInvoiceEmail() {
         }
       }
       
+      // Shipping/Freight 추가 — 거래처에 청구되는 운송비
+      // Split warehouse면 sc_freight + ca_freight, 아니면 freight_amount
+      const isSplitWh = orderForGL?.is_split_warehouse;
+      const freightAmount = isSplitWh
+        ? (parseFloat(orderForGL.sc_freight_amount) || 0) + (parseFloat(orderForGL.ca_freight_amount) || 0)
+        : (parseFloat(orderForGL.freight_amount) || 0);
+      const productSales = totalSales;
+      totalSales += freightAmount;
+      
       console.log('[Invoice GL]', {
         order: orderForGL?.order_number,
+        productSales,
+        freightAmount,
         totalSales,
         totalCOGS,
         cogsLines
@@ -27517,7 +27528,7 @@ async function sendInvoiceEmail() {
         } else if (je) {
           // journal_lines INSERT
           const jLines = [
-            // 1. Sales 분개
+            // 1. Sales 분개 (Product + Freight)
             {
               journal_entry_id: je.id,
               account_code: '105-000',
@@ -27528,7 +27539,9 @@ async function sendInvoiceEmail() {
             {
               journal_entry_id: je.id,
               account_code: '400-000',
-              description: `Sales: ${orderForGL.order_number}`,
+              description: freightAmount > 0 
+                ? `Sales: ${orderForGL.order_number} (Product $${productSales.toFixed(2)} + Freight $${freightAmount.toFixed(2)})`
+                : `Sales: ${orderForGL.order_number}`,
               debit: 0,
               credit: totalSales
             }
@@ -27558,7 +27571,7 @@ async function sendInvoiceEmail() {
           if (jlErr) {
             console.error('[Invoice GL] journal_lines 실패:', jlErr);
           } else {
-            console.log(`✅ [Invoice GL] ${jeNum} 분개 완료 — Sales $${totalSales.toFixed(2)}, COGS $${totalCOGS.toFixed(2)}`);
+            console.log(`✅ [Invoice GL] ${jeNum} 분개 완료 — Sales $${totalSales.toFixed(2)} (Product $${productSales.toFixed(2)}${freightAmount > 0 ? ` + Freight $${freightAmount.toFixed(2)}` : ''}), COGS $${totalCOGS.toFixed(2)}`);
           }
         }
       }
@@ -51032,6 +51045,18 @@ function openPaymentModal(orderId = null) {
           <input type="text" class="fi" id="pmt-notes" placeholder="Optional notes..." style="width:100%;">
         </div>
         
+        <!-- Check copy 업로드 -->
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">📎 Check Copy / Wire Confirmation</label>
+          <div id="pmt-check-area" style="border:2px dashed #d1d5db;border-radius:6px;padding:12px;background:#f9fafb;text-align:center;">
+            <input type="file" id="pmt-check-file" accept="image/*,application/pdf" onchange="previewCheckImage(this)" style="display:none;">
+            <label for="pmt-check-file" style="display:inline-block;cursor:pointer;background:#fff;padding:6px 14px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;font-weight:600;color:#374151;">
+              📎 파일 선택 (이미지/PDF)
+            </label>
+            <div id="pmt-check-preview" style="margin-top:8px;"></div>
+          </div>
+        </div>
+        
         <!-- Invoices 적용 영역 -->
         <div style="border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;padding:10px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -51190,6 +51215,55 @@ function updatePaymentSummary() {
   }
 }
 
+// 파일 미리보기 + base64 저장 (window 객체에 임시 저장)
+function previewCheckImage(input) {
+  const file = input.files[0];
+  const preview = document.getElementById('pmt-check-preview');
+  if (!file) {
+    preview.innerHTML = '';
+    window._pmtCheckB64 = null;
+    window._pmtCheckFilename = null;
+    return;
+  }
+  
+  // 5MB 초과 체크
+  if (file.size > 5 * 1024 * 1024) {
+    alert('파일이 너무 큽니다 (5MB 이하만 가능)');
+    input.value = '';
+    return;
+  }
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const b64 = e.target.result;  // data:image/...;base64,XXX
+    window._pmtCheckB64 = b64;
+    window._pmtCheckFilename = file.name;
+    
+    const isImage = file.type.startsWith('image/');
+    preview.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;background:#fff;padding:8px;border-radius:4px;border:1px solid #e5e7eb;">
+        ${isImage 
+          ? `<img src="${b64}" style="max-width:120px;max-height:80px;border-radius:3px;object-fit:cover;">`
+          : `<div style="width:60px;height:60px;background:#fef3c7;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:24px;">📄</div>`
+        }
+        <div style="flex:1;text-align:left;">
+          <div style="font-size:11px;font-weight:700;color:#374151;">${escapeHtml(file.name)}</div>
+          <div style="font-size:10px;color:#6b7280;">${(file.size/1024).toFixed(1)} KB</div>
+        </div>
+        <button onclick="removeCheckImage()" style="background:none;border:none;color:#dc2626;font-size:11px;cursor:pointer;font-weight:700;">✕ 제거</button>
+      </div>
+    `;
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeCheckImage() {
+  document.getElementById('pmt-check-file').value = '';
+  document.getElementById('pmt-check-preview').innerHTML = '';
+  window._pmtCheckB64 = null;
+  window._pmtCheckFilename = null;
+}
+
 // 옛 함수 (호환성용)
 function updatePaymentBalance() {
   // 새 모달은 renderPaymentInvoices/updatePaymentSummary 사용
@@ -51248,6 +51322,9 @@ async function savePayment() {
   const now = new Date().toISOString();
   
   // 1) Payments INSERT — 각 invoice마다 별도 row (기존 구조 유지)
+  const checkB64 = window._pmtCheckB64 || null;
+  const checkFilename = window._pmtCheckFilename || null;
+  
   const paymentInserts = applications.map(a => ({
     order_id: a.invoice_id,
     customer_name: a.customer_name,
@@ -51257,7 +51334,9 @@ async function savePayment() {
     reference: ref,
     notes,
     posted_by: performedBy,
-    created_at: now
+    created_at: now,
+    check_image_b64: checkB64,
+    check_image_filename: checkFilename
   }));
   
   const { data: insertedPayments, error: pmtErr } = await db.from('payments')
@@ -51327,6 +51406,9 @@ async function savePayment() {
   }
   
   document.getElementById('pmt-modal')?.remove();
+  // 메모리 정리
+  window._pmtCheckB64 = null;
+  window._pmtCheckFilename = null;
   showToast(`✅ Payment $${totalApplied.toFixed(2)} posted to ${applications.length} invoice(s)`);
   await loadAR();
 }
@@ -51534,4 +51616,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T12:24:15Z - Payment 모달 재설계 (Customer-based, 여러 invoice 동시 처리) -->
+
+
+<!-- Deploy trigger: 2026-04-27T14:25:25Z - GL 분개에 Freight 포함 (Sales/AR에 합산) -->
