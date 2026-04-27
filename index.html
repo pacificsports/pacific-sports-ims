@@ -1963,8 +1963,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                 <button class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;" onclick="emailStatement()">📧 Email</button>
               </div>
             </div>
-            <div id="ar-stmt-preview" style="background:#f9fafb;border:1px solid var(--border);border-radius:8px;padding:20px;min-height:200px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:13px;">
-              Select a customer to preview their statement
+            <div id="ar-stmt-preview" style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:0;min-height:200px;color:#9ca3af;font-size:13px;">
+              <div style="display:flex;align-items:center;justify-content:center;padding:60px;">Select a customer to preview their statement</div>
             </div>
           </div>
         </div>
@@ -52273,64 +52273,193 @@ function previewStatement() {
 
   const asOfDate = new Date(asOf + 'T23:59:59');
   const custInvs = _arInvoices.filter(i => i.customer_id === custId);
-  const custName = custInvs[0]?.customer_name || '';
+  const customer = (_custMgmtList || []).find(c => c.id === custId) || customers.find(c => c.id === custId) || {};
+  const custName = custInvs[0]?.customer_name || customer.name || '';
+  
   if (custInvs.length === 0) {
     document.getElementById('ar-stmt-preview').innerHTML = '<div style="color:#6b7280;text-align:center;padding:40px;">No open invoices for this customer</div>';
     return;
   }
 
-  const fmt = v => '$' + v.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+  const fmt = v => '$' + (v || 0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+  const fmtDate = d => d ? new Date(d).toLocaleDateString('en-US', {month:'2-digit',day:'2-digit',year:'numeric'}) : '—';
   const totalBal = custInvs.filter(i => i.balance > 0).reduce((s,i) => s+i.balance, 0);
-  const dateStr = asOfDate.toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'});
-
-  const rows = custInvs.sort((a,b) => a.invDate - b.invDate).map(i => `
-    <tr style="border-bottom:1px solid #f3f4f6;">
-      <td style="padding:6px 10px;font-family:monospace;font-size:11px;">${i.invDate.toLocaleDateString('en-US')}</td>
-      <td style="padding:6px 10px;font-size:11px;font-weight:600;">${i.invoice_number||i.order_number||'—'}</td>
-      <td style="padding:6px 10px;font-size:11px;">${i.customer_po||'—'}</td>
-      <td style="padding:6px 10px;font-size:11px;font-family:monospace;">${i.dueDate.toLocaleDateString('en-US')}</td>
-      <td style="padding:6px 10px;text-align:right;font-size:11px;">$${i.invAmt.toFixed(2)}</td>
-      <td style="padding:6px 10px;text-align:right;font-size:11px;color:#16a34a;">${i.cmAmt > 0 ? '($'+i.cmAmt.toFixed(2)+')' : '—'}</td>
-      <td style="padding:6px 10px;text-align:right;font-size:11px;color:#1a56a0;">${i.pmtAmt > 0 ? '($'+i.pmtAmt.toFixed(2)+')' : '—'}</td>
-      <td style="padding:6px 10px;text-align:right;font-weight:700;font-size:11px;color:${i.balance>0?'#dc2626':'#15803d'};">$${i.balance.toFixed(2)}</td>
-      <td style="padding:6px 10px;font-size:10px;">
-        ${i.daysOverdue > 0 && i.balance > 0 ? `<span style="color:#dc2626;font-weight:700;">${i.daysOverdue}d overdue</span>` : '<span style="color:#15803d;">Current</span>'}
-      </td>
-    </tr>`).join('');
+  const totalInvoiced = custInvs.reduce((s,i) => s+i.invAmt, 0);
+  const totalPaid = custInvs.reduce((s,i) => s+i.pmtAmt, 0);
+  const totalCredits = custInvs.reduce((s,i) => s+i.cmAmt, 0);
+  
+  // Aging bucket 계산
+  const aging = { current: 0, b30: 0, b60: 0, b90: 0, b90plus: 0 };
+  custInvs.forEach(i => {
+    if (i.balance <= 0) return;
+    const od = i.daysOverdue || 0;
+    if (od <= 0) aging.current += i.balance;
+    else if (od <= 30) aging.b30 += i.balance;
+    else if (od <= 60) aging.b60 += i.balance;
+    else if (od <= 90) aging.b90 += i.balance;
+    else aging.b90plus += i.balance;
+  });
+  
+  // Customer 주소 정리
+  const billAddr = customer.bill_address || customer.address || '';
+  const billCity = customer.bill_city || customer.city || '';
+  const billState = customer.bill_state || customer.state || '';
+  const billZip = customer.bill_zip || customer.zip || '';
+  const cityStateZip = [billCity, billState, billZip].filter(Boolean).join(', ').replace(/, ([A-Z]{2})$/, ', $1');
+  
+  const rows = custInvs.sort((a,b) => a.invDate - b.invDate).map(i => {
+    const isOverdue = i.daysOverdue > 0 && i.balance > 0;
+    const statusBadge = i.balance <= 0 
+      ? '<span style="display:inline-block;padding:2px 6px;background:#dcfce7;color:#15803d;border-radius:3px;font-size:9px;font-weight:700;">PAID</span>'
+      : isOverdue
+        ? `<span style="display:inline-block;padding:2px 6px;background:#fee2e2;color:#991b1b;border-radius:3px;font-size:9px;font-weight:700;">${i.daysOverdue}d OVERDUE</span>`
+        : '<span style="display:inline-block;padding:2px 6px;background:#dbeafe;color:#1e40af;border-radius:3px;font-size:9px;font-weight:700;">CURRENT</span>';
+    
+    return `
+    <tr style="border-bottom:1px solid #e5e7eb;">
+      <td style="padding:9px 12px;font-size:11px;color:#374151;font-family:'IBM Plex Mono',monospace;white-space:nowrap;">${fmtDate(i.invDate)}</td>
+      <td style="padding:9px 12px;font-size:11px;font-weight:700;color:#1f2937;">${escapeHtml(i.invoice_number || i.order_number || '—')}</td>
+      <td style="padding:9px 12px;font-size:10px;color:#6b7280;">${escapeHtml(i.customer_po || '—')}</td>
+      <td style="padding:9px 12px;font-size:11px;color:#374151;font-family:'IBM Plex Mono',monospace;white-space:nowrap;">${fmtDate(i.dueDate)}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#1f2937;">${fmt(i.invAmt)}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:11px;font-family:'IBM Plex Mono',monospace;color:${i.cmAmt > 0 ? '#16a34a' : '#9ca3af'};">${i.cmAmt > 0 ? '(' + fmt(i.cmAmt) + ')' : '—'}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:11px;font-family:'IBM Plex Mono',monospace;color:${i.pmtAmt > 0 ? '#1d4ed8' : '#9ca3af'};">${i.pmtAmt > 0 ? '(' + fmt(i.pmtAmt) + ')' : '—'}</td>
+      <td style="padding:9px 12px;text-align:right;font-size:12px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:${i.balance > 0 ? '#dc2626' : '#15803d'};">${fmt(i.balance)}</td>
+      <td style="padding:9px 12px;text-align:center;">${statusBadge}</td>
+    </tr>`;
+  }).join('');
 
   document.getElementById('ar-stmt-preview').innerHTML = `
-    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;">
-      <div style="background:#0f2744;padding:14px 20px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center;">
-        <div style="color:#fff;font-size:16px;font-weight:800;">PACIFIC SPORTS INC</div>
-        <div style="color:#fff;font-size:13px;font-weight:700;">ACCOUNT STATEMENT</div>
+    <div style="font-family:'Inter',Arial,sans-serif;max-width:920px;margin:0 auto;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+      
+      <!-- Header: Pacific Sports + STATEMENT -->
+      <div style="padding:24px 32px;border-bottom:3px solid #0f2744;display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <div style="font-size:22px;font-weight:900;color:#0f2744;letter-spacing:-0.5px;">PACIFIC SPORTS INC</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5;">
+            3440 Preserve Court<br>
+            Sumter, SC 29150<br>
+            (803) 760-6251
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:24px;font-weight:900;color:#0f2744;letter-spacing:1px;">STATEMENT</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:8px;">
+            <div><strong style="color:#374151;">Date:</strong> ${asOfDate.toLocaleDateString('en-US', {month:'long',day:'numeric',year:'numeric'})}</div>
+            <div style="margin-top:2px;"><strong style="color:#374151;">Account:</strong> ${escapeHtml(customer.customer_no || customer.id?.substring(0,8) || '—')}</div>
+          </div>
+        </div>
       </div>
-      <div style="background:#f8fafc;border:1px solid #e5e7eb;border-top:none;padding:10px 20px;display:flex;justify-content:space-between;font-size:12px;">
-        <div><span style="color:#6b7280;">Customer:</span> <strong>${custName}</strong></div>
-        <div><span style="color:#6b7280;">As of:</span> <strong>${dateStr}</strong></div>
+
+      <!-- Bill To + Remit To -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:20px 32px;background:#f9fafb;">
+        <div>
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Bill To</div>
+          <div style="font-size:13px;font-weight:800;color:#1f2937;">${escapeHtml(custName)}</div>
+          ${customer.contact_name ? `<div style="font-size:11px;color:#374151;margin-top:2px;">${escapeHtml(customer.contact_name)}</div>` : ''}
+          <div style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5;">
+            ${billAddr ? escapeHtml(billAddr).replace(/\n/g, '<br>') + '<br>' : ''}
+            ${cityStateZip ? escapeHtml(cityStateZip) : ''}
+          </div>
+          ${customer.phone ? `<div style="font-size:10px;color:#6b7280;margin-top:4px;">📞 ${escapeHtml(customer.phone)}</div>` : ''}
+          ${customer.email ? `<div style="font-size:10px;color:#6b7280;">✉ ${escapeHtml(customer.email)}</div>` : ''}
+          <div style="font-size:10px;color:#374151;margin-top:6px;padding-top:6px;border-top:1px solid #e5e7eb;">
+            <strong>Terms:</strong> ${escapeHtml(customer.terms || 'N30')}
+          </div>
+        </div>
+        <div>
+          <div style="font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Remit Payment To</div>
+          <div style="font-size:13px;font-weight:800;color:#1f2937;">Hana Commercial Finance</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5;">
+            Dept. LA 24406<br>
+            Pasadena, CA 91185-4406
+          </div>
+          <div style="font-size:10px;color:#374151;margin-top:6px;padding-top:6px;border-top:1px solid #e5e7eb;">
+            <strong>Make checks payable to:</strong><br>
+            Pacific Sports Inc.
+          </div>
+        </div>
       </div>
-      <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">
-        <thead><tr style="background:#111827;color:#fff;font-size:10px;">
-          <th style="padding:7px 10px;text-align:left;">Date</th>
-          <th style="padding:7px 10px;text-align:left;">Invoice #</th>
-          <th style="padding:7px 10px;text-align:left;">PO #</th>
-          <th style="padding:7px 10px;text-align:left;">Due Date</th>
-          <th style="padding:7px 10px;text-align:right;">Invoice Amt</th>
-          <th style="padding:7px 10px;text-align:right;">Credits</th>
-          <th style="padding:7px 10px;text-align:right;">Payments</th>
-          <th style="padding:7px 10px;text-align:right;">Balance</th>
-          <th style="padding:7px 10px;text-align:left;">Status</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-        <tfoot>
-          <tr style="background:#111827;color:#fff;">
-            <td colspan="7" style="padding:10px;text-align:right;font-weight:700;font-size:13px;">TOTAL BALANCE DUE:</td>
-            <td colspan="2" style="padding:10px;text-align:right;font-weight:900;font-size:16px;">${fmt(totalBal)}</td>
-          </tr>
-        </tfoot>
-      </table>
-      <div style="padding:10px 20px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;font-size:10px;color:#6b7280;background:#fafafa;">
-        Please remit payment to: Hana Commercial Finance · Dept. LA 24406 · Pasadena, CA 91185-4406
+
+      <!-- Activity Table -->
+      <div style="padding:0 32px;">
+        <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin:18px 0 8px;">Account Activity</div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;">
+          <thead>
+            <tr style="background:#0f2744;color:#fff;">
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Date</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Invoice #</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">PO #</th>
+              <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Due Date</th>
+              <th style="padding:10px 12px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Amount</th>
+              <th style="padding:10px 12px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Credits</th>
+              <th style="padding:10px 12px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Payments</th>
+              <th style="padding:10px 12px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Balance</th>
+              <th style="padding:10px 12px;text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr style="background:#f3f4f6;border-top:2px solid #0f2744;">
+              <td colspan="4" style="padding:10px 12px;text-align:right;font-size:11px;font-weight:700;color:#374151;">SUBTOTALS:</td>
+              <td style="padding:10px 12px;text-align:right;font-size:12px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1f2937;">${fmt(totalInvoiced)}</td>
+              <td style="padding:10px 12px;text-align:right;font-size:12px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${totalCredits > 0 ? '#16a34a' : '#9ca3af'};">${totalCredits > 0 ? '(' + fmt(totalCredits) + ')' : '—'}</td>
+              <td style="padding:10px 12px;text-align:right;font-size:12px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${totalPaid > 0 ? '#1d4ed8' : '#9ca3af'};">${totalPaid > 0 ? '(' + fmt(totalPaid) + ')' : '—'}</td>
+              <td style="padding:10px 12px;text-align:right;font-size:13px;font-family:'IBM Plex Mono',monospace;font-weight:900;color:${totalBal > 0 ? '#dc2626' : '#15803d'};">${fmt(totalBal)}</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
+
+      <!-- Aging Summary -->
+      ${totalBal > 0 ? `
+      <div style="padding:0 32px;margin-top:18px;">
+        <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Aging Summary</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);border:1px solid #e5e7eb;overflow:hidden;border-radius:4px;">
+          <div style="padding:12px 8px;text-align:center;background:${aging.current > 0 ? '#f0fdf4' : '#f9fafb'};border-right:1px solid #e5e7eb;">
+            <div style="font-size:9px;font-weight:700;color:#166534;text-transform:uppercase;margin-bottom:4px;">Current</div>
+            <div style="font-size:14px;font-weight:800;color:${aging.current > 0 ? '#15803d' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${aging.current > 0 ? fmt(aging.current) : '—'}</div>
+          </div>
+          <div style="padding:12px 8px;text-align:center;background:${aging.b30 > 0 ? '#fefce8' : '#f9fafb'};border-right:1px solid #e5e7eb;">
+            <div style="font-size:9px;font-weight:700;color:#854d0e;text-transform:uppercase;margin-bottom:4px;">1-30 Days</div>
+            <div style="font-size:14px;font-weight:800;color:${aging.b30 > 0 ? '#a16207' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${aging.b30 > 0 ? fmt(aging.b30) : '—'}</div>
+          </div>
+          <div style="padding:12px 8px;text-align:center;background:${aging.b60 > 0 ? '#fff7ed' : '#f9fafb'};border-right:1px solid #e5e7eb;">
+            <div style="font-size:9px;font-weight:700;color:#9a3412;text-transform:uppercase;margin-bottom:4px;">31-60 Days</div>
+            <div style="font-size:14px;font-weight:800;color:${aging.b60 > 0 ? '#c2410c' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${aging.b60 > 0 ? fmt(aging.b60) : '—'}</div>
+          </div>
+          <div style="padding:12px 8px;text-align:center;background:${aging.b90 > 0 ? '#fef2f2' : '#f9fafb'};border-right:1px solid #e5e7eb;">
+            <div style="font-size:9px;font-weight:700;color:#991b1b;text-transform:uppercase;margin-bottom:4px;">61-90 Days</div>
+            <div style="font-size:14px;font-weight:800;color:${aging.b90 > 0 ? '#dc2626' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${aging.b90 > 0 ? fmt(aging.b90) : '—'}</div>
+          </div>
+          <div style="padding:12px 8px;text-align:center;background:${aging.b90plus > 0 ? '#7f1d1d' : '#f9fafb'};">
+            <div style="font-size:9px;font-weight:700;color:${aging.b90plus > 0 ? '#fecaca' : '#374151'};text-transform:uppercase;margin-bottom:4px;">90+ Days</div>
+            <div style="font-size:14px;font-weight:800;color:${aging.b90plus > 0 ? '#fff' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${aging.b90plus > 0 ? fmt(aging.b90plus) : '—'}</div>
+          </div>
+        </div>
+      </div>` : ''}
+
+      <!-- Total Due -->
+      <div style="margin:20px 32px;padding:18px 24px;background:linear-gradient(135deg,#0f2744 0%,#1a3a5c 100%);border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Total Amount Due</div>
+          <div style="font-size:10px;color:#cbd5e1;margin-top:4px;">${custInvs.filter(i => i.balance > 0).length} open invoice${custInvs.filter(i => i.balance > 0).length !== 1 ? 's' : ''}</div>
+        </div>
+        <div style="font-size:32px;font-weight:900;color:#fff;font-family:'IBM Plex Mono',monospace;letter-spacing:-1px;">${fmt(totalBal)}</div>
+      </div>
+
+      <!-- Footer Note -->
+      <div style="padding:16px 32px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;">
+        <div style="font-size:10px;color:#6b7280;line-height:1.6;">
+          <div style="font-weight:700;color:#374151;margin-bottom:4px;">Payment Instructions:</div>
+          • Please reference invoice number(s) on your remittance.<br>
+          • Make checks payable to <strong>Pacific Sports Inc.</strong> and mail to the address above.<br>
+          • For questions about this statement, please contact us at <strong>(803) 760-6251</strong>.<br>
+          ${totalBal > 0 ? '• Payment terms: <strong>' + escapeHtml(customer.terms || 'Net 30') + '</strong>. Late payments may incur additional charges.' : ''}
+        </div>
+      </div>
+
     </div>`;
 }
 
@@ -52478,4 +52607,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T17:25:32Z - Customer Mgmt의 +New Customer / Edit이 옛 풍부한 모달 사용 -->
+
+<!-- Deploy trigger: 2026-04-27T17:47:15Z - AR Statement 새 디자인 (헤더, Bill To/Remit To, Aging, Total Due) -->
