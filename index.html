@@ -1807,6 +1807,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button class="btn" onclick="refreshAR()">🔄 Refresh</button>
         <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;" onclick="openPaymentModal()">💵 Record Payment</button>
         <button class="btn" onclick="exportArCsv()">⬇ Export CSV</button>
+        <button class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="openArMigrationModal()" title="MAS 200에서 AR 데이터 옮기기">📥 Migration</button>
       </div>
 
       <!-- AR KPI Cards -->
@@ -2725,6 +2726,77 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
       </div>
     </div>
+
+    <!-- ── AR Migration 모달 (MAS 200 PDF 마이그레이션) ── -->
+    <div id="ar-migration-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;width:95%;max-width:1200px;max-height:92vh;display:flex;flex-direction:column;border-radius:8px;overflow:hidden;">
+        <div style="padding:14px 20px;background:linear-gradient(135deg,#7c3aed 0%,#6d28d9 100%);display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">📥 AR Migration — MAS 200 → New System</span>
+          <button onclick="document.getElementById('ar-migration-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fff;">✕</button>
+        </div>
+        
+        <div style="padding:18px 22px;overflow-y:auto;flex:1;">
+          <!-- Step 1: Upload -->
+          <div id="ar-mig-step-upload">
+            <div style="background:#f3f4f6;border-left:4px solid #7c3aed;padding:14px 16px;border-radius:6px;margin-bottom:18px;">
+              <div style="font-weight:700;color:#5b21b6;font-size:13px;margin-bottom:6px;">📋 사용 방법</div>
+              <div style="font-size:12px;color:#374151;line-height:1.7;">
+                1. MAS 200에서 <strong>Accounts Receivable Aged Invoice Report</strong> PDF 준비<br>
+                2. 아래 PDF 파일 업로드<br>
+                3. Claude AI 가 자동으로 거래처 + invoice 추출<br>
+                4. 결과 확인 후 <strong>Import</strong> 클릭 → 새 시스템에 자동 입력<br>
+                <br>
+                <span style="color:#dc2626;">⚠️ 이 작업은 한 번만 실행. 기존 customer / invoice 와 중복 안 되게 주의.</span>
+              </div>
+            </div>
+            
+            <div style="border:2px dashed #d1d5db;border-radius:8px;padding:32px;text-align:center;background:#fafafa;">
+              <div style="font-size:48px;margin-bottom:8px;">📄</div>
+              <div style="font-size:14px;font-weight:700;color:#374151;margin-bottom:14px;">AR Aging Report PDF 업로드</div>
+              <input type="file" id="ar-mig-pdf-input" accept="application/pdf" style="display:none;" onchange="handleArMigrationPdf(event)">
+              <button class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;font-size:14px;padding:10px 28px;" onclick="document.getElementById('ar-mig-pdf-input').click()">📁 PDF 선택</button>
+              <div style="font-size:11px;color:#6b7280;margin-top:12px;">최대 파일 크기: 32MB</div>
+            </div>
+          </div>
+          
+          <!-- Step 2: Parsing -->
+          <div id="ar-mig-step-parsing" style="display:none;text-align:center;padding:60px 20px;">
+            <div style="font-size:48px;margin-bottom:16px;">🤖</div>
+            <div style="font-size:16px;font-weight:700;color:#5b21b6;margin-bottom:8px;">Claude AI 가 PDF 분석 중...</div>
+            <div style="font-size:12px;color:#6b7280;" id="ar-mig-parsing-msg">PDF를 읽고 거래처와 invoice를 추출하고 있습니다 (보통 30초-2분 소요)</div>
+            <div style="margin-top:24px;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;">
+              <div id="ar-mig-progress" style="height:100%;background:linear-gradient(90deg,#7c3aed,#a78bfa);animation:progress-pulse 2s ease-in-out infinite;"></div>
+            </div>
+          </div>
+          
+          <!-- Step 3: Preview -->
+          <div id="ar-mig-step-preview" style="display:none;">
+            <div id="ar-mig-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px;"></div>
+            <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px 14px;margin-bottom:14px;">
+              <div style="font-size:12px;color:#78350f;font-weight:700;">⚠️ 검증 필수</div>
+              <div style="font-size:11px;color:#92400e;margin-top:4px;line-height:1.6;">
+                Parser 결과를 <strong>꼭 확인</strong>하세요. 스캔본 PDF는 OCR 정확도 95-99%. 합계가 PDF와 일치하는지 비교하세요.
+              </div>
+            </div>
+            <div id="ar-mig-preview-content" style="border:1px solid #e5e7eb;border-radius:6px;max-height:50vh;overflow-y:auto;"></div>
+          </div>
+        </div>
+        
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#f9fafb;">
+          <div id="ar-mig-status" style="font-size:12px;color:#6b7280;"></div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn" onclick="document.getElementById('ar-migration-modal').style.display='none'">Cancel</button>
+            <button id="ar-mig-import-btn" class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;display:none;" onclick="executeArMigration()">✅ Import to New System</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <style>
+      @keyframes progress-pulse {
+        0%, 100% { opacity: 1; transform: scaleX(1); transform-origin: left; }
+        50% { opacity: 0.6; transform: scaleX(0.95); }
+      }
+    </style>
 
     <!-- ── AP Invoice 입력 모달 ── -->
     <div id="ap-invoice-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;align-items:center;justify-content:center;">
@@ -52736,6 +52808,261 @@ async function emailStatement() {
   }
 }
 
+// ─────────────────────────────────────
+// AR Migration (MAS 200 → New System)
+// ─────────────────────────────────────
+let _arMigrationData = null;  // parsed AR aging data
+
+function openArMigrationModal() {
+  // Reset state
+  _arMigrationData = null;
+  document.getElementById('ar-mig-step-upload').style.display = 'block';
+  document.getElementById('ar-mig-step-parsing').style.display = 'none';
+  document.getElementById('ar-mig-step-preview').style.display = 'none';
+  document.getElementById('ar-mig-import-btn').style.display = 'none';
+  document.getElementById('ar-mig-status').textContent = '';
+  document.getElementById('ar-mig-pdf-input').value = '';
+  document.getElementById('ar-migration-modal').style.display = 'flex';
+}
+
+async function handleArMigrationPdf(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.type !== 'application/pdf') {
+    showToast('PDF 파일만 가능합니다');
+    return;
+  }
+  if (file.size > 32 * 1024 * 1024) {
+    showToast('파일이 너무 큽니다 (32MB 초과)');
+    return;
+  }
+  
+  // Switch to parsing step
+  document.getElementById('ar-mig-step-upload').style.display = 'none';
+  document.getElementById('ar-mig-step-parsing').style.display = 'block';
+  document.getElementById('ar-mig-status').textContent = `📄 ${file.name} (${(file.size/1024).toFixed(0)} KB)`;
+  
+  try {
+    // PDF → base64
+    const reader = new FileReader();
+    const base64 = await new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    
+    document.getElementById('ar-mig-parsing-msg').textContent = 'Claude AI 호출 중... PDF가 크면 1-3분 걸릴 수 있어요';
+    
+    const res = await fetch('https://po-confirm-email.hjbae.workers.dev/parse-ar-aging', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        file_base64: base64,
+        media_type: 'application/pdf'
+      })
+    });
+    
+    const data = await res.json();
+    
+    if (!data.ok) {
+      throw new Error(data.error || 'Parse failed');
+    }
+    
+    _arMigrationData = data.data;
+    showArMigrationPreview(data.data, data.stats);
+    
+  } catch(e) {
+    console.error('[AR Migration]', e);
+    showToast('❌ PDF 분석 실패: ' + e.message);
+    document.getElementById('ar-mig-step-parsing').style.display = 'none';
+    document.getElementById('ar-mig-step-upload').style.display = 'block';
+  }
+}
+
+function showArMigrationPreview(data, stats) {
+  document.getElementById('ar-mig-step-parsing').style.display = 'none';
+  document.getElementById('ar-mig-step-preview').style.display = 'block';
+  
+  const fmt = v => '$' + (Number(v) || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  
+  // Stats cards
+  const totalCustomers = stats.customers || data.customers?.length || 0;
+  const totalItems = stats.items || (data.customers || []).reduce((s,c) => s + (c.items?.length || 0), 0);
+  const reportTotal = data.report_total || 0;
+  const calculatedTotal = (data.customers || []).reduce((s,c) => 
+    s + (c.items || []).reduce((s2,i) => s2 + (i.balance || 0), 0), 0);
+  const matched = Math.abs(reportTotal - calculatedTotal) < 1;
+  
+  document.getElementById('ar-mig-stats').innerHTML = `
+    <div style="background:#ede9fe;border:1px solid #c4b5fd;border-radius:6px;padding:12px;text-align:center;">
+      <div style="font-size:10px;color:#5b21b6;text-transform:uppercase;font-weight:700;">As of Date</div>
+      <div style="font-size:16px;font-weight:800;color:#5b21b6;margin-top:4px;">${data.as_of_date || '—'}</div>
+    </div>
+    <div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:12px;text-align:center;">
+      <div style="font-size:10px;color:#1e40af;text-transform:uppercase;font-weight:700;">Customers</div>
+      <div style="font-size:20px;font-weight:800;color:#1e40af;margin-top:4px;">${totalCustomers}</div>
+    </div>
+    <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:12px;text-align:center;">
+      <div style="font-size:10px;color:#92400e;text-transform:uppercase;font-weight:700;">Total Invoices</div>
+      <div style="font-size:20px;font-weight:800;color:#92400e;margin-top:4px;">${totalItems}</div>
+    </div>
+    <div style="background:${matched?'#dcfce7':'#fee2e2'};border:1px solid ${matched?'#86efac':'#fca5a5'};border-radius:6px;padding:12px;text-align:center;">
+      <div style="font-size:10px;color:${matched?'#166534':'#991b1b'};text-transform:uppercase;font-weight:700;">Total AR ${matched?'✓':'⚠'}</div>
+      <div style="font-size:16px;font-weight:800;color:${matched?'#166534':'#991b1b'};margin-top:4px;font-family:monospace;">${fmt(reportTotal)}</div>
+      ${!matched ? `<div style="font-size:9px;color:#991b1b;margin-top:2px;">계산: ${fmt(calculatedTotal)}</div>` : ''}
+    </div>
+  `;
+  
+  // Customer list
+  const html = (data.customers || []).map(c => {
+    const items = c.items || [];
+    const itemsHtml = items.map(i => `
+      <tr style="border-top:1px solid #f3f4f6;">
+        <td style="padding:5px 8px;font-family:monospace;font-size:11px;">${i.invoice_number || ''}</td>
+        <td style="padding:5px 8px;font-size:11px;">${i.invoice_date || ''}</td>
+        <td style="padding:5px 8px;font-size:11px;">${i.due_date || '—'}</td>
+        <td style="padding:5px 8px;text-align:right;font-family:monospace;font-size:11px;font-weight:600;color:${i.balance < 0 ? '#16a34a' : '#1f2937'};">${fmt(i.balance)}</td>
+        <td style="padding:5px 8px;text-align:center;font-size:10px;">${i.days_delinquent ? '<span style="color:#dc2626;font-weight:700;">' + i.days_delinquent + 'd</span>' : '—'}</td>
+      </tr>
+    `).join('');
+    return `
+    <div style="border-bottom:2px solid #e5e7eb;">
+      <div style="padding:10px 14px;background:#f9fafb;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <span style="font-size:13px;font-weight:700;color:#1f2937;">${c.customer_name || '—'}</span>
+          <span style="font-size:11px;color:#6b7280;margin-left:8px;">#${c.customer_no || ''}</span>
+        </div>
+        <div style="font-family:monospace;font-size:13px;font-weight:800;color:#5b21b6;">${fmt(c.customer_total)} <span style="font-size:10px;color:#9ca3af;">(${items.length})</span></div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#fafafa;">
+            <th style="padding:5px 8px;text-align:left;font-size:10px;color:#6b7280;font-weight:600;">Invoice #</th>
+            <th style="padding:5px 8px;text-align:left;font-size:10px;color:#6b7280;font-weight:600;">Date</th>
+            <th style="padding:5px 8px;text-align:left;font-size:10px;color:#6b7280;font-weight:600;">Due</th>
+            <th style="padding:5px 8px;text-align:right;font-size:10px;color:#6b7280;font-weight:600;">Balance</th>
+            <th style="padding:5px 8px;text-align:center;font-size:10px;color:#6b7280;font-weight:600;">Delq</th>
+          </tr>
+        </thead>
+        <tbody>${itemsHtml}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+  
+  document.getElementById('ar-mig-preview-content').innerHTML = html;
+  document.getElementById('ar-mig-import-btn').style.display = 'inline-block';
+  document.getElementById('ar-mig-status').textContent = `✅ ${totalCustomers} customers, ${totalItems} invoices 추출 완료. 검토 후 Import 클릭.`;
+}
+
+async function executeArMigration() {
+  if (!_arMigrationData) return;
+  
+  const ok = confirm(`정말로 ${_arMigrationData.customers?.length || 0}개 거래처의 invoice를 새 시스템에 import 하시겠습니까?\n\n⚠️ 이 작업은 되돌리기 어렵습니다. 한 번만 실행하세요.`);
+  if (!ok) return;
+  
+  const btn = document.getElementById('ar-mig-import-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Importing...';
+  
+  let createdCustomers = 0;
+  let matchedCustomers = 0;
+  let createdInvoices = 0;
+  let errors = [];
+  
+  try {
+    // Customer 매칭/생성
+    const { data: existingCustomers } = await db.from('customers').select('id, name, customer_no');
+    const customerMap = {};  // name → id
+    (existingCustomers || []).forEach(c => {
+      customerMap[(c.name || '').trim().toUpperCase()] = c.id;
+    });
+    
+    for (const cust of (_arMigrationData.customers || [])) {
+      try {
+        const custKey = (cust.customer_name || '').trim().toUpperCase();
+        let customerId = customerMap[custKey];
+        
+        // 거래처 없으면 새로 생성
+        if (!customerId) {
+          const { data: newCust, error: cErr } = await db.from('customers').insert({
+            name: cust.customer_name || 'Unknown',
+            customer_no: '99-' + (cust.customer_no || '').padStart(7, '0'),
+            credit_limit: cust.credit_limit || 0,
+            phone: cust.phone || '',
+            terms: 'Net 30'
+          }).select('id').single();
+          
+          if (cErr) {
+            errors.push(`${cust.customer_name}: customer 생성 실패 - ${cErr.message}`);
+            continue;
+          }
+          customerId = newCust.id;
+          createdCustomers++;
+          customerMap[custKey] = customerId;
+        } else {
+          matchedCustomers++;
+        }
+        
+        // 각 invoice / credit memo 입력
+        for (const item of (cust.items || [])) {
+          if (!item.balance || item.balance === 0) continue;  // 0 잔액 skip
+          
+          const isCM = item.type === 'CM' || (item.balance < 0);
+          const invNum = item.invoice_number || '';
+          
+          // ar_invoices_migrated 테이블에 단순 기록 (또는 invoices 테이블에 minimal entry)
+          const { error: iErr } = await db.from('ar_migrated_invoices').insert({
+            customer_id: customerId,
+            invoice_number: invNum,
+            invoice_date: item.invoice_date,
+            due_date: item.due_date || item.invoice_date,
+            original_amount: Math.abs(item.balance),
+            balance: item.balance,
+            is_credit_memo: isCM,
+            memo: 'Migrated from MAS 200',
+            migrated_at: new Date().toISOString()
+          });
+          
+          if (iErr) {
+            errors.push(`${cust.customer_name} ${invNum}: ${iErr.message}`);
+          } else {
+            createdInvoices++;
+          }
+        }
+        
+        document.getElementById('ar-mig-status').textContent = 
+          `진행 중... ${createdCustomers + matchedCustomers}/${_arMigrationData.customers.length} 거래처, ${createdInvoices} invoices`;
+      } catch(e) {
+        errors.push(`${cust.customer_name}: ${e.message}`);
+      }
+    }
+    
+    // 결과
+    const msg = `✅ Migration 완료\n\n` +
+                `• 새 거래처 생성: ${createdCustomers}\n` +
+                `• 기존 거래처 매칭: ${matchedCustomers}\n` +
+                `• Invoices 생성: ${createdInvoices}\n` +
+                (errors.length ? `\n❌ 에러 ${errors.length}개:\n${errors.slice(0,5).join('\n')}` : '');
+    
+    alert(msg);
+    
+    if (errors.length === 0) {
+      document.getElementById('ar-migration-modal').style.display = 'none';
+      refreshAR();
+    } else {
+      console.error('Migration errors:', errors);
+    }
+    
+  } catch(e) {
+    console.error('[AR Migration]', e);
+    alert('❌ Migration 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✅ Import to New System';
+  }
+}
+
+
 function exportArCsv() {
   const rows = [['Invoice #','Customer','PO #','Invoice Date','Due Date','Terms','Invoice Amt','Credits','Payments','Balance','Status']];
   _arInvoices.forEach(i => rows.push([
@@ -52889,4 +53216,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T19:16:56Z - printStatement template literal의 script 태그 fix (DOM write 방식) -->
+
+
+<!-- Deploy trigger: 2026-04-27T20:13:39Z - exportArCsv 함수 선언 복원 -->
