@@ -50803,7 +50803,13 @@ async function loadAR() {
 
   const today = new Date(); today.setHours(0,0,0,0);
   _arInvoices = (orders || []).map(o => {
-    const invAmt = parseFloat(o.total_amount) || 0;
+    // Invoice 금액 = product total + freight (운임은 거래처 청구분)
+    const productAmt = parseFloat(o.total_amount) || 0;
+    const baseFreight = parseFloat(o.freight_amount) || 0;
+    const scFreight = parseFloat(o.sc_freight_amount) || 0;
+    const caFreight = parseFloat(o.ca_freight_amount) || 0;
+    const freightAmt = baseFreight > 0 ? baseFreight : (scFreight + caFreight);
+    const invAmt = productAmt + freightAmt;
     const cmAmt = (cmByOrder[o.id] || []).reduce((s,c) => s + (parseFloat(c.total_amount)||0) + (parseFloat(c.freight_credit)||0), 0);
     const pmtAmt = (pmtByOrder[o.id] || []).reduce((s,p) => s + (parseFloat(p.amount)||0), 0);
     const balance = Math.max(0, invAmt - cmAmt - pmtAmt);
@@ -51658,4 +51664,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T14:37:35Z - Split warehouse 분개 (창고별 separate JE, freight 포함) -->
+
+<!-- Deploy trigger: 2026-04-27T14:42:39Z - AR Aging에 운임 포함 (invAmt = product + freight) -->
