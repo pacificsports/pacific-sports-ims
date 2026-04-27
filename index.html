@@ -52554,8 +52554,200 @@ async function previewStatement() {
     </div>`;
 }
 
+// Print Statement — 새 창에 statement HTML 그대로 띄우고 print
+function printStatement() {
+  const previewEl = document.getElementById('ar-stmt-preview');
+  if (!previewEl || !previewEl.querySelector('div')) {
+    showToast('먼저 customer 선택해서 preview 하세요');
+    return;
+  }
+  
+  const custName = (_custMgmtList || []).find(c => c.id === document.getElementById('ar-stmt-customer')?.value)?.name 
+    || customers.find(c => c.id === document.getElementById('ar-stmt-customer')?.value)?.name 
+    || 'Statement';
+  
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<title>Statement - ${escapeHtml(custName)}</title>
+<style>
+  @media print {
+    @page { size: letter; margin: 0.5in; }
+    body { margin: 0; }
+  }
+  body { 
+    font-family: 'Inter', Arial, sans-serif; 
+    margin: 0; 
+    padding: 20px;
+    background: #fff;
+    color: #1f2937;
+  }
+  table { border-collapse: collapse; }
+</style>
+</head>
+<body>
+${previewEl.innerHTML}
+<script>
+  window.onload = function() {
+    setTimeout(function() {
+      window.print();
+    }, 300);
+  };
+  window.onafterprint = function() {
+    setTimeout(function() { window.close(); }, 200);
+  };
+</script>
+</body>
+</html>`;
+  
+  const win = window.open('', '_blank', 'width=900,height=1100');
+  if (!win) {
+    showToast('❌ 팝업 차단됨 - 브라우저 팝업 허용 필요');
+    return;
+  }
+  win.document.write(html);
+  win.document.close();
+}
+
+// Email Statement — 거래처 이메일로 PDF 또는 HTML 첨부
 async function emailStatement() {
-  showToast('📧 Statement email feature coming soon!');
+  const custId = document.getElementById('ar-stmt-customer')?.value;
+  if (!custId) { showToast('Customer를 먼저 선택하세요'); return; }
+  
+  const previewEl = document.getElementById('ar-stmt-preview');
+  if (!previewEl || !previewEl.querySelector('div')) {
+    showToast('먼저 Preview 하세요');
+    return;
+  }
+  
+  const customer = (_custMgmtList || []).find(c => c.id === custId) 
+    || customers.find(c => c.id === custId) 
+    || {};
+  
+  // 거래처 이메일 확인
+  const toEmail = customer.accounting_email || customer.email || '';
+  if (!toEmail) {
+    showToast('❌ 이 거래처에 이메일이 없습니다. 거래처 정보에서 이메일을 먼저 입력하세요.');
+    return;
+  }
+  
+  // CC 이메일들
+  const ccList = [];
+  if (customer.accounting_email_cc) ccList.push(...customer.accounting_email_cc.split(/[,;]/).map(e => e.trim()).filter(Boolean));
+  if (customer.email_cc) ccList.push(...customer.email_cc.split(/[,;]/).map(e => e.trim()).filter(Boolean));
+  
+  // Internal CC (settings에서)
+  let internalCc = '';
+  try {
+    const { data } = await db.from('company_settings').select('value').eq('key', 'internal_cc_emails').maybeSingle();
+    internalCc = data?.value || '';
+  } catch(e) {}
+  if (internalCc) ccList.push(...internalCc.split(/[,;]/).map(e => e.trim()).filter(Boolean));
+  
+  const asOf = document.getElementById('ar-stmt-date')?.value;
+  const asOfFormatted = asOf ? new Date(asOf + 'T12:00:00').toLocaleDateString('en-US', {month:'long',day:'numeric',year:'numeric'}) : '';
+  
+  // Statement HTML을 이메일 본문에 그대로 (이미 디자인되어 있어서 이메일에서도 보임)
+  const subject = `Statement of Account - ${customer.name || ''} - ${asOfFormatted}`;
+  
+  // 회사 정보
+  const ci = await getCompanyInfo();
+  const companyName = ci.company_name || 'Peace Textile America Inc.';
+  const companyDba = ci.company_dba || 'Pacific Sports';
+  
+  // Total balance
+  const custInvs = _arInvoices.filter(i => i.customer_id === custId);
+  const totalBal = custInvs.filter(i => i.balance > 0).reduce((s,i) => s+i.balance, 0);
+  const pastDueAmount = custInvs.filter(i => i.balance > 0 && i.daysOverdue > 0).reduce((s,i) => s + i.balance, 0);
+  const fmt = v => '$' + (v || 0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
+  
+  const greeting = customer.contact_name ? `Dear ${customer.contact_name},` : 'Dear Customer,';
+  
+  const emailBody = `
+<div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6;">
+  <p>${greeting}</p>
+  <p>Please find attached your account statement as of <strong>${asOfFormatted}</strong>.</p>
+  <p style="background:#f3f4f6;padding:12px 16px;border-left:4px solid #0f2744;margin:16px 0;">
+    <strong>Account Summary:</strong><br>
+    Total Account Balance: <strong>${fmt(totalBal)}</strong>
+    ${pastDueAmount > 0 ? '<br>⚠️ Past Due Amount: <strong style="color:#dc2626;">' + fmt(pastDueAmount) + '</strong>' : ''}
+  </p>
+  ${pastDueAmount > 0 
+    ? '<p style="color:#dc2626;"><strong>Please remit payment for the past due amount as soon as possible.</strong></p>'
+    : '<p>Thank you for your continued business.</p>'
+  }
+  <p>If you have any questions about this statement, please contact us at <strong>${escapeHtml(ci.company_phone || '(803) 760-6251')}</strong>.</p>
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
+  ${previewEl.innerHTML}
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:20px 0;">
+  <p style="font-size:11px;color:#6b7280;">
+    Best regards,<br>
+    <strong>${escapeHtml(companyName)}</strong>${companyDba ? ` (DBA ${escapeHtml(companyDba)})` : ''}
+  </p>
+</div>`;
+  
+  // 확인 모달 - 보낼 정보 보여주고 확인 후 발송
+  const ccString = [...new Set(ccList)].join(', ');
+  const confirmMsg = `이메일 발송 확인\n\nTo: ${toEmail}\n${ccString ? 'Cc: ' + ccString + '\n' : ''}Subject: ${subject}\n\n계속하시겠습니까?`;
+  if (!confirm(confirmMsg)) return;
+  
+  showToast('📧 이메일 발송 중...');
+  
+  try {
+    // Reply-To 이메일
+    let replyToEmail = '';
+    try {
+      const { data: rt } = await db.from('company_settings').select('value').eq('key', 'reply_to_email').maybeSingle();
+      replyToEmail = rt?.value || '';
+    } catch(e) {}
+    if (!replyToEmail && internalCc) {
+      replyToEmail = internalCc.split(/[,;]/)[0].trim();
+    }
+    
+    const ccArr = [...new Set(ccList)].filter(e => e && e.includes('@'));
+    
+    const res = await fetch('https://po-confirm-email.hjbae.workers.dev/send-statement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customer_name: customer.name || '',
+        customer_email: toEmail,
+        ...(ccArr.length ? { cc: ccArr } : {}),
+        ...(replyToEmail ? { reply_to: replyToEmail } : {}),
+        subject,
+        email_html: emailBody,
+        as_of: asOfFormatted,
+        total_balance: totalBal,
+        past_due: pastDueAmount
+      })
+    });
+    
+    if (!res.ok) {
+      // /send-statement 없으면 /send fallback
+      const res2 = await fetch('https://po-confirm-email.hjbae.workers.dev/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_number: 'STATEMENT-' + asOf,
+          customer_name: customer.name || '',
+          customer_email: toEmail,
+          ...(ccArr.length ? { cc: ccArr } : {}),
+          ...(replyToEmail ? { reply_to: replyToEmail } : {}),
+          email_html: emailBody,
+          subject_override: subject
+        })
+      });
+      if (!res2.ok) {
+        const errData = await res2.json().catch(()=>({}));
+        throw new Error(errData.error || res2.statusText);
+      }
+    }
+    
+    showToast('✅ Statement 이메일 발송 완료: ' + toEmail);
+  } catch(e) {
+    console.error('[emailStatement]', e);
+    showToast('❌ 이메일 발송 실패: ' + (e.message || ''));
+  }
 }
 
 function exportArCsv() {
@@ -52709,4 +52901,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T19:07:11Z - Statement: Total Amount Due → Total Account Balance -->
+
+<!-- Deploy trigger: 2026-04-27T19:12:47Z - Statement Print + Email 기능 추가 -->
