@@ -27432,11 +27432,16 @@ async function sendInvoiceEmail() {
       .select('*, styles(style_number, cost_xs, cost_s, cost_m, cost_l, cost_xl, cost_2xl, cost_3xl, cost_4xl, cost_5xl)')
       .eq('order_id', _invoiceOrderId);
     
-    // 이미 분개됐는지 체크 (중복 방지)
+    // 분개 어느 warehouse 발송분 — split이면 _invoiceWh 기준, 아니면 order 자체 wh
+    const isSplitWh = orderForGL?.is_split_warehouse || orderForGL?.wh_code === 'SC&CA';
+    const thisWh = _invoiceWh || (orderForGL?.wh_code === 'CA' ? 'CA' : 'SC');
+    
+    // 이미 분개됐는지 체크 (split이면 wh별로 따로)
+    const sourceIdKey = isSplitWh ? `${_invoiceOrderId}::${thisWh}` : _invoiceOrderId;
     const { data: existingJE } = await db.from('journal_entries')
       .select('id')
       .eq('source', 'ar_invoice')
-      .eq('source_id', _invoiceOrderId)
+      .eq('source_id', sourceIdKey)
       .maybeSingle();
     
     if (existingJE) {
@@ -27450,43 +27455,76 @@ async function sendInvoiceEmail() {
         '4XL': 'cost_4xl', '5XL': 'cost_5xl'
       };
       
-      // Sales 합계 + COGS 합계 계산 (line별)
+      // 이 창고의 line만 필터 (split이면)
+      const filteredLines = isSplitWh 
+        ? (linesForGL || []).filter(l => {
+            // l.wh = 'SC' | 'CA' | 'SC&CA' (둘 다)
+            if (thisWh === 'CA') return l.wh === 'CA' || l.wh === 'SC&CA';
+            return l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh;
+          })
+        : (linesForGL || []);
+      
+      // Sales + COGS 계산
       let totalSales = 0;
       let totalCOGS = 0;
       const cogsLines = [];
       
-      for (const l of (linesForGL || [])) {
-        const filled = l.qty_filled || l.qty_pieces || 0;
+      for (const l of filteredLines) {
+        // split일 때 line의 알맞은 fill 컬럼 사용
+        let filled;
+        if (isSplitWh) {
+          // split이면 sc_qty_filled / ca_qty_filled 따로 (있으면)
+          if (thisWh === 'CA') {
+            filled = l.ca_qty_filled || 0;
+          } else {
+            filled = l.sc_qty_filled || 0;
+          }
+          // 만약 split 컬럼이 없으면 (옛 데이터) qty_filled 사용
+          if (filled === 0 && l.wh === thisWh) {
+            filled = l.qty_filled || l.qty_pieces || 0;
+          }
+        } else {
+          filled = l.qty_filled || l.qty_pieces || 0;
+        }
+        
+        if (filled <= 0) continue;
+        
         const lineSales = filled * (parseFloat(l.unit_price) || 0);
         totalSales += lineSales;
         
-        // cost 가져오기
+        // cost
         const sizeKey = (l.size || '').toUpperCase();
         const costCol = sizeCostMap[sizeKey];
         const unitCost = costCol ? (parseFloat(l.styles?.[costCol]) || 0) : 0;
         const lineCOGS = filled * unitCost;
         totalCOGS += lineCOGS;
         
-        if (filled > 0) {
-          cogsLines.push({
-            sku: l.sku_id,
-            color: l.color,
-            size: l.size,
-            qty: filled,
-            unit_cost: unitCost,
-            line_cogs: lineCOGS,
-            unit_price: parseFloat(l.unit_price) || 0,
-            line_sales: lineSales
-          });
-        }
+        cogsLines.push({
+          sku: l.sku_id,
+          color: l.color,
+          size: l.size,
+          qty: filled,
+          unit_cost: unitCost,
+          line_cogs: lineCOGS,
+          unit_price: parseFloat(l.unit_price) || 0,
+          line_sales: lineSales
+        });
       }
       
-      // Shipping/Freight 추가 — 거래처에 청구되는 운송비
-      // Split warehouse면 sc_freight + ca_freight, 아니면 freight_amount
-      const isSplitWh = orderForGL?.is_split_warehouse;
-      const freightAmount = isSplitWh
-        ? (parseFloat(orderForGL.sc_freight_amount) || 0) + (parseFloat(orderForGL.ca_freight_amount) || 0)
-        : (parseFloat(orderForGL.freight_amount) || 0);
+      // Freight — 이 창고의 운임만
+      let freightAmount = 0;
+      if (isSplitWh) {
+        freightAmount = thisWh === 'CA' 
+          ? (parseFloat(orderForGL.ca_freight_amount) || 0)
+          : (parseFloat(orderForGL.sc_freight_amount) || 0);
+      } else {
+        // 단일 창고: freight_amount 또는 sc_/ca_freight_amount 중 채워진 거
+        const baseFreight = parseFloat(orderForGL.freight_amount) || 0;
+        const scFreight = parseFloat(orderForGL.sc_freight_amount) || 0;
+        const caFreight = parseFloat(orderForGL.ca_freight_amount) || 0;
+        freightAmount = baseFreight > 0 ? baseFreight : (scFreight + caFreight);
+      }
+      
       const productSales = totalSales;
       totalSales += freightAmount;
       
@@ -27515,9 +27553,9 @@ async function sendInvoiceEmail() {
         const { data: je, error: jeErr } = await db.from('journal_entries').insert({
           entry_number: jeNum,
           entry_date: today,
-          description: `Invoice: ${orderForGL.order_number} — ${orderForGL.customer_name}${orderForGL.customer_po ? ` (PO# ${orderForGL.customer_po})` : ''}`,
+          description: `Invoice: ${orderForGL.order_number} — ${orderForGL.customer_name}${orderForGL.customer_po ? ` (PO# ${orderForGL.customer_po})` : ''}${isSplitWh ? ` [${thisWh}]` : ''}`,
           source: 'ar_invoice',
-          source_id: _invoiceOrderId,
+          source_id: sourceIdKey,
           status: 'posted',
           created_by: performedBy,
           created_at: new Date().toISOString()
@@ -51618,4 +51656,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T14:25:25Z - GL 분개에 Freight 포함 (Sales/AR에 합산) -->
+
+
+<!-- Deploy trigger: 2026-04-27T14:37:35Z - Split warehouse 분개 (창고별 separate JE, freight 포함) -->
