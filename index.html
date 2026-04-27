@@ -5677,6 +5677,13 @@ function _openNewInvoiceInner(skipPushState = false) {
   updateStatusButtons(null);
 
   fillWhDropdown();
+  
+  // 새 PO 시 항상 재고 새로 로드 (캐시 무시) — 다른 화면에서 변경된 재고 반영
+  loadScInventory().then(() => {
+    if (poLines.length > 0) renderEntryTable();
+    liveRenderDocs();
+  });
+  
   const hasDraft = !window._boSkipDraft && loadDraft();
   window._boSkipDraft = false;
   if (hasDraft) { renderEntryTable(); liveRenderDocs(); return; }
@@ -5720,10 +5727,8 @@ async function openInvoice(orderId, skipPushState = false) {
   document.getElementById('inv-entry-form').style.display = 'none';
   document.getElementById('po-save-btn').style.display = 'none';
 
-  // inventory가 없으면 먼저 로드 (Edit PO 진입 시 재고 정상 표시를 위해)
-  if (Object.keys(scInventory).length === 0 || Object.keys(window.binInventory?.['SC'] || {}).length === 0) {
-    await loadScInventory();
-  }
+  // 항상 재고 새로 로드 (다른 화면에서 변경된 재고 반영)
+  await loadScInventory();
 
   const [{ data: order }, { data: lines }] = await Promise.all([
     db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single(),
@@ -51251,4 +51256,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T09:15:49Z - Invoice 시 GL 분개 자동 생성 (Sales+COGS) -->
+
+<!-- Deploy trigger: 2026-04-27T11:27:16Z - PO 화면 열 때 항상 재고 새로 로드 (캐시 stale 문제 fix) -->
