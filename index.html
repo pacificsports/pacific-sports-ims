@@ -2748,7 +2748,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           </div>
           <div>
             <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">INVOICE DATE *</div>
-            <input type="date" id="ap-inv-date" class="fi" style="width:140px;font-size:13px;">
+            <input type="date" id="ap-inv-date" class="fi" style="width:140px;font-size:13px;" onchange="calcAPDueDate()">
           </div>
           <div>
             <div style="font-size:10px;font-weight:700;color:#374151;margin-bottom:3px;">TERMS</div>
@@ -52505,14 +52505,40 @@ async function previewStatement() {
         </div>
       </div>` : ''}
 
-      <!-- Total Due -->
-      <div style="margin:20px 32px;padding:18px 24px;background:linear-gradient(135deg,#0f2744 0%,#1a3a5c 100%);border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Total Amount Due</div>
-          <div style="font-size:10px;color:#cbd5e1;margin-top:4px;">${custInvs.filter(i => i.balance > 0).length} open invoice${custInvs.filter(i => i.balance > 0).length !== 1 ? 's' : ''}</div>
+      <!-- Total Due + Past Due -->
+      ${(() => {
+        const openCount = custInvs.filter(i => i.balance > 0).length;
+        const pastDueAmount = custInvs.filter(i => i.balance > 0 && i.daysOverdue > 0).reduce((s,i) => s + i.balance, 0);
+        const pastDueCount = custInvs.filter(i => i.balance > 0 && i.daysOverdue > 0).length;
+        const hasPastDue = pastDueAmount > 0;
+        return `
+        <div style="margin:20px 32px;border-radius:6px;overflow:hidden;border:2px solid ${hasPastDue ? '#dc2626' : '#0f2744'};">
+          <!-- Total Outstanding -->
+          <div style="padding:16px 24px;background:linear-gradient(135deg,#0f2744 0%,#1a3a5c 100%);display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">Total Amount Due</div>
+              <div style="font-size:10px;color:#cbd5e1;margin-top:4px;">${openCount} open invoice${openCount !== 1 ? 's' : ''}</div>
+            </div>
+            <div style="font-size:30px;font-weight:900;color:#fff;font-family:'IBM Plex Mono',monospace;letter-spacing:-1px;">${fmt(totalBal)}</div>
+          </div>
+          <!-- Past Due Amount -->
+          ${hasPastDue ? `
+          <div style="padding:14px 24px;background:#fee2e2;border-top:1px solid #dc2626;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-size:11px;color:#991b1b;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;">⚠ Past Due Amount</div>
+              <div style="font-size:10px;color:#7f1d1d;margin-top:4px;">${pastDueCount} overdue invoice${pastDueCount !== 1 ? 's' : ''} — pay immediately</div>
+            </div>
+            <div style="font-size:24px;font-weight:900;color:#991b1b;font-family:'IBM Plex Mono',monospace;letter-spacing:-1px;">${fmt(pastDueAmount)}</div>
+          </div>
+          ` : `
+          <div style="padding:12px 24px;background:#f0fdf4;border-top:1px solid #15803d;display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:11px;color:#166534;font-weight:700;">✓ No Past Due Amount</div>
+            <div style="font-size:14px;font-weight:700;color:#15803d;font-family:'IBM Plex Mono',monospace;">$0.00</div>
+          </div>
+          `}
         </div>
-        <div style="font-size:32px;font-weight:900;color:#fff;font-family:'IBM Plex Mono',monospace;letter-spacing:-1px;">${fmt(totalBal)}</div>
-      </div>
+        `;
+      })()}
 
       <!-- Footer Note -->
       <div style="padding:16px 32px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;">
@@ -52680,4 +52706,6 @@ function exportArCsv() {
  literal 처리) -->
 
 
-<!-- Deploy trigger: 2026-04-27T18:15:41Z - Statement에 Past Due 컬럼 추가 (각 invoice 며칠 늦었는지) -->
+
+
+<!-- Deploy trigger: 2026-04-27T19:00:11Z - AP Invoice Date 변경 시 Due Date 자동 계산 -->
