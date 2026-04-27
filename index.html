@@ -26858,12 +26858,13 @@ async function _doShippedCoreInner(emp) {
       }
     }
 
-    // inventory 실제 차감 (일반 bin + PCR bin 모두)
+    // ── 실제 inventory + inventory_bins 차감 ──
+    // alloc_detail / alloc_ca_detail 에 명시된 bin들을 정확히 차감
+    
     const whIds = lineWh === 'SC&CA'
       ? [scWh?.id, caWh?.id].filter(Boolean)
       : lineWh === 'CA' ? [caWh?.id] : [scWh?.id];
 
-    // WH warehouse + PCR warehouse 모두 차감
     const pcrWhIds = lineWh === 'SC&CA'
       ? [warehouses.find(w=>w.code==='SC-PCR')?.id, warehouses.find(w=>w.code==='CA-PCR')?.id].filter(Boolean)
       : lineWh === 'CA'
@@ -26871,26 +26872,99 @@ async function _doShippedCoreInner(emp) {
         : [warehouses.find(w=>w.code==='SC-PCR')?.id].filter(Boolean);
 
     const allDeductWhIds = [...whIds, ...pcrWhIds];
+    
+    // 현재 WH의 alloc_detail (어떤 bin에서 빼야 할지 명시됨)
+    const currentAllocObj = wh === 'CA' ? allocCA : allocSC;
+    
+    // alloc_detail에 명시된 bin들에서 정확히 차감
+    const allocBins = Object.entries(currentAllocObj)
+      .filter(([k]) => !k.includes('TRANSFER|'))
+      .map(([binCode, val]) => ({
+        bin_code: binCode,
+        pcs: typeof val === 'object' ? (val.pcs || 0) : (val || 0)
+      }))
+      .filter(b => b.pcs > 0);
+    
+    console.log(`[Ship deduction] line ${l.color}/${l.size} filled=${filled}, allocBins:`, allocBins);
+    
     let toDeduct = filled;
-
-    for (const wId of allDeductWhIds) {
-      if (toDeduct <= 0) break;
-      const { data: invRows } = await db.from('inventory')
-        .select('id, qty_on_hand, qty_committed')
-        .eq('color', (l.color||'').toUpperCase())
-        .eq('size', (l.size||'').toUpperCase())
-        .eq('warehouse_id', wId)
-        .order('qty_on_hand', { ascending: false });
-      for (const inv of (invRows || [])) {
+    
+    if (allocBins.length > 0) {
+      // alloc_detail 기준 정확한 bin 차감
+      for (const ab of allocBins) {
         if (toDeduct <= 0) break;
-        const deduct = Math.min(toDeduct, inv.qty_on_hand || 0);
-        const commitRelease = Math.min(inv.qty_committed || 0, deduct);
-        if (deduct > 0) {
-          await db.from('inventory').update({
-            qty_on_hand: (inv.qty_on_hand || 0) - deduct,
-            qty_committed: Math.max(0, (inv.qty_committed || 0) - commitRelease)
-          }).eq('id', inv.id);
-          toDeduct -= deduct;
+        const binCode = ab.bin_code;
+        const deductFromBin = Math.min(toDeduct, ab.pcs);
+        
+        // 이 bin_code 에 해당하는 inventory_bins 찾기 (color/size 매칭)
+        // PCR bin인 경우 pallet 없을 수 있음, 그래도 bin_code로 찾기
+        const { data: binRows } = await db.from('inventory_bins')
+          .select('id, qty, inventory!inner(id, sku_id, color, size, warehouse_id)')
+          .eq('bin_code', binCode)
+          .eq('inventory.color', (l.color||'').toUpperCase())
+          .eq('inventory.size', (l.size||'').toUpperCase())
+          .gt('qty', 0);
+        
+        let stillToDeduct = deductFromBin;
+        for (const br of (binRows || [])) {
+          if (stillToDeduct <= 0) break;
+          const binDeduct = Math.min(stillToDeduct, br.qty || 0);
+          const newQty = (br.qty || 0) - binDeduct;
+          
+          if (newQty <= 0) {
+            // bin 삭제 (또는 qty=0)
+            await db.from('inventory_bins').delete().eq('id', br.id);
+          } else {
+            await db.from('inventory_bins').update({ qty: newQty }).eq('id', br.id);
+          }
+          
+          // inventory 테이블도 함께 차감
+          if (br.inventory?.id) {
+            const { data: invRow } = await db.from('inventory')
+              .select('qty_on_hand, qty_committed')
+              .eq('id', br.inventory.id).single();
+            if (invRow) {
+              const commitRelease = Math.min(invRow.qty_committed || 0, binDeduct);
+              await db.from('inventory').update({
+                qty_on_hand: (invRow.qty_on_hand || 0) - binDeduct,
+                qty_committed: Math.max(0, (invRow.qty_committed || 0) - commitRelease)
+              }).eq('id', br.inventory.id);
+            }
+          }
+          
+          stillToDeduct -= binDeduct;
+          toDeduct -= binDeduct;
+          console.log(`  bin ${binCode}: -${binDeduct} (newQty=${newQty})`);
+        }
+        
+        if (stillToDeduct > 0) {
+          console.warn(`  [Ship] bin ${binCode}에 ${stillToDeduct} pcs 부족`);
+        }
+      }
+    }
+    
+    // alloc_detail에 안 잡혔거나 부족한 부분은 fallback (color/size 기준)
+    if (toDeduct > 0) {
+      console.warn(`[Ship] ${l.color}/${l.size} fallback 차감 ${toDeduct} pcs`);
+      for (const wId of allDeductWhIds) {
+        if (toDeduct <= 0) break;
+        const { data: invRows } = await db.from('inventory')
+          .select('id, qty_on_hand, qty_committed')
+          .eq('color', (l.color||'').toUpperCase())
+          .eq('size', (l.size||'').toUpperCase())
+          .eq('warehouse_id', wId)
+          .order('qty_on_hand', { ascending: false });
+        for (const inv of (invRows || [])) {
+          if (toDeduct <= 0) break;
+          const deduct = Math.min(toDeduct, inv.qty_on_hand || 0);
+          const commitRelease = Math.min(inv.qty_committed || 0, deduct);
+          if (deduct > 0) {
+            await db.from('inventory').update({
+              qty_on_hand: (inv.qty_on_hand || 0) - deduct,
+              qty_committed: Math.max(0, (inv.qty_committed || 0) - commitRelease)
+            }).eq('id', inv.id);
+            toDeduct -= deduct;
+          }
         }
       }
     }
@@ -51026,4 +51100,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-26T22:17:18Z - 완료 버튼 우측 끝에 ✅ 표시 -->
+
+<!-- Deploy trigger: 2026-04-27T00:21:49Z - Ship 차감 fix: alloc_detail 기준 inventory_bins + inventory 정확 차감 -->
