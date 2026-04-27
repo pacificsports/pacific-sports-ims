@@ -52566,47 +52566,33 @@ function printStatement() {
     || customers.find(c => c.id === document.getElementById('ar-stmt-customer')?.value)?.name 
     || 'Statement';
   
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-<title>Statement - ${escapeHtml(custName)}</title>
-<style>
-  @media print {
-    @page { size: letter; margin: 0.5in; }
-    body { margin: 0; }
-  }
-  body { 
-    font-family: 'Inter', Arial, sans-serif; 
-    margin: 0; 
-    padding: 20px;
-    background: #fff;
-    color: #1f2937;
-  }
-  table { border-collapse: collapse; }
-</style>
-</head>
-<body>
-${previewEl.innerHTML}
-<script>
-  window.onload = function() {
-    setTimeout(function() {
-      window.print();
-    }, 300);
-  };
-  window.onafterprint = function() {
-    setTimeout(function() { window.close(); }, 200);
-  };
-</script>
-</body>
-</html>`;
-  
   const win = window.open('', '_blank', 'width=900,height=1100');
   if (!win) {
     showToast('❌ 팝업 차단됨 - 브라우저 팝업 허용 필요');
     return;
   }
-  win.document.write(html);
-  win.document.close();
+  
+  const doc = win.document;
+  doc.open();
+  doc.write('<!DOCTYPE html><html><head><title>Statement - ' + escapeHtml(custName) + '</title>');
+  doc.write('<style>');
+  doc.write('@media print { @page { size: letter; margin: 0.5in; } body { margin: 0; } }');
+  doc.write("body { font-family: 'Inter', Arial, sans-serif; margin: 0; padding: 20px; background: #fff; color: #1f2937; }");
+  doc.write('table { border-collapse: collapse; }');
+  doc.write('</style></head><body>');
+  doc.write(previewEl.innerHTML);
+  doc.write('</body></html>');
+  doc.close();
+  
+  // 약간 대기 후 print 다이얼로그 띄우기
+  setTimeout(() => {
+    try {
+      win.focus();
+      win.print();
+    } catch(e) {
+      console.warn('[printStatement]', e);
+    }
+  }, 400);
 }
 
 // Email Statement — 거래처 이메일로 PDF 또는 HTML 첨부
@@ -52902,4 +52888,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T19:12:47Z - Statement Print + Email 기능 추가 -->
+
+<!-- Deploy trigger: 2026-04-27T19:16:56Z - printStatement template literal의 script 태그 fix (DOM write 방식) -->
