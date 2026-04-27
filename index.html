@@ -1825,6 +1825,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button id="ar-tab-payments" onclick="arSetTab('payments')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">💵 Payment History</button>
         <button id="ar-tab-statement" onclick="arSetTab('statement')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📋 Statements</button>
         <button id="ar-tab-analytics" onclick="arSetTab('analytics')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">📈 Analytics</button>
+        <button id="ar-tab-customers" onclick="arSetTab('customers')" style="padding:6px 16px;font-size:12px;font-weight:600;border:none;background:#f5f7fa;color:var(--text2);border-radius:5px 5px 0 0;cursor:pointer;">👥 Customer Management</button>
       </div>
 
       <!-- Aging Report Tab -->
@@ -1996,9 +1997,32 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- ── P&L (Income Statement) ── -->
+      <!-- Customer Management Tab -->
+      <div id="ar-pane-customers" style="display:none;">
+        <div style="display:flex;gap:12px;height:calc(100vh - 320px);min-height:500px;">
+          <!-- 왼쪽: 고객 리스트 -->
+          <div style="width:280px;flex-shrink:0;background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;">
+            <div style="padding:10px 12px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
+              <input type="text" id="cust-mgmt-search" placeholder="고객 검색..." class="fi"
+                style="width:100%;font-size:12px;" oninput="renderCustMgmtList()">
+            </div>
+            <div id="cust-mgmt-list" style="overflow-y:auto;flex:1;"></div>
+            <div style="padding:8px 12px;border-top:1px solid #e5e7eb;">
+              <button onclick="openCustomerEditModal(null)" style="width:100%;background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:7px;font-size:12px;font-weight:700;cursor:pointer;">+ New Customer</button>
+            </div>
+          </div>
+
+          <!-- 오른쪽: 고객 상세 -->
+          <div id="cust-mgmt-detail" style="flex:1;overflow-y:auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;">
+            <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af;flex-direction:column;gap:8px;">
+              <div style="font-size:40px;">👥</div>
+              <div style="font-size:14px;font-weight:600;">고객을 선택하세요</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="panel" id="panel-pl">
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
         <h2 style="margin:0;font-size:16px;font-weight:700;">📈 Income Statement</h2>
@@ -38138,7 +38162,7 @@ let _arTab = 'aging';
 
 function arSetTab(tab) {
   _arTab = tab;
-  ['aging','invoices','payments','statement','analytics'].forEach(t => {
+  ['aging','invoices','payments','statement','analytics','customers'].forEach(t => {
     const btn = document.getElementById('ar-tab-' + t);
     const pane = document.getElementById('ar-pane-' + t);
     if (!btn || !pane) return;
@@ -38148,6 +38172,349 @@ function arSetTab(tab) {
     pane.style.display = active ? '' : 'none';
   });
   if (tab === 'analytics') renderArAnalytics();
+  if (tab === 'customers') loadCustomerMgmt();
+}
+
+// ══════════════════════════════════════════════════════════════
+// CUSTOMER MANAGEMENT MODULE
+// ══════════════════════════════════════════════════════════════
+let _custMgmtList = [];
+let _custMgmtSelected = null;
+
+async function loadCustomerMgmt() {
+  // 1. customers 가져오기
+  const { data: customers, error } = await db.from('customers')
+    .select('*')
+    .order('name');
+  
+  if (error) {
+    console.error('[CustMgmt] Load error:', error);
+    document.getElementById('cust-mgmt-list').innerHTML = '<div style="padding:20px;text-align:center;color:#dc2626;font-size:11px;">로딩 실패</div>';
+    return;
+  }
+  
+  _custMgmtList = customers || [];
+  
+  // 2. AR 데이터 없으면 로드
+  if (!_arInvoices || _arInvoices.length === 0) {
+    await loadAR();
+  }
+  
+  renderCustMgmtList();
+}
+
+function renderCustMgmtList() {
+  const search = (document.getElementById('cust-mgmt-search')?.value || '').toLowerCase();
+  const list = document.getElementById('cust-mgmt-list');
+  if (!list) return;
+  
+  // 각 고객의 AR 통계 계산
+  const custStats = {};
+  (_arInvoices || []).forEach(i => {
+    if (!i.customer_id) return;
+    if (!custStats[i.customer_id]) {
+      custStats[i.customer_id] = { totalSales: 0, outstanding: 0, invCount: 0 };
+    }
+    custStats[i.customer_id].totalSales += i.invAmt || 0;
+    custStats[i.customer_id].outstanding += i.balance || 0;
+    custStats[i.customer_id].invCount++;
+  });
+  
+  let filtered = _custMgmtList.filter(c => {
+    if (!search) return true;
+    return (c.name || '').toLowerCase().includes(search) ||
+           (c.email || '').toLowerCase().includes(search) ||
+           (c.phone || '').toLowerCase().includes(search);
+  });
+  
+  // 잔액 큰 순서로 정렬
+  filtered.sort((a, b) => {
+    const sa = custStats[a.id]?.outstanding || 0;
+    const sb = custStats[b.id]?.outstanding || 0;
+    if (sa !== sb) return sb - sa;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  
+  if (filtered.length === 0) {
+    list.innerHTML = '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:11px;font-style:italic;">고객이 없습니다</div>';
+    return;
+  }
+  
+  list.innerHTML = filtered.map(c => {
+    const stats = custStats[c.id] || { outstanding: 0, invCount: 0 };
+    const isSelected = _custMgmtSelected?.id === c.id;
+    return `
+      <div onclick="selectCustomer('${c.id}')" style="padding:9px 12px;border-bottom:1px solid #f3f4f6;cursor:pointer;background:${isSelected ? '#eff6ff' : '#fff'};border-left:3px solid ${isSelected ? '#1a56a0' : 'transparent'};transition:background 0.1s;" onmouseover="if(!this.dataset.sel)this.style.background='#f9fafb'" onmouseout="if(!this.dataset.sel)this.style.background='${isSelected ? '#eff6ff' : '#fff'}'" ${isSelected ? 'data-sel="1"' : ''}>
+        <div style="font-size:12px;font-weight:700;color:#1f2937;line-height:1.3;">${escapeHtml(c.name || '—')}</div>
+        ${stats.outstanding > 0
+          ? `<div style="font-size:10px;color:#dc2626;margin-top:2px;font-family:'IBM Plex Mono',monospace;font-weight:700;">$${stats.outstanding.toFixed(2)} open</div>`
+          : `<div style="font-size:10px;color:#9ca3af;margin-top:2px;">${stats.invCount} invoice${stats.invCount !== 1 ? 's' : ''}</div>`
+        }
+      </div>
+    `;
+  }).join('');
+}
+
+function selectCustomer(custId) {
+  _custMgmtSelected = _custMgmtList.find(c => c.id === custId);
+  renderCustMgmtList();
+  renderCustMgmtDetail();
+}
+
+function renderCustMgmtDetail() {
+  const detail = document.getElementById('cust-mgmt-detail');
+  if (!detail || !_custMgmtSelected) return;
+  
+  const c = _custMgmtSelected;
+  
+  // AR 데이터에서 이 고객의 invoice들과 payment들
+  const invoices = (_arInvoices || []).filter(i => i.customer_id === c.id);
+  const payments = (_arPayments || []).filter(p => {
+    const inv = _arInvoices.find(i => i.id === p.order_id);
+    return inv?.customer_id === c.id;
+  });
+  
+  // KPIs 계산
+  const totalSales = invoices.reduce((s, i) => s + (i.invAmt || 0), 0);
+  const outstanding = invoices.reduce((s, i) => s + (i.balance || 0), 0);
+  const totalPaid = payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+  
+  // DSO 계산: 평균 (payment_date - invoice_date)
+  let dsoSum = 0, dsoCount = 0;
+  payments.forEach(p => {
+    const inv = invoices.find(i => i.id === p.order_id);
+    if (inv && inv.invDate && p.payment_date) {
+      const days = Math.floor((new Date(p.payment_date) - new Date(inv.invDate)) / 86400000);
+      if (days >= 0) { dsoSum += days; dsoCount++; }
+    }
+  });
+  const avgDSO = dsoCount > 0 ? Math.round(dsoSum / dsoCount) : 0;
+  
+  // 마지막 결제일
+  const lastPayment = payments.sort((a, b) => 
+    new Date(b.payment_date) - new Date(a.payment_date))[0];
+  const lastPayDate = lastPayment 
+    ? new Date(lastPayment.payment_date).toLocaleDateString('en-US')
+    : '없음';
+  
+  // 최근 invoice 5개
+  const recentInvs = invoices.slice(0, 5);
+  // 최근 payment 5개
+  const recentPmts = payments.slice(0, 5);
+  
+  detail.innerHTML = `
+    <div style="padding:16px;">
+      <!-- Header -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #e5e7eb;">
+        <div>
+          <h3 style="margin:0 0 4px 0;font-size:18px;font-weight:800;color:#1f2937;">${escapeHtml(c.name || '—')}</h3>
+          <div style="font-size:11px;color:#6b7280;">${escapeHtml(c.email || c.phone || c.id)}</div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm" onclick="openCustomerEditModal('${c.id}')" style="background:#1a56a0;color:#fff;border-color:#1a56a0;">✏️ Edit</button>
+        </div>
+      </div>
+      
+      <!-- KPI Cards -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;">
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px;text-align:center;">
+          <div style="font-size:9px;font-weight:700;color:#1e40af;text-transform:uppercase;margin-bottom:4px;">Total Sales</div>
+          <div style="font-size:16px;font-weight:800;color:#1d4ed8;font-family:'IBM Plex Mono',monospace;">$${totalSales.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+          <div style="font-size:9px;color:#6b7280;margin-top:2px;">${invoices.length} invoices</div>
+        </div>
+        <div style="background:${outstanding > 0 ? '#fef2f2' : '#f0fdf4'};border:1px solid ${outstanding > 0 ? '#fecaca' : '#bbf7d0'};border-radius:6px;padding:10px;text-align:center;">
+          <div style="font-size:9px;font-weight:700;color:${outstanding > 0 ? '#991b1b' : '#166534'};text-transform:uppercase;margin-bottom:4px;">Outstanding</div>
+          <div style="font-size:16px;font-weight:800;color:${outstanding > 0 ? '#dc2626' : '#15803d'};font-family:'IBM Plex Mono',monospace;">$${outstanding.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+          <div style="font-size:9px;color:#6b7280;margin-top:2px;">${outstanding > 0 ? '미수금' : '완납'}</div>
+        </div>
+        <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:10px;text-align:center;">
+          <div style="font-size:9px;font-weight:700;color:#9a3412;text-transform:uppercase;margin-bottom:4px;">Avg DSO</div>
+          <div style="font-size:16px;font-weight:800;color:#c2410c;font-family:'IBM Plex Mono',monospace;">${avgDSO} <span style="font-size:11px;font-weight:600;">days</span></div>
+          <div style="font-size:9px;color:#6b7280;margin-top:2px;">평균 결제일</div>
+        </div>
+        <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:6px;padding:10px;text-align:center;">
+          <div style="font-size:9px;font-weight:700;color:#5b21b6;text-transform:uppercase;margin-bottom:4px;">Last Payment</div>
+          <div style="font-size:13px;font-weight:800;color:#6d28d9;font-family:'IBM Plex Mono',monospace;line-height:1.3;">${lastPayDate}</div>
+          <div style="font-size:9px;color:#6b7280;margin-top:2px;">${lastPayment ? '$' + (parseFloat(lastPayment.amount)||0).toFixed(2) : '—'}</div>
+        </div>
+      </div>
+      
+      <!-- Customer Info Card -->
+      <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px;margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+          <span>📋 Customer Information</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:11px;">
+          <div><span style="color:#6b7280;">📧 Email:</span> <strong>${escapeHtml(c.email || '—')}</strong></div>
+          <div><span style="color:#6b7280;">📞 Phone:</span> <strong>${escapeHtml(c.phone || '—')}</strong></div>
+          <div><span style="color:#6b7280;">📍 Address:</span> <strong>${escapeHtml(c.address || c.bill_address || '—')}</strong></div>
+          <div><span style="color:#6b7280;">🏙️ City:</span> <strong>${escapeHtml([c.city, c.state, c.zip].filter(Boolean).join(', ') || '—')}</strong></div>
+          <div><span style="color:#6b7280;">📜 Terms:</span> <strong>${escapeHtml(c.terms || c.payment_terms || 'Net 30')}</strong></div>
+          <div><span style="color:#6b7280;">💳 Credit Limit:</span> <strong>${c.credit_limit ? '$' + parseFloat(c.credit_limit).toLocaleString() : '—'}</strong></div>
+        </div>
+      </div>
+      
+      <!-- Recent Invoices + Payments (2 cards side-by-side) -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <!-- Recent Invoices -->
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <div style="background:#f8fafc;padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:700;color:#374151;">📜 Recent Invoices</div>
+          ${recentInvs.length === 0
+            ? '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:11px;font-style:italic;">No invoices</div>'
+            : recentInvs.map(i => {
+                const dt = i.invDate ? i.invDate.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'2-digit'}) : '—';
+                const isPaid = i.balance <= 0;
+                return `
+                  <div style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:11px;display:grid;grid-template-columns:60px 1fr 80px 60px;gap:6px;align-items:center;">
+                    <span style="color:#6b7280;">${dt}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1f2937;">${escapeHtml(i.invoice_number || i.order_number || '—')}</span>
+                    <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1d4ed8;">$${(i.invAmt||0).toFixed(2)}</span>
+                    <span style="text-align:right;font-size:9px;font-weight:700;padding:2px 4px;border-radius:3px;background:${isPaid ? '#dcfce7' : '#fef2f2'};color:${isPaid ? '#15803d' : '#dc2626'};">${isPaid ? 'PAID' : '$' + (i.balance||0).toFixed(0)}</span>
+                  </div>
+                `;
+              }).join('')
+          }
+        </div>
+        
+        <!-- Recent Payments -->
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <div style="background:#f0fdf4;padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:11px;font-weight:700;color:#15803d;">💵 Recent Payments</div>
+          ${recentPmts.length === 0
+            ? '<div style="padding:20px;text-align:center;color:#9ca3af;font-size:11px;font-style:italic;">No payments</div>'
+            : recentPmts.map(p => {
+                const dt = p.payment_date ? new Date(p.payment_date).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'2-digit'}) : '—';
+                const inv = invoices.find(i => i.id === p.order_id);
+                return `
+                  <div style="padding:8px 12px;border-bottom:1px solid #f3f4f6;font-size:11px;display:grid;grid-template-columns:60px 1fr 70px 50px;gap:6px;align-items:center;">
+                    <span style="color:#6b7280;">${dt}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;color:#1f2937;font-size:10px;">${escapeHtml(inv?.invoice_number || inv?.order_number || p.reference || '—')}</span>
+                    <span style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#15803d;">$${(parseFloat(p.amount)||0).toFixed(2)}</span>
+                    <span style="text-align:right;font-size:9px;color:#6b7280;">${escapeHtml(p.method || '')}</span>
+                  </div>
+                `;
+              }).join('')
+          }
+        </div>
+      </div>
+      
+      <!-- Quick Actions -->
+      <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
+        ${outstanding > 0 ? `<button class="btn" onclick="openPaymentModal()" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;font-size:12px;">💵 Record Payment</button>` : ''}
+        <button class="btn" onclick="arSetTab('statement');setTimeout(()=>{const s=document.getElementById('ar-stmt-customer');if(s){s.value='${c.id}';if(typeof generateStatement==='function')generateStatement();}},100)" style="font-size:12px;">📋 Statement</button>
+      </div>
+    </div>
+  `;
+}
+
+// 고객 편집/추가 모달
+function openCustomerEditModal(customerId) {
+  const isNew = !customerId;
+  const c = isNew ? { id: null, name: '', email: '', phone: '', address: '', city: '', state: '', zip: '', terms: 'Net 30', credit_limit: null } 
+                  : (_custMgmtList.find(x => x.id === customerId) || {});
+  
+  const html = `<div id="cust-edit-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:999999;display:flex;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:12px;width:600px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div style="background:#1a56a0;border-radius:12px 12px 0 0;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="color:#fff;font-weight:800;font-size:15px;">${isNew ? '+ New Customer' : '✏️ Edit Customer'}</span>
+        <button onclick="document.getElementById('cust-edit-modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#bfdbfe;">✕</button>
+      </div>
+      <div style="padding:18px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Name <span style="color:#dc2626">*</span></label>
+          <input type="text" class="fi" id="ce-name" value="${escapeHtml(c.name || '')}" style="width:100%;font-size:13px;">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Email</label>
+            <input type="email" class="fi" id="ce-email" value="${escapeHtml(c.email || '')}" style="width:100%;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Phone</label>
+            <input type="text" class="fi" id="ce-phone" value="${escapeHtml(c.phone || '')}" style="width:100%;">
+          </div>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Address</label>
+          <input type="text" class="fi" id="ce-address" value="${escapeHtml(c.address || c.bill_address || '')}" style="width:100%;">
+        </div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">City</label>
+            <input type="text" class="fi" id="ce-city" value="${escapeHtml(c.city || '')}" style="width:100%;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">State</label>
+            <input type="text" class="fi" id="ce-state" value="${escapeHtml(c.state || '')}" maxlength="2" style="width:100%;text-transform:uppercase;">
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">ZIP</label>
+            <input type="text" class="fi" id="ce-zip" value="${escapeHtml(c.zip || '')}" style="width:100%;">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Payment Terms</label>
+            <select class="fi" id="ce-terms" style="width:100%;">
+              <option ${(c.terms||c.payment_terms)==='Net 15'?'selected':''}>Net 15</option>
+              <option ${(c.terms||c.payment_terms||'Net 30')==='Net 30'?'selected':''}>Net 30</option>
+              <option ${(c.terms||c.payment_terms)==='Net 45'?'selected':''}>Net 45</option>
+              <option ${(c.terms||c.payment_terms)==='Net 60'?'selected':''}>Net 60</option>
+              <option ${(c.terms||c.payment_terms)==='Net 90'?'selected':''}>Net 90</option>
+              <option ${(c.terms||c.payment_terms)==='Due on Receipt'?'selected':''}>Due on Receipt</option>
+              <option ${(c.terms||c.payment_terms)==='COD'?'selected':''}>COD</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:3px;">Credit Limit</label>
+            <input type="number" class="fi" id="ce-credit" value="${c.credit_limit || ''}" placeholder="0.00" style="width:100%;font-family:'IBM Plex Mono',monospace;">
+          </div>
+        </div>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:flex-end;gap:8px;background:#fafafa;border-radius:0 0 12px 12px;">
+        <button class="btn" onclick="document.getElementById('cust-edit-modal').remove()">Cancel</button>
+        <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;font-weight:700;" onclick="saveCustomerFromModal('${customerId || ''}')">💾 Save</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function saveCustomerFromModal(customerId) {
+  const isNew = !customerId;
+  const data = {
+    name: document.getElementById('ce-name')?.value?.trim(),
+    email: document.getElementById('ce-email')?.value?.trim() || null,
+    phone: document.getElementById('ce-phone')?.value?.trim() || null,
+    address: document.getElementById('ce-address')?.value?.trim() || null,
+    city: document.getElementById('ce-city')?.value?.trim() || null,
+    state: document.getElementById('ce-state')?.value?.trim()?.toUpperCase() || null,
+    zip: document.getElementById('ce-zip')?.value?.trim() || null,
+    terms: document.getElementById('ce-terms')?.value || 'Net 30',
+    credit_limit: parseFloat(document.getElementById('ce-credit')?.value) || null
+  };
+  
+  if (!data.name) { alert('Customer name이 필요합니다'); return; }
+  
+  let result;
+  if (isNew) {
+    result = await db.from('customers').insert(data).select().single();
+  } else {
+    result = await db.from('customers').update(data).eq('id', customerId).select().single();
+  }
+  
+  if (result.error) {
+    alert('저장 실패: ' + result.error.message);
+    console.error('[CustMgmt] Save error:', result.error);
+    return;
+  }
+  
+  document.getElementById('cust-edit-modal').remove();
+  showToast(`✅ Customer ${isNew ? 'added' : 'updated'}`);
+  
+  await loadCustomerMgmt();
+  if (result.data?.id) {
+    selectCustomer(result.data.id);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -50994,10 +51361,45 @@ function _renderArPayments() {
           <td style="font-size:11px;color:#6b7280;">${p.notes || '—'}</td>
           <td style="font-size:11px;">${p.posted_by || '—'}</td>
           <td>
+            ${p.check_image_b64 ? `<button class="btn btn-sm" style="color:#1e40af;border-color:#93c5fd;background:#eff6ff;margin-right:4px;" onclick="viewCheckImage('${p.id}')">📎 View</button>` : ''}
             <button class="btn btn-sm" style="color:#dc2626;border-color:#fca5a5;" onclick="voidPayment('${p.id}')">🗑 Void</button>
           </td>
         </tr>`;
       }).join('');
+}
+
+// Check copy 보기 모달
+function viewCheckImage(paymentId) {
+  const pmt = _arPayments.find(p => p.id === paymentId);
+  if (!pmt || !pmt.check_image_b64) {
+    alert('첨부된 check copy가 없습니다.');
+    return;
+  }
+  
+  const filename = pmt.check_image_filename || 'check.pdf';
+  const isImage = pmt.check_image_b64.startsWith('data:image/');
+  const isPdf = pmt.check_image_b64.startsWith('data:application/pdf') || filename.toLowerCase().endsWith('.pdf');
+  
+  const html = `<div id="check-view-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;display:flex;align-items:center;justify-content:center;" onclick="if(event.target.id==='check-view-modal') document.getElementById('check-view-modal').remove()">
+    <div style="background:#fff;border-radius:12px;max-width:92vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+      <div style="background:#1a56a0;border-radius:12px 12px 0 0;padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <span style="color:#fff;font-weight:700;font-size:13px;">📎 ${escapeHtml(filename)}</span>
+        <div style="display:flex;gap:6px;">
+          <a href="${pmt.check_image_b64}" download="${escapeHtml(filename)}" class="btn btn-sm" style="background:#fff;color:#1a56a0;border-color:#fff;font-weight:600;">💾 Download</a>
+          <button onclick="document.getElementById('check-view-modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#bfdbfe;padding:0 6px;">✕</button>
+        </div>
+      </div>
+      <div style="padding:14px;overflow:auto;flex:1;background:#f3f4f6;">
+        ${isImage 
+          ? `<img src="${pmt.check_image_b64}" style="max-width:100%;max-height:75vh;display:block;margin:0 auto;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,0.15);">`
+          : isPdf
+            ? `<iframe src="${pmt.check_image_b64}" style="width:80vw;height:75vh;border:1px solid #e5e7eb;border-radius:4px;background:#fff;"></iframe>`
+            : `<div style="padding:60px;text-align:center;color:#6b7280;">미리보기 불가 — Download 버튼으로 받아주세요</div>`
+        }
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
 }
 
 function _populateStatementCustomers() {
@@ -51666,4 +52068,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T14:51:49Z - loadAR SELECT에 freight 컬럼 추가 -->
+
+
+<!-- Deploy trigger: 2026-04-27T15:09:37Z - AR에 Customer Management 탭 추가 (KPI, edit, recent activity) -->
