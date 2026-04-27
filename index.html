@@ -38261,7 +38261,7 @@ function selectCustomer(custId) {
   renderCustMgmtDetail();
 }
 
-function renderCustMgmtDetail() {
+async function renderCustMgmtDetail() {
   const detail = document.getElementById('cust-mgmt-detail');
   if (!detail || !_custMgmtSelected) return;
   
@@ -38273,6 +38273,69 @@ function renderCustMgmtDetail() {
     const inv = _arInvoices.find(i => i.id === p.order_id);
     return inv?.customer_id === c.id;
   });
+  
+  // 이 고객의 모든 order_lines 가져오기 (구매 history)
+  let purchasedLines = [];
+  if (invoices.length > 0) {
+    const orderIds = invoices.map(i => i.id);
+    const { data: lines } = await db.from('order_lines')
+      .select('order_id, sku_id, color, size, qty_filled, qty_pieces, unit_price, styles(style_number, description, category)')
+      .in('order_id', orderIds);
+    purchasedLines = lines || [];
+  }
+  
+  // SKU별 집계
+  const skuStats = {};
+  purchasedLines.forEach(l => {
+    const filled = l.qty_filled || l.qty_pieces || 0;
+    if (filled <= 0) return;
+    const key = l.sku_id;
+    if (!skuStats[key]) {
+      skuStats[key] = {
+        sku_id: l.sku_id,
+        style_number: l.styles?.style_number || '—',
+        description: l.styles?.description || '',
+        category: l.styles?.category || '',
+        color: l.color,
+        size: l.size,
+        qty: 0,
+        amount: 0,
+        orderCount: new Set()
+      };
+    }
+    skuStats[key].qty += filled;
+    skuStats[key].amount += filled * (parseFloat(l.unit_price) || 0);
+    skuStats[key].orderCount.add(l.order_id);
+  });
+  
+  // Style별 집계
+  const styleStats = {};
+  purchasedLines.forEach(l => {
+    const filled = l.qty_filled || l.qty_pieces || 0;
+    if (filled <= 0) return;
+    const key = l.styles?.style_number || 'Unknown';
+    if (!styleStats[key]) {
+      styleStats[key] = {
+        style_number: key,
+        description: l.styles?.description || '',
+        category: l.styles?.category || '',
+        qty: 0,
+        amount: 0,
+        skus: new Set()
+      };
+    }
+    styleStats[key].qty += filled;
+    styleStats[key].amount += filled * (parseFloat(l.unit_price) || 0);
+    styleStats[key].skus.add(l.sku_id);
+  });
+  
+  // Top SKUs 정렬
+  const topSkus = Object.values(skuStats)
+    .sort((a, b) => b.qty - a.qty);
+  
+  // Top Styles 정렬
+  const topStyles = Object.values(styleStats)
+    .sort((a, b) => b.qty - a.qty);
   
   // KPIs 계산
   const totalSales = invoices.reduce((s, i) => s + (i.invAmt || 0), 0);
@@ -38339,6 +38402,60 @@ function renderCustMgmtDetail() {
         </div>
       </div>
       
+      <!-- AR Aging Card -->
+      ${(() => {
+        // Aging bucket 계산
+        const buckets = { current: 0, b30: 0, b60: 0, b90: 0, b90plus: 0 };
+        const counts = { current: 0, b30: 0, b60: 0, b90: 0, b90plus: 0 };
+        invoices.forEach(i => {
+          if (i.balance <= 0) return;
+          const od = i.daysOverdue || 0;
+          if (od <= 0) { buckets.current += i.balance; counts.current++; }
+          else if (od <= 30) { buckets.b30 += i.balance; counts.b30++; }
+          else if (od <= 60) { buckets.b60 += i.balance; counts.b60++; }
+          else if (od <= 90) { buckets.b90 += i.balance; counts.b90++; }
+          else { buckets.b90plus += i.balance; counts.b90plus++; }
+        });
+        const totalOpen = buckets.current + buckets.b30 + buckets.b60 + buckets.b90 + buckets.b90plus;
+        if (totalOpen <= 0) return '';
+        const fmt = v => v > 0 ? '$' + v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
+        return `
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:14px;overflow:hidden;">
+          <div style="background:#fef2f2;padding:8px 12px;border-bottom:1px solid #fecaca;font-size:11px;font-weight:700;color:#991b1b;display:flex;justify-content:space-between;align-items:center;">
+            <span>📅 AR Aging</span>
+            <span style="font-family:'IBM Plex Mono',monospace;">Total Open: ${fmt(totalOpen)}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);">
+            <div style="padding:10px 8px;text-align:center;background:#f0fdf4;border-right:1px solid #e5e7eb;">
+              <div style="font-size:9px;font-weight:700;color:#166534;text-transform:uppercase;margin-bottom:3px;">Current</div>
+              <div style="font-size:13px;font-weight:800;color:${buckets.current > 0 ? '#15803d' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${fmt(buckets.current)}</div>
+              <div style="font-size:9px;color:#6b7280;margin-top:2px;">${counts.current} inv</div>
+            </div>
+            <div style="padding:10px 8px;text-align:center;background:#fefce8;border-right:1px solid #e5e7eb;">
+              <div style="font-size:9px;font-weight:700;color:#854d0e;text-transform:uppercase;margin-bottom:3px;">1-30 days</div>
+              <div style="font-size:13px;font-weight:800;color:${buckets.b30 > 0 ? '#a16207' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${fmt(buckets.b30)}</div>
+              <div style="font-size:9px;color:#6b7280;margin-top:2px;">${counts.b30} inv</div>
+            </div>
+            <div style="padding:10px 8px;text-align:center;background:#fff7ed;border-right:1px solid #e5e7eb;">
+              <div style="font-size:9px;font-weight:700;color:#9a3412;text-transform:uppercase;margin-bottom:3px;">31-60 days</div>
+              <div style="font-size:13px;font-weight:800;color:${buckets.b60 > 0 ? '#c2410c' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${fmt(buckets.b60)}</div>
+              <div style="font-size:9px;color:#6b7280;margin-top:2px;">${counts.b60} inv</div>
+            </div>
+            <div style="padding:10px 8px;text-align:center;background:#fef2f2;border-right:1px solid #e5e7eb;">
+              <div style="font-size:9px;font-weight:700;color:#991b1b;text-transform:uppercase;margin-bottom:3px;">61-90 days</div>
+              <div style="font-size:13px;font-weight:800;color:${buckets.b90 > 0 ? '#dc2626' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${fmt(buckets.b90)}</div>
+              <div style="font-size:9px;color:#6b7280;margin-top:2px;">${counts.b90} inv</div>
+            </div>
+            <div style="padding:10px 8px;text-align:center;background:#7f1d1d;color:#fff;">
+              <div style="font-size:9px;font-weight:700;color:#fecaca;text-transform:uppercase;margin-bottom:3px;">90+ days</div>
+              <div style="font-size:13px;font-weight:800;color:${buckets.b90plus > 0 ? '#fff' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${fmt(buckets.b90plus)}</div>
+              <div style="font-size:9px;color:#fca5a5;margin-top:2px;">${counts.b90plus} inv</div>
+            </div>
+          </div>
+        </div>
+        `;
+      })()}
+      
       <!-- Customer Info Card -->
       <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px;margin-bottom:14px;">
         <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
@@ -38396,6 +38513,71 @@ function renderCustMgmtDetail() {
           }
         </div>
       </div>
+      
+      <!-- 🛍 Purchase Pattern (Top SKUs + Top Styles) -->
+      ${topSkus.length === 0 ? '' : `
+      <div style="margin-top:14px;display:grid;grid-template-columns:1.3fr 1fr;gap:10px;">
+        <!-- Top SKUs -->
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <div style="background:#fef3c7;padding:8px 12px;border-bottom:1px solid #fde68a;font-size:11px;font-weight:700;color:#92400e;display:flex;justify-content:space-between;align-items:center;">
+            <span>🏆 Top SKUs (가장 많이 구매)</span>
+            <span style="font-size:10px;color:#6b7280;">${topSkus.length} SKUs</span>
+          </div>
+          <div style="max-height:280px;overflow-y:auto;">
+            <div style="display:grid;grid-template-columns:30px 1fr 60px 60px 80px;gap:6px;padding:6px 12px;background:#fafafa;border-bottom:1px solid #e5e7eb;font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">
+              <div>#</div>
+              <div>STYLE / COLOR / SIZE</div>
+              <div style="text-align:right;">QTY</div>
+              <div style="text-align:right;">ORDERS</div>
+              <div style="text-align:right;">AMOUNT</div>
+            </div>
+            ${topSkus.slice(0, 15).map((s, idx) => {
+              const isTop3 = idx < 3;
+              const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '';
+              return `
+                <div style="display:grid;grid-template-columns:30px 1fr 60px 60px 80px;gap:6px;padding:7px 12px;border-bottom:1px solid #f3f4f6;font-size:11px;align-items:center;${isTop3 ? 'background:#fffbeb;' : ''}">
+                  <div style="font-weight:700;color:${isTop3 ? '#92400e' : '#9ca3af'};font-family:'IBM Plex Mono',monospace;">${medal || (idx + 1)}</div>
+                  <div>
+                    <div style="font-weight:700;color:#1f2937;font-size:11px;">${escapeHtml(s.style_number)} ${escapeHtml((s.color || '').toUpperCase())} ${escapeHtml((s.size || '').toUpperCase())}</div>
+                    <div style="font-size:9px;color:#6b7280;line-height:1.2;">${escapeHtml(s.description || '')}</div>
+                  </div>
+                  <div style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1d4ed8;">${s.qty.toLocaleString()}</div>
+                  <div style="text-align:right;font-family:'IBM Plex Mono',monospace;color:#6b7280;font-size:10px;">${s.orderCount.size}</div>
+                  <div style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#15803d;">$${s.amount.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
+                </div>
+              `;
+            }).join('')}
+            ${topSkus.length > 15 ? `<div style="padding:8px 12px;text-align:center;font-size:10px;color:#6b7280;font-style:italic;">+${topSkus.length - 15} more SKUs</div>` : ''}
+          </div>
+        </div>
+        
+        <!-- Top Styles -->
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <div style="background:#dbeafe;padding:8px 12px;border-bottom:1px solid #bfdbfe;font-size:11px;font-weight:700;color:#1e40af;display:flex;justify-content:space-between;align-items:center;">
+            <span>📦 Top Styles (스타일별)</span>
+            <span style="font-size:10px;color:#6b7280;">${topStyles.length} styles</span>
+          </div>
+          <div style="max-height:280px;overflow-y:auto;">
+            <div style="display:grid;grid-template-columns:1fr 60px 80px;gap:6px;padding:6px 12px;background:#fafafa;border-bottom:1px solid #e5e7eb;font-size:9px;font-weight:700;color:#6b7280;text-transform:uppercase;">
+              <div>STYLE</div>
+              <div style="text-align:right;">QTY</div>
+              <div style="text-align:right;">AMOUNT</div>
+            </div>
+            ${topStyles.slice(0, 10).map(s => `
+              <div style="display:grid;grid-template-columns:1fr 60px 80px;gap:6px;padding:7px 12px;border-bottom:1px solid #f3f4f6;font-size:11px;align-items:center;">
+                <div>
+                  <div style="font-weight:700;color:#1f2937;">#${escapeHtml(s.style_number)}</div>
+                  <div style="font-size:9px;color:#6b7280;line-height:1.2;">${escapeHtml(s.description || '')}<br>${s.skus.size} colors/sizes</div>
+                </div>
+                <div style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#1d4ed8;">${s.qty.toLocaleString()}</div>
+                <div style="text-align:right;font-family:'IBM Plex Mono',monospace;font-weight:700;color:#15803d;">$${s.amount.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
+              </div>
+            `).join('')}
+            ${topStyles.length > 10 ? `<div style="padding:8px 12px;text-align:center;font-size:10px;color:#6b7280;font-style:italic;">+${topStyles.length - 10} more styles</div>` : ''}
+          </div>
+        </div>
+      </div>
+      `}
       
       <!-- Quick Actions -->
       <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;">
@@ -52070,4 +52252,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T15:09:37Z - AR에 Customer Management 탭 추가 (KPI, edit, recent activity) -->
+
+
+<!-- Deploy trigger: 2026-04-27T16:37:31Z - Customer Mgmt에 Top SKUs / Top Styles 구매 패턴 추가 -->
