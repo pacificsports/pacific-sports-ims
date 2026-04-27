@@ -32767,8 +32767,37 @@ function openEditCustomer(id) {
   openModal('modal-customer');
 }
 
+// 다음 customer_no 자동 생성 (99-0000001, 99-0000002, ...)
+async function generateNextCustomerNo() {
+  try {
+    const { data } = await db.from('customers')
+      .select('customer_no')
+      .like('customer_no', '99-%')
+      .order('customer_no', { ascending: false })
+      .limit(1);
+    
+    let nextNum = 1;
+    if (data && data.length > 0 && data[0].customer_no) {
+      const match = data[0].customer_no.match(/^99-(\d+)$/);
+      if (match) {
+        nextNum = parseInt(match[1], 10) + 1;
+      }
+    }
+    return '99-' + String(nextNum).padStart(7, '0');
+  } catch(e) {
+    console.error('[generateNextCustomerNo]', e);
+    return '99-' + String(Date.now()).slice(-7);
+  }
+}
+
 async function saveCustomer() {
   const id = document.getElementById('cust-edit-id').value;
+  
+  // 새 customer 이고 customer_no 비어있으면 자동 채번
+  let customerNo = document.getElementById('cust-customer-no').value.trim();
+  if (!id && !customerNo) {
+    customerNo = await generateNextCustomerNo();
+  }
   
   // 구조화된 Bill To 필드에서 legacy bill_address 자동 생성
   const billAddr1 = document.getElementById('cust-bill-addr1').value.trim();
@@ -32785,7 +32814,7 @@ async function saveCustomer() {
   
   const payload = {
     name:    document.getElementById('cust-company').value.trim(),
-    customer_no: document.getElementById('cust-customer-no').value.trim(),
+    customer_no: customerNo,
     salesperson: document.getElementById('cust-salesperson').value.trim(),
     contact_name:    document.getElementById('cust-contact').value.trim(),
     phone:           document.getElementById('cust-phone').value.trim(),
@@ -52292,7 +52321,8 @@ async function previewStatement() {
   const companyZip = ci.company_zip || '29150';
   const companyPhone = ci.company_phone || '(803) 760-6251';
   const paymentInfoText = ci.payment_info || 'Hana Commercial Finance\nDept. LA 24406\nPasadena, CA 91185-4406';
-  const paymentInfoLines = paymentInfoText.split('\n').filter(l => l.trim());
+  // \n literal 문자열도, 진짜 newline도 모두 처리
+  const paymentInfoLines = paymentInfoText.replace(/\\n/g, '\n').split(/\r?\n/).map(l => l.trim()).filter(l => l);
 
   const fmt = v => '$' + (v || 0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2});
   const fmtDate = d => d ? new Date(d).toLocaleDateString('en-US', {month:'2-digit',day:'2-digit',year:'numeric'}) : '—';
@@ -52624,4 +52654,7 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T17:58:31Z - Statement에서 Settings 회사 정보 자동 사용 -->
+
+ literal 처리) -->
+
+<!-- Deploy trigger: 2026-04-27T18:07:09Z - Customer 자동 채번 (99-0000001부터) -->
