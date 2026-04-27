@@ -2000,7 +2000,14 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
       <!-- Customer Management Tab -->
       <div id="ar-pane-customers" style="display:none;">
-        <div style="display:flex;gap:12px;height:calc(100vh - 320px);min-height:500px;">
+        <!-- View Mode Toggle -->
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;gap:4px;">
+          <button id="cust-view-detail-btn" onclick="setCustViewMode('detail')" style="padding:6px 14px;font-size:11px;font-weight:700;border:1px solid #1a56a0;background:#1a56a0;color:#fff;border-radius:5px 0 0 5px;cursor:pointer;">📋 Detail View</button>
+          <button id="cust-view-list-btn" onclick="setCustViewMode('list')" style="padding:6px 14px;font-size:11px;font-weight:700;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:0 5px 5px 0;cursor:pointer;">📊 List View</button>
+        </div>
+        
+        <!-- Detail View (default) -->
+        <div id="cust-view-detail" style="display:flex;gap:12px;height:calc(100vh - 360px);min-height:500px;">
           <!-- 왼쪽: 고객 리스트 -->
           <div style="width:280px;flex-shrink:0;background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;">
             <div style="padding:10px 12px;border-bottom:1px solid #e5e7eb;background:#f8fafc;">
@@ -2019,6 +2026,18 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <div style="font-size:40px;">👥</div>
               <div style="font-size:14px;font-weight:600;">고객을 선택하세요</div>
             </div>
+          </div>
+        </div>
+        
+        <!-- List View (table) -->
+        <div id="cust-view-list" style="display:none;">
+          <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+            <div style="padding:10px 12px;border-bottom:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:10px;align-items:center;">
+              <input type="text" id="cust-list-search" placeholder="고객 검색..." class="fi"
+                style="flex:1;font-size:12px;" oninput="renderCustListView()">
+              <button onclick="openCustomerEditModal(null)" style="background:#1a56a0;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ New Customer</button>
+            </div>
+            <div id="cust-list-table-wrap" style="overflow:auto;max-height:calc(100vh - 400px);"></div>
           </div>
         </div>
       </div>
@@ -38238,6 +38257,152 @@ async function loadCustomerMgmt() {
       }
     } catch(e) {}
   }
+  
+  // localStorage에 저장된 view mode 복원
+  try {
+    const savedMode = localStorage.getItem('cust_view_mode');
+    if (savedMode === 'list') {
+      setCustViewMode('list');
+    }
+  } catch(e) {}
+  
+  // List view도 한 번 렌더 (cached)
+  renderCustListView();
+}
+
+// View 모드 전환 (detail / list)
+function setCustViewMode(mode) {
+  const detailView = document.getElementById('cust-view-detail');
+  const listView = document.getElementById('cust-view-list');
+  const detailBtn = document.getElementById('cust-view-detail-btn');
+  const listBtn = document.getElementById('cust-view-list-btn');
+  
+  if (mode === 'list') {
+    detailView.style.display = 'none';
+    listView.style.display = '';
+    detailBtn.style.background = '#fff';
+    detailBtn.style.color = '#374151';
+    detailBtn.style.borderColor = '#d1d5db';
+    listBtn.style.background = '#1a56a0';
+    listBtn.style.color = '#fff';
+    listBtn.style.borderColor = '#1a56a0';
+    renderCustListView();
+  } else {
+    detailView.style.display = 'flex';
+    listView.style.display = 'none';
+    detailBtn.style.background = '#1a56a0';
+    detailBtn.style.color = '#fff';
+    detailBtn.style.borderColor = '#1a56a0';
+    listBtn.style.background = '#fff';
+    listBtn.style.color = '#374151';
+    listBtn.style.borderColor = '#d1d5db';
+  }
+  
+  try { localStorage.setItem('cust_view_mode', mode); } catch(e) {}
+}
+
+// List view 렌더 (테이블 형식)
+function renderCustListView() {
+  const wrap = document.getElementById('cust-list-table-wrap');
+  if (!wrap) return;
+  
+  const search = (document.getElementById('cust-list-search')?.value || '').toLowerCase();
+  
+  // 각 customer의 outstanding 계산
+  const arByCustomer = {};
+  (_arInvoices || []).forEach(i => {
+    if (!i.customer_id) return;
+    if (!arByCustomer[i.customer_id]) arByCustomer[i.customer_id] = { outstanding: 0, totalSales: 0, count: 0 };
+    arByCustomer[i.customer_id].outstanding += i.balance || 0;
+    arByCustomer[i.customer_id].totalSales += i.invAmt || 0;
+    arByCustomer[i.customer_id].count++;
+  });
+  
+  let filtered = _custMgmtList.filter(c => {
+    if (!search) return true;
+    return (c.name || '').toLowerCase().includes(search) ||
+           (c.email || '').toLowerCase().includes(search) ||
+           (c.phone || '').toLowerCase().includes(search) ||
+           (c.contact_name || '').toLowerCase().includes(search);
+  });
+  
+  if (filtered.length === 0) {
+    wrap.innerHTML = '<div style="padding:30px;text-align:center;color:#9ca3af;font-size:12px;font-style:italic;">고객 없음</div>';
+    return;
+  }
+  
+  const rows = filtered.map(c => {
+    const terms = (c.terms || '').trim();
+    const noCreditNeeded = ['COD', 'Credit Card', 'Prepay'].includes(terms);
+    
+    // Credit limit 표시
+    const cl = Number(c.credit_limit) || 0;
+    let clDisplay, clColor;
+    if (noCreditNeeded) {
+      clDisplay = '—';
+      clColor = '#9ca3af';
+    } else if (cl === 0) {
+      clDisplay = '<span style="color:#dc2626;">⚠ $0</span>';
+      clColor = '#dc2626';
+    } else if (cl >= 999999) {
+      clDisplay = '무제한';
+      clColor = '#059669';
+    } else {
+      clDisplay = '$' + cl.toLocaleString();
+      clColor = '#0f2744';
+    }
+    
+    // Outstanding 표시
+    const stats = arByCustomer[c.id] || { outstanding: 0, totalSales: 0 };
+    let osDisplay = stats.outstanding > 0 ? '$' + stats.outstanding.toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) : '—';
+    let osColor = '#6b7280';
+    if (!noCreditNeeded && cl > 0 && cl < 999999 && stats.outstanding > 0) {
+      const pct = Math.round((stats.outstanding / cl) * 100);
+      if (pct >= 100) { osColor = '#dc2626'; osDisplay += ` <span style="font-size:9px;">(${pct}% ⚠)</span>`; }
+      else if (pct >= 80) { osColor = '#ea580c'; osDisplay += ` <span style="font-size:9px;">(${pct}%)</span>`; }
+      else { osColor = '#0f2744'; osDisplay += ` <span style="font-size:9px;color:#6b7280;">(${pct}%)</span>`; }
+    }
+    
+    let termsColor = '#0f2744';
+    if (terms === 'COD') termsColor = '#059669';
+    else if (terms === 'Credit Card') termsColor = '#7c3aed';
+    else if (terms === 'Prepay') termsColor = '#0891b2';
+    
+    return `
+      <tr style="cursor:pointer;" onclick="setCustViewMode('detail');selectCustomer('${c.id}')" onmouseover="this.style.background='#f9fafb'" onmouseout="this.style.background=''">
+        <td style="font-weight:700;padding:8px 10px;font-size:12px;color:#1f2937;">${escapeHtml(c.name || '')}</td>
+        <td style="padding:8px 10px;font-size:11px;color:#6b7280;">${escapeHtml(c.contact_name) || '—'}</td>
+        <td style="padding:8px 10px;font-size:11px;color:#6b7280;">${escapeHtml(c.phone) || '—'}</td>
+        <td style="padding:8px 10px;font-size:11px;color:#6b7280;">${escapeHtml(c.email) || '—'}</td>
+        <td style="padding:8px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${termsColor};font-weight:600;">${escapeHtml(terms) || '—'}</td>
+        <td style="padding:8px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:${clColor};white-space:nowrap;">${clDisplay}</td>
+        <td style="padding:8px 10px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${osColor};white-space:nowrap;">${osDisplay}</td>
+        <td style="padding:8px 10px;max-width:200px;white-space:pre-wrap;font-size:10px;color:#6b7280;">${escapeHtml((c.bill_address || '').replace(/\n/g,', '))}</td>
+        <td style="padding:8px 10px;text-align:center;">
+          <button class="btn btn-sm" style="font-size:10px;padding:3px 8px;" onclick="event.stopPropagation();openCustomerEditModal('${c.id}')">✏️</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  
+  wrap.innerHTML = `
+    <table class="tbl" style="margin:0;">
+      <thead>
+        <tr style="background:#f3f4f6;">
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Company</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Contact</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Phone</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Email</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Terms</th>
+          <th style="padding:8px 10px;text-align:right;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Credit Limit</th>
+          <th style="padding:8px 10px;text-align:right;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Outstanding</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Bill To</th>
+          <th style="padding:8px 10px;text-align:center;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;">Edit</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
 }
 
 function renderCustMgmtList() {
@@ -52311,4 +52476,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T17:12:58Z - 마지막 선택 customer도 localStorage에 저장+복원 -->
+
+<!-- Deploy trigger: 2026-04-27T17:20:15Z - Customer Mgmt에 View 토글 (Detail / List) 추가 -->
