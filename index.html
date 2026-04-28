@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260428_194553 — Haiti split view: 원본 엑셀 + 파싱결과 나란히 + Row# 클릭 시 원본으로 jump -->
+<!-- BUILD: 20260428_201535 — 원본 view 진짜 HTML table 로 (사이즈 컬럼 정렬, 색상별 row, TOTAL 강조) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4098,7 +4098,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <!-- 원본 엑셀 패널 -->
             <div id="transit-original-panel" style="flex:0 0 38%;max-width:38%;border:1px solid #ddd;border-radius:6px;background:#fafafa;overflow:hidden;">
               <div style="padding:6px 10px;background:#e8f0fe;border-bottom:1px solid #cdd;font-size:11px;font-weight:700;color:#0f4c8a;">📄 원본 엑셀 (참고용)</div>
-              <div id="transit-original-body" style="max-height:600px;overflow-y:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.5;padding:8px 10px;background:#fff;"></div>
+              <div id="transit-original-body" style="max-height:600px;overflow-y:auto;font-size:11px;line-height:1.4;padding:8px 10px;background:#fff;"></div>
             </div>
             <!-- 파싱 결과 테이블 -->
             <div id="transit-parsed-panel" style="flex:1;min-width:0;overflow-x:auto;">
@@ -36483,69 +36483,174 @@ function renderTransitEditTable() {
 }
 
 // ── 원본 엑셀 view (참고용 — read-only, row 번호 표시)
+//   스타일별 작은 table 로 그려서 사이즈 컬럼이 정렬되게 함
 function renderTransitOriginalView() {
   const el = document.getElementById('transit-original-body');
   if (!el || !_transitParsed?.rawRows) return;
-  
-  // raw row 들 중 의미있는 것만 (헤더 제외, 의미있는 첫 컬럼 또는 둘째 컬럼)
-  const lines = [];
-  _transitParsed.rawRows.forEach((row, ri) => {
-    if (!row || row.every(v => v === null || v === undefined || String(v).trim() === '')) return;
-    
+
+  const rawRows = _transitParsed.rawRows;
+  const out = [];
+
+  // raw row 들을 스캔하면서 STYLE 그룹 단위로 묶어서 렌더
+  let i = 0;
+  while (i < rawRows.length) {
+    const row = rawRows[i] || [];
     const r0 = String(row[0]||'').trim();
     const r1 = String(row[1]||'').trim();
-    
-    // 어떤 종류의 row 인지
-    let cls = 'normal';
-    let display = '';
-    
+    const ri1 = i + 1;  // 1-based
+
+    // 헤더 정보 (invoice, container)
     if (r0.includes('NO & DATE OF INVOICE')) {
-      cls = 'invoice'; display = r0;
-    } else if (r0 === 'STYLE :') {
-      cls = 'style'; display = `STYLE: ${r1}`;
-    } else if (r0 === 'COLOR :') {
-      cls = 'colorhdr';
-      const sizes = row.slice(2, 12).filter(v => v != null && String(v).trim() !== '');
-      display = `   sizes: ${sizes.join('  ')}`;
-    } else if (r1 === 'DZS' && r0 && r0 !== 'TOTAL') {
-      cls = 'colordata';
-      const vals = row.slice(2, 12).map(v => v == null ? '·' : String(v).padStart(4)).join(' ');
-      const tot = row[12] != null ? row[12] : '';
-      display = `  ${r0.padEnd(22)} DZS ${vals}  TOT ${tot}`;
-    } else if (r1 === 'BOXES') {
-      cls = 'boxdata';
-      const vals = row.slice(2, 12).map(v => v == null ? '·' : String(v).padStart(4)).join(' ');
-      const tot = row[12] != null ? row[12] : '';
-      display = `      ${' '.repeat(22)}BOX ${vals}  TOT ${tot}`;
-    } else if (r0 === 'TOTAL') {
-      cls = 'total';
-      const tot = row[12] != null ? row[12] : '';
-      const unit = row[11] != null ? row[11] : '';
-      display = `   TOTAL  ${unit} ${tot}`;
-    } else {
-      // 그 외 (헤더 정보 등)
-      const vals = row.map(v => v == null ? null : String(v)).filter(Boolean).slice(0, 4).join(' | ');
-      if (vals) display = vals;
-      else return;
+      out.push(
+        `<div id="orig-row-${ri1}" data-row="${ri1}" style="padding:4px 6px;margin-bottom:4px;background:#dbeafe;border-radius:4px;font-size:11px;font-weight:700;color:#0f4c8a;">` +
+        `<span style="display:inline-block;width:32px;color:#0f4c8a;font-size:9px;font-family:'IBM Plex Mono',monospace;">R${ri1}</span>` +
+        `📋 ${escapeHtmlSafe(r0)}` +
+        `</div>`
+      );
+      i++; continue;
     }
-    
-    const colors = {
-      invoice:  '#0f4c8a',
-      style:    '#065f46',
-      colorhdr: '#7c2d12',
-      colordata:'#1f2937',
-      boxdata:  '#6b7280',
-      total:    '#92400e',
-      normal:   '#9ca3af'
-    };
-    const weights = { style:'700', invoice:'700', total:'600' };
-    lines.push(
-      `<div id="orig-row-${ri+1}" data-row="${ri+1}" style="white-space:pre;padding:1px 4px;border-radius:3px;color:${colors[cls]};font-weight:${weights[cls]||'400'};">` +
-      `<span style="display:inline-block;width:30px;color:#cbd5e1;font-size:9px;">R${ri+1}</span>${escapeHtmlSafe(display)}` +
-      `</div>`
-    );
-  });
-  el.innerHTML = lines.join('');
+    // Container row (4글자 + 숫자)
+    if (r0.match(/^[A-Z]{4}\s*\d/)) {
+      const dt = row[12];
+      const dtStr = dt instanceof Date ? dt.toISOString().slice(0,10) : (dt ? String(dt) : '');
+      out.push(
+        `<div id="orig-row-${ri1}" data-row="${ri1}" style="padding:4px 6px;margin-bottom:8px;background:#fef3c7;border-radius:4px;font-size:11px;color:#92400e;">` +
+        `<span style="display:inline-block;width:32px;color:#92400e;font-size:9px;font-family:'IBM Plex Mono',monospace;">R${ri1}</span>` +
+        `🚢 <b>${escapeHtmlSafe(r0)}</b>${dtStr ? ` · Ship: <b>${escapeHtmlSafe(dtStr)}</b>` : ''}` +
+        `</div>`
+      );
+      i++; continue;
+    }
+    // STYLE 그룹 시작
+    if (r0 === 'STYLE :') {
+      const styleDesc = r1;
+      const styleRowNum = ri1;
+      // 다음 COLOR row 찾기
+      let colorHdrIdx = -1;
+      for (let j = i+1; j < rawRows.length; j++) {
+        if (String(rawRows[j]?.[0]||'').trim() === 'COLOR :') { colorHdrIdx = j; break; }
+        if (String(rawRows[j]?.[0]||'').trim() === 'STYLE :') break; // 다른 style 만나면 멈춤
+      }
+      // sizes 추출 (정규화 안 한 raw 그대로)
+      let sizes = [];
+      if (colorHdrIdx >= 0) {
+        sizes = (rawRows[colorHdrIdx] || []).slice(2, 12)
+          .map((v, idx) => ({ idx, val: v == null ? '' : String(v).trim() }))
+          .filter(o => o.val !== '');
+      }
+      // STYLE 헤더
+      out.push(
+        `<div id="orig-row-${styleRowNum}" data-row="${styleRowNum}" style="margin-top:10px;padding:5px 8px;background:#d1fae5;border-radius:4px;font-size:11px;font-weight:700;color:#065f46;">` +
+        `<span style="display:inline-block;width:32px;color:#065f46;font-size:9px;font-family:'IBM Plex Mono',monospace;">R${styleRowNum}</span>` +
+        `📦 STYLE: ${escapeHtmlSafe(styleDesc)}` +
+        `</div>`
+      );
+      // table 시작 — 사이즈별 컬럼
+      if (sizes.length > 0) {
+        const colorHdrRowNum = colorHdrIdx + 1;
+        let tableHtml = `<table style="width:100%;border-collapse:collapse;font-size:10px;font-family:'IBM Plex Mono',monospace;margin-bottom:6px;">`;
+        // 헤더 row
+        tableHtml += `<thead><tr style="background:#fef3c7;color:#7c2d12;">`;
+        tableHtml += `<th style="padding:3px 4px;border:1px solid #fde68a;text-align:right;font-size:9px;color:#cbd5e1;width:30px;">R${colorHdrRowNum}</th>`;
+        tableHtml += `<th style="padding:3px 6px;border:1px solid #fde68a;text-align:left;min-width:130px;">Color</th>`;
+        tableHtml += `<th style="padding:3px 4px;border:1px solid #fde68a;text-align:center;width:32px;color:#7c2d12;">·</th>`;
+        sizes.forEach(s => {
+          tableHtml += `<th style="padding:3px 4px;border:1px solid #fde68a;text-align:center;width:34px;">${escapeHtmlSafe(s.val)}</th>`;
+        });
+        tableHtml += `<th style="padding:3px 4px;border:1px solid #fde68a;text-align:center;width:38px;background:#fde68a;">TOT</th>`;
+        tableHtml += `</tr></thead><tbody>`;
+        
+        // body — DZS, BOXES 페어들 처리
+        let j = colorHdrIdx + 1;
+        let curColor = null;
+        let curColorRow = -1;
+        while (j < rawRows.length) {
+          const r = rawRows[j] || [];
+          const rj0 = String(r[0]||'').trim();
+          const rj1 = String(r[1]||'').trim();
+          // 다음 STYLE 만나면 stop
+          if (rj0 === 'STYLE :') break;
+          // TOTAL 만나면 stop 후 따로 처리
+          if (rj0 === 'TOTAL') break;
+          // DZS row
+          if (rj1 === 'DZS' && rj0) {
+            curColor = rj0;
+            curColorRow = j + 1;
+            tableHtml += `<tr id="orig-row-${j+1}" data-row="${j+1}" style="background:#fff;">`;
+            tableHtml += `<td style="padding:2px 4px;border:1px solid #f1f5f9;text-align:right;font-size:9px;color:#cbd5e1;">R${j+1}</td>`;
+            tableHtml += `<td style="padding:2px 6px;border:1px solid #f1f5f9;font-weight:600;color:#1f2937;">${escapeHtmlSafe(curColor)}</td>`;
+            tableHtml += `<td style="padding:2px 4px;border:1px solid #f1f5f9;text-align:center;color:#6b7280;font-size:9px;">DZ</td>`;
+            sizes.forEach(s => {
+              const v = r[2 + s.idx];
+              const vs = (v == null || v === '') ? '·' : String(v);
+              const isEmpty = v == null || v === '';
+              tableHtml += `<td style="padding:2px 4px;border:1px solid #f1f5f9;text-align:right;color:${isEmpty?'#cbd5e1':'#1f2937'};">${escapeHtmlSafe(vs)}</td>`;
+            });
+            const tot = r[12];
+            tableHtml += `<td style="padding:2px 4px;border:1px solid #f1f5f9;text-align:right;font-weight:700;color:#0f4c8a;background:#f0f7ff;">${tot != null ? escapeHtmlSafe(String(tot)) : ''}</td>`;
+            tableHtml += `</tr>`;
+          }
+          // BOXES row
+          else if (rj1 === 'BOXES') {
+            tableHtml += `<tr id="orig-row-${j+1}" data-row="${j+1}" style="background:#fafafa;">`;
+            tableHtml += `<td style="padding:2px 4px;border:1px solid #f1f5f9;text-align:right;font-size:9px;color:#cbd5e1;">R${j+1}</td>`;
+            tableHtml += `<td style="padding:2px 6px;border:1px solid #f1f5f9;color:#9ca3af;font-size:9px;font-style:italic;">↑</td>`;
+            tableHtml += `<td style="padding:2px 4px;border:1px solid #f1f5f9;text-align:center;color:#6b7280;font-size:9px;font-weight:700;background:#f3f4f6;">BX</td>`;
+            sizes.forEach(s => {
+              const v = r[2 + s.idx];
+              const vs = (v == null || v === '' || v === 0) ? '·' : String(v);
+              const isEmpty = v == null || v === '' || v === 0;
+              tableHtml += `<td style="padding:2px 4px;border:1px solid #f1f5f9;text-align:right;color:${isEmpty?'#cbd5e1':'#6b7280'};font-size:10px;">${escapeHtmlSafe(vs)}</td>`;
+            });
+            const tot = r[12];
+            tableHtml += `<td style="padding:2px 4px;border:1px solid #f1f5f9;text-align:right;font-weight:600;color:#92400e;background:#fef9e7;">${tot != null ? escapeHtmlSafe(String(tot)) : ''}</td>`;
+            tableHtml += `</tr>`;
+          }
+          j++;
+        }
+        tableHtml += `</tbody></table>`;
+        out.push(tableHtml);
+        
+        // TOTAL row 따로 표시
+        if (j < rawRows.length && String(rawRows[j]?.[0]||'').trim() === 'TOTAL') {
+          const totRow = rawRows[j] || [];
+          const totUnit = totRow[11] || '';
+          const totVal = totRow[12] || '';
+          const totRow2 = rawRows[j+1] || [];
+          const totUnit2 = totRow2[11] || '';
+          const totVal2 = totRow2[12] || '';
+          out.push(
+            `<div id="orig-row-${j+1}" data-row="${j+1}" style="padding:4px 8px;margin-bottom:8px;background:#fef3c7;border-radius:4px;font-size:10px;color:#92400e;font-weight:700;display:flex;gap:14px;align-items:center;">` +
+            `<span style="display:inline-block;width:30px;color:#92400e;font-size:9px;font-family:'IBM Plex Mono',monospace;">R${j+1}</span>` +
+            `<span>━━ TOTAL: <b>${escapeHtmlSafe(String(totVal))}</b> ${escapeHtmlSafe(String(totUnit))}` +
+            (totVal2 ? ` / <b>${escapeHtmlSafe(String(totVal2))}</b> ${escapeHtmlSafe(String(totUnit2))}` : '') +
+            ` ━━</span>` +
+            `</div>`
+          );
+          j += 2; // TOTAL DZ + TOTAL BX 두 줄 skip
+        }
+        i = j;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    // 그 외 (PACIFIC SPORTS HAITI 등)
+    if (r0 || r1) {
+      const text = [r0, r1].filter(Boolean).join(' ');
+      if (text && !text.includes('FOR COLOR') && !text.includes('PACIFIC')) {
+        out.push(
+          `<div id="orig-row-${ri1}" data-row="${ri1}" style="padding:1px 6px;font-size:9px;color:#9ca3af;">` +
+          `<span style="display:inline-block;width:32px;color:#cbd5e1;font-family:'IBM Plex Mono',monospace;">R${ri1}</span>` +
+          escapeHtmlSafe(text) +
+          `</div>`
+        );
+      }
+    }
+    i++;
+  }
+  
+  el.innerHTML = out.join('');
 }
 
 // 안전한 escape
