@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260428_170344 — Use Reserved 제거 (가끔 쓰는 feature, 정합성 위험). 안내 모달로 대체 -->
+<!-- BUILD: 20260428_192346 — Haiti Excel parsing: color/size 정규화 (RT/HT/US/CVC/HTR/괄호 제거) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -36272,6 +36272,32 @@ async function parseTransitExcel(input) {
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
 
+  // ── Color 정규화 — Haiti 양식 prefix/suffix 제거
+  //   예: "RT BLACK CVC" → "BLACK", "HT DARK NAVY (DS)" → "DARK NAVY", "BLACK (SW)" → "BLACK"
+  function normalizeHaitiColor(raw) {
+    if (!raw) return '';
+    let c = String(raw).toUpperCase().trim();
+    // 괄호 안 내용 모두 제거 (SW, DS 등)
+    c = c.replace(/\([^)]*\)/g, '').trim();
+    // 단어 단위로 split 해서 prefix/suffix 제거
+    const PREFIX = new Set(['RT', 'HT', 'US']);
+    const SUFFIX = new Set(['CVC', 'HTR']);
+    let parts = c.split(/\s+/).filter(Boolean);
+    // leading prefix 제거 (반복적 — RT 만 있어도 한 번)
+    while (parts.length > 1 && PREFIX.has(parts[0])) parts.shift();
+    // trailing suffix 제거
+    while (parts.length > 1 && SUFFIX.has(parts[parts.length-1])) parts.pop();
+    return parts.join(' ').trim();
+  }
+
+  // ── Size 정규화 — 괄호 제거, trim, uppercase
+  function normalizeHaitiSize(raw) {
+    if (raw === null || raw === undefined) return '';
+    let s = String(raw).toUpperCase().trim();
+    s = s.replace(/\([^)]*\)/g, '').trim();
+    return s;
+  }
+
   let invoiceNo = '', containerNo = '', shipDate = '';
   let currentStyle = '', currentSizes = [], currentDzPerBox = 6;
   const parsed = [];
@@ -36298,12 +36324,14 @@ async function parseTransitExcel(input) {
       if (mStyle) currentStyle = mStyle[1].replace(/N$/,'');
     }
     if (r0 === 'COLOR :') {
-      currentSizes = row.slice(2, 12).filter(v => v !== null && v !== undefined && String(v).trim() !== '');
+      currentSizes = row.slice(2, 12)
+        .map(v => normalizeHaitiSize(v))
+        .filter(v => v !== '');
       pendingDzsRow = null;
     }
     // DZS 행 → 임시 저장
     if (r1 === 'DZS' && r0 && r0 !== 'TOTAL') {
-      pendingDzsRow = { color: r0, dzVals: row.slice(2, 12) };
+      pendingDzsRow = { color: normalizeHaitiColor(r0), dzVals: row.slice(2, 12) };
     }
     // BOXES 행 → DZS와 매칭해서 박스 정보 추출
     if (r1 === 'BOXES' && pendingDzsRow) {
@@ -36321,7 +36349,7 @@ async function parseTransitExcel(input) {
             ship_date: shipDate,
             style_number: currentStyle,
             color: pendingDzsRow.color,
-            size: String(sz).trim(),
+            size: sz,
             qty_dz: dz,
             qty_boxes: boxes,
             ppb: pcsPerBox,        // 실제 pcs/box
