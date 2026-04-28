@@ -53112,36 +53112,60 @@ async function runInventoryReconciliation() {
   try {
     document.getElementById('inv-recon-status').textContent = '⏳ 내 시스템 데이터 가져오는 중...';
     
-    // 내 시스템 inventory (qty > 0)
+    // 1. inventory 메타 정보 (style/color/size/warehouse 매핑용)
     const { data: invData, error } = await db.from('inventory')
-      .select('id, qty_on_hand, sku, style_number, color, size, location, warehouses(code), styles(style_number)')
+      .select('id, qty_on_hand, sku, style_number, color, size, warehouses(code), styles(style_number)')
       .gt('qty_on_hand', 0);
     
     if (error) throw error;
+    
+    // inventory id → meta 매핑
+    const invMeta = {};
+    (invData || []).forEach(row => {
+      const whFull = (row.warehouses?.code || '').toUpperCase();
+      const wh = whFull.startsWith('SC') ? 'SC' : whFull.startsWith('CA') ? 'CA' : whFull;
+      
+      if (!uploadedWarehouses.includes(wh)) return;
+      
+      invMeta[row.id] = {
+        style: (row.style_number || row.styles?.style_number || '').toLowerCase(),
+        color: (row.color || '').toUpperCase(),
+        size: (row.size || '').toUpperCase(),
+        wh
+      };
+    });
+    
+    // 2. inventory_bins 가져오기 (진짜 bin 별 데이터)
+    document.getElementById('inv-recon-status').textContent = '⏳ Bin 별 데이터 가져오는 중...';
+    const invIds = Object.keys(invMeta);
+    const allBins = [];
+    
+    // 청크 단위 (Supabase IN 한도 회피)
+    const CHUNK = 500;
+    for (let i = 0; i < invIds.length; i += CHUNK) {
+      const chunk = invIds.slice(i, i + CHUNK);
+      const { data: binChunk } = await db.from('inventory_bins')
+        .select('inventory_id, bin_code, qty')
+        .in('inventory_id', chunk);
+      if (binChunk) allBins.push(...binChunk);
+    }
     
     // 매칭 키
     const buildKey = (style, color, size, wh, bin) => 
       `${(style||'').toLowerCase().trim()}|${(color||'').toUpperCase().trim()}|${(size||'').toUpperCase().trim()}|${(wh||'').toUpperCase().trim()}|${(bin||'').toUpperCase().trim()}`;
     
-    // 내 시스템 매핑 — 업로드된 warehouse 만
+    // 3. 내 시스템 매핑 — bin 별 (inventory_bins 사용)
     const ourMap = {};
-    (invData || []).forEach(row => {
-      const whFull = (row.warehouses?.code || '').toUpperCase();
-      const wh = whFull.startsWith('SC') ? 'SC' : whFull.startsWith('CA') ? 'CA' : whFull;
+    allBins.forEach(b => {
+      const meta = invMeta[b.inventory_id];
+      if (!meta) return;
       
-      // 업로드 안 된 warehouse는 skip
-      if (!uploadedWarehouses.includes(wh)) return;
-      
-      const style = (row.style_number || row.styles?.style_number || '').toLowerCase();
-      const color = (row.color || '').toUpperCase();
-      const size = (row.size || '').toUpperCase();
-      const bin = (row.location || '').toUpperCase().trim();
-      
-      const key = buildKey(style, color, size, wh, bin);
+      const bin = (b.bin_code || '').toUpperCase().trim();
+      const key = buildKey(meta.style, meta.color, meta.size, meta.wh, bin);
       
       if (!ourMap[key]) ourMap[key] = { qty: 0, items: [] };
-      ourMap[key].qty += (row.qty_on_hand || 0);
-      ourMap[key].items.push(row);
+      ourMap[key].qty += (b.qty || 0);
+      ourMap[key].items.push(b);
     });
     
     // Davinci 매핑
@@ -54006,4 +54030,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T00:54:48Z - Recon: 업로드한 warehouse만 비교 -->
+
+<!-- Deploy trigger: 2026-04-28T01:17:56Z - Recon: inventory_bins 사용 (진짜 bin 별 매칭) -->
