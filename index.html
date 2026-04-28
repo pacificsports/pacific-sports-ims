@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260428_193826 — Haiti parsing v3: DZ 컬럼 제거, pcs 직접 편집, boxes/ppb 자동 sync -->
+<!-- BUILD: 20260428_194553 — Haiti split view: 원본 엑셀 + 파싱결과 나란히 + Row# 클릭 시 원본으로 jump -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4065,10 +4065,16 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
     <!-- In Transit Upload Preview Modal -->
     <!-- In Transit Upload Preview Modal -->
     <div class="modal-overlay" id="transit-preview-modal" style="display:none;">
-      <div class="modal-box" style="max-width:920px;width:95vw;max-height:90vh;display:flex;flex-direction:column;">
+      <div class="modal-box" style="max-width:1400px;width:97vw;max-height:92vh;display:flex;flex-direction:column;">
         <div class="modal-head" style="background:#0f4c8a;">
           <span class="modal-title" style="color:#fff;">🚢 Haiti Invoice — 수정 후 저장</span>
-          <button class="modal-close" onclick="document.getElementById('transit-preview-modal').style.display='none'">✕</button>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+            <label style="color:#fff;font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">
+              <input type="checkbox" id="transit-show-original" checked onchange="toggleTransitOriginalView()" style="cursor:pointer;"/>
+              📄 원본 보기
+            </label>
+            <button class="modal-close" onclick="document.getElementById('transit-preview-modal').style.display='none'">✕</button>
+          </div>
         </div>
         <div style="padding:16px;overflow-y:auto;flex:1;">
           <!-- Invoice 정보 -->
@@ -4087,22 +4093,32 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <button class="btn btn-sm" onclick="addTransitRow()" style="white-space:nowrap;">+ 라인 추가</button>
           </div>
 
-          <!-- 수정 가능한 테이블 -->
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-size:12px;" id="transit-edit-table">
-              <thead>
-                <tr style="background:#e8f0fe;position:sticky;top:0;z-index:1;">
-                  <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Style #</th>
-                  <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Color</th>
-                  <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Size</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">박스수</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;background:#fff9c4;">pcs/box</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Pcs 합계</th>
-                  <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">삭제</th>
-                </tr>
-              </thead>
-              <tbody id="transit-edit-body"></tbody>
-            </table>
+          <!-- ── Split view: 원본 (왼쪽) + 파싱 결과 (오른쪽) ── -->
+          <div id="transit-split-wrap" style="display:flex;gap:12px;align-items:flex-start;">
+            <!-- 원본 엑셀 패널 -->
+            <div id="transit-original-panel" style="flex:0 0 38%;max-width:38%;border:1px solid #ddd;border-radius:6px;background:#fafafa;overflow:hidden;">
+              <div style="padding:6px 10px;background:#e8f0fe;border-bottom:1px solid #cdd;font-size:11px;font-weight:700;color:#0f4c8a;">📄 원본 엑셀 (참고용)</div>
+              <div id="transit-original-body" style="max-height:600px;overflow-y:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.5;padding:8px 10px;background:#fff;"></div>
+            </div>
+            <!-- 파싱 결과 테이블 -->
+            <div id="transit-parsed-panel" style="flex:1;min-width:0;overflow-x:auto;">
+              <div style="padding:6px 10px;background:#e8f0fe;border:1px solid #cdd;border-bottom:none;border-radius:6px 6px 0 0;font-size:11px;font-weight:700;color:#0f4c8a;">✏️ 파싱 결과 — 수정 가능</div>
+              <table style="width:100%;border-collapse:collapse;font-size:12px;" id="transit-edit-table">
+                <thead>
+                  <tr style="background:#f0f7ff;position:sticky;top:0;z-index:1;">
+                    <th style="padding:6px 4px;text-align:center;border:1px solid #cdd;font-size:10px;color:var(--text3);">원본<br>Row</th>
+                    <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Style #</th>
+                    <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Color</th>
+                    <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Size</th>
+                    <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">박스수</th>
+                    <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;background:#fff9c4;">pcs/box</th>
+                    <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Pcs 합계</th>
+                    <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">삭제</th>
+                  </tr>
+                </thead>
+                <tbody id="transit-edit-body"></tbody>
+              </table>
+            </div>
           </div>
 
           <!-- 합계 -->
@@ -36311,6 +36327,7 @@ async function parseTransitExcel(input) {
 
   let invoiceNo = '', containerNo = '', shipDate = '';
   let currentStyle = '', currentSizes = [], currentDzPerBox = 6;
+  let currentStyleRaw = '', currentSizesRaw = [], currentStyleRow = -1, currentColorHeaderRow = -1;
   const parsed = [];
   let pendingDzsRow = null; // DZS row 임시 저장 (다음 BOXES row와 매칭)
 
@@ -36333,16 +36350,25 @@ async function parseTransitExcel(input) {
       currentDzPerBox = mDz ? parseInt(mDz[1]) : 6;
       const mStyle = r1.match(/(\d{4}[A-Z]?)/);
       if (mStyle) currentStyle = mStyle[1].replace(/N$/,'');
+      currentStyleRaw = r1;
+      currentStyleRow = ri;
     }
     if (r0 === 'COLOR :') {
+      currentSizesRaw = row.slice(2, 12).filter(v => v !== null && v !== undefined && String(v).trim() !== '');
       currentSizes = row.slice(2, 12)
         .map(v => normalizeHaitiSize(v))
         .filter(v => v !== '');
+      currentColorHeaderRow = ri;
       pendingDzsRow = null;
     }
     // DZS 행 → 임시 저장
     if (r1 === 'DZS' && r0 && r0 !== 'TOTAL') {
-      pendingDzsRow = { color: normalizeHaitiColor(r0), dzVals: row.slice(2, 12) };
+      pendingDzsRow = {
+        color: normalizeHaitiColor(r0),
+        colorRaw: r0,
+        dzVals: row.slice(2, 12),
+        sourceRow: ri  // 엑셀 row index (0-based)
+      };
     }
     // BOXES 행 → DZS와 매칭해서 박스 정보 추출
     if (r1 === 'BOXES' && pendingDzsRow) {
@@ -36368,7 +36394,12 @@ async function parseTransitExcel(input) {
             is_nonstandard: boxes > 0 && pcsPerBox !== stdPpb,
             qty_pcs: dz * 12,
             transit_type: 'haiti_sc',
-            status: 'in_transit'
+            status: 'in_transit',
+            // 원본 추적 (split view 비교용)
+            source_row: pendingDzsRow.sourceRow + 1,  // 1-based for display
+            source_color_raw: pendingDzsRow.colorRaw,
+            source_size_raw: String(currentSizesRaw[i] || ''),
+            source_style_raw: currentStyleRaw
           });
         }
       });
@@ -36376,7 +36407,8 @@ async function parseTransitExcel(input) {
     }
   });
 
-  _transitParsed = { invoiceNo, containerNo, shipDate, rows: parsed };
+  // 원본 raw rows 도 저장 (split view 표시용)
+  _transitParsed = { invoiceNo, containerNo, shipDate, rows: parsed, rawRows: rows };
 
   // 헤더 정보
   document.getElementById('transit-preview-info').innerHTML =
@@ -36406,7 +36438,12 @@ function renderTransitEditTable() {
     const ppb = r.ppb || 72;
     const isNonStd = r.is_nonstandard;
     const rowBg = isNonStd ? '#fffde7' : '#fff';
+    const srcRow = r.source_row ? `R${r.source_row}` : '—';
     return `<tr id="transit-row-${i}" style="border-bottom:1px solid #f0f0f0;background:${rowBg};">
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;font-size:10px;color:#0f4c8a;font-family:'IBM Plex Mono',monospace;cursor:pointer;" 
+          onclick="scrollOriginalToRow(${r.source_row||0})" title="원본 엑셀 ${srcRow} 으로 이동">
+        ${srcRow}
+      </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
         <input value="${r.style_number}" onchange="_transitParsed.rows[${i}].style_number=this.value"
           style="width:58px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;"/>
@@ -36441,6 +36478,107 @@ function renderTransitEditTable() {
     </tr>`;
   }).join('');
   updateTransitTotal();
+  // 원본 패널도 같이 그리기 (처음만)
+  renderTransitOriginalView();
+}
+
+// ── 원본 엑셀 view (참고용 — read-only, row 번호 표시)
+function renderTransitOriginalView() {
+  const el = document.getElementById('transit-original-body');
+  if (!el || !_transitParsed?.rawRows) return;
+  
+  // raw row 들 중 의미있는 것만 (헤더 제외, 의미있는 첫 컬럼 또는 둘째 컬럼)
+  const lines = [];
+  _transitParsed.rawRows.forEach((row, ri) => {
+    if (!row || row.every(v => v === null || v === undefined || String(v).trim() === '')) return;
+    
+    const r0 = String(row[0]||'').trim();
+    const r1 = String(row[1]||'').trim();
+    
+    // 어떤 종류의 row 인지
+    let cls = 'normal';
+    let display = '';
+    
+    if (r0.includes('NO & DATE OF INVOICE')) {
+      cls = 'invoice'; display = r0;
+    } else if (r0 === 'STYLE :') {
+      cls = 'style'; display = `STYLE: ${r1}`;
+    } else if (r0 === 'COLOR :') {
+      cls = 'colorhdr';
+      const sizes = row.slice(2, 12).filter(v => v != null && String(v).trim() !== '');
+      display = `   sizes: ${sizes.join('  ')}`;
+    } else if (r1 === 'DZS' && r0 && r0 !== 'TOTAL') {
+      cls = 'colordata';
+      const vals = row.slice(2, 12).map(v => v == null ? '·' : String(v).padStart(4)).join(' ');
+      const tot = row[12] != null ? row[12] : '';
+      display = `  ${r0.padEnd(22)} DZS ${vals}  TOT ${tot}`;
+    } else if (r1 === 'BOXES') {
+      cls = 'boxdata';
+      const vals = row.slice(2, 12).map(v => v == null ? '·' : String(v).padStart(4)).join(' ');
+      const tot = row[12] != null ? row[12] : '';
+      display = `      ${' '.repeat(22)}BOX ${vals}  TOT ${tot}`;
+    } else if (r0 === 'TOTAL') {
+      cls = 'total';
+      const tot = row[12] != null ? row[12] : '';
+      const unit = row[11] != null ? row[11] : '';
+      display = `   TOTAL  ${unit} ${tot}`;
+    } else {
+      // 그 외 (헤더 정보 등)
+      const vals = row.map(v => v == null ? null : String(v)).filter(Boolean).slice(0, 4).join(' | ');
+      if (vals) display = vals;
+      else return;
+    }
+    
+    const colors = {
+      invoice:  '#0f4c8a',
+      style:    '#065f46',
+      colorhdr: '#7c2d12',
+      colordata:'#1f2937',
+      boxdata:  '#6b7280',
+      total:    '#92400e',
+      normal:   '#9ca3af'
+    };
+    const weights = { style:'700', invoice:'700', total:'600' };
+    lines.push(
+      `<div id="orig-row-${ri+1}" data-row="${ri+1}" style="white-space:pre;padding:1px 4px;border-radius:3px;color:${colors[cls]};font-weight:${weights[cls]||'400'};">` +
+      `<span style="display:inline-block;width:30px;color:#cbd5e1;font-size:9px;">R${ri+1}</span>${escapeHtmlSafe(display)}` +
+      `</div>`
+    );
+  });
+  el.innerHTML = lines.join('');
+}
+
+// 안전한 escape
+function escapeHtmlSafe(s) {
+  return String(s||'').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+// 원본 패널의 특정 row 로 스크롤 + 하이라이트
+function scrollOriginalToRow(rowNum) {
+  if (!rowNum) return;
+  const el = document.getElementById('orig-row-' + rowNum);
+  if (!el) return;
+  el.scrollIntoView({ behavior:'smooth', block:'center' });
+  // 1.2초 깜빡 하이라이트
+  const oldBg = el.style.background;
+  el.style.background = '#fff7d6';
+  el.style.transition = 'background 0.4s';
+  setTimeout(() => { el.style.background = oldBg; }, 1200);
+}
+
+// 원본 보기 토글
+function toggleTransitOriginalView() {
+  const cb = document.getElementById('transit-show-original');
+  const panel = document.getElementById('transit-original-panel');
+  const parsedPanel = document.getElementById('transit-parsed-panel');
+  if (!cb || !panel) return;
+  if (cb.checked) {
+    panel.style.display = '';
+    if (parsedPanel) { parsedPanel.style.flex = '1'; }
+  } else {
+    panel.style.display = 'none';
+    if (parsedPanel) { parsedPanel.style.flex = '1'; }
+  }
 }
 
 // 사용자가 박스 수 변경 → pcs 재계산 (boxes × ppb)
