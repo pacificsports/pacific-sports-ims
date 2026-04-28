@@ -13367,6 +13367,269 @@ async function submitDeleteOrder() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// 🆕 INVENTORY CHANGE — 모든 재고 변경의 진짜 single source of truth
+// 
+// 이 함수들이 진짜 답:
+//   - 모든 재고 변경 = createInventoryTransaction → changeInventory 호출
+//   - 일관된 처리 + transaction log 자동
+//   - reverse 가능 (universal reverseTransaction 으로)
+//   - bug 한 곳 fix 하면 전부 fix
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * 재고 transaction 생성 — 여러 changeInventory 묶음
+ * 
+ * @param {Object} params
+ * @param {string} params.transaction_type - 'order_ship', 'pallet_receive', 'manual_adjust', 'pallet_transfer', etc
+ * @param {string} params.description - 사용자에게 보일 설명
+ * @param {string} [params.style_number] - 스타일 (optional)
+ * @param {string} params.warehouse_code - 'SC', 'CA', 'SC-PCR', 'CA-PCR'
+ * @param {string} [params.performed_by] - 누가 (default: _currentEmployee.name)
+ * @param {Object} [params.metadata] - 추가 정보 (order_id, batch_id, reason 등)
+ * @returns {Promise<{id, txn_number}>} - transaction 정보
+ */
+async function createInventoryTransaction({
+  transaction_type,
+  description,
+  style_number = null,
+  warehouse_code,
+  performed_by = null,
+  metadata = {}
+}) {
+  if (!transaction_type) throw new Error('transaction_type 필수');
+  if (!description) throw new Error('description 필수');
+  if (!warehouse_code) throw new Error('warehouse_code 필수');
+  
+  const empName = performed_by || (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+  
+  const { data, error } = await db.from('inventory_transactions').insert({
+    transaction_type,
+    description,
+    style_number,
+    warehouse_code,
+    performed_by: empName,
+    status: 'active',
+    affected_rows: 0,        // changeInventory 가 update 함
+    total_qty_change: 0,     // 끝나면 finalizeInventoryTransaction 에서 update
+    metadata
+  }).select('id, txn_number').single();
+  
+  if (error) throw new Error(`Transaction 생성 실패: ${error.message}`);
+  return data;
+}
+
+/**
+ * 진짜 핵심 함수 — bin 1개의 qty 변경
+ * 
+ * @param {Object} params
+ * @param {string} params.transaction_id - createInventoryTransaction 으로 받은 id (필수)
+ * @param {string} params.inventory_id - inventory.id (필수)
+ * @param {string} params.bin_code - bin 코드 (예: 'H2248')
+ * @param {number} params.delta - 변경량 (+72, -72 등)
+ * @param {string} [params.pallet_id] - 새 bin 만들 때 pallet_id (optional)
+ * @param {string} params.action - 'ship', 'receive', 'split', 'partial_keep', 'adjust', etc
+ * @param {Object} [params.detail_metadata] - 이 detail 만의 추가 정보
+ * @returns {Promise<{success, before, after, detail_id, error}>}
+ */
+async function changeInventory({
+  transaction_id,
+  inventory_id,
+  bin_code,
+  delta,
+  pallet_id = null,
+  action,
+  detail_metadata = {}
+}) {
+  // ─── 검증 ───
+  if (!transaction_id) return { success: false, error: 'transaction_id 필수' };
+  if (!inventory_id) return { success: false, error: 'inventory_id 필수' };
+  if (!bin_code) return { success: false, error: 'bin_code 필수' };
+  if (typeof delta !== 'number' || isNaN(delta)) return { success: false, error: 'delta 는 숫자여야 함' };
+  if (delta === 0) return { success: false, error: 'delta 가 0 이면 변경 X' };
+  if (!action) return { success: false, error: 'action 필수' };
+  
+  try {
+    // ─── 1. inventory 정보 조회 ───
+    const { data: inv, error: invErr } = await db.from('inventory')
+      .select('id, sku_id, style_number, color, size, qty_on_hand, qty_committed, warehouse_id, warehouses(code)')
+      .eq('id', inventory_id)
+      .single();
+    if (invErr || !inv) return { success: false, error: `inventory 없음: ${inventory_id}` };
+    
+    const warehouse_code = inv.warehouses?.code || '';
+    const qty_on_hand_before = inv.qty_on_hand || 0;
+    const qty_on_hand_after = qty_on_hand_before + delta;
+    
+    // 음수 방지 (delta 가 - 일 때 재고 부족)
+    if (qty_on_hand_after < 0) {
+      return { 
+        success: false, 
+        error: `재고 부족: ${inv.color}/${inv.size} 현재 ${qty_on_hand_before}, 차감 시도 ${Math.abs(delta)}` 
+      };
+    }
+    
+    // ─── 2. 현재 bin 상태 조회 ───
+    const { data: existingBin } = await db.from('inventory_bins')
+      .select('id, qty')
+      .eq('inventory_id', inventory_id)
+      .eq('bin_code', bin_code)
+      .maybeSingle();
+    
+    const bin_qty_before = existingBin?.qty || 0;
+    const bin_qty_after = bin_qty_before + delta;
+    
+    if (bin_qty_after < 0) {
+      return { 
+        success: false, 
+        error: `Bin ${bin_code} 재고 부족: 현재 ${bin_qty_before}, 차감 시도 ${Math.abs(delta)}` 
+      };
+    }
+    
+    // ─── 3. inventory_bins update/insert/delete ───
+    if (existingBin) {
+      if (bin_qty_after === 0) {
+        // 0 되면 delete
+        const { error: delErr } = await db.from('inventory_bins').delete().eq('id', existingBin.id);
+        if (delErr) return { success: false, error: `bin delete 실패: ${delErr.message}` };
+      } else {
+        const { error: updErr } = await db.from('inventory_bins')
+          .update({ qty: bin_qty_after })
+          .eq('id', existingBin.id);
+        if (updErr) return { success: false, error: `bin update 실패: ${updErr.message}` };
+      }
+    } else {
+      // 새 bin
+      if (delta < 0) {
+        return { success: false, error: `Bin ${bin_code} 없는데 차감 시도` };
+      }
+      
+      // pallet_id 자동 lookup (안 주어진 경우)
+      let resolved_pallet_id = pallet_id;
+      if (!resolved_pallet_id) {
+        const { data: pallet } = await db.from('pallets')
+          .select('id')
+          .eq('pallet_code', bin_code)
+          .eq('warehouse_code', warehouse_code)
+          .maybeSingle();
+        resolved_pallet_id = pallet?.id || null;
+      }
+      
+      const { error: insErr } = await db.from('inventory_bins').insert({
+        inventory_id,
+        bin_code,
+        qty: bin_qty_after,
+        pallet_id: resolved_pallet_id
+      });
+      if (insErr) return { success: false, error: `bin insert 실패: ${insErr.message}` };
+    }
+    
+    // ─── 4. inventory.qty_on_hand update ───
+    const { error: invUpdErr } = await db.from('inventory')
+      .update({ qty_on_hand: qty_on_hand_after })
+      .eq('id', inventory_id);
+    if (invUpdErr) return { success: false, error: `inventory update 실패: ${invUpdErr.message}` };
+    
+    // ─── 5. transaction_details 에 row 추가 ───
+    const { data: detail, error: detErr } = await db.from('inventory_transaction_details').insert({
+      transaction_id,
+      inventory_id,
+      sku_id: inv.sku_id,
+      style_number: inv.style_number,
+      warehouse_code,
+      color: inv.color,
+      size: inv.size,
+      action,
+      qty_before: qty_on_hand_before,
+      qty_after: qty_on_hand_after,
+      // qty_delta 는 generated column
+      bins_before: [{ bin: bin_code, qty: bin_qty_before }],
+      bins_after: bin_qty_after > 0 ? [{ bin: bin_code, qty: bin_qty_after }] : [],
+      metadata: detail_metadata
+    }).select('id').single();
+    
+    if (detErr) {
+      // CRITICAL — detail 저장 실패하면 reverse 못 함. alert 발생
+      console.error('[changeInventory] CRITICAL: detail 저장 실패', detErr);
+      return { 
+        success: false, 
+        error: `Detail 저장 실패 (DB 변경은 완료): ${detErr.message}`,
+        critical: true
+      };
+    }
+    
+    return {
+      success: true,
+      before: { bin_qty: bin_qty_before, total_qty: qty_on_hand_before },
+      after: { bin_qty: bin_qty_after, total_qty: qty_on_hand_after },
+      detail_id: detail.id
+    };
+  } catch (e) {
+    console.error('[changeInventory]', e);
+    return { success: false, error: e.message };
+  }
+}
+
+/**
+ * Transaction 마감 — affected_rows, total_qty_change 자동 계산
+ * 모든 changeInventory 호출 후 마지막에 호출
+ * 
+ * @param {string} transaction_id
+ * @returns {Promise<{success, affected_rows, total_qty_change}>}
+ */
+async function finalizeInventoryTransaction(transaction_id) {
+  if (!transaction_id) return { success: false, error: 'transaction_id 필수' };
+  
+  // 모든 detail 조회
+  const { data: details, error: detErr } = await db.from('inventory_transaction_details')
+    .select('qty_before, qty_after')
+    .eq('transaction_id', transaction_id);
+  
+  if (detErr) return { success: false, error: detErr.message };
+  
+  const affected_rows = details?.length || 0;
+  const total_qty_change = (details || []).reduce((s, d) => s + ((d.qty_after || 0) - (d.qty_before || 0)), 0);
+  
+  // Transaction update
+  const { error: updErr } = await db.from('inventory_transactions')
+    .update({ affected_rows, total_qty_change })
+    .eq('id', transaction_id);
+  
+  if (updErr) return { success: false, error: updErr.message };
+  
+  return { success: true, affected_rows, total_qty_change };
+}
+
+/**
+ * Bulk changeInventory — 여러 변경을 한 번에 처리
+ * 모든 변경이 성공해야 함 (하나라도 실패하면 그 시점까지의 변경은 유지)
+ * 
+ * @param {string} transaction_id
+ * @param {Array} changes - [{inventory_id, bin_code, delta, action, ...}]
+ * @returns {Promise<{success, results, errors}>}
+ */
+async function changeInventoryBulk(transaction_id, changes) {
+  const results = [];
+  const errors = [];
+  
+  for (const change of changes) {
+    const result = await changeInventory({ transaction_id, ...change });
+    results.push(result);
+    if (!result.success) {
+      errors.push({ change, error: result.error });
+    }
+  }
+  
+  return {
+    success: errors.length === 0,
+    results,
+    errors,
+    total: changes.length,
+    succeeded: results.filter(r => r.success).length,
+    failed: errors.length
+  };
+}
+
 async function restoreOrderInventory(orderId) {
   const { data: lines } = await db.from('order_lines').select('*').eq('order_id', orderId);
   if (!lines || lines.length === 0) return;
@@ -54653,4 +54916,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T11:42:50Z - Pull Receive: bins_before에 qty 추가 (reverse 가능하도록) -->
+
+
+<!-- Deploy trigger: 2026-04-28T12:00:12Z - changeInventory functions added (Phase 1) -->
