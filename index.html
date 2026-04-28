@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260428_164153 — Use Reserved fix: alloc_detail 청소 + bin 정확 매칭 + 로깅 -->
+<!-- BUILD: 20260428_170344 — Use Reserved 제거 (가끔 쓰는 feature, 정합성 위험). 안내 모달로 대체 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7410,27 +7410,23 @@ const lines = [...poLines].sort((a, b) => {
 
 
 
-// ── Reserved 재고 사용 모달
-let _useReservedState = null;
-
-async function showUseReservedModal(bin, wh, committed, invId) {
-  // 클릭한 bin 에 진짜 alloc 잡은 active order_lines 만 정확히 찾기
-  // (옛 방식: color+size 매칭만 — 다른 bin reserve 도 잘못 표시될 수 있었음)
+// ── Reserved 재고 정보 안내 모달 (Use Reserved 제거 후 단순 안내용)
+//   Reserve 를 깨려면 사용자가 수동으로 해당 PO 를 cancel 해야 함 (안전, 명시적)
+async function showReservedInfoModal(bin, wh, committed, invId) {
   const l = _allocState ? poLines[_allocState.lineIdx] : null;
   if (!l) return;
 
   const whObj = warehouses.find(w => w.code === wh);
   const ACTIVE = ['po_entered','credit_hold','preparing','ready_to_ship','reserved','reserved_partial','backordered','partial','open'];
-  // alloc_detail 또는 alloc_ca_detail 에 이 bin 이 있는 line 만 (정확)
+  // alloc_detail / alloc_ca_detail 에 이 bin 잡은 active line 만 정확히 찾기
   const { data: candidateLines } = await db.from('order_lines')
-    .select('id, reserved_qty, backordered_reserved_qty, qty_pieces, qty_filled, color, size, alloc_detail, alloc_ca_detail, warehouses!order_lines_warehouse_id_fkey(code), orders!inner(order_number, customer_name, customer_po, status)')
+    .select('id, color, size, alloc_detail, alloc_ca_detail, warehouses!order_lines_warehouse_id_fkey(code), orders!inner(id, order_number, customer_name, customer_po, status)')
     .eq('warehouse_id', whObj?.id)
     .eq('color', (l.color||'').toUpperCase())
     .eq('size', (l.size||'').toUpperCase())
     .in('orders.status', ACTIVE);
 
-  // 이 bin 에 진짜 alloc 잡은 line 만 추출 + 그 bin 의 pcs 계산
-  const lines = [];
+  const matched = [];
   (candidateLines||[]).forEach(rl => {
     const lineWh = rl.warehouses?.code;
     const alloc = (lineWh === 'CA') ? (rl.alloc_ca_detail || rl.alloc_detail) : rl.alloc_detail;
@@ -7439,71 +7435,35 @@ async function showUseReservedModal(bin, wh, committed, invId) {
     if (!binVal) return;
     const binPcs = (typeof binVal === 'object' && binVal !== null) ? (binVal.pcs || 0) : (parseInt(binVal) || 0);
     if (binPcs <= 0) return;
-    // line 에 이 bin 의 pcs 정보 첨부
-    rl._binPcs = binPcs;
-    lines.push(rl);
+    matched.push({ ...rl, _binPcs: binPcs });
   });
 
-  if (lines.length === 0) {
-    alert('이 bin 에 alloc 잡은 active PO 를 찾지 못했습니다.\n(데이터 정합성 확인 필요)');
-    return;
-  }
+  const linesHtml = matched.length === 0
+    ? `<div style="padding:12px;color:#b54708;font-size:12px;text-align:center;">
+         이 bin 에 alloc 잡은 active PO 를 찾지 못했습니다.<br>
+         (데이터 정합성 확인 필요 — 새로고침 후에도 보이면 reconciliation 실행)
+       </div>`
+    : matched.map(rl => `
+        <div style="padding:10px 12px;border-bottom:1px solid #f3f0ff;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <a href="javascript:void(0)" onclick="closeModal('modal-reserved-info'); openPODetail('${rl.orders?.id}')"
+                 style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;color:#6d28d9;text-decoration:underline;">
+                ${rl.orders?.order_number}
+              </a>
+              <span style="font-size:11px;color:var(--text3);margin-left:8px;">${rl.orders?.customer_name||''}</span>
+              <div style="font-size:10px;color:var(--text3);margin-top:2px;">
+                PO# ${rl.orders?.customer_po||'—'} · status: <b>${rl.orders?.status}</b>
+              </div>
+            </div>
+            <span style="font-size:12px;font-weight:700;color:#6d28d9;white-space:nowrap;">🔒 ${rl._binPcs}pcs</span>
+          </div>
+        </div>`).join('');
 
-  _useReservedState = { bin, wh, committed, invId, lines, color: l.color, size: l.size };
-
-  document.getElementById('use-reserved-info').innerHTML =
+  document.getElementById('reserved-info-bin').innerHTML =
     `<b style="font-family:'IBM Plex Mono',monospace;">${bin}</b> — 🔒 ${committed.toLocaleString()}pcs Reserved`;
-  document.getElementById('use-reserved-qty').value = Math.min(committed, 72);
-  document.getElementById('use-reserved-qty').max = committed;
-  document.getElementById('use-reserved-max').textContent = `최대 ${committed}pcs`;
-
-  const linesHtml = lines.map(rl => `
-    <div style="padding:8px 12px;border-bottom:1px solid #f3f0ff;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:#6d28d9;">${rl.orders?.order_number}</span>
-          <span style="font-size:11px;color:var(--text3);margin-left:6px;">${rl.orders?.customer_name}</span>
-          <span style="font-size:10px;color:var(--text3);margin-left:6px;">[${rl.orders?.status}]</span>
-        </div>
-        <span style="font-size:11px;font-weight:700;color:#6d28d9;">🔒 ${rl._binPcs}pcs (${bin})</span>
-      </div>
-      <label style="display:flex;align-items:center;gap:6px;margin-top:4px;cursor:pointer;">
-        <input type="radio" name="reserve-line" value="${rl.id}" data-binpcs="${rl._binPcs}" style="accent-color:#7c3aed;"/>
-        <span style="font-size:11px;color:var(--text2);">이 PO에서 차출</span>
-      </label>
-    </div>`).join('');
-
-  document.getElementById('use-reserved-lines').innerHTML = linesHtml;
-  // 첫번째 선택
-  const firstRadio = document.querySelector('#use-reserved-lines input[type="radio"]');
-  if (firstRadio) firstRadio.checked = true;
-
-  document.getElementById('modal-use-reserved').style.display = 'flex';
-}
-
-async function confirmUseReserved() {
-  const s = _useReservedState;
-  if (!s) return;
-  const useQty = parseInt(document.getElementById('use-reserved-qty').value)||0;
-  if (useQty <= 0 || useQty > s.committed) { alert('수량을 확인해주세요.'); return; }
-
-  const selectedRadio = document.querySelector('#use-reserved-lines input[name="reserve-line"]:checked');
-  if (!selectedRadio) { alert('Reserve PO를 선택해주세요.'); return; }
-  const selectedLineId = selectedRadio.value;
-  const selectedBinPcs = parseInt(selectedRadio.dataset.binpcs) || 0;
-  
-  // 차출 수량이 선택 PO 의 이 bin alloc 보다 크면 에러
-  if (useQty > selectedBinPcs) {
-    alert(`선택한 PO 가 이 bin 에 잡은 수량은 ${selectedBinPcs}pcs 입니다. ${useQty}pcs 차출 불가.`);
-    return;
-  }
-
-  const invRow = await db.from('inventory').select('qty_committed').eq('id', s.invId).single();
-  const curCommitted = invRow?.data?.qty_committed || 0;
-
-  await useReservedQty(selectedLineId, useQty, s.invId, 0, curCommitted, s.bin);
-  closeModal('modal-use-reserved');
-  _useReservedState = null;
+  document.getElementById('reserved-info-lines').innerHTML = linesHtml;
+  document.getElementById('modal-reserved-info').style.display = 'flex';
 }
 
 // ── Haiti 입고 시 Reserved 자동 재확보
@@ -7660,70 +7620,10 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
   await loadInvoices();
 }
 
-// ── Reserve PO에서 수량 사용 (긴급 오더용)
-async function useReservedQty(orderLineId, useQty, invId, invQty, invCommitted, fromBin) {
-  if (!confirm(`Reserved ${useQty}pcs를 이 오더에 사용하시겠습니까?
-해당 Reserve PO는 backordered 상태로 변경됩니다.`)) return;
-
-  // 1. inventory qty_committed 감소 + 로깅
-  const newCommitted = Math.max(0, invCommitted - useQty);
-  await db.from('inventory').update({
-    qty_committed: newCommitted
-  }).eq('id', invId);
-  // 로깅 (logInventoryChange 가 있으면 호출)
-  if (typeof logInventoryChange === 'function') {
-    try {
-      await logInventoryChange(invId, invCommitted, newCommitted, 'release', _currentEmployee?.name||'system', orderLineId, 'order_line', `Use Reserved - ${fromBin||'?'} -${useQty}pcs`);
-    } catch(e) { console.warn('[useReservedQty] logInventoryChange failed:', e); }
-  }
-
-  // 2. order_line 업데이트: reserved_qty 감소, backordered 증가, alloc_detail 에서 해당 bin 차감
-  const { data: ol } = await db.from('order_lines')
-    .select('reserved_qty, backordered_reserved_qty, order_id, alloc_detail, alloc_ca_detail, warehouses!order_lines_warehouse_id_fkey(code)')
-    .eq('id', orderLineId).single();
-  if (ol) {
-    const newReserved = Math.max(0, (ol.reserved_qty||0) - useQty);
-    const newBack = (ol.backordered_reserved_qty||0) + useQty;
-    
-    // alloc_detail / alloc_ca_detail 청소: 해당 bin 의 pcs 만큼 차감 (0 되면 제거)
-    const lineWh = ol.warehouses?.code;
-    const isAllocCa = (lineWh === 'CA');
-    const allocField = isAllocCa ? 'alloc_ca_detail' : 'alloc_detail';
-    const allocCopy = JSON.parse(JSON.stringify(ol[allocField] || {}));
-    if (fromBin && allocCopy[fromBin]) {
-      const cur = allocCopy[fromBin];
-      const curPcs = (typeof cur === 'object' && cur !== null) ? (cur.pcs || 0) : (parseInt(cur) || 0);
-      const newPcs = Math.max(0, curPcs - useQty);
-      if (newPcs === 0) {
-        delete allocCopy[fromBin];
-      } else if (typeof cur === 'object') {
-        const ppb = (cur.pcs && cur.boxes !== undefined) ? Math.round(cur.pcs / Math.max(cur.boxes + (cur.partial?1:0), 1)) : 72;
-        allocCopy[fromBin] = { ...cur, pcs: newPcs, boxes: Math.floor(newPcs / 72), partial: newPcs % 72 };
-      } else {
-        allocCopy[fromBin] = newPcs;
-      }
-    }
-    
-    const updatePayload = {
-      reserved_qty: newReserved,
-      backordered_reserved_qty: newBack,
-      is_backordered: newBack > 0
-    };
-    updatePayload[allocField] = Object.keys(allocCopy).length > 0 ? allocCopy : null;
-    await db.from('order_lines').update(updatePayload).eq('id', orderLineId);
-
-    // order 전체 status 업데이트
-    const { data: allLines } = await db.from('order_lines').select('reserved_qty, backordered_reserved_qty').eq('order_id', ol.order_id);
-    const totalBack = (allLines||[]).reduce((s,l) => s + (l.backordered_reserved_qty||0), 0);
-    const totalReserved = (allLines||[]).reduce((s,l) => s + (l.reserved_qty||0), 0);
-    const newStatus = totalReserved === 0 ? 'backordered' : totalBack > 0 ? 'reserved_partial' : 'reserved';
-    await db.from('orders').update({ status: newStatus }).eq('id', ol.order_id);
-  }
-
-  showToast(`✅ ${useQty}pcs 사용 완료 — Reserve PO backordered 처리`);
-  await loadScInventory();
-  renderEntryTable();
-}
+// ── Reserve PO에서 수량 사용 (긴급 오더용) — 제거됨 (2026-04-28)
+//   사유: 가끔 쓰는 feature 인데 alloc_detail/status/Back Orders 정합성 처리 복잡.
+//   대신 사용자가 해당 PO 를 명시적으로 cancel/edit 하는 방식이 더 안전하고 명확.
+//   필요 시 git history 에서 복원 가능.
 
 // ══════════════════════════════════════════════
 // INVENTORY LOGGING SYSTEM
@@ -35004,10 +34904,10 @@ function buildAllocHtml(lineIdx, whGroup) {
         </div>
         ${(b.committed||0)>0 ? `
         <div style="margin-top:8px;padding:6px 8px;background:#f5f3ff;border-radius:4px;border:1px solid #c4b5fd;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-          <span style="font-size:10px;color:#6d28d9;font-weight:600;">🔒 ${b.committed}pcs Reserved — 잠긴 재고</span>
-          <button onclick="showUseReservedModal('${b.bin}','${isSC?'SC':'CA'}',${b.committed||0},'${b.inv_id||''}')"
-            style="font-size:10px;padding:3px 10px;border-radius:4px;border:1px solid #7c3aed;background:#7c3aed;color:#fff;cursor:pointer;font-weight:700;white-space:nowrap;">
-            ⚡ Use Reserved
+          <span style="font-size:10px;color:#6d28d9;font-weight:600;">🔒 ${b.committed}pcs Reserved — 다른 PO에서 사용 중</span>
+          <button onclick="showReservedInfoModal('${b.bin}','${isSC?'SC':'CA'}',${b.committed||0},'${b.inv_id||''}')"
+            style="font-size:10px;padding:3px 10px;border-radius:4px;border:1px solid #7c3aed;background:#fff;color:#7c3aed;cursor:pointer;font-weight:700;white-space:nowrap;">
+            🔍 어느 PO?
           </button>
         </div>` : ''}
         ${loosePcs > 0 ? `
@@ -37518,24 +37418,22 @@ function showCreditHoldFlash(overAmt) {
   </div>
 </div>
 
-<!-- ── Use Reserved Modal ── -->
-<div class="modal-overlay" id="modal-use-reserved" style="display:none;z-index:10000;">
-  <div class="modal-box" style="max-width:460px;">
+<!-- ── Reserved Info Modal (Use Reserved 제거 후 안내용) ── -->
+<div class="modal-overlay" id="modal-reserved-info" style="display:none;z-index:10000;">
+  <div class="modal-box" style="max-width:480px;">
     <div style="padding:14px 16px;background:#6d28d9;display:flex;align-items:center;justify-content:space-between;">
-      <span style="font-weight:700;color:#fff;font-size:14px;">⚡ Reserved 재고 사용</span>
-      <button onclick="closeModal('modal-use-reserved')" style="background:none;border:none;color:rgba(255,255,255,0.8);font-size:18px;cursor:pointer;">×</button>
+      <span style="font-weight:700;color:#fff;font-size:14px;">🔒 Reserved 재고 정보</span>
+      <button onclick="closeModal('modal-reserved-info')" style="background:none;border:none;color:rgba(255,255,255,0.8);font-size:18px;cursor:pointer;">×</button>
     </div>
     <div style="padding:16px;">
-      <div id="use-reserved-info" style="font-size:13px;color:var(--text2);margin-bottom:12px;"></div>
-      <div style="margin-bottom:16px;">
-        <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px;">사용할 수량 (pcs)</label>
-        <input type="number" id="use-reserved-qty" min="1" style="width:120px;height:36px;border:1px solid #c4b5fd;border-radius:6px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:700;"/>
-        <span id="use-reserved-max" style="font-size:11px;color:#7c3aed;margin-left:8px;"></span>
+      <div id="reserved-info-bin" style="font-size:13px;color:var(--text2);margin-bottom:12px;"></div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.5;">
+        이 재고를 다른 PO 에 쓰려면 아래 PO 를 먼저 <b>cancel</b> 또는 <b>edit</b> 하세요.<br>
+        <span style="color:var(--text3);font-size:11px;">PO 번호를 클릭하면 해당 PO 로 이동합니다.</span>
       </div>
-      <div id="use-reserved-lines" style="max-height:200px;overflow-y:auto;border:1px solid #e8e8e8;border-radius:6px;margin-bottom:16px;"></div>
+      <div id="reserved-info-lines" style="max-height:280px;overflow-y:auto;border:1px solid #e8e8e8;border-radius:6px;margin-bottom:16px;"></div>
       <div style="display:flex;justify-content:flex-end;gap:8px;">
-        <button onclick="closeModal('modal-use-reserved')" class="btn">취소</button>
-        <button onclick="confirmUseReserved()" class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;">⚡ 사용 확정</button>
+        <button onclick="closeModal('modal-reserved-info')" class="btn">닫기</button>
       </div>
     </div>
   </div>
