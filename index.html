@@ -53112,6 +53112,12 @@ async function runInventoryReconciliation() {
   try {
     document.getElementById('inv-recon-status').textContent = '⏳ 내 시스템 데이터 가져오는 중...';
     
+    // Davinci 파일에 있는 style 목록 추출 (이것만 비교)
+    const davinciStyles = new Set();
+    [..._reconDavinciData.SC, ..._reconDavinciData.CA].forEach(d => {
+      if (d.style) davinciStyles.add(d.style.toLowerCase());
+    });
+    
     // 1. inventory 메타 정보 (style/color/size/warehouse 매핑용)
     const { data: invData, error } = await db.from('inventory')
       .select('id, qty_on_hand, sku, style_number, color, size, warehouses(code), styles(style_number)')
@@ -53119,7 +53125,7 @@ async function runInventoryReconciliation() {
     
     if (error) throw error;
     
-    // inventory id → meta 매핑
+    // inventory id → meta 매핑 (Davinci 에 있는 style 만)
     const invMeta = {};
     (invData || []).forEach(row => {
       const whFull = (row.warehouses?.code || '').toUpperCase();
@@ -53127,8 +53133,13 @@ async function runInventoryReconciliation() {
       
       if (!uploadedWarehouses.includes(wh)) return;
       
+      const style = (row.style_number || row.styles?.style_number || '').toLowerCase();
+      
+      // Davinci 파일에 있는 style 만 비교
+      if (!davinciStyles.has(style)) return;
+      
       invMeta[row.id] = {
-        style: (row.style_number || row.styles?.style_number || '').toLowerCase(),
+        style,
         color: (row.color || '').toUpperCase(),
         size: (row.size || '').toUpperCase(),
         wh
@@ -54031,4 +54042,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T01:17:56Z - Recon: inventory_bins 사용 (진짜 bin 별 매칭) -->
+
+<!-- Deploy trigger: 2026-04-28T01:31:38Z - Recon: 파일에 있는 style만 비교 -->
