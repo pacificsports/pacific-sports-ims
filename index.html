@@ -801,6 +801,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <button class="btn" id="po-btn-prep-complete" style="display:none;background:#0891b2;color:#fff;border-color:#0891b2;" onclick="markPrepComplete()">✅ Preparation Complete</button>
           <button class="btn" id="po-btn-shipped" style="display:none;background:#16a34a;color:#fff;border-color:#16a34a;" onclick="markOrderShipped()">🚚 Shipped</button>
           <button class="btn" id="po-btn-approve-invoice" style="display:none;background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="approveAndSendInvoice()">🧾 Approve & Send Invoice</button>
+          <button class="btn" id="po-btn-reverse-ship" style="display:none;background:#fff7ed;color:#ea580c;border-color:#fdba74;" onclick="reverseShipConfirm()">↩ Reverse Ship</button>
           <span id="po-doc-title" style="font-size:13px;font-weight:700;color:var(--primary-dark);margin-left:4px;"></span>
           <span id="po-status-badge" style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:12px;background:#f3f4f6;color:#6b7280;"></span>
         </div>
@@ -6247,9 +6248,11 @@ function updateStatusButtons(status) {
   const btnPrep    = document.getElementById('po-btn-prep-complete');
   const btnShipped = document.getElementById('po-btn-shipped');
   const btnApprove = document.getElementById('po-btn-approve-invoice');
+  const btnReverse = document.getElementById('po-btn-reverse-ship');
   if (btnPrep)    btnPrep.style.display    = (status === 'preparing') ? 'inline-flex' : 'none';
   if (btnShipped) btnShipped.style.display = (status === 'ready_to_ship') ? 'inline-flex' : 'none';
   if (btnApprove) btnApprove.style.display = (status === 'shipped') ? 'inline-flex' : 'none';
+  if (btnReverse) btnReverse.style.display = (status === 'shipped' || status === 'invoiced') ? 'inline-flex' : 'none';
 }
 
 function printCurrentDoc() {
@@ -6301,6 +6304,108 @@ async function approveAndSendInvoice() {
   currentInvoiceData.order.status = 'invoiced';
   updateStatusButtons('invoiced');
   alert('🧾 Invoiced 처리 완료!\n(이메일 자동발송 기능은 곧 추가됩니다)');
+}
+
+// ─────────────────────────────────────────────
+// 🆕 Reverse Ship — Shipped/Invoiced 오더의 재고 복원
+// ─────────────────────────────────────────────
+async function reverseShipConfirm() {
+  if (!currentInvoiceData?.order?.id) return;
+  const order = currentInvoiceData.order;
+  const orderId = order.id;
+  
+  // 확인 모달
+  const reason = prompt(
+    `⚠️ Ship 을 되돌릴까요?\n\n` +
+    `Order: ${order.order_number} (${order.customer_po || ''})\n` +
+    `Customer: ${order.customer_name}\n` +
+    `Status: ${order.status}\n\n` +
+    `이 작업은:\n` +
+    `1. 출고된 inventory 를 복원합니다\n` +
+    `2. inventory_bins 의 박스를 다시 추가합니다\n` +
+    `3. 오더 상태를 ready_to_ship 으로 되돌립니다\n` +
+    `4. Reverse 기록이 transaction log 에 남습니다\n\n` +
+    `사유를 입력하세요 (필수):`,
+    ''
+  );
+  
+  if (reason === null) return;  // 사용자가 cancel
+  if (!reason || !reason.trim()) {
+    alert('사유는 필수입니다.');
+    return;
+  }
+  
+  if (!confirm(`정말로 Ship 을 되돌릴까요?\n\n사유: ${reason}\n\n이 작업은 되돌릴 수 없습니다.`)) return;
+  
+  try {
+    showToast('⏳ Reverse 진행 중...');
+    
+    // 1. inventory 복원
+    await restoreOrderInventory(orderId);
+    
+    // 2. order 상태 되돌리기 + ship_txn_id 제거 (재 ship 가능하도록)
+    const updateFields = {
+      status: 'ready_to_ship',
+      shipped_at: null,
+      sc_ship_txn_id: null,
+      ca_ship_txn_id: null
+    };
+    
+    // WH 별 status 도 reset
+    if (order.wh_code === 'SC&CA' || order.is_split_warehouse) {
+      if (order.sc_status === 'shipped' || order.sc_status === 'invoiced') {
+        updateFields.sc_status = 'ready_to_ship';
+        updateFields.sc_shipped_at = null;
+      }
+      if (order.ca_status === 'shipped' || order.ca_status === 'invoiced') {
+        updateFields.ca_status = 'ready_to_ship';
+        updateFields.ca_shipped_at = null;
+      }
+    } else {
+      const whField = order.wh_code === 'CA' ? 'ca_shipped_at' : 'sc_shipped_at';
+      const whStatusField = order.wh_code === 'CA' ? 'ca_status' : 'sc_status';
+      updateFields[whField] = null;
+      updateFields[whStatusField] = 'ready_to_ship';
+    }
+    
+    await db.from('orders').update(updateFields).eq('id', orderId);
+    
+    // 3. order_lines qty_filled 0 으로 reset (재출고 가능하도록)
+    await db.from('order_lines')
+      .update({ qty_filled: 0, qty_backordered: 0, is_backordered: false })
+      .eq('order_id', orderId);
+    
+    // 4. Reverse log
+    const empName = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+    await db.from('inventory_transactions').insert({
+      transaction_type: 'order_reverse_ship',
+      description: `Reverse Ship — Order ${order.order_number} (${reason})`,
+      warehouse_code: order.wh_code === 'CA' ? 'CA' : 'SC',
+      performed_by: empName,
+      status: 'active',
+      affected_rows: 0,
+      total_qty_change: 0,
+      metadata: {
+        order_id: orderId,
+        order_number: order.order_number,
+        customer_po: order.customer_po,
+        customer_name: order.customer_name,
+        reason: reason.trim(),
+        action: 'reverse_ship_user_initiated'
+      }
+    });
+    
+    showToast('✅ Reverse 완료 — 재고 복원됨');
+    
+    // UI 업데이트 — 페이지 reload 또는 status update
+    setTimeout(() => {
+      location.reload();
+    }, 1500);
+    
+  } catch(e) {
+    console.error('[Reverse Ship]', e);
+    alert('❌ Reverse 실패: ' + e.message);
+  }
 }
 
 function openInvoiceDetail(orderId) { openInvoice(orderId); }
@@ -54376,4 +54481,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T11:06:41Z - Ship transaction: qty_delta generated column 처리 -->
+
+<!-- Deploy trigger: 2026-04-28T11:15:55Z - Reverse Ship 버튼 추가 -->
