@@ -2744,9 +2744,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <div style="font-weight:700;color:#78350f;font-size:13px;margin-bottom:6px;">📋 사용 방법</div>
               <div style="font-size:12px;color:#78350f;line-height:1.7;">
                 1. Davinci에서 SC + CA 재고 Excel export<br>
+                &nbsp;&nbsp;&nbsp;필수 컬럼: <code>Item Code, Color, Size, Available Qty, Location</code><br>
                 2. 둘 다 업로드 (또는 하나씩)<br>
-                3. 내 시스템 데이터와 자동 비교<br>
-                4. 차이 확인 → CSV로 export 하거나 화면에서 보기
+                3. <strong>Box → Pcs 자동 변환</strong> (Style master의 pcs_per_box 사용)<br>
+                4. 내 시스템 데이터와 자동 비교 — <strong>Bin location까지 정확히 매칭</strong><br>
+                5. 차이 확인 → CSV로 export 가능
               </div>
             </div>
             
@@ -2793,12 +2795,13 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <table style="width:100%;border-collapse:collapse;font-size:12px;">
                 <thead>
                   <tr style="background:#1f2937;color:#fff;position:sticky;top:0;z-index:1;">
-                    <th style="padding:8px;text-align:left;">SKU</th>
+                    <th style="padding:8px;text-align:left;">Item Code</th>
                     <th style="padding:8px;text-align:center;">Color</th>
                     <th style="padding:8px;text-align:center;">Size</th>
                     <th style="padding:8px;text-align:center;">WH</th>
-                    <th style="padding:8px;text-align:right;color:#93c5fd;">Davinci</th>
-                    <th style="padding:8px;text-align:right;color:#fbbf24;">내 시스템</th>
+                    <th style="padding:8px;text-align:center;color:#fbbf24;">Bin</th>
+                    <th style="padding:8px;text-align:right;color:#93c5fd;">Davinci<br><span style="font-weight:400;font-size:10px;">(box / pcs)</span></th>
+                    <th style="padding:8px;text-align:right;color:#fbbf24;">내 시스템<br><span style="font-weight:400;font-size:10px;">(pcs)</span></th>
                     <th style="padding:8px;text-align:right;">차이</th>
                     <th style="padding:8px;text-align:center;">상태</th>
                   </tr>
@@ -53010,96 +53013,84 @@ async function loadReconFile(event, warehouse) {
   statusEl.textContent = '⏳ 파일 읽는 중...';
   
   try {
-    let rows = [];
+    // XLSX 라이브러리 로드
+    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
     
-    if (file.name.toLowerCase().endsWith('.csv')) {
-      const text = await file.text();
-      rows = parseCsv(text);
-    } else {
-      // XLSX
-      if (!window.XLSX) {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-          s.onload = resolve;
-          s.onerror = reject;
-          document.head.appendChild(s);
-        });
-      }
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, {type:'array'});
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
-    }
-    
-    if (!rows || rows.length < 2) {
+    if (!rows || rows.length === 0) {
       statusEl.textContent = '❌ 빈 파일';
       return;
     }
     
-    // 헤더 자동 감지 (Davinci 형식)
-    // 일반적: Style, Color, Size, Available Qty, Unit Cost
-    const headers = rows[0].map(h => String(h || '').toLowerCase().trim());
-    const findCol = (...names) => {
-      for (const n of names) {
-        const idx = headers.findIndex(h => h.includes(n.toLowerCase()));
-        if (idx >= 0) return idx;
-      }
-      return -1;
-    };
-    
-    const styleCol = findCol('style number', 'style', 'item');
-    const colorCol = findCol('color');
-    const sizeCol = findCol('size');
-    const qtyCol = findCol('available qty', 'available', 'qty', 'quantity', 'on hand');
-    const costCol = findCol('unit cost', 'cost', 'price');
-    
-    if (styleCol < 0 || qtyCol < 0) {
-      statusEl.textContent = '❌ 컬럼 인식 실패 (Style, Qty 필요)';
+    // Davinci 형식 검증
+    const firstRow = rows[0];
+    const required = ['Item Code', 'Color', 'Size', 'Available Qty', 'Location'];
+    const missing = required.filter(c => !(c in firstRow));
+    if (missing.length > 0) {
+      statusEl.textContent = '❌ 컬럼 누락: ' + missing.join(', ');
+      statusEl.style.color = '#dc2626';
       return;
     }
     
+    // 모든 styles의 pcs_per_box 가져오기 (한 번에)
+    const { data: stylesData } = await db.from('styles').select('style_number, pcs_per_box, pcs_per_box_large');
+    const ppbMap = {};
+    (stylesData || []).forEach(s => {
+      ppbMap[(s.style_number || '').toLowerCase()] = {
+        small: s.pcs_per_box || 72,
+        large: s.pcs_per_box_large || 48
+      };
+    });
+    
+    // Davinci 행 파싱
     const data = [];
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      if (!r || !r[styleCol]) continue;
+    for (const row of rows) {
+      const item = String(row['Item Code'] || '').trim();
+      if (!item) continue;
       
-      const style = String(r[styleCol] || '').trim();
-      const color = colorCol >= 0 ? String(r[colorCol] || '').trim().toUpperCase() : '';
-      const size = sizeCol >= 0 ? String(r[sizeCol] || '').trim().toUpperCase() : '';
-      const qty = parseFloat(String(r[qtyCol]).replace(/,/g, '')) || 0;
-      const cost = costCol >= 0 ? (parseFloat(String(r[costCol]).replace(/[,$]/g, '')) || 0) : 0;
+      // Style number 추출 — 앞쪽 숫자/하이픈만
+      // "1580NAVYS" → "1580"
+      // "1580BLACKXL+ER" → "1580"
+      // "AB-100BLKL" → "AB-100" (style이 알파벳 포함하는 경우는 드물음)
+      // 일반적으로 Davinci style은 숫자만
+      const styleMatch = item.match(/^([0-9]+(?:-[0-9]+)?)/);
+      const styleNum = styleMatch ? styleMatch[1] : '';
       
-      if (!style || qty === 0) continue;
+      // parseDavinciRow 활용
+      const parsed = parseDavinciRow(row, styleNum);
       
-      data.push({ style, color, size, qty, cost, warehouse });
+      // Box → Pcs 변환
+      const ppb = ppbMap[styleNum.toLowerCase()] || { small: 72, large: 48 };
+      const ppbVal = pcsPerBox(parsed.size, ppb.small, ppb.large);
+      const qtyPcs = parsed.qtyBoxes * ppbVal;
+      
+      data.push({
+        item_code: item,
+        style: styleNum.toLowerCase(),
+        color: parsed.color,
+        size: parsed.size,
+        location: (parsed.location || '').toUpperCase().trim(),
+        qtyBoxes: parsed.qtyBoxes,
+        qtyPcs: qtyPcs,
+        ppb: ppbVal,
+        warehouse
+      });
     }
     
     _reconDavinciData[warehouse] = data;
-    statusEl.textContent = `✅ ${data.length}개 SKU 로드됨`;
+    const totalBoxes = data.reduce((s,d) => s + d.qtyBoxes, 0);
+    const totalPcs = data.reduce((s,d) => s + d.qtyPcs, 0);
+    statusEl.innerHTML = `✅ ${data.length}개 행<br>${totalBoxes.toLocaleString()} boxes / ${totalPcs.toLocaleString()} pcs`;
     statusEl.style.color = '#16a34a';
     
   } catch(e) {
     console.error('[Recon Load]', e);
-    statusEl.textContent = '❌ 에러: ' + e.message;
+    statusEl.textContent = '❌ ' + e.message;
     statusEl.style.color = '#dc2626';
   }
-}
-
-function parseCsv(text) {
-  const lines = text.split(/\r?\n/);
-  return lines.map(line => {
-    const cells = [];
-    let cur = '', inQuote = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (c === '"') { inQuote = !inQuote; }
-      else if (c === ',' && !inQuote) { cells.push(cur); cur = ''; }
-      else cur += c;
-    }
-    cells.push(cur);
-    return cells;
-  });
 }
 
 async function runInventoryReconciliation() {
@@ -53114,43 +53105,45 @@ async function runInventoryReconciliation() {
   btn.textContent = '⏳ Loading...';
   
   try {
-    // 내 시스템 데이터 로드
     document.getElementById('inv-recon-status').textContent = '⏳ 내 시스템 데이터 가져오는 중...';
+    
+    // 내 시스템 inventory 모두 (qty > 0)
     const { data: invData, error } = await db.from('inventory')
-      .select('*, warehouses(code), styles(style_number)')
+      .select('id, qty_on_hand, sku, style_number, color, size, location, warehouses(code), styles(style_number)')
       .gt('qty_on_hand', 0);
     
     if (error) throw error;
     
-    // 내 시스템 데이터 매핑
-    const ourMap = {};  // key: style|color|size|wh
+    // 매칭 키: style|color|size|warehouse|bin
+    const buildKey = (style, color, size, wh, bin) => 
+      `${(style||'').toLowerCase().trim()}|${(color||'').toUpperCase().trim()}|${(size||'').toUpperCase().trim()}|${(wh||'').toUpperCase().trim()}|${(bin||'').toUpperCase().trim()}`;
+    
+    // 내 시스템 매핑
+    const ourMap = {};
     (invData || []).forEach(row => {
-      const style = (row.style_number || row.styles?.style_number || '').toLowerCase().trim();
-      const color = (row.color || '').toUpperCase().trim();
-      const size = (row.size || '').toUpperCase().trim();
-      const wh = (row.warehouses?.code || '').toUpperCase().trim();
-      // SC-PCR, CA-PCR 같은 거 정리
-      const whClean = wh.startsWith('SC') ? 'SC' : wh.startsWith('CA') ? 'CA' : wh;
-      const key = `${style}|${color}|${size}|${whClean}`;
+      const style = (row.style_number || row.styles?.style_number || '').toLowerCase();
+      const color = (row.color || '').toUpperCase();
+      const size = (row.size || '').toUpperCase();
+      const whFull = (row.warehouses?.code || '').toUpperCase();
+      // SC-PCR, CA-PCR 등 → SC/CA 추출
+      const wh = whFull.startsWith('SC') ? 'SC' : whFull.startsWith('CA') ? 'CA' : whFull;
+      const bin = (row.location || '').toUpperCase().trim();
       
-      if (!ourMap[key]) ourMap[key] = { qty: 0, cost: 0, items: [] };
+      const key = buildKey(style, color, size, wh, bin);
+      
+      if (!ourMap[key]) ourMap[key] = { qty: 0, items: [] };
       ourMap[key].qty += (row.qty_on_hand || 0);
-      if (row.unit_cost > 0) ourMap[key].cost = row.unit_cost;
       ourMap[key].items.push(row);
     });
     
-    // Davinci 데이터 매핑
+    // Davinci 매핑
     const davinciMap = {};
     [..._reconDavinciData.SC, ..._reconDavinciData.CA].forEach(d => {
-      const style = (d.style || '').toLowerCase().trim();
-      const color = (d.color || '').toUpperCase().trim();
-      const size = (d.size || '').toUpperCase().trim();
-      const wh = d.warehouse;
-      const key = `${style}|${color}|${size}|${wh}`;
+      const key = buildKey(d.style, d.color, d.size, d.warehouse, d.location);
       
-      if (!davinciMap[key]) davinciMap[key] = { qty: 0, cost: 0 };
-      davinciMap[key].qty += d.qty;
-      if (d.cost > 0) davinciMap[key].cost = d.cost;
+      if (!davinciMap[key]) davinciMap[key] = { qty: 0, qtyBoxes: 0, item_code: d.item_code };
+      davinciMap[key].qty += d.qtyPcs;
+      davinciMap[key].qtyBoxes += d.qtyBoxes;
     });
     
     // 비교
@@ -53158,35 +53151,44 @@ async function runInventoryReconciliation() {
     const results = [];
     
     allKeys.forEach(key => {
-      const [style, color, size, wh] = key.split('|');
+      const [style, color, size, wh, bin] = key.split('|');
       const d = davinciMap[key];
       const o = ourMap[key];
       
-      let status, davinci_qty, our_qty, diff;
+      let status, davinci_qty, our_qty, diff, davinci_boxes;
       
       if (d && !o) {
         status = 'davinci_only';
         davinci_qty = d.qty;
+        davinci_boxes = d.qtyBoxes;
         our_qty = 0;
         diff = d.qty;
       } else if (!d && o) {
         status = 'ours_only';
         davinci_qty = 0;
+        davinci_boxes = 0;
         our_qty = o.qty;
         diff = -o.qty;
       } else if (d.qty !== o.qty) {
         status = 'diff';
         davinci_qty = d.qty;
+        davinci_boxes = d.qtyBoxes;
         our_qty = o.qty;
         diff = d.qty - o.qty;
       } else {
         status = 'match';
         davinci_qty = d.qty;
+        davinci_boxes = d.qtyBoxes;
         our_qty = o.qty;
         diff = 0;
       }
       
-      results.push({ key, style, color, size, wh, davinci_qty, our_qty, diff, status });
+      results.push({ 
+        key, style, color, size, wh, bin: bin || '—',
+        davinci_qty, our_qty, diff, status, 
+        davinci_boxes,
+        item_code: d?.item_code || ''
+      });
     });
     
     _reconResults = results;
@@ -53283,12 +53285,17 @@ function filterReconResults(filter) {
     const diffColor = r.diff === 0 ? '#9ca3af' : (r.diff > 0 ? '#dc2626' : '#16a34a');
     const diffStr = r.diff === 0 ? '—' : (r.diff > 0 ? '+' + r.diff : r.diff);
     
+    const davinciDisplay = r.davinci_boxes 
+      ? `<span style="font-size:10px;color:#6b7280;">${r.davinci_boxes}box</span> / ${r.davinci_qty.toLocaleString()}`
+      : r.davinci_qty.toLocaleString();
+    
     return `<tr style="border-bottom:1px solid #f3f4f6;">
-      <td style="padding:6px 8px;font-family:monospace;font-size:11px;font-weight:600;">${r.style}</td>
+      <td style="padding:6px 8px;font-family:monospace;font-size:11px;font-weight:600;">${r.item_code || (r.style + r.color + r.size)}</td>
       <td style="padding:6px 8px;text-align:center;font-size:11px;">${r.color || '—'}</td>
       <td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;">${r.size || '—'}</td>
       <td style="padding:6px 8px;text-align:center;font-size:10px;font-weight:700;color:${r.wh === 'CA' ? '#ea580c' : '#1e40af'};">${r.wh}</td>
-      <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;font-weight:600;color:#1e40af;">${r.davinci_qty.toLocaleString()}</td>
+      <td style="padding:6px 8px;text-align:center;font-family:monospace;font-size:10px;color:${r.bin === '—' ? '#9ca3af' : '#92400e'};">${r.bin}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:11px;color:#1e40af;">${davinciDisplay}</td>
       <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;font-weight:600;color:#92400e;">${r.our_qty.toLocaleString()}</td>
       <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;font-weight:800;color:${diffColor};">${diffStr}</td>
       <td style="padding:6px 8px;text-align:center;">${statusBadge}</td>
@@ -53297,9 +53304,9 @@ function filterReconResults(filter) {
 }
 
 function exportReconResults() {
-  const rows = [['Style','Color','Size','Warehouse','Davinci_Qty','Our_Qty','Diff','Status']];
+  const rows = [['Item Code','Style','Color','Size','Warehouse','Bin','Davinci_Boxes','Davinci_Pcs','Our_Pcs','Diff','Status']];
   _reconResults.forEach(r => rows.push([
-    r.style, r.color, r.size, r.wh, r.davinci_qty, r.our_qty, r.diff, r.status
+    r.item_code || '', r.style, r.color, r.size, r.wh, r.bin, r.davinci_boxes || 0, r.davinci_qty, r.our_qty, r.diff, r.status
   ]));
   const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
   const a = document.createElement('a');
@@ -53988,4 +53995,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T22:36:10Z - Inventory + AR Reconciliation 시스템 추가 -->
+
+
+<!-- Deploy trigger: 2026-04-28T00:49:29Z - Style 추출 fix (숫자 + 하이픈만) -->
