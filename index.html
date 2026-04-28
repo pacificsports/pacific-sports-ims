@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260415_150857 -->
+<!-- BUILD: 20260428_143850 — Reserved bug fix: alloc_detail 기반 진짜 binCommittedMap (loadScInventory) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5703,6 +5703,50 @@ async function loadScInventory() {
     if (!binsByInvId[b.inventory_id]) binsByInvId[b.inventory_id] = [];
     binsByInvId[b.inventory_id].push(b);
   });
+
+  // 3. ★ 진짜 bin별 committed: active order_lines의 alloc_detail/alloc_ca_detail 에서 build
+  //   inventory.qty_committed 는 row 단위라 bin 정보 없음 → 기존 비례분배는 추정일 뿐 (틀림)
+  //   order_lines.alloc_detail = { 'H1130': { pcs: 72 }, ... } 가 진짜 source of truth
+  const ACTIVE_COMMIT_STATUSES = ['po_entered','credit_hold','preparing','ready_to_ship','reserved','reserved_partial','backordered','partial','open'];
+  const { data: commitLines } = await db.from('order_lines')
+    .select('color, size, alloc_detail, alloc_ca_detail, qty_pieces, qty_filled, warehouses!order_lines_warehouse_id_fkey(code), orders!inner(status, order_number)')
+    .in('orders.status', ACTIVE_COMMIT_STATUSES);
+  
+  // (wh + color + size + bin) → committed pcs
+  const trueBinCommitted = { 'SC':{}, 'SC-PCR':{}, 'CA':{}, 'CA-PCR':{} };
+  (commitLines || []).forEach(ol => {
+    const colorU = (ol.color || '').toUpperCase();
+    const sizeU = (ol.size || '').toUpperCase();
+    const lineWh = ol.warehouses?.code; // SC or CA
+    if (!lineWh || !colorU || !sizeU) return;
+    
+    const processAlloc = (allocObj, baseWh) => {
+      if (!allocObj) return;
+      Object.entries(allocObj).forEach(([binKey, val]) => {
+        const pcs = (typeof val === 'object' && val !== null) ? (val.pcs || 0) : (parseInt(val) || 0);
+        if (!pcs || pcs <= 0) return;
+        // PCR transfer 항목 skip (실제 bin 점유 아님)
+        if (binKey.includes('TRANSFER|')) return;
+        // PCR bin 패턴: 'SC-PCR|binCode' 또는 'CA-PCR|binCode'
+        let targetWh = baseWh;
+        let actualBin = binKey;
+        if (binKey.startsWith('SC-PCR|')) { targetWh = 'SC-PCR'; actualBin = binKey.slice(7); }
+        else if (binKey.startsWith('CA-PCR|')) { targetWh = 'CA-PCR'; actualBin = binKey.slice(7); }
+        
+        const k = `${actualBin}|${colorU}|${sizeU}`;
+        trueBinCommitted[targetWh][k] = (trueBinCommitted[targetWh][k] || 0) + pcs;
+      });
+    };
+    if (lineWh === 'SC') {
+      processAlloc(ol.alloc_detail, 'SC');
+    } else if (lineWh === 'CA') {
+      // wh=CA 라인은 alloc_ca_detail 우선, 없으면 alloc_detail
+      processAlloc(ol.alloc_ca_detail || ol.alloc_detail, 'CA');
+    }
+  });
+  // 진단용 전역 노출
+  window.__trueBinCommitted = trueBinCommitted;
+  console.log('[loadScInventory] true bin-level committed map:', trueBinCommitted);
   
   allInv.forEach(row => {
     if (!row.warehouses) return;
@@ -5741,12 +5785,12 @@ async function loadScInventory() {
       
       if (bins.length > 0) {
         // inventory_bins에 데이터 있음 → 여러 bin 지원!
-        // committed는 inventory row 전체 값 → bin별로 비례 분배
-        const totalBinQty = bins.reduce((s,b) => s + (b.qty || 0), 0);
+        // ★ committed는 bin 단위로 trueBinCommitted 에서 lookup (alloc_detail 기반 진짜 값)
         bins.forEach(b => {
           if (!b.bin_code || !b.qty) return;
-          // 이 bin의 committed 추정 (전체 committed × bin_qty/total_bin_qty)
-          const binCommitted = totalBinQty > 0 ? Math.round(committed * (b.qty / totalBinQty)) : 0;
+          // 이 bin 의 진짜 committed (alloc_detail 합산 결과)
+          const lookupKey = `${b.bin_code}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+          const binCommitted = trueBinCommitted[wh]?.[lookupKey] || 0;
           const binAvailQty = Math.max(0, b.qty - binCommitted);
           
           if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
@@ -5777,11 +5821,17 @@ async function loadScInventory() {
         });
       } else if (row.location) {
         // Fallback: inventory_bins에 없으면 기존 location 사용 (1 bin)
+        // 단일 bin이므로 row 전체 committed = 그 bin 의 committed (안전)
+        // 단 trueBinCommitted 가 있으면 우선
+        const lookupKey = `${row.location}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+        const trueCommitted = trueBinCommitted[wh]?.[lookupKey];
+        const useCommitted = (trueCommitted !== undefined) ? trueCommitted : committed;
+        const useAvail = Math.max(0, (row.qty_on_hand||0) - useCommitted);
         if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
         window.binInventory[wh][key].push({ 
           bin: row.location, 
-          qty: availQty, 
-          committed: committed, 
+          qty: useAvail, 
+          committed: useCommitted, 
           inv_id: row.id, 
           received_date: rcvDate 
         });
@@ -5792,8 +5842,8 @@ async function loadScInventory() {
             if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
             window.binInventory[wh][csKey].push({ 
               bin: row.location, 
-              qty: availQty, 
-              committed: committed, 
+              qty: useAvail, 
+              committed: useCommitted, 
               inv_id: row.id, 
               received_date: rcvDate 
             });
