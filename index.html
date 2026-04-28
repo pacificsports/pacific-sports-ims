@@ -53100,6 +53100,11 @@ async function runInventoryReconciliation() {
     return;
   }
   
+  // 업로드된 warehouse만 비교
+  const uploadedWarehouses = [];
+  if (_reconDavinciData.SC.length > 0) uploadedWarehouses.push('SC');
+  if (_reconDavinciData.CA.length > 0) uploadedWarehouses.push('CA');
+  
   const btn = document.getElementById('inv-recon-run-btn');
   btn.disabled = true;
   btn.textContent = '⏳ Loading...';
@@ -53107,26 +53112,29 @@ async function runInventoryReconciliation() {
   try {
     document.getElementById('inv-recon-status').textContent = '⏳ 내 시스템 데이터 가져오는 중...';
     
-    // 내 시스템 inventory 모두 (qty > 0)
+    // 내 시스템 inventory (qty > 0)
     const { data: invData, error } = await db.from('inventory')
       .select('id, qty_on_hand, sku, style_number, color, size, location, warehouses(code), styles(style_number)')
       .gt('qty_on_hand', 0);
     
     if (error) throw error;
     
-    // 매칭 키: style|color|size|warehouse|bin
+    // 매칭 키
     const buildKey = (style, color, size, wh, bin) => 
       `${(style||'').toLowerCase().trim()}|${(color||'').toUpperCase().trim()}|${(size||'').toUpperCase().trim()}|${(wh||'').toUpperCase().trim()}|${(bin||'').toUpperCase().trim()}`;
     
-    // 내 시스템 매핑
+    // 내 시스템 매핑 — 업로드된 warehouse 만
     const ourMap = {};
     (invData || []).forEach(row => {
+      const whFull = (row.warehouses?.code || '').toUpperCase();
+      const wh = whFull.startsWith('SC') ? 'SC' : whFull.startsWith('CA') ? 'CA' : whFull;
+      
+      // 업로드 안 된 warehouse는 skip
+      if (!uploadedWarehouses.includes(wh)) return;
+      
       const style = (row.style_number || row.styles?.style_number || '').toLowerCase();
       const color = (row.color || '').toUpperCase();
       const size = (row.size || '').toUpperCase();
-      const whFull = (row.warehouses?.code || '').toUpperCase();
-      // SC-PCR, CA-PCR 등 → SC/CA 추출
-      const wh = whFull.startsWith('SC') ? 'SC' : whFull.startsWith('CA') ? 'CA' : whFull;
       const bin = (row.location || '').toUpperCase().trim();
       
       const key = buildKey(style, color, size, wh, bin);
@@ -53997,4 +54005,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T00:49:29Z - Style 추출 fix (숫자 + 하이픈만) -->
+
+<!-- Deploy trigger: 2026-04-28T00:54:48Z - Recon: 업로드한 warehouse만 비교 -->
