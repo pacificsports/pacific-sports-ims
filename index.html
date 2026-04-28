@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260428_192346 — Haiti Excel parsing: color/size 정규화 (RT/HT/US/CVC/HTR/괄호 제거) -->
+<!-- BUILD: 20260428_193253 — Haiti parsing v2: HT/TK 유지, toddler (2)→2T, HTR-1 → HTR -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -36273,27 +36273,39 @@ async function parseTransitExcel(input) {
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
 
   // ── Color 정규화 — Haiti 양식 prefix/suffix 제거
-  //   예: "RT BLACK CVC" → "BLACK", "HT DARK NAVY (DS)" → "DARK NAVY", "BLACK (SW)" → "BLACK"
+  //   RT, US 는 자동 제거. HT, TK 는 사람이 판단해야 하므로 유지.
+  //   CVC 항상 제거. HTR 단독일 때만 제거 (HTR-1 같은 형태는 유지).
+  //   괄호 안 내용 모두 제거.
   function normalizeHaitiColor(raw) {
     if (!raw) return '';
     let c = String(raw).toUpperCase().trim();
-    // 괄호 안 내용 모두 제거 (SW, DS 등)
+    // 괄호 안 모두 제거 (SW, DS 등)
     c = c.replace(/\([^)]*\)/g, '').trim();
-    // 단어 단위로 split 해서 prefix/suffix 제거
-    const PREFIX = new Set(['RT', 'HT', 'US']);
-    const SUFFIX = new Set(['CVC', 'HTR']);
+    // 원본에 HTR-숫자 패턴 있었는지 기억
+    const hadDashedHtr = /HTR-\d+/i.test(String(raw).toUpperCase());
+    // trailing dash-숫자 제거 (예: HTR-1 → HTR)
+    c = c.replace(/-\d+\b/g, '').trim();
+    const PREFIX = new Set(['RT', 'US']); // HT, TK 는 사람 판단 영역
     let parts = c.split(/\s+/).filter(Boolean);
-    // leading prefix 제거 (반복적 — RT 만 있어도 한 번)
+    // leading prefix 제거
     while (parts.length > 1 && PREFIX.has(parts[0])) parts.shift();
-    // trailing suffix 제거
-    while (parts.length > 1 && SUFFIX.has(parts[parts.length-1])) parts.pop();
+    // trailing CVC 항상 제거
+    while (parts.length > 1 && parts[parts.length-1] === 'CVC') parts.pop();
+    // trailing HTR: dashed 패턴이 아니었던 경우에만 제거
+    if (!hadDashedHtr) {
+      while (parts.length > 1 && parts[parts.length-1] === 'HTR') parts.pop();
+    }
     return parts.join(' ').trim();
   }
 
-  // ── Size 정규화 — 괄호 제거, trim, uppercase
+  // ── Size 정규화 — toddler (2)→2T 변환, 괄호 제거, uppercase
   function normalizeHaitiSize(raw) {
     if (raw === null || raw === undefined) return '';
     let s = String(raw).toUpperCase().trim();
+    // toddler 패턴: (2), (3), (4), (5) → 2T, 3T, 4T, 5T
+    const tm = s.match(/^\((\d+)\)$/);
+    if (tm) return tm[1] + 'T';
+    // 그 외 괄호 안 제거
     s = s.replace(/\([^)]*\)/g, '').trim();
     return s;
   }
