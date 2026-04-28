@@ -13354,7 +13354,9 @@ async function restoreOrderInventory(orderId) {
           .single();
         
         if (invRow) {
-          const restoreQty = -(d.qty_delta || 0);  // qty_delta 는 음수 (-차감), 복원은 +
+          // qty_delta = qty_after - qty_before (generated column)
+          // 차감된 양 = qty_before - qty_after
+          const restoreQty = (d.qty_before || 0) - (d.qty_after || 0);
           const commitToRestore = (d.metadata?.commit_released || 0);
           
           await db.from('inventory').update({
@@ -13372,11 +13374,11 @@ async function restoreOrderInventory(orderId) {
     const { data: reverseTxn } = await db.from('inventory_transactions').insert({
       transaction_type: 'order_ship_reverse',
       description: `Reverse Ship — Order Cancel TXN-${txn.txn_number}`,
-      warehouse_code: d.warehouse_code,
+      warehouse_code: details[0]?.warehouse_code || 'SC',
       performed_by: empName,
       status: 'active',
       affected_rows: details.length,
-      total_qty_change: details.reduce((s,d)=>s + (-(d.qty_delta||0)), 0),
+      total_qty_change: details.reduce((s,d)=>s + ((d.qty_before||0) - (d.qty_after||0)), 0),
       metadata: {
         order_id: orderId,
         original_txn_id: txnId,
@@ -27552,7 +27554,7 @@ async function _doShippedCoreInner(emp) {
           action: 'order_ship',
           qty_before: info.invInfo?.qty_on_hand_before || 0,
           qty_after: (info.invInfo?.qty_on_hand_before || 0) - (info.invInfo?.total_deducted || 0),
-          qty_delta: -(info.invInfo?.total_deducted || 0),
+          // qty_delta 는 generated column — 자동 계산되므로 insert 안 함
           bins_before: info.bins.map(b => ({ bin: b.bin, qty: b.qty_before })),
           bins_after: info.bins.filter(b => b.qty_after > 0).map(b => ({ bin: b.bin, qty: b.qty_after })),
           metadata: {
@@ -27619,7 +27621,8 @@ async function _doShippedCoreInner(emp) {
     }
     
     // transaction 자체에 affected_rows 등 업데이트
-    const totalQtyChange = shipTxnDetails.reduce((s, d) => s + (d.qty_delta || 0), 0);
+    // qty_delta 는 generated column — 직접 계산 (qty_after - qty_before)
+    const totalQtyChange = shipTxnDetails.reduce((s, d) => s + ((d.qty_after || 0) - (d.qty_before || 0)), 0);
     await db.from('inventory_transactions').update({
       affected_rows: shipTxnDetails.length,
       total_qty_change: totalQtyChange
@@ -54372,4 +54375,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T09:51:26Z - Mark as Shipped: transaction tracking + restoreOrderInventory: full bin restore -->
+
+<!-- Deploy trigger: 2026-04-28T11:06:41Z - Ship transaction: qty_delta generated column 처리 -->
