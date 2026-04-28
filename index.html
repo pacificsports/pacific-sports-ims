@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260428_193253 — Haiti parsing v2: HT/TK 유지, toddler (2)→2T, HTR-1 → HTR -->
+<!-- BUILD: 20260428_193826 — Haiti parsing v3: DZ 컬럼 제거, pcs 직접 편집, boxes/ppb 자동 sync -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4095,7 +4095,6 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Style #</th>
                   <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Color</th>
                   <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Size</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">DZ</th>
                   <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">박스수</th>
                   <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;background:#fff9c4;">pcs/box</th>
                   <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Pcs 합계</th>
@@ -36398,7 +36397,7 @@ async function parseTransitExcel(input) {
   document.getElementById('transit-preview-modal').style.display = 'flex';
 }
 
-// ── 수정 가능한 테이블 렌더링 (박스/ppb 포함)
+// ── 수정 가능한 테이블 렌더링 (박스/ppb/pcs 직접 편집)
 function renderTransitEditTable() {
   if (!_transitParsed) return;
   const tbody = document.getElementById('transit-edit-body');
@@ -36421,23 +36420,20 @@ function renderTransitEditTable() {
           style="width:38px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:right;">
-        <input type="number" value="${r.qty_dz}" min="0"
-          onchange="_transitParsed.rows[${i}].qty_dz=parseInt(this.value)||0;_transitParsed.rows[${i}].qty_pcs=(parseInt(this.value)||0)*12;updateTransitRowPcs(${i})"
-          style="width:46px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:#fff;"/>
-      </td>
-      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;">
         <input type="number" value="${boxes}" min="0"
-          onchange="_transitParsed.rows[${i}].qty_boxes=parseInt(this.value)||0;recalcPpb(${i})"
-          style="width:44px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:#fff;"/>
+          onchange="onTransitBoxesChange(${i}, this.value)"
+          style="width:50px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;background:#fffde7;text-align:right;" id="transit-ppb-cell-${i}">
         <input type="number" value="${ppb}" min="1"
-          onchange="_transitParsed.rows[${i}].ppb=parseInt(this.value)||72;_transitParsed.rows[${i}].is_nonstandard=true;updateTransitRowPcs(${i})"
-          style="width:44px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:${isNonStd?'#fff8e1':'#fff'};font-weight:${isNonStd?'700':'400'};color:${isNonStd?'#e65100':'inherit'};"/>
+          onchange="onTransitPpbChange(${i}, this.value)"
+          style="width:50px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:${isNonStd?'#fff8e1':'#fff'};font-weight:${isNonStd?'700':'400'};color:${isNonStd?'#e65100':'inherit'};"/>
         ${isNonStd ? '<span style="font-size:9px;color:#e65100;">⚠️비표준</span>' : ''}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:right;" id="transit-pcs-${i}">
-        <b style="font-size:12px;color:${isNonStd?'#e65100':'inherit'};">${(r.qty_pcs||0).toLocaleString()}</b>
+        <input type="number" value="${r.qty_pcs||0}" min="0"
+          onchange="onTransitPcsChange(${i}, this.value)"
+          style="width:64px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:12px;font-weight:700;text-align:right;background:${isNonStd?'#fff8e1':'#fff'};color:${isNonStd?'#e65100':'inherit'};"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
         <button onclick="deleteTransitRow(${i})" style="border:none;background:none;color:#e53935;cursor:pointer;font-size:14px;">✕</button>
@@ -36447,31 +36443,51 @@ function renderTransitEditTable() {
   updateTransitTotal();
 }
 
-function recalcPpb(i) {
+// 사용자가 박스 수 변경 → pcs 재계산 (boxes × ppb)
+function onTransitBoxesChange(i, val) {
   const r = _transitParsed.rows[i];
-  const boxes = r.qty_boxes || 0;
-  if (boxes > 0) {
-    r.ppb = Math.round((r.qty_dz * 12) / boxes);
-    r.is_nonstandard = r.ppb !== (r.std_ppb || 72);
-  }
-  updateTransitRowPcs(i);
-  renderTransitEditTable(); // 비표준 스타일 리렌더
+  r.qty_boxes = parseInt(val)||0;
+  const ppb = r.ppb || 72;
+  r.qty_pcs = r.qty_boxes * ppb;
+  r.qty_dz = Math.round((r.qty_pcs / 12) * 100) / 100; // 호환용 — 저장 시 사용
+  renderTransitEditTable();
 }
 
-function updateTransitRowPcs(i) {
+// 사용자가 pcs/box 변경 → pcs 재계산 + 비표준 표시
+function onTransitPpbChange(i, val) {
   const r = _transitParsed.rows[i];
-  r.qty_pcs = (r.qty_dz||0) * 12;
-  const el = document.getElementById('transit-pcs-' + i);
-  if (el) el.innerHTML = '<b style="font-size:12px;color:' + (r.is_nonstandard?'#e65100':'inherit') + ';">' + (r.qty_pcs||0).toLocaleString() + '</b>';
-  updateTransitTotal();
+  r.ppb = parseInt(val)||72;
+  r.is_nonstandard = r.ppb !== (r.std_ppb || 72);
+  r.qty_pcs = (r.qty_boxes || 0) * r.ppb;
+  r.qty_dz = Math.round((r.qty_pcs / 12) * 100) / 100;
+  renderTransitEditTable();
 }
+
+// 사용자가 pcs 직접 변경 → boxes 재계산 (pcs / ppb)
+function onTransitPcsChange(i, val) {
+  const r = _transitParsed.rows[i];
+  r.qty_pcs = parseInt(val)||0;
+  r.qty_dz = Math.round((r.qty_pcs / 12) * 100) / 100;
+  const ppb = r.ppb || 72;
+  // boxes 자동 재계산 (남는 거 있으면 비표준)
+  r.qty_boxes = Math.floor(r.qty_pcs / ppb);
+  // 만약 pcs 가 ppb 의 정수배가 아니면 비표준
+  if (r.qty_pcs % ppb !== 0) {
+    r.is_nonstandard = true;
+  }
+  renderTransitEditTable();
+}
+
+// 옛 함수들 (호환용 — 이미 onchange 안 쓰는데 외부에서 부를까봐 stub)
+function recalcPpb(i) { /* deprecated — onTransitBoxesChange 가 처리 */ }
+function updateTransitRowPcs(i) { /* deprecated */ }
 
 function updateTransitTotal() {
   if (!_transitParsed) return;
-  const totalDz = _transitParsed.rows.reduce((s,r)=>s+(r.qty_dz||0),0);
   const totalPcs = _transitParsed.rows.reduce((s,r)=>s+(r.qty_pcs||0),0);
+  const totalBoxes = _transitParsed.rows.reduce((s,r)=>s+(r.qty_boxes||0),0);
   const el = document.getElementById('transit-edit-total');
-  if (el) el.innerHTML = `<b>총 ${_transitParsed.rows.length}개 라인 | ${totalDz.toLocaleString()} DZ | ${totalPcs.toLocaleString()} pcs (${Math.round(totalPcs/72)} boxes)</b>`;
+  if (el) el.innerHTML = `<b>총 ${_transitParsed.rows.length}개 라인 | ${totalPcs.toLocaleString()} pcs | ${totalBoxes.toLocaleString()} boxes</b>`;
 }
 
 function deleteTransitRow(i) {
@@ -36485,7 +36501,9 @@ function addTransitRow() {
     invoice_no: _transitParsed.invoiceNo,
     container_no: _transitParsed.containerNo,
     ship_date: _transitParsed.shipDate,
-    style_number: '', color: '', size: '', qty_dz: 0, qty_pcs: 0,
+    style_number: '', color: '', size: '', 
+    qty_pcs: 0, qty_boxes: 0, qty_dz: 0,
+    ppb: 72, std_ppb: 72, is_nonstandard: false,
     transit_type: 'haiti_sc', status: 'in_transit'
   });
   renderTransitEditTable();
