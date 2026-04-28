@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260428_143850 — Reserved bug fix: alloc_detail 기반 진짜 binCommittedMap (loadScInventory) -->
+<!-- BUILD: 20260428_164153 — Use Reserved fix: alloc_detail 청소 + bin 정확 매칭 + 로깅 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7414,21 +7414,38 @@ const lines = [...poLines].sort((a, b) => {
 let _useReservedState = null;
 
 async function showUseReservedModal(bin, wh, committed, invId) {
-  // 해당 bin/color/size에 연결된 reserve order_lines 조회
+  // 클릭한 bin 에 진짜 alloc 잡은 active order_lines 만 정확히 찾기
+  // (옛 방식: color+size 매칭만 — 다른 bin reserve 도 잘못 표시될 수 있었음)
   const l = _allocState ? poLines[_allocState.lineIdx] : null;
   if (!l) return;
 
   const whObj = warehouses.find(w => w.code === wh);
-  const { data: reserveLines } = await db.from('order_lines')
-    .select('id, reserved_qty, backordered_reserved_qty, color, size, orders(order_number, customer_name, customer_po, status)')
+  const ACTIVE = ['po_entered','credit_hold','preparing','ready_to_ship','reserved','reserved_partial','backordered','partial','open'];
+  // alloc_detail 또는 alloc_ca_detail 에 이 bin 이 있는 line 만 (정확)
+  const { data: candidateLines } = await db.from('order_lines')
+    .select('id, reserved_qty, backordered_reserved_qty, qty_pieces, qty_filled, color, size, alloc_detail, alloc_ca_detail, warehouses!order_lines_warehouse_id_fkey(code), orders!inner(order_number, customer_name, customer_po, status)')
     .eq('warehouse_id', whObj?.id)
     .eq('color', (l.color||'').toUpperCase())
     .eq('size', (l.size||'').toUpperCase())
-    .gt('reserved_qty', 0);
+    .in('orders.status', ACTIVE);
 
-  const lines = (reserveLines||[]).filter(rl => rl.orders?.status?.includes('reserved'));
+  // 이 bin 에 진짜 alloc 잡은 line 만 추출 + 그 bin 의 pcs 계산
+  const lines = [];
+  (candidateLines||[]).forEach(rl => {
+    const lineWh = rl.warehouses?.code;
+    const alloc = (lineWh === 'CA') ? (rl.alloc_ca_detail || rl.alloc_detail) : rl.alloc_detail;
+    if (!alloc) return;
+    const binVal = alloc[bin];
+    if (!binVal) return;
+    const binPcs = (typeof binVal === 'object' && binVal !== null) ? (binVal.pcs || 0) : (parseInt(binVal) || 0);
+    if (binPcs <= 0) return;
+    // line 에 이 bin 의 pcs 정보 첨부
+    rl._binPcs = binPcs;
+    lines.push(rl);
+  });
+
   if (lines.length === 0) {
-    alert('이 재고에 연결된 Reserve PO가 없습니다.');
+    alert('이 bin 에 alloc 잡은 active PO 를 찾지 못했습니다.\n(데이터 정합성 확인 필요)');
     return;
   }
 
@@ -7446,11 +7463,12 @@ async function showUseReservedModal(bin, wh, committed, invId) {
         <div>
           <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:12px;color:#6d28d9;">${rl.orders?.order_number}</span>
           <span style="font-size:11px;color:var(--text3);margin-left:6px;">${rl.orders?.customer_name}</span>
+          <span style="font-size:10px;color:var(--text3);margin-left:6px;">[${rl.orders?.status}]</span>
         </div>
-        <span style="font-size:11px;font-weight:700;color:#6d28d9;">🔒 ${rl.reserved_qty}pcs</span>
+        <span style="font-size:11px;font-weight:700;color:#6d28d9;">🔒 ${rl._binPcs}pcs (${bin})</span>
       </div>
       <label style="display:flex;align-items:center;gap:6px;margin-top:4px;cursor:pointer;">
-        <input type="radio" name="reserve-line" value="${rl.id}" style="accent-color:#7c3aed;"/>
+        <input type="radio" name="reserve-line" value="${rl.id}" data-binpcs="${rl._binPcs}" style="accent-color:#7c3aed;"/>
         <span style="font-size:11px;color:var(--text2);">이 PO에서 차출</span>
       </label>
     </div>`).join('');
@@ -7469,13 +7487,21 @@ async function confirmUseReserved() {
   const useQty = parseInt(document.getElementById('use-reserved-qty').value)||0;
   if (useQty <= 0 || useQty > s.committed) { alert('수량을 확인해주세요.'); return; }
 
-  const selectedLineId = document.querySelector('#use-reserved-lines input[name="reserve-line"]:checked')?.value;
-  if (!selectedLineId) { alert('Reserve PO를 선택해주세요.'); return; }
+  const selectedRadio = document.querySelector('#use-reserved-lines input[name="reserve-line"]:checked');
+  if (!selectedRadio) { alert('Reserve PO를 선택해주세요.'); return; }
+  const selectedLineId = selectedRadio.value;
+  const selectedBinPcs = parseInt(selectedRadio.dataset.binpcs) || 0;
+  
+  // 차출 수량이 선택 PO 의 이 bin alloc 보다 크면 에러
+  if (useQty > selectedBinPcs) {
+    alert(`선택한 PO 가 이 bin 에 잡은 수량은 ${selectedBinPcs}pcs 입니다. ${useQty}pcs 차출 불가.`);
+    return;
+  }
 
   const invRow = await db.from('inventory').select('qty_committed').eq('id', s.invId).single();
   const curCommitted = invRow?.data?.qty_committed || 0;
 
-  await useReservedQty(selectedLineId, useQty, s.invId, 0, curCommitted);
+  await useReservedQty(selectedLineId, useQty, s.invId, 0, curCommitted, s.bin);
   closeModal('modal-use-reserved');
   _useReservedState = null;
 }
@@ -7635,25 +7661,56 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
 }
 
 // ── Reserve PO에서 수량 사용 (긴급 오더용)
-async function useReservedQty(orderLineId, useQty, invId, invQty, invCommitted) {
+async function useReservedQty(orderLineId, useQty, invId, invQty, invCommitted, fromBin) {
   if (!confirm(`Reserved ${useQty}pcs를 이 오더에 사용하시겠습니까?
 해당 Reserve PO는 backordered 상태로 변경됩니다.`)) return;
 
-  // 1. inventory qty_committed 감소
+  // 1. inventory qty_committed 감소 + 로깅
+  const newCommitted = Math.max(0, invCommitted - useQty);
   await db.from('inventory').update({
-    qty_committed: Math.max(0, invCommitted - useQty)
+    qty_committed: newCommitted
   }).eq('id', invId);
+  // 로깅 (logInventoryChange 가 있으면 호출)
+  if (typeof logInventoryChange === 'function') {
+    try {
+      await logInventoryChange(invId, invCommitted, newCommitted, 'release', _currentEmployee?.name||'system', orderLineId, 'order_line', `Use Reserved - ${fromBin||'?'} -${useQty}pcs`);
+    } catch(e) { console.warn('[useReservedQty] logInventoryChange failed:', e); }
+  }
 
-  // 2. order_line reserved_qty 감소, backordered 증가
-  const { data: ol } = await db.from('order_lines').select('reserved_qty, backordered_reserved_qty, order_id').eq('id', orderLineId).single();
+  // 2. order_line 업데이트: reserved_qty 감소, backordered 증가, alloc_detail 에서 해당 bin 차감
+  const { data: ol } = await db.from('order_lines')
+    .select('reserved_qty, backordered_reserved_qty, order_id, alloc_detail, alloc_ca_detail, warehouses!order_lines_warehouse_id_fkey(code)')
+    .eq('id', orderLineId).single();
   if (ol) {
     const newReserved = Math.max(0, (ol.reserved_qty||0) - useQty);
     const newBack = (ol.backordered_reserved_qty||0) + useQty;
-    await db.from('order_lines').update({
+    
+    // alloc_detail / alloc_ca_detail 청소: 해당 bin 의 pcs 만큼 차감 (0 되면 제거)
+    const lineWh = ol.warehouses?.code;
+    const isAllocCa = (lineWh === 'CA');
+    const allocField = isAllocCa ? 'alloc_ca_detail' : 'alloc_detail';
+    const allocCopy = JSON.parse(JSON.stringify(ol[allocField] || {}));
+    if (fromBin && allocCopy[fromBin]) {
+      const cur = allocCopy[fromBin];
+      const curPcs = (typeof cur === 'object' && cur !== null) ? (cur.pcs || 0) : (parseInt(cur) || 0);
+      const newPcs = Math.max(0, curPcs - useQty);
+      if (newPcs === 0) {
+        delete allocCopy[fromBin];
+      } else if (typeof cur === 'object') {
+        const ppb = (cur.pcs && cur.boxes !== undefined) ? Math.round(cur.pcs / Math.max(cur.boxes + (cur.partial?1:0), 1)) : 72;
+        allocCopy[fromBin] = { ...cur, pcs: newPcs, boxes: Math.floor(newPcs / 72), partial: newPcs % 72 };
+      } else {
+        allocCopy[fromBin] = newPcs;
+      }
+    }
+    
+    const updatePayload = {
       reserved_qty: newReserved,
       backordered_reserved_qty: newBack,
       is_backordered: newBack > 0
-    }).eq('id', orderLineId);
+    };
+    updatePayload[allocField] = Object.keys(allocCopy).length > 0 ? allocCopy : null;
+    await db.from('order_lines').update(updatePayload).eq('id', orderLineId);
 
     // order 전체 status 업데이트
     const { data: allLines } = await db.from('order_lines').select('reserved_qty, backordered_reserved_qty').eq('order_id', ol.order_id);
