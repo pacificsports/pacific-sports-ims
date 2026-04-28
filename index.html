@@ -11901,12 +11901,20 @@ async function executeInventoryImport() {
       // inventory_bins 저장 + 모든 bin을 pallet으로 자동 등록/연결
       const binsAfter = [];
       if (inventoryId && group.bins.length > 0) {
+        // 0. 같은 SKU 내 같은 bin code 중복 합치기 (Davinci 파일에 중복 있을 수 있음)
+        const binMergeMap = {};
+        for (const b of group.bins) {
+          const code = (b.bin_code || '').trim();
+          if (!code) continue;
+          if (!binMergeMap[code]) {
+            binMergeMap[code] = { bin_code: code, qty: 0, received_date: b.received_date };
+          }
+          binMergeMap[code].qty += (b.qty || 0);
+        }
+        const dedupedBins = Object.values(binMergeMap);
+        
         // 1. 모든 고유 bin code 수집
-        const allBinCodes = [...new Set(
-          group.bins
-            .map(b => (b.bin_code || '').trim())
-            .filter(c => c)
-        )];
+        const allBinCodes = dedupedBins.map(b => b.bin_code);
         
         const palletMap = {};  // bin_code → pallet_id
         if (allBinCodes.length > 0) {
@@ -11929,34 +11937,87 @@ async function executeInventoryImport() {
               location_type: c.toUpperCase().startsWith('H') ? '3rd_party' : 'in_house',
               status: 'active'
             }));
+            // upsert 사용 — 동시 insert 시 충돌 방지 (race condition fix)
             const { data: created, error: pErr } = await db.from('pallets')
-              .insert(newPallets)
+              .upsert(newPallets, { onConflict: 'pallet_code,warehouse_code', ignoreDuplicates: false })
               .select('id, pallet_code');
-            if (pErr) console.error('[pallets create]', pErr);
-            (created || []).forEach(p => {
-              palletMap[p.pallet_code] = p.id;
-            });
+            if (pErr) {
+              console.error('[pallets upsert]', pErr);
+              // upsert 실패 → fallback: 개별 처리 + 다시 select
+              for (const p of newPallets) {
+                try {
+                  await db.from('pallets').insert(p);
+                } catch(e) { /* 이미 있으면 무시 */ }
+              }
+              // 모든 pallet id 다시 가져오기
+              const { data: refetched } = await db.from('pallets')
+                .select('id, pallet_code')
+                .in('pallet_code', missingPalletCodes)
+                .eq('warehouse_code', _invImportData.whCode);
+              (refetched || []).forEach(p => {
+                palletMap[p.pallet_code] = p.id;
+              });
+            } else {
+              (created || []).forEach(p => {
+                palletMap[p.pallet_code] = p.id;
+              });
+            }
           }
         }
         
         // 2. inventory_bins insert (pallet_id 포함)
-        const binsToInsert = group.bins
-          .filter(b => b.bin_code && b.bin_code.trim())
-          .map(b => {
-            const code = b.bin_code.trim();
-            return {
-              inventory_id: inventoryId,
-              bin_code: code,
-              qty: b.qty,
-              received_date: b.received_date,
-              pallet_id: palletMap[code] || null  // 모든 bin에 pallet 연결
-            };
-          });
+        const binsToInsert = dedupedBins.map(b => ({
+          inventory_id: inventoryId,
+          bin_code: b.bin_code,
+          qty: b.qty,
+          received_date: b.received_date,
+          pallet_id: palletMap[b.bin_code] || null
+        }));
+        
         if (binsToInsert.length > 0) {
+          // Bulk insert 시도
           const { error: binInsErr } = await db.from('inventory_bins').insert(binsToInsert);
-          if (binInsErr) console.error('[inventory_bins insert]', binInsErr);
-          else binsCreated += binsToInsert.length;
-          binsToInsert.forEach(b => binsAfter.push({ bin: b.bin_code, qty: b.qty }));
+          
+          if (binInsErr) {
+            // Bulk 실패 → 개별 insert fallback (한 row 만 실패해도 나머지는 넣기)
+            console.warn(`[inventory_bins bulk insert failed for ${sku_id}, falling back to individual inserts]`, binInsErr);
+            let individualSuccess = 0;
+            const failedBins = [];
+            for (const b of binsToInsert) {
+              const { error: indErr } = await db.from('inventory_bins').insert(b);
+              if (indErr) {
+                console.error(`[inventory_bins individual insert failed]`, b, indErr);
+                failedBins.push({ bin: b.bin_code, qty: b.qty, error: indErr.message });
+              } else {
+                individualSuccess++;
+              }
+            }
+            binsCreated += individualSuccess;
+            // 실패한 거 있으면 throw
+            if (failedBins.length > 0) {
+              throw new Error(
+                `${sku_id} 의 ${failedBins.length}개 bin insert 실패:\n` +
+                failedBins.map(f => `  • ${f.bin}: ${f.error}`).join('\n')
+              );
+            }
+            binsToInsert.forEach(b => binsAfter.push({ bin: b.bin_code, qty: b.qty }));
+          } else {
+            // Bulk 성공 — 검증
+            binsCreated += binsToInsert.length;
+            binsToInsert.forEach(b => binsAfter.push({ bin: b.bin_code, qty: b.qty }));
+          }
+          
+          // 3. Verify — insert 후 실제 row 개수 확인
+          const { count: actualCount } = await db.from('inventory_bins')
+            .select('*', { count: 'exact', head: true })
+            .eq('inventory_id', inventoryId);
+          if (actualCount !== binsToInsert.length) {
+            throw new Error(
+              `❌ ${sku_id}: insert 검증 실패 — ` +
+              `예상 ${binsToInsert.length}개, 실제 ${actualCount}개 ` +
+              `(누락 ${binsToInsert.length - actualCount}개)`
+            );
+          }
         }
       }
       
@@ -13206,12 +13267,145 @@ async function restoreOrderInventory(orderId) {
   if (!lines || lines.length === 0) return;
 
   const { data: order } = await db.from('orders')
-    .select('sc_pcr_complete_at,ca_pcr_complete_at,sc_pcroom_printed_at,ca_pcroom_printed_at,sc_pcr_transfer_confirmed_at,ca_pcr_transfer_confirmed_at,wh_code')
+    .select('sc_pcr_complete_at,ca_pcr_complete_at,sc_pcroom_printed_at,ca_pcroom_printed_at,sc_pcr_transfer_confirmed_at,ca_pcr_transfer_confirmed_at,wh_code,sc_ship_txn_id,ca_ship_txn_id,status,sc_status,ca_status')
     .eq('id', orderId).single();
 
-  // PCR Transfer 확인 여부로 판단
-  const scTransferConfirmed = !!(order?.sc_pcr_transfer_confirmed_at || order?.sc_pcr_complete_at);
-  const caTransferConfirmed = !!(order?.ca_pcr_transfer_confirmed_at || order?.ca_pcr_complete_at);
+  // ─────────────────────────────────────────────────
+  // 🆕 Step 1: Ship transaction 으로 inventory_bins 복원 (가장 정확)
+  // ─────────────────────────────────────────────────
+  const shipTxnIds = [order?.sc_ship_txn_id, order?.ca_ship_txn_id].filter(Boolean);
+  let restoredFromTxn = false;
+  
+  for (const txnId of shipTxnIds) {
+    // 이미 reverse 된 transaction 스킵
+    const { data: txn } = await db.from('inventory_transactions')
+      .select('id, status, reversed_at, txn_number')
+      .eq('id', txnId)
+      .single();
+    if (!txn || txn.status === 'reversed' || txn.reversed_at) {
+      console.log(`[Restore] TXN-${txn?.txn_number} 이미 reverse 됨, 건너뜀`);
+      continue;
+    }
+    
+    // 이 transaction 의 모든 details 가져오기
+    const { data: details } = await db.from('inventory_transaction_details')
+      .select('*')
+      .eq('transaction_id', txnId);
+    
+    if (!details || details.length === 0) continue;
+    
+    console.log(`[Restore] TXN-${txn.txn_number} 으로 ${details.length}개 inventory 복원 중...`);
+    
+    for (const d of details) {
+      try {
+        // 1) inventory_bins 복원 — bins_before 의 각 row 다시 만들기
+        const binsBefore = d.bins_before || [];
+        const binsAfter = d.bins_after || [];
+        const afterByBin = {};
+        binsAfter.forEach(b => { afterByBin[b.bin] = b.qty || 0; });
+        
+        for (const bb of binsBefore) {
+          const binCode = bb.bin;
+          const origQty = bb.qty || 0;
+          const afterQty = afterByBin[binCode] || 0;
+          const restoreAmount = origQty - afterQty;  // 복원할 양 = 차감된 양
+          
+          if (restoreAmount <= 0) continue;
+          
+          // 현재 이 bin row 가 있는지 확인
+          const { data: existingBin } = await db.from('inventory_bins')
+            .select('id, qty')
+            .eq('inventory_id', d.inventory_id)
+            .eq('bin_code', binCode)
+            .maybeSingle();
+          
+          if (existingBin) {
+            // 이미 있음 → qty 더하기
+            await db.from('inventory_bins').update({
+              qty: (existingBin.qty || 0) + restoreAmount
+            }).eq('id', existingBin.id);
+          } else {
+            // 없음 → 새로 INSERT (pallet 찾기)
+            // pallet_id 찾기 — bin_code 와 같은 pallet
+            const { data: invInfo } = await db.from('inventory')
+              .select('warehouse_id, warehouses(code)')
+              .eq('id', d.inventory_id)
+              .single();
+            const whCode = invInfo?.warehouses?.code || d.warehouse_code;
+            const { data: pallet } = await db.from('pallets')
+              .select('id')
+              .eq('pallet_code', binCode)
+              .eq('warehouse_code', whCode)
+              .maybeSingle();
+            
+            await db.from('inventory_bins').insert({
+              inventory_id: d.inventory_id,
+              bin_code: binCode,
+              qty: restoreAmount,
+              pallet_id: pallet?.id || null
+            });
+          }
+        }
+        
+        // 2) inventory.qty_on_hand 복원
+        const { data: invRow } = await db.from('inventory')
+          .select('qty_on_hand, qty_committed')
+          .eq('id', d.inventory_id)
+          .single();
+        
+        if (invRow) {
+          const restoreQty = -(d.qty_delta || 0);  // qty_delta 는 음수 (-차감), 복원은 +
+          const commitToRestore = (d.metadata?.commit_released || 0);
+          
+          await db.from('inventory').update({
+            qty_on_hand: (invRow.qty_on_hand || 0) + restoreQty,
+            qty_committed: (invRow.qty_committed || 0) + commitToRestore
+          }).eq('id', d.inventory_id);
+        }
+      } catch(e) {
+        console.error('[Restore detail]', d, e);
+      }
+    }
+    
+    // transaction 자체를 reversed 로 마킹
+    const empName = _currentEmployee?.name || 'system';
+    const { data: reverseTxn } = await db.from('inventory_transactions').insert({
+      transaction_type: 'order_ship_reverse',
+      description: `Reverse Ship — Order Cancel TXN-${txn.txn_number}`,
+      warehouse_code: d.warehouse_code,
+      performed_by: empName,
+      status: 'active',
+      affected_rows: details.length,
+      total_qty_change: details.reduce((s,d)=>s + (-(d.qty_delta||0)), 0),
+      metadata: {
+        order_id: orderId,
+        original_txn_id: txnId,
+        original_txn_number: txn.txn_number,
+        action: 'order_cancel'
+      }
+    }).select('id').single();
+    
+    await db.from('inventory_transactions').update({
+      status: 'reversed',
+      reversed_at: new Date().toISOString(),
+      reversed_by: empName,
+      reversed_by_txn_id: reverseTxn?.id || null
+    }).eq('id', txnId);
+    
+    restoredFromTxn = true;
+  }
+  
+  // 🆕 Ship transaction 으로 복원 됐으면 → 끝 (committed 만 처리)
+  if (restoredFromTxn) {
+    console.log(`[Restore] Order ${orderId} — Ship transaction 으로 복원 완료`);
+    return;
+  }
+  
+  // ─────────────────────────────────────────────────
+  // Step 2: Ship 이 없는 케이스 (PO 생성 후 cancel) — qty_committed 만 복원
+  // 기존 로직 유지
+  // ─────────────────────────────────────────────────
+  console.log('[Restore] Ship transaction 없음 — qty_committed 만 복원');
 
   // bin location 이름 → inventory id 매핑
   const { data: allInv } = await db.from('inventory').select('id,location,qty_committed,qty_on_hand,warehouses(code)');
@@ -13232,19 +13426,15 @@ async function restoreOrderInventory(orderId) {
   };
 
   for (const line of lines) {
-    // pcr_transfer_status: { 'SC-TRANSFER|1J-17': true, 'CA-TRANSFER|2A-05': false }
     const transferStatus = line.pcr_transfer_status || {};
     const scAlloc = line.alloc_detail || {};
     const caAlloc = line.alloc_ca_detail || {};
 
-    // SC PCR transfer 여부 판단:
-    // 1. pcr_transfer_status에 SC-TRANSFER: true 가 있으면 확실히 됨
-    // 2. pcr_transfer_status가 비어있고 alloc에 SC-TRANSFER key가 있으면 → 확인 안 됐지만 transfer 지시됨 → 보수적으로 됐다고 간주
     const hasScTransferKey = Object.keys(scAlloc).some(k => k.startsWith('SC-TRANSFER|'));
     const scStatusConfirmed = Object.keys(transferStatus).some(k => k.startsWith('SC-TRANSFER|'));
     const scTransferDone = scStatusConfirmed
       ? Object.entries(transferStatus).some(([k,v]) => k.startsWith('SC-TRANSFER|') && v === true)
-      : hasScTransferKey; // 확인 안 됐으면 key 존재 여부로 판단
+      : hasScTransferKey;
 
     const hasCaTransferKey = Object.keys(caAlloc).some(k => k.startsWith('CA-TRANSFER|'));
     const caStatusConfirmed = Object.keys(transferStatus).some(k => k.startsWith('CA-TRANSFER|'));
@@ -13252,10 +13442,8 @@ async function restoreOrderInventory(orderId) {
       ? Object.entries(transferStatus).some(([k,v]) => k.startsWith('CA-TRANSFER|') && v === true)
       : hasCaTransferKey;
 
-    // alloc_detail (SC bins)
     for (const [key, val] of Object.entries(scAlloc)) {
       if (key.includes('TRANSFER|')) continue;
-      // val.pcs가 전체 수량 (boxes*ppb + partial = pcs로 저장됨)
       const pcs = typeof val === 'object' ? (val.pcs||0) : (val||0);
       if (pcs <= 0) continue;
       const isScPcr = key.includes('PCR|PCR');
@@ -13274,7 +13462,6 @@ async function restoreOrderInventory(orderId) {
       }
     }
 
-    // alloc_ca_detail (CA bins)
     for (const [key, val] of Object.entries(caAlloc)) {
       if (key.includes('TRANSFER|')) continue;
       const pcs = typeof val === 'object' ? (val.pcs||0) : (val||0);
@@ -13296,7 +13483,6 @@ async function restoreOrderInventory(orderId) {
     }
   }
 
-  // DB 업데이트
   const empName = _currentEmployee?.name || 'system';
   for (const [invId, amounts] of Object.entries(restoreMap)) {
     const inv = (allInv||[]).find(i => i.id === invId);
@@ -27080,6 +27266,41 @@ async function _doShippedCoreInner(emp) {
 
   let totalBackQty = 0;
   const backLines = [];
+  
+  // ─────────────────────────────────────────────────────────
+  // 🆕 SHIP TRANSACTION 시작 — inventory 변경 기록 (reverse 가능하도록)
+  // ─────────────────────────────────────────────────────────
+  const shipTxnPerformedBy = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || emp?.name || 'system';
+  const { data: shipTxnData, error: shipTxnErr } = await db.from('inventory_transactions').insert({
+    transaction_type: 'order_ship',
+    description: `Ship PO# ${order.customer_po || order.order_number} → ${wh || 'SC'}`,
+    style_number: null,  // 여러 style 가능
+    warehouse_code: wh || 'SC',
+    performed_by: shipTxnPerformedBy,
+    status: 'active',
+    metadata: {
+      order_id: orderId,
+      order_number: order.order_number,
+      customer_po: order.customer_po,
+      customer_name: order.customer_name,
+      wh: wh || 'SC',
+      ship_date: shipDate,
+      carrier: carrier
+    }
+  }).select('id, txn_number').single();
+  
+  let shipTxnId = null;
+  let shipTxnNumber = null;
+  if (shipTxnErr) {
+    console.error('[ship transaction create]', shipTxnErr);
+    // 계속 진행 — transaction 없어도 ship 은 되어야 함 (graceful degradation)
+  } else {
+    shipTxnId = shipTxnData.id;
+    shipTxnNumber = shipTxnData.txn_number;
+    console.log('[Ship] Transaction created:', `TXN-${shipTxnNumber}`);
+  }
+  
+  const shipTxnDetails = [];  // line별 차감 상세 (나중에 일괄 INSERT)
 
   for (const l of lines) {
     const lineWh = l.wh || 'SC';
@@ -27153,6 +27374,10 @@ async function _doShippedCoreInner(emp) {
     // ── 실제 inventory + inventory_bins 차감 ──
     // alloc_detail / alloc_ca_detail 에 명시된 bin들을 정확히 차감
     
+    // 🆕 차감 전 snapshot — line별 inventory + bins 상태 저장 (reverse 용)
+    const lineBinsBefore = [];  // [{inventory_id, bin_code, qty, qty_to_deduct}]
+    const lineInvBefore = {};   // {inventory_id: {qty_on_hand_before, qty_committed_before}}
+    
     const whIds = lineWh === 'SC&CA'
       ? [scWh?.id, caWh?.id].filter(Boolean)
       : lineWh === 'CA' ? [caWh?.id] : [scWh?.id];
@@ -27203,6 +27428,15 @@ async function _doShippedCoreInner(emp) {
           const binDeduct = Math.min(stillToDeduct, br.qty || 0);
           const newQty = (br.qty || 0) - binDeduct;
           
+          // 🆕 차감 전 snapshot 기록 (reverse 용)
+          lineBinsBefore.push({
+            inventory_id: br.inventory?.id,
+            bin_code: binCode,
+            qty_before: br.qty || 0,
+            qty_deducted: binDeduct,
+            qty_after: newQty
+          });
+          
           if (newQty <= 0) {
             // bin 삭제 (또는 qty=0)
             await db.from('inventory_bins').delete().eq('id', br.id);
@@ -27217,6 +27451,19 @@ async function _doShippedCoreInner(emp) {
               .eq('id', br.inventory.id).single();
             if (invRow) {
               const commitRelease = Math.min(invRow.qty_committed || 0, binDeduct);
+              
+              // 🆕 inventory before snapshot
+              if (!lineInvBefore[br.inventory.id]) {
+                lineInvBefore[br.inventory.id] = {
+                  qty_on_hand_before: invRow.qty_on_hand || 0,
+                  qty_committed_before: invRow.qty_committed || 0,
+                  total_deducted: 0,
+                  total_commit_released: 0
+                };
+              }
+              lineInvBefore[br.inventory.id].total_deducted += binDeduct;
+              lineInvBefore[br.inventory.id].total_commit_released += commitRelease;
+              
               await db.from('inventory').update({
                 qty_on_hand: (invRow.qty_on_hand || 0) - binDeduct,
                 qty_committed: Math.max(0, (invRow.qty_committed || 0) - commitRelease)
@@ -27251,6 +27498,19 @@ async function _doShippedCoreInner(emp) {
           const deduct = Math.min(toDeduct, inv.qty_on_hand || 0);
           const commitRelease = Math.min(inv.qty_committed || 0, deduct);
           if (deduct > 0) {
+            // 🆕 fallback snapshot
+            if (!lineInvBefore[inv.id]) {
+              lineInvBefore[inv.id] = {
+                qty_on_hand_before: inv.qty_on_hand || 0,
+                qty_committed_before: inv.qty_committed || 0,
+                total_deducted: 0,
+                total_commit_released: 0,
+                fallback: true
+              };
+            }
+            lineInvBefore[inv.id].total_deducted += deduct;
+            lineInvBefore[inv.id].total_commit_released += commitRelease;
+            
             await db.from('inventory').update({
               qty_on_hand: (inv.qty_on_hand || 0) - deduct,
               qty_committed: Math.max(0, (inv.qty_committed || 0) - commitRelease)
@@ -27258,6 +27518,50 @@ async function _doShippedCoreInner(emp) {
             toDeduct -= deduct;
           }
         }
+      }
+    }
+    
+    // 🆕 line의 차감 정보를 transaction details 에 수집
+    if (shipTxnId && (lineBinsBefore.length > 0 || Object.keys(lineInvBefore).length > 0)) {
+      // inventory_id 별로 그룹핑
+      const byInvId = {};
+      lineBinsBefore.forEach(b => {
+        if (!b.inventory_id) return;
+        if (!byInvId[b.inventory_id]) byInvId[b.inventory_id] = { bins: [], invInfo: lineInvBefore[b.inventory_id] };
+        byInvId[b.inventory_id].bins.push({
+          bin: b.bin_code,
+          qty_before: b.qty_before,
+          qty_deducted: b.qty_deducted,
+          qty_after: b.qty_after
+        });
+      });
+      // bins 없이 inventory 만 있는 케이스 (fallback)
+      Object.entries(lineInvBefore).forEach(([invId, info]) => {
+        if (!byInvId[invId]) byInvId[invId] = { bins: [], invInfo: info };
+      });
+      
+      for (const [invId, info] of Object.entries(byInvId)) {
+        shipTxnDetails.push({
+          transaction_id: shipTxnId,
+          inventory_id: invId,
+          sku_id: l.styles?.style_number ? `${l.styles.style_number}${(l.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6)}${(l.size||'').toLowerCase()}` : null,
+          style_number: l.styles?.style_number || null,
+          warehouse_code: wh || 'SC',
+          color: l.color || '',
+          size: l.size || '',
+          action: 'order_ship',
+          qty_before: info.invInfo?.qty_on_hand_before || 0,
+          qty_after: (info.invInfo?.qty_on_hand_before || 0) - (info.invInfo?.total_deducted || 0),
+          qty_delta: -(info.invInfo?.total_deducted || 0),
+          bins_before: info.bins.map(b => ({ bin: b.bin, qty: b.qty_before })),
+          bins_after: info.bins.filter(b => b.qty_after > 0).map(b => ({ bin: b.bin, qty: b.qty_after })),
+          metadata: {
+            order_id: orderId,
+            order_line_id: l.id,
+            commit_released: info.invInfo?.total_commit_released || 0,
+            fallback: !!info.invInfo?.fallback
+          }
+        });
       }
     }
 
@@ -27304,6 +27608,25 @@ async function _doShippedCoreInner(emp) {
       ...allocUpdate
     }).eq('id', l.id);
   }
+  
+  // 🆕 모든 line 처리 완료 후 — transaction details 일괄 저장
+  if (shipTxnId && shipTxnDetails.length > 0) {
+    // chunk 단위 (Supabase 제한)
+    for (let i = 0; i < shipTxnDetails.length; i += 500) {
+      const chunk = shipTxnDetails.slice(i, i + 500);
+      const { error: detErr } = await db.from('inventory_transaction_details').insert(chunk);
+      if (detErr) console.error('[ship details insert]', detErr);
+    }
+    
+    // transaction 자체에 affected_rows 등 업데이트
+    const totalQtyChange = shipTxnDetails.reduce((s, d) => s + (d.qty_delta || 0), 0);
+    await db.from('inventory_transactions').update({
+      affected_rows: shipTxnDetails.length,
+      total_qty_change: totalQtyChange
+    }).eq('id', shipTxnId);
+    
+    console.log(`[Ship] Transaction TXN-${shipTxnNumber} saved with ${shipTxnDetails.length} details (${totalQtyChange} pcs)`);
+  }
 
   // Invoice 번호 생성 — INV-2026-0001 형식
   const invYear = new Date().getFullYear();
@@ -27343,6 +27666,10 @@ async function _doShippedCoreInner(emp) {
     ship_note: shipNote || null,
     shipped_by: _shippedEmp?.name || null,
     shipped_at: new Date().toISOString(),
+    // 🆕 ship transaction id — Cancel/Reverse 시 inventory 복원용
+    ...(shipTxnId ? { 
+      [wh === 'CA' ? 'ca_ship_txn_id' : 'sc_ship_txn_id']: shipTxnId 
+    } : {}),
     // 실제 출고일 저장 — 미국 로컬 정오 기준으로 UTC 변환 시 날짜 안 밀림
     [whShippedAtField]: shipDate ? (() => {
       const d = new Date(shipDate + 'T12:00:00');
@@ -54043,4 +54370,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T01:31:38Z - Recon: 파일에 있는 style만 비교 -->
+
+
+<!-- Deploy trigger: 2026-04-28T09:51:26Z - Mark as Shipped: transaction tracking + restoreOrderInventory: full bin restore -->
