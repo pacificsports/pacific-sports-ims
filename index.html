@@ -576,6 +576,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <button class="btn btn-sm" style="background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="openInventoryLog()">📋 Change Log</button>
             <button class="btn btn-sm" style="background:#ede9fe;color:#5b21b6;border-color:#c4b5fd;" onclick="openTransactions()">📜 Transactions</button>
             <button class="btn btn-sm" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;" onclick="openPallets()">🚚 Pallets</button>
+            <button class="btn btn-sm" style="background:#fce7f3;color:#9d174d;border-color:#f9a8d4;" onclick="openReconcileModal()" title="Davinci ↔ 내 시스템 비교">🔍 Reconcile</button>
             <button class="btn btn-primary btn-sm" onclick="openAddInventory()">+ Add Stock</button>
           </div>
         </div>
@@ -1808,6 +1809,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button class="btn" style="background:#1a56a0;color:#fff;border-color:#1a56a0;" onclick="openPaymentModal()">💵 Record Payment</button>
         <button class="btn" onclick="exportArCsv()">⬇ Export CSV</button>
         <button class="btn" style="background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="openArMigrationModal()" title="MAS 200에서 AR 데이터 옮기기">📥 Migration</button>
+        <button class="btn" style="background:#db2777;color:#fff;border-color:#db2777;" onclick="openArReconcileModal()" title="MAS 200 ↔ 내 시스템 AR 비교">🔍 Reconcile</button>
       </div>
 
       <!-- AR KPI Cards -->
@@ -2726,6 +2728,173 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
       </div>
     </div>
+
+    <!-- ── Inventory Reconciliation 모달 ── -->
+    <div id="inv-reconcile-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;width:96%;max-width:1400px;max-height:94vh;display:flex;flex-direction:column;border-radius:8px;overflow:hidden;">
+        <div style="padding:14px 20px;background:linear-gradient(135deg,#db2777 0%,#9d174d 100%);display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">🔍 Inventory Reconciliation — Davinci ↔ 내 시스템</span>
+          <button onclick="document.getElementById('inv-reconcile-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fff;">✕</button>
+        </div>
+        
+        <div style="padding:18px 22px;overflow-y:auto;flex:1;">
+          <!-- Step 1: Upload -->
+          <div id="inv-recon-step-upload">
+            <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:14px 16px;border-radius:6px;margin-bottom:18px;">
+              <div style="font-weight:700;color:#78350f;font-size:13px;margin-bottom:6px;">📋 사용 방법</div>
+              <div style="font-size:12px;color:#78350f;line-height:1.7;">
+                1. Davinci에서 SC + CA 재고 Excel export<br>
+                2. 둘 다 업로드 (또는 하나씩)<br>
+                3. 내 시스템 데이터와 자동 비교<br>
+                4. 차이 확인 → CSV로 export 하거나 화면에서 보기
+              </div>
+            </div>
+            
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+              <!-- SC Upload -->
+              <div style="border:2px dashed #d1d5db;border-radius:8px;padding:24px;text-align:center;background:#fafafa;">
+                <div style="font-size:32px;margin-bottom:6px;">📄</div>
+                <div style="font-size:13px;font-weight:700;color:#1e40af;margin-bottom:10px;">SC Warehouse Excel</div>
+                <input type="file" id="inv-recon-sc-input" accept=".xlsx,.xls,.csv" style="display:none;" onchange="loadReconFile(event, 'SC')">
+                <button class="btn btn-sm" style="background:#1e40af;color:#fff;" onclick="document.getElementById('inv-recon-sc-input').click()">📁 SC 파일 선택</button>
+                <div id="inv-recon-sc-status" style="font-size:11px;color:#6b7280;margin-top:8px;">대기 중...</div>
+              </div>
+              <!-- CA Upload -->
+              <div style="border:2px dashed #d1d5db;border-radius:8px;padding:24px;text-align:center;background:#fafafa;">
+                <div style="font-size:32px;margin-bottom:6px;">📄</div>
+                <div style="font-size:13px;font-weight:700;color:#ea580c;margin-bottom:10px;">CA Warehouse Excel</div>
+                <input type="file" id="inv-recon-ca-input" accept=".xlsx,.xls,.csv" style="display:none;" onchange="loadReconFile(event, 'CA')">
+                <button class="btn btn-sm" style="background:#ea580c;color:#fff;" onclick="document.getElementById('inv-recon-ca-input').click()">📁 CA 파일 선택</button>
+                <div id="inv-recon-ca-status" style="font-size:11px;color:#6b7280;margin-top:8px;">대기 중...</div>
+              </div>
+            </div>
+            
+            <div style="margin-top:20px;text-align:center;">
+              <button class="btn" id="inv-recon-run-btn" style="background:#db2777;color:#fff;border-color:#db2777;font-size:14px;padding:10px 28px;" onclick="runInventoryReconciliation()">🔍 Reconciliation 실행</button>
+            </div>
+          </div>
+          
+          <!-- Step 2: Results -->
+          <div id="inv-recon-step-results" style="display:none;">
+            <!-- Summary Cards -->
+            <div id="inv-recon-summary" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;"></div>
+            
+            <!-- Filter Tabs -->
+            <div style="display:flex;gap:2px;border-bottom:2px solid #e5e7eb;margin-bottom:10px;">
+              <button id="inv-recon-tab-all" onclick="filterReconResults('all')" style="padding:6px 14px;font-size:12px;font-weight:600;border:none;background:#db2777;color:#fff;border-radius:4px 4px 0 0;cursor:pointer;">All</button>
+              <button id="inv-recon-tab-diff" onclick="filterReconResults('diff')" style="padding:6px 14px;font-size:12px;font-weight:600;border:none;background:#fef3c7;color:#92400e;border-radius:4px 4px 0 0;cursor:pointer;">⚠ Diff Only</button>
+              <button id="inv-recon-tab-davinci" onclick="filterReconResults('davinci_only')" style="padding:6px 14px;font-size:12px;font-weight:600;border:none;background:#dbeafe;color:#1e40af;border-radius:4px 4px 0 0;cursor:pointer;">📄 Davinci Only</button>
+              <button id="inv-recon-tab-ours" onclick="filterReconResults('ours_only')" style="padding:6px 14px;font-size:12px;font-weight:600;border:none;background:#fce7f3;color:#9d174d;border-radius:4px 4px 0 0;cursor:pointer;">💾 내 시스템만</button>
+              <button id="inv-recon-tab-match" onclick="filterReconResults('match')" style="padding:6px 14px;font-size:12px;font-weight:600;border:none;background:#dcfce7;color:#166534;border-radius:4px 4px 0 0;cursor:pointer;">✓ 일치</button>
+            </div>
+            
+            <!-- Results Table -->
+            <div style="border:1px solid #e5e7eb;border-radius:6px;max-height:55vh;overflow-y:auto;">
+              <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead>
+                  <tr style="background:#1f2937;color:#fff;position:sticky;top:0;z-index:1;">
+                    <th style="padding:8px;text-align:left;">SKU</th>
+                    <th style="padding:8px;text-align:center;">Color</th>
+                    <th style="padding:8px;text-align:center;">Size</th>
+                    <th style="padding:8px;text-align:center;">WH</th>
+                    <th style="padding:8px;text-align:right;color:#93c5fd;">Davinci</th>
+                    <th style="padding:8px;text-align:right;color:#fbbf24;">내 시스템</th>
+                    <th style="padding:8px;text-align:right;">차이</th>
+                    <th style="padding:8px;text-align:center;">상태</th>
+                  </tr>
+                </thead>
+                <tbody id="inv-recon-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#f9fafb;">
+          <div id="inv-recon-status" style="font-size:12px;color:#6b7280;"></div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn" onclick="document.getElementById('inv-reconcile-modal').style.display='none'">Close</button>
+            <button id="inv-recon-export-btn" class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;display:none;" onclick="exportReconResults()">⬇ Export CSV</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ── AR Reconciliation 모달 ── -->
+    <div id="ar-reconcile-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;align-items:center;justify-content:center;">
+      <div style="background:#fff;width:96%;max-width:1300px;max-height:94vh;display:flex;flex-direction:column;border-radius:8px;overflow:hidden;">
+        <div style="padding:14px 20px;background:linear-gradient(135deg,#db2777 0%,#9d174d 100%);display:flex;justify-content:space-between;align-items:center;">
+          <span style="color:#fff;font-weight:800;font-size:15px;">🔍 AR Reconciliation — MAS 200 ↔ 내 시스템</span>
+          <button onclick="document.getElementById('ar-reconcile-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#fff;">✕</button>
+        </div>
+        
+        <div style="padding:18px 22px;overflow-y:auto;flex:1;">
+          <!-- Step 1: Upload -->
+          <div id="ar-recon-step-upload">
+            <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:14px 16px;border-radius:6px;margin-bottom:18px;">
+              <div style="font-weight:700;color:#78350f;font-size:13px;margin-bottom:6px;">📋 사용 방법</div>
+              <div style="font-size:12px;color:#78350f;line-height:1.7;">
+                <strong>옵션 A</strong>: MAS 200 AR Aging PDF 업로드 (AI 분석)<br>
+                <strong>옵션 B</strong>: CSV로 직접 입력 (Customer, Balance)<br>
+                → 내 시스템 AR 데이터와 자동 비교<br>
+                → 거래처별 차이 확인
+              </div>
+            </div>
+            
+            <!-- Option A: PDF -->
+            <div style="border:2px dashed #d1d5db;border-radius:8px;padding:24px;text-align:center;background:#fafafa;margin-bottom:14px;">
+              <div style="font-size:32px;margin-bottom:6px;">📄</div>
+              <div style="font-size:13px;font-weight:700;color:#7c3aed;margin-bottom:10px;">옵션 A: MAS 200 AR Aging PDF</div>
+              <input type="file" id="ar-recon-pdf-input" accept="application/pdf" style="display:none;" onchange="loadArReconPdf(event)">
+              <button class="btn btn-sm" style="background:#7c3aed;color:#fff;" onclick="document.getElementById('ar-recon-pdf-input').click()">📁 PDF 선택</button>
+              <div id="ar-recon-pdf-status" style="font-size:11px;color:#6b7280;margin-top:8px;">대기 중...</div>
+            </div>
+            
+            <div style="text-align:center;color:#9ca3af;font-size:11px;font-weight:700;margin:8px 0;">━━━ OR ━━━</div>
+            
+            <!-- Option B: Manual entry -->
+            <div style="border:1px solid #e5e7eb;border-radius:8px;padding:18px;background:#fafafa;">
+              <div style="font-size:13px;font-weight:700;color:#1e40af;margin-bottom:8px;">옵션 B: 직접 입력 (Customer Name, Balance)</div>
+              <div style="font-size:11px;color:#6b7280;margin-bottom:10px;">한 줄에 하나씩. 형식: <code>거래처명, 잔액</code> 또는 탭으로 구분</div>
+              <textarea id="ar-recon-manual-input" rows="8" placeholder="APSCO Sports Enterprises Inc., 468.60&#10;BLACK ANCHOR SUPPLY CO., 517.20&#10;BRAND MAKER, 153.45&#10;..." style="width:100%;border:1px solid #d1d5db;border-radius:4px;padding:10px;font-family:monospace;font-size:12px;"></textarea>
+            </div>
+            
+            <div style="margin-top:20px;text-align:center;">
+              <button class="btn" id="ar-recon-run-btn" style="background:#db2777;color:#fff;border-color:#db2777;font-size:14px;padding:10px 28px;" onclick="runArReconciliation()">🔍 Reconciliation 실행</button>
+            </div>
+          </div>
+          
+          <!-- Step 2: Results -->
+          <div id="ar-recon-step-results" style="display:none;">
+            <div id="ar-recon-summary" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;"></div>
+            
+            <div style="border:1px solid #e5e7eb;border-radius:6px;max-height:60vh;overflow-y:auto;">
+              <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead>
+                  <tr style="background:#1f2937;color:#fff;position:sticky;top:0;z-index:1;">
+                    <th style="padding:8px;text-align:left;">Customer</th>
+                    <th style="padding:8px;text-align:right;color:#93c5fd;">MAS 200</th>
+                    <th style="padding:8px;text-align:right;color:#fbbf24;">내 시스템</th>
+                    <th style="padding:8px;text-align:right;">차이</th>
+                    <th style="padding:8px;text-align:center;">상태</th>
+                  </tr>
+                </thead>
+                <tbody id="ar-recon-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        
+        <div style="padding:12px 20px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#f9fafb;">
+          <div id="ar-recon-status" style="font-size:12px;color:#6b7280;"></div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn" onclick="document.getElementById('ar-reconcile-modal').style.display='none'">Close</button>
+            <button id="ar-recon-export-btn" class="btn" style="background:#16a34a;color:#fff;border-color:#16a34a;display:none;" onclick="exportArReconResults()">⬇ Export CSV</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
 
     <!-- ── AR Migration 모달 (MAS 200 PDF 마이그레이션) ── -->
     <div id="ar-migration-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:99999;align-items:center;justify-content:center;">
@@ -52813,6 +52982,606 @@ async function emailStatement() {
 // ─────────────────────────────────────
 let _arMigrationData = null;  // parsed AR aging data
 
+// ─────────────────────────────────────
+// Inventory Reconciliation
+// ─────────────────────────────────────
+let _reconDavinciData = { SC: [], CA: [] };  // {SC:[{sku, color, size, qty, cost}], CA:[]}
+let _reconResults = [];
+
+function openReconcileModal() {
+  _reconDavinciData = { SC: [], CA: [] };
+  _reconResults = [];
+  document.getElementById('inv-recon-step-upload').style.display = 'block';
+  document.getElementById('inv-recon-step-results').style.display = 'none';
+  document.getElementById('inv-recon-export-btn').style.display = 'none';
+  document.getElementById('inv-recon-sc-status').textContent = '대기 중...';
+  document.getElementById('inv-recon-ca-status').textContent = '대기 중...';
+  document.getElementById('inv-recon-status').textContent = '';
+  document.getElementById('inv-recon-sc-input').value = '';
+  document.getElementById('inv-recon-ca-input').value = '';
+  document.getElementById('inv-reconcile-modal').style.display = 'flex';
+}
+
+async function loadReconFile(event, warehouse) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  const statusEl = document.getElementById('inv-recon-' + warehouse.toLowerCase() + '-status');
+  statusEl.textContent = '⏳ 파일 읽는 중...';
+  
+  try {
+    let rows = [];
+    
+    if (file.name.toLowerCase().endsWith('.csv')) {
+      const text = await file.text();
+      rows = parseCsv(text);
+    } else {
+      // XLSX
+      if (!window.XLSX) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+      }
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, {type:'array'});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    }
+    
+    if (!rows || rows.length < 2) {
+      statusEl.textContent = '❌ 빈 파일';
+      return;
+    }
+    
+    // 헤더 자동 감지 (Davinci 형식)
+    // 일반적: Style, Color, Size, Available Qty, Unit Cost
+    const headers = rows[0].map(h => String(h || '').toLowerCase().trim());
+    const findCol = (...names) => {
+      for (const n of names) {
+        const idx = headers.findIndex(h => h.includes(n.toLowerCase()));
+        if (idx >= 0) return idx;
+      }
+      return -1;
+    };
+    
+    const styleCol = findCol('style number', 'style', 'item');
+    const colorCol = findCol('color');
+    const sizeCol = findCol('size');
+    const qtyCol = findCol('available qty', 'available', 'qty', 'quantity', 'on hand');
+    const costCol = findCol('unit cost', 'cost', 'price');
+    
+    if (styleCol < 0 || qtyCol < 0) {
+      statusEl.textContent = '❌ 컬럼 인식 실패 (Style, Qty 필요)';
+      return;
+    }
+    
+    const data = [];
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r || !r[styleCol]) continue;
+      
+      const style = String(r[styleCol] || '').trim();
+      const color = colorCol >= 0 ? String(r[colorCol] || '').trim().toUpperCase() : '';
+      const size = sizeCol >= 0 ? String(r[sizeCol] || '').trim().toUpperCase() : '';
+      const qty = parseFloat(String(r[qtyCol]).replace(/,/g, '')) || 0;
+      const cost = costCol >= 0 ? (parseFloat(String(r[costCol]).replace(/[,$]/g, '')) || 0) : 0;
+      
+      if (!style || qty === 0) continue;
+      
+      data.push({ style, color, size, qty, cost, warehouse });
+    }
+    
+    _reconDavinciData[warehouse] = data;
+    statusEl.textContent = `✅ ${data.length}개 SKU 로드됨`;
+    statusEl.style.color = '#16a34a';
+    
+  } catch(e) {
+    console.error('[Recon Load]', e);
+    statusEl.textContent = '❌ 에러: ' + e.message;
+    statusEl.style.color = '#dc2626';
+  }
+}
+
+function parseCsv(text) {
+  const lines = text.split(/\r?\n/);
+  return lines.map(line => {
+    const cells = [];
+    let cur = '', inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQuote = !inQuote; }
+      else if (c === ',' && !inQuote) { cells.push(cur); cur = ''; }
+      else cur += c;
+    }
+    cells.push(cur);
+    return cells;
+  });
+}
+
+async function runInventoryReconciliation() {
+  const totalDavinci = _reconDavinciData.SC.length + _reconDavinciData.CA.length;
+  if (totalDavinci === 0) {
+    showToast('Davinci 파일을 먼저 업로드하세요');
+    return;
+  }
+  
+  const btn = document.getElementById('inv-recon-run-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Loading...';
+  
+  try {
+    // 내 시스템 데이터 로드
+    document.getElementById('inv-recon-status').textContent = '⏳ 내 시스템 데이터 가져오는 중...';
+    const { data: invData, error } = await db.from('inventory')
+      .select('*, warehouses(code), styles(style_number)')
+      .gt('qty_on_hand', 0);
+    
+    if (error) throw error;
+    
+    // 내 시스템 데이터 매핑
+    const ourMap = {};  // key: style|color|size|wh
+    (invData || []).forEach(row => {
+      const style = (row.style_number || row.styles?.style_number || '').toLowerCase().trim();
+      const color = (row.color || '').toUpperCase().trim();
+      const size = (row.size || '').toUpperCase().trim();
+      const wh = (row.warehouses?.code || '').toUpperCase().trim();
+      // SC-PCR, CA-PCR 같은 거 정리
+      const whClean = wh.startsWith('SC') ? 'SC' : wh.startsWith('CA') ? 'CA' : wh;
+      const key = `${style}|${color}|${size}|${whClean}`;
+      
+      if (!ourMap[key]) ourMap[key] = { qty: 0, cost: 0, items: [] };
+      ourMap[key].qty += (row.qty_on_hand || 0);
+      if (row.unit_cost > 0) ourMap[key].cost = row.unit_cost;
+      ourMap[key].items.push(row);
+    });
+    
+    // Davinci 데이터 매핑
+    const davinciMap = {};
+    [..._reconDavinciData.SC, ..._reconDavinciData.CA].forEach(d => {
+      const style = (d.style || '').toLowerCase().trim();
+      const color = (d.color || '').toUpperCase().trim();
+      const size = (d.size || '').toUpperCase().trim();
+      const wh = d.warehouse;
+      const key = `${style}|${color}|${size}|${wh}`;
+      
+      if (!davinciMap[key]) davinciMap[key] = { qty: 0, cost: 0 };
+      davinciMap[key].qty += d.qty;
+      if (d.cost > 0) davinciMap[key].cost = d.cost;
+    });
+    
+    // 비교
+    const allKeys = new Set([...Object.keys(davinciMap), ...Object.keys(ourMap)]);
+    const results = [];
+    
+    allKeys.forEach(key => {
+      const [style, color, size, wh] = key.split('|');
+      const d = davinciMap[key];
+      const o = ourMap[key];
+      
+      let status, davinci_qty, our_qty, diff;
+      
+      if (d && !o) {
+        status = 'davinci_only';
+        davinci_qty = d.qty;
+        our_qty = 0;
+        diff = d.qty;
+      } else if (!d && o) {
+        status = 'ours_only';
+        davinci_qty = 0;
+        our_qty = o.qty;
+        diff = -o.qty;
+      } else if (d.qty !== o.qty) {
+        status = 'diff';
+        davinci_qty = d.qty;
+        our_qty = o.qty;
+        diff = d.qty - o.qty;
+      } else {
+        status = 'match';
+        davinci_qty = d.qty;
+        our_qty = o.qty;
+        diff = 0;
+      }
+      
+      results.push({ key, style, color, size, wh, davinci_qty, our_qty, diff, status });
+    });
+    
+    _reconResults = results;
+    showInventoryReconResults(results);
+    
+  } catch(e) {
+    console.error('[Recon]', e);
+    showToast('❌ 실패: ' + e.message);
+    document.getElementById('inv-recon-status').textContent = '❌ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Reconciliation 실행';
+  }
+}
+
+function showInventoryReconResults(results) {
+  document.getElementById('inv-recon-step-upload').style.display = 'none';
+  document.getElementById('inv-recon-step-results').style.display = 'block';
+  document.getElementById('inv-recon-export-btn').style.display = 'inline-block';
+  
+  // Summary
+  const total = results.length;
+  const matched = results.filter(r => r.status === 'match').length;
+  const diffCount = results.filter(r => r.status === 'diff').length;
+  const davinciOnly = results.filter(r => r.status === 'davinci_only').length;
+  const oursOnly = results.filter(r => r.status === 'ours_only').length;
+  
+  document.getElementById('inv-recon-summary').innerHTML = `
+    <div style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700;">전체 SKU</div>
+      <div style="font-size:20px;font-weight:800;color:#1f2937;margin-top:4px;">${total}</div>
+    </div>
+    <div style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#166534;text-transform:uppercase;font-weight:700;">✓ 일치</div>
+      <div style="font-size:20px;font-weight:800;color:#166534;margin-top:4px;">${matched}</div>
+      <div style="font-size:9px;color:#166534;">${total ? Math.round(matched/total*100) : 0}%</div>
+    </div>
+    <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#92400e;text-transform:uppercase;font-weight:700;">⚠ 차이</div>
+      <div style="font-size:20px;font-weight:800;color:#92400e;margin-top:4px;">${diffCount}</div>
+    </div>
+    <div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#1e40af;text-transform:uppercase;font-weight:700;">📄 Davinci만</div>
+      <div style="font-size:20px;font-weight:800;color:#1e40af;margin-top:4px;">${davinciOnly}</div>
+    </div>
+    <div style="background:#fce7f3;border:1px solid #f9a8d4;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#9d174d;text-transform:uppercase;font-weight:700;">💾 내 시스템만</div>
+      <div style="font-size:20px;font-weight:800;color:#9d174d;margin-top:4px;">${oursOnly}</div>
+    </div>
+  `;
+  
+  filterReconResults('diff');  // Default: show diffs
+  document.getElementById('inv-recon-status').textContent = `✅ 비교 완료 — ${matched}/${total} 일치 (${total ? Math.round(matched/total*100) : 0}%)`;
+}
+
+function filterReconResults(filter) {
+  // 탭 active
+  ['all','diff','davinci_only','ours_only','match'].forEach(t => {
+    const btn = document.getElementById('inv-recon-tab-' + (t === 'davinci_only' ? 'davinci' : t === 'ours_only' ? 'ours' : t));
+    if (!btn) return;
+    if (t === filter) {
+      btn.style.background = '#db2777';
+      btn.style.color = '#fff';
+    } else {
+      const colors = {
+        all: '#fef3c7', diff: '#fef3c7', davinci_only: '#dbeafe', 
+        ours_only: '#fce7f3', match: '#dcfce7'
+      };
+      const textColors = {
+        all: '#92400e', diff: '#92400e', davinci_only: '#1e40af',
+        ours_only: '#9d174d', match: '#166534'
+      };
+      btn.style.background = colors[t] || '#f3f4f6';
+      btn.style.color = textColors[t] || '#1f2937';
+    }
+  });
+  
+  let filtered;
+  if (filter === 'all') filtered = _reconResults;
+  else filtered = _reconResults.filter(r => r.status === filter);
+  
+  // 차이 큰 순 정렬
+  filtered = [...filtered].sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  
+  const tbody = document.getElementById('inv-recon-tbody');
+  tbody.innerHTML = filtered.map(r => {
+    const statusBadge = {
+      match: '<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;">✓ MATCH</span>',
+      diff: '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;">⚠ DIFF</span>',
+      davinci_only: '<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;">📄 DAVINCI</span>',
+      ours_only: '<span style="background:#fce7f3;color:#9d174d;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;">💾 OURS</span>'
+    }[r.status];
+    
+    const diffColor = r.diff === 0 ? '#9ca3af' : (r.diff > 0 ? '#dc2626' : '#16a34a');
+    const diffStr = r.diff === 0 ? '—' : (r.diff > 0 ? '+' + r.diff : r.diff);
+    
+    return `<tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:6px 8px;font-family:monospace;font-size:11px;font-weight:600;">${r.style}</td>
+      <td style="padding:6px 8px;text-align:center;font-size:11px;">${r.color || '—'}</td>
+      <td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:600;">${r.size || '—'}</td>
+      <td style="padding:6px 8px;text-align:center;font-size:10px;font-weight:700;color:${r.wh === 'CA' ? '#ea580c' : '#1e40af'};">${r.wh}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;font-weight:600;color:#1e40af;">${r.davinci_qty.toLocaleString()}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;font-weight:600;color:#92400e;">${r.our_qty.toLocaleString()}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;font-weight:800;color:${diffColor};">${diffStr}</td>
+      <td style="padding:6px 8px;text-align:center;">${statusBadge}</td>
+    </tr>`;
+  }).join('');
+}
+
+function exportReconResults() {
+  const rows = [['Style','Color','Size','Warehouse','Davinci_Qty','Our_Qty','Diff','Status']];
+  _reconResults.forEach(r => rows.push([
+    r.style, r.color, r.size, r.wh, r.davinci_qty, r.our_qty, r.diff, r.status
+  ]));
+  const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'Inventory_Reconciliation_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
+
+// ─────────────────────────────────────
+// AR Reconciliation
+// ─────────────────────────────────────
+let _arReconMasData = [];  // [{customer, balance}]
+let _arReconResults = [];
+
+function openArReconcileModal() {
+  _arReconMasData = [];
+  _arReconResults = [];
+  document.getElementById('ar-recon-step-upload').style.display = 'block';
+  document.getElementById('ar-recon-step-results').style.display = 'none';
+  document.getElementById('ar-recon-export-btn').style.display = 'none';
+  document.getElementById('ar-recon-pdf-status').textContent = '대기 중...';
+  document.getElementById('ar-recon-status').textContent = '';
+  document.getElementById('ar-recon-pdf-input').value = '';
+  document.getElementById('ar-recon-manual-input').value = '';
+  document.getElementById('ar-reconcile-modal').style.display = 'flex';
+}
+
+async function loadArReconPdf(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  const statusEl = document.getElementById('ar-recon-pdf-status');
+  statusEl.textContent = '⏳ AI 분석 중 (1-2분)...';
+  statusEl.style.color = '#7c3aed';
+  
+  try {
+    const reader = new FileReader();
+    const base64 = await new Promise((resolve, reject) => {
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    
+    const res = await fetch('https://po-confirm-email.hjbae.workers.dev/parse-ar-aging', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_base64: base64, media_type: 'application/pdf' })
+    });
+    
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Parse failed');
+    
+    // PDF 데이터 → reconciliation 데이터 변환
+    _arReconMasData = (data.data.customers || []).map(c => ({
+      customer_no: c.customer_no || '',
+      customer_name: c.customer_name || '',
+      balance: c.customer_total || 0
+    }));
+    
+    statusEl.textContent = `✅ ${_arReconMasData.length}개 거래처 로드됨`;
+    statusEl.style.color = '#16a34a';
+    
+  } catch(e) {
+    console.error('[AR Recon Load]', e);
+    statusEl.textContent = '❌ ' + e.message;
+    statusEl.style.color = '#dc2626';
+  }
+}
+
+async function runArReconciliation() {
+  // PDF 또는 manual input 사용
+  if (_arReconMasData.length === 0) {
+    // Manual input parse
+    const text = document.getElementById('ar-recon-manual-input').value;
+    if (!text.trim()) {
+      showToast('PDF 업로드 또는 직접 입력하세요');
+      return;
+    }
+    
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    _arReconMasData = lines.map(line => {
+      // 마지막 숫자가 balance, 그 앞이 customer
+      const match = line.match(/^(.+?)[\s,\t]+(-?[\d,]+\.?\d*)\s*$/);
+      if (match) {
+        return {
+          customer_no: '',
+          customer_name: match[1].trim(),
+          balance: parseFloat(match[2].replace(/,/g, '')) || 0
+        };
+      }
+      return null;
+    }).filter(Boolean);
+    
+    if (_arReconMasData.length === 0) {
+      showToast('형식 인식 실패. "거래처명, 잔액" 형식으로 입력하세요');
+      return;
+    }
+  }
+  
+  const btn = document.getElementById('ar-recon-run-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Loading...';
+  
+  try {
+    document.getElementById('ar-recon-status').textContent = '⏳ 내 시스템 AR 가져오는 중...';
+    
+    // 내 시스템 AR 잔액 (orders 기반 + ar_migrated_invoices)
+    const { data: customers, error: cErr } = await db.from('customers').select('id, name, customer_no');
+    if (cErr) throw cErr;
+    
+    // 각 customer의 outstanding balance 계산
+    const ourMap = {};  // customer_name → balance
+    
+    // Orders / Invoices 기반
+    const { data: orders } = await db.from('orders').select('customer_name, total_amount, status').neq('status', 'cancelled');
+    (orders || []).forEach(o => {
+      if (o.status !== 'invoiced' && o.status !== 'paid') return;
+      const key = (o.customer_name || '').toUpperCase().trim();
+      if (!ourMap[key]) ourMap[key] = 0;
+      ourMap[key] += (o.total_amount || 0);
+    });
+    
+    // Payments
+    const { data: payments } = await db.from('payments').select('customer_name, amount');
+    (payments || []).forEach(p => {
+      const key = (p.customer_name || '').toUpperCase().trim();
+      if (!ourMap[key]) ourMap[key] = 0;
+      ourMap[key] -= (p.amount || 0);
+    });
+    
+    // Migrated invoices (있으면)
+    try {
+      const { data: migrated } = await db.from('ar_migrated_invoices').select('customer_id, balance');
+      const custIdMap = {};
+      (customers || []).forEach(c => { custIdMap[c.id] = (c.name || '').toUpperCase().trim(); });
+      (migrated || []).forEach(m => {
+        const key = custIdMap[m.customer_id];
+        if (!key) return;
+        if (!ourMap[key]) ourMap[key] = 0;
+        ourMap[key] += (m.balance || 0);
+      });
+    } catch(e) { /* table may not exist yet */ }
+    
+    // MAS 200 데이터 매핑
+    const masMap = {};
+    _arReconMasData.forEach(m => {
+      const key = (m.customer_name || '').toUpperCase().trim();
+      masMap[key] = m;
+    });
+    
+    // 비교 (이름 fuzzy match)
+    const allKeys = new Set([...Object.keys(masMap), ...Object.keys(ourMap)]);
+    const results = [];
+    
+    allKeys.forEach(key => {
+      const m = masMap[key];
+      const o = ourMap[key];
+      
+      let status, mas_balance, our_balance, diff;
+      
+      if (m && o == null) {
+        status = 'mas_only';
+        mas_balance = m.balance;
+        our_balance = 0;
+        diff = m.balance;
+      } else if (!m && o != null) {
+        if (Math.abs(o) < 0.01) return;  // 0 잔액 skip
+        status = 'ours_only';
+        mas_balance = 0;
+        our_balance = o;
+        diff = -o;
+      } else {
+        const d = m.balance - (o || 0);
+        if (Math.abs(d) < 0.01) {
+          status = 'match';
+        } else {
+          status = 'diff';
+        }
+        mas_balance = m.balance;
+        our_balance = o || 0;
+        diff = d;
+      }
+      
+      results.push({ 
+        customer_name: key, 
+        customer_no: m?.customer_no || '',
+        mas_balance, our_balance, diff, status 
+      });
+    });
+    
+    _arReconResults = results;
+    showArReconResults(results);
+    
+  } catch(e) {
+    console.error('[AR Recon]', e);
+    showToast('❌ 실패: ' + e.message);
+    document.getElementById('ar-recon-status').textContent = '❌ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Reconciliation 실행';
+  }
+}
+
+function showArReconResults(results) {
+  document.getElementById('ar-recon-step-upload').style.display = 'none';
+  document.getElementById('ar-recon-step-results').style.display = 'block';
+  document.getElementById('ar-recon-export-btn').style.display = 'inline-block';
+  
+  const fmt = v => '$' + (Number(v) || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+  
+  const total = results.length;
+  const matched = results.filter(r => r.status === 'match').length;
+  const diffCount = results.filter(r => r.status === 'diff').length;
+  const masOnly = results.filter(r => r.status === 'mas_only').length;
+  const oursOnly = results.filter(r => r.status === 'ours_only').length;
+  
+  const totalMas = results.reduce((s,r) => s + (r.mas_balance || 0), 0);
+  const totalOurs = results.reduce((s,r) => s + (r.our_balance || 0), 0);
+  
+  document.getElementById('ar-recon-summary').innerHTML = `
+    <div style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#6b7280;text-transform:uppercase;font-weight:700;">전체 거래처</div>
+      <div style="font-size:20px;font-weight:800;color:#1f2937;margin-top:4px;">${total}</div>
+    </div>
+    <div style="background:#dcfce7;border:1px solid #86efac;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#166534;text-transform:uppercase;font-weight:700;">✓ 일치</div>
+      <div style="font-size:20px;font-weight:800;color:#166534;margin-top:4px;">${matched}</div>
+    </div>
+    <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#92400e;text-transform:uppercase;font-weight:700;">⚠ 차이</div>
+      <div style="font-size:20px;font-weight:800;color:#92400e;margin-top:4px;">${diffCount}</div>
+    </div>
+    <div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#1e40af;text-transform:uppercase;font-weight:700;">MAS 200 합계</div>
+      <div style="font-size:14px;font-weight:800;color:#1e40af;margin-top:4px;font-family:monospace;">${fmt(totalMas)}</div>
+    </div>
+    <div style="background:#fce7f3;border:1px solid #f9a8d4;border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:10px;color:#9d174d;text-transform:uppercase;font-weight:700;">내 시스템 합계</div>
+      <div style="font-size:14px;font-weight:800;color:#9d174d;margin-top:4px;font-family:monospace;">${fmt(totalOurs)}</div>
+    </div>
+  `;
+  
+  // 차이 큰 순
+  const sorted = [...results].sort((a,b) => Math.abs(b.diff) - Math.abs(a.diff));
+  
+  const tbody = document.getElementById('ar-recon-tbody');
+  tbody.innerHTML = sorted.map(r => {
+    const statusBadge = {
+      match: '<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;">✓ MATCH</span>',
+      diff: '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;">⚠ DIFF</span>',
+      mas_only: '<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;">MAS 200</span>',
+      ours_only: '<span style="background:#fce7f3;color:#9d174d;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;">내 시스템</span>'
+    }[r.status];
+    
+    const diffColor = Math.abs(r.diff) < 0.01 ? '#9ca3af' : (r.diff > 0 ? '#dc2626' : '#16a34a');
+    const diffStr = Math.abs(r.diff) < 0.01 ? '—' : (r.diff > 0 ? '+$' + r.diff.toFixed(2) : '-$' + Math.abs(r.diff).toFixed(2));
+    
+    return `<tr style="border-bottom:1px solid #f3f4f6;">
+      <td style="padding:6px 8px;font-size:12px;font-weight:600;">${r.customer_name}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;color:#1e40af;">$${(r.mas_balance || 0).toFixed(2)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;color:#9d174d;">$${(r.our_balance || 0).toFixed(2)}</td>
+      <td style="padding:6px 8px;text-align:right;font-family:monospace;font-size:12px;font-weight:800;color:${diffColor};">${diffStr}</td>
+      <td style="padding:6px 8px;text-align:center;">${statusBadge}</td>
+    </tr>`;
+  }).join('');
+  
+  document.getElementById('ar-recon-status').textContent = `✅ ${matched}/${total} 일치 — 합계 차이: ${fmt(totalMas - totalOurs)}`;
+}
+
+function exportArReconResults() {
+  const rows = [['Customer','MAS_200_Balance','Our_System_Balance','Diff','Status']];
+  _arReconResults.forEach(r => rows.push([
+    r.customer_name, r.mas_balance.toFixed(2), r.our_balance.toFixed(2), r.diff.toFixed(2), r.status
+  ]));
+  const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'AR_Reconciliation_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
+
+
 function openArMigrationModal() {
   // Reset state
   _arMigrationData = null;
@@ -53218,4 +53987,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-27T20:13:39Z - exportArCsv 함수 선언 복원 -->
+
+<!-- Deploy trigger: 2026-04-27T22:36:10Z - Inventory + AR Reconciliation 시스템 추가 -->
