@@ -17952,8 +17952,8 @@ async function completeHPalletReceive() {
           action: 'pallet_split',
           qty_before: 0,
           qty_after: it.qty_pcs,
-          bins_before: [{ bin: it.bin_code, pallet: it.pallet_code, type: '3rd_party', note: 'split source' }],
-          bins_after: [{ bin: targetBinCode, type: it.assigned_location, qty: it.qty_pcs }]
+          bins_before: [{ bin: it.bin_code, qty: 0, pallet: it.pallet_code, type: '3rd_party', note: 'split source - new bin created' }],
+          bins_after: [{ bin: targetBinCode, qty: it.qty_pcs, type: it.assigned_location }]
         });
       }
     }
@@ -27858,22 +27858,50 @@ async function _doShippedCoreInner(emp) {
   
   // 🆕 모든 line 처리 완료 후 — transaction details 일괄 저장
   if (shipTxnId && shipTxnDetails.length > 0) {
+    let detailsSaved = 0;
+    let detailsFailed = [];
+    
     // chunk 단위 (Supabase 제한)
     for (let i = 0; i < shipTxnDetails.length; i += 500) {
       const chunk = shipTxnDetails.slice(i, i + 500);
       const { error: detErr } = await db.from('inventory_transaction_details').insert(chunk);
-      if (detErr) console.error('[ship details insert]', detErr);
+      
+      if (detErr) {
+        // Bulk 실패 → 개별 insert fallback
+        console.warn('[ship details bulk insert failed, falling back to individual]', detErr);
+        for (const d of chunk) {
+          const { error: indErr } = await db.from('inventory_transaction_details').insert(d);
+          if (indErr) {
+            console.error('[ship detail insert failed]', d, indErr);
+            detailsFailed.push({ sku: d.sku_id, error: indErr.message });
+          } else {
+            detailsSaved++;
+          }
+        }
+      } else {
+        detailsSaved += chunk.length;
+      }
+    }
+    
+    // 만약 일부 실패했으면 — 진짜 사용자에게 알림 (silent X)
+    if (detailsFailed.length > 0) {
+      const errMsg = `⚠️ Ship 처리 완료 됐지만 transaction details 일부 저장 실패!\n\n` +
+        `실패 ${detailsFailed.length}개:\n` +
+        detailsFailed.slice(0,5).map(f => `  • ${f.sku}: ${f.error}`).join('\n') +
+        `\n\n이 ship 은 reverse 못 할 수 있습니다.\n` +
+        `즉시 개발자 / 시스템 관리자에게 알려주세요.`;
+      console.error('[CRITICAL] Ship details partial failure:', detailsFailed);
+      alert(errMsg);
     }
     
     // transaction 자체에 affected_rows 등 업데이트
-    // qty_delta 는 generated column — 직접 계산 (qty_after - qty_before)
     const totalQtyChange = shipTxnDetails.reduce((s, d) => s + ((d.qty_after || 0) - (d.qty_before || 0)), 0);
     await db.from('inventory_transactions').update({
-      affected_rows: shipTxnDetails.length,
+      affected_rows: detailsSaved,
       total_qty_change: totalQtyChange
     }).eq('id', shipTxnId);
     
-    console.log(`[Ship] Transaction TXN-${shipTxnNumber} saved with ${shipTxnDetails.length} details (${totalQtyChange} pcs)`);
+    console.log(`[Ship] Transaction TXN-${shipTxnNumber} saved with ${detailsSaved}/${shipTxnDetails.length} details (${totalQtyChange} pcs)`);
   }
 
   // Invoice 번호 생성 — INV-2026-0001 형식
@@ -54623,4 +54651,6 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T11:27:05Z - reverseTransaction: 안전 delta 방식, 사유 필수 -->
+
+
+<!-- Deploy trigger: 2026-04-28T11:42:50Z - Pull Receive: bins_before에 qty 추가 (reverse 가능하도록) -->
