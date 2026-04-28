@@ -13823,14 +13823,26 @@ async function openTransactionDetail(txnId) {
 
 /** Transaction Reverse (되돌리기) */
 async function reverseTransaction(txnId, txnNumber) {
-  if (!confirm(`TXN-${txnNumber}을 되돌리시겠습니까?\n\n이 transaction이 바꾼 재고가 모두 이전 상태로 복원됩니다.\n\n(새로운 reversal transaction이 생성되어 이력에 남습니다)`)) return;
+  // 사유 입력
+  const reason = prompt(
+    `⚠️ TXN-${txnNumber}을 되돌릴까요?\n\n` +
+    `이 transaction이 변경한 재고가 모두 이전 상태로 복원됩니다.\n` +
+    `(새로운 reversal transaction이 생성되어 이력에 남습니다)\n\n` +
+    `사유를 입력하세요 (필수):`,
+    ''
+  );
+  if (reason === null) return;
+  if (!reason || !reason.trim()) {
+    alert('사유는 필수입니다.');
+    return;
+  }
   
   // 🧪 TEST MODE
   if (window.TEST_MODE) {
     tdbLog('INSERT', 'inventory_transactions', { type: 'reversal', reversed: txnNumber });
     tdbLog('UPDATE', 'inventory_bins', { restore: 'to previous state' }, { related_txn: txnId });
     tdbLog('UPDATE', 'inventory_transactions', { status: 'reversed' }, { id: txnId });
-    alert(`🧪 [TEST MODE] TXN-${txnNumber} Reverse 시뮬레이션\n\n실제 DB는 변경되지 않았습니다.`);
+    alert(`🧪 [TEST MODE] TXN-${txnNumber} Reverse 시뮬레이션`);
     document.getElementById('txn-detail-modal').style.display = 'none';
     return;
   }
@@ -13847,66 +13859,192 @@ async function reverseTransaction(txnId, txnNumber) {
     const { data: details, error: detErr } = await db.from('inventory_transaction_details')
       .select('*').eq('transaction_id', txnId);
     if (detErr) throw detErr;
+    if (!details || details.length === 0) throw new Error('이 transaction은 details 가 없어 reverse 불가능합니다');
     
-    // Reversal transaction 생성
+    // ─────────────────────────────────────────────
+    // Step 1: 안전 검사 — 이 transaction 이후에 같은 inventory_id 가 또 변경됐나?
+    // 진짜 안전한 reverse 위해 — 같은 inventory_id 의 더 최근 transaction 있으면 경고
+    // ─────────────────────────────────────────────
+    const affectedInvIds = [...new Set(details.map(d => d.inventory_id).filter(Boolean))];
+    let warnings = [];
+    if (affectedInvIds.length > 0) {
+      const { data: laterTxns } = await db.from('inventory_transaction_details')
+        .select('transaction_id, inventory_transactions!inner(txn_number, transaction_type, performed_at, status)')
+        .in('inventory_id', affectedInvIds)
+        .gt('inventory_transactions.performed_at', origTxn.performed_at)
+        .neq('inventory_transactions.status', 'reversed');
+      
+      if (laterTxns && laterTxns.length > 0) {
+        const laterTxnNums = [...new Set(laterTxns.map(t => t.inventory_transactions?.txn_number).filter(Boolean))];
+        warnings.push(
+          `⚠️ 이후 transaction 들이 같은 SKU 를 변경했습니다:\n` +
+          `TXN-${laterTxnNums.join(', TXN-')}\n\n` +
+          `이 transaction 만 reverse 하면 이후 변경분과 충돌할 수 있습니다.\n` +
+          `진짜 진행하시겠습니까?`
+        );
+      }
+    }
+    
+    if (warnings.length > 0) {
+      const proceed = confirm(warnings.join('\n\n'));
+      if (!proceed) return;
+    }
+    
+    // ─────────────────────────────────────────────
+    // Step 2: Reversal transaction 생성
+    // ─────────────────────────────────────────────
+    const totalRevQty = details.reduce((s, d) => s + ((d.qty_before || 0) - (d.qty_after || 0)), 0);
     const { data: revTxn, error: revErr } = await db.from('inventory_transactions').insert({
       transaction_type: 'reversal',
-      description: `Reversal of TXN-${origTxn.txn_number}: ${origTxn.description}`,
+      description: `Reversal of TXN-${origTxn.txn_number}: ${origTxn.description} (${reason})`,
       style_number: origTxn.style_number,
       warehouse_code: origTxn.warehouse_code,
       performed_by: performedBy,
       status: 'active',
       affected_rows: details.length,
-      total_qty_change: -(origTxn.total_qty_change || 0),
-      metadata: { reversed_txn_id: txnId, reversed_txn_number: origTxn.txn_number }
+      total_qty_change: totalRevQty,
+      metadata: {
+        reversed_txn_id: txnId,
+        reversed_txn_number: origTxn.txn_number,
+        reason: reason.trim()
+      }
     }).select('id, txn_number').single();
     if (revErr) throw revErr;
     
-    // 각 detail을 되돌림: qty_after → qty_before, bins_after → bins_before
+    // ─────────────────────────────────────────────
+    // Step 3: 각 detail 되돌리기 (DELTA 방식)
+    // 핵심 — 모든 bin 삭제 X. 각 detail 의 변경분 (delta) 만 역으로 적용
+    // ─────────────────────────────────────────────
     let reverted = 0;
+    let skipped = 0;
+    const errors = [];
+    
     for (const d of details) {
-      if (!d.inventory_id) continue;
-      
-      // 1. inventory.qty_on_hand = qty_before
-      const primaryBin = (d.bins_before && d.bins_before.length > 0) ? d.bins_before[0].bin : null;
-      await db.from('inventory').update({
-        qty_on_hand: d.qty_before || 0,
-        location: primaryBin
-      }).eq('id', d.inventory_id);
-      
-      // 2. 현재 bins 삭제
-      await db.from('inventory_bins').delete().eq('inventory_id', d.inventory_id);
-      
-      // 3. bins_before 복원
-      if (d.bins_before && d.bins_before.length > 0) {
-        const binsToInsert = d.bins_before.map(b => ({
-          inventory_id: d.inventory_id,
-          bin_code: b.bin,
-          qty: b.qty
-        }));
-        await db.from('inventory_bins').insert(binsToInsert);
+      if (!d.inventory_id) {
+        skipped++;
+        continue;
       }
       
-      // Reversal detail 기록
-      await db.from('inventory_transaction_details').insert({
-        transaction_id: revTxn.id,
-        inventory_id: d.inventory_id,
-        sku_id: d.sku_id,
-        style_number: d.style_number,
-        warehouse_code: d.warehouse_code,
-        color: d.color,
-        size: d.size,
-        action: 'reverse',
-        qty_before: d.qty_after,
-        qty_after: d.qty_before,
-        bins_before: d.bins_after,
-        bins_after: d.bins_before
-      });
-      
-      reverted++;
+      try {
+        // 현재 inventory state
+        const { data: invRow } = await db.from('inventory')
+          .select('qty_on_hand, qty_committed')
+          .eq('id', d.inventory_id)
+          .single();
+        if (!invRow) {
+          errors.push(`${d.color}/${d.size}: inventory not found`);
+          continue;
+        }
+        
+        // qty_on_hand 변경분 = qty_after - qty_before. Reverse 시 -(변경분)
+        const qtyDelta = (d.qty_after || 0) - (d.qty_before || 0);
+        const newQtyOnHand = (invRow.qty_on_hand || 0) - qtyDelta;
+        
+        // qty_committed 복원 (메타에서 commit_released)
+        const commitToRestore = d.metadata?.commit_released || 0;
+        const newQtyCommitted = (invRow.qty_committed || 0) + commitToRestore;
+        
+        await db.from('inventory').update({
+          qty_on_hand: newQtyOnHand,
+          qty_committed: newQtyCommitted
+        }).eq('id', d.inventory_id);
+        
+        // ── inventory_bins delta 적용 ──
+        // bins_before, bins_after 비교해서 각 bin 별 delta 계산
+        const binsBefore = d.bins_before || [];
+        const binsAfter = d.bins_after || [];
+        
+        const beforeMap = {};
+        binsBefore.forEach(b => {
+          const code = b.bin || b.bin_code;
+          if (code) beforeMap[code] = (b.qty || 0);
+        });
+        
+        const afterMap = {};
+        binsAfter.forEach(b => {
+          const code = b.bin || b.bin_code;
+          if (code) afterMap[code] = (b.qty || 0);
+        });
+        
+        const allBins = new Set([...Object.keys(beforeMap), ...Object.keys(afterMap)]);
+        
+        for (const binCode of allBins) {
+          const beforeQty = beforeMap[binCode] || 0;
+          const afterQty = afterMap[binCode] || 0;
+          const binDelta = afterQty - beforeQty;  // transaction 의 변경분
+          // Reverse = -binDelta 만큼 적용 (bin qty 에 -binDelta 더하기)
+          const restoreQty = -binDelta;  // 양수면 추가, 음수면 차감
+          
+          if (restoreQty === 0) continue;
+          
+          // 현재 bin 상태
+          const { data: existingBin } = await db.from('inventory_bins')
+            .select('id, qty')
+            .eq('inventory_id', d.inventory_id)
+            .eq('bin_code', binCode)
+            .maybeSingle();
+          
+          if (existingBin) {
+            const newBinQty = (existingBin.qty || 0) + restoreQty;
+            if (newBinQty <= 0) {
+              await db.from('inventory_bins').delete().eq('id', existingBin.id);
+            } else {
+              await db.from('inventory_bins').update({ qty: newBinQty }).eq('id', existingBin.id);
+            }
+          } else if (restoreQty > 0) {
+            // bin row 없는데 추가 필요 → 새로 INSERT
+            // pallet_id 찾기
+            const { data: invInfo } = await db.from('inventory')
+              .select('warehouses(code)')
+              .eq('id', d.inventory_id)
+              .single();
+            const whCode = invInfo?.warehouses?.code || d.warehouse_code;
+            const { data: pallet } = await db.from('pallets')
+              .select('id')
+              .eq('pallet_code', binCode)
+              .eq('warehouse_code', whCode)
+              .maybeSingle();
+            
+            await db.from('inventory_bins').insert({
+              inventory_id: d.inventory_id,
+              bin_code: binCode,
+              qty: restoreQty,
+              pallet_id: pallet?.id || null
+            });
+          }
+        }
+        
+        // Reversal detail 기록
+        await db.from('inventory_transaction_details').insert({
+          transaction_id: revTxn.id,
+          inventory_id: d.inventory_id,
+          sku_id: d.sku_id,
+          style_number: d.style_number,
+          warehouse_code: d.warehouse_code,
+          color: d.color,
+          size: d.size,
+          action: 'reverse',
+          qty_before: d.qty_after,
+          qty_after: d.qty_before,
+          bins_before: d.bins_after,
+          bins_after: d.bins_before,
+          metadata: {
+            reversed_detail_id: d.id,
+            original_action: d.action,
+            commit_restored: commitToRestore
+          }
+        });
+        
+        reverted++;
+      } catch(e) {
+        errors.push(`${d.color}/${d.size}: ${e.message}`);
+        console.error('[reverse detail]', d, e);
+      }
     }
     
-    // 원 transaction 상태 업데이트
+    // ─────────────────────────────────────────────
+    // Step 4: 원 transaction status 업데이트
+    // ─────────────────────────────────────────────
     await db.from('inventory_transactions').update({
       status: 'reversed',
       reversed_by_txn_id: revTxn.id,
@@ -13914,13 +14052,15 @@ async function reverseTransaction(txnId, txnNumber) {
       reversed_by: performedBy
     }).eq('id', txnId);
     
-    alert(`✅ TXN-${txnNumber} Reversed!\n\n복원된 SKU: ${reverted}개\n새 Reversal Transaction: TXN-${revTxn.txn_number}`);
+    let msg = `✅ TXN-${txnNumber} Reversed!\n\n복원된 SKU: ${reverted}개`;
+    if (skipped > 0) msg += `\n건너뜀: ${skipped}개`;
+    if (errors.length > 0) msg += `\n\n⚠️ 에러:\n${errors.slice(0, 5).join('\n')}`;
+    msg += `\n\n새 Reversal Transaction: TXN-${revTxn.txn_number}`;
+    alert(msg);
     
     // 리로드
     document.getElementById('txn-detail-modal').style.display = 'none';
-    await loadTransactions();
-    
-    // 재고 탭 새로고침
+    if (typeof loadTransactions === 'function') await loadTransactions();
     if (typeof loadInventory === 'function') loadInventory();
   } catch (e) {
     console.error('[reverseTransaction]', e);
@@ -54482,4 +54622,5 @@ function exportArCsv() {
 
 
 
-<!-- Deploy trigger: 2026-04-28T11:15:55Z - Reverse Ship 버튼 추가 -->
+
+<!-- Deploy trigger: 2026-04-28T11:27:05Z - reverseTransaction: 안전 delta 방식, 사유 필수 -->
