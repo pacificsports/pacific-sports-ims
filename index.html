@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_170111 — SC→CA Shipment Builder + Pallet 시스템 + Packing List + CA Receive (통째로/해체) -->
+<!-- BUILD: 20260429_181222 — SC Inv 선택 모달: SKU fallback (DB 빈 값 시 계산) + 박스 컬럼 추가 (pcs/box 와 박스 수) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4307,6 +4307,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;background:#dbeafe;border:1px solid #cdd;">Size</th>
                   <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:left;background:#bbf7d0;border:1px solid #cdd;">SKU</th>
                   <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:right;background:#dbeafe;border:1px solid #cdd;">SC 재고</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;background:#dbeafe;border:1px solid #cdd;">pcs/box</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;background:#dbeafe;border:1px solid #cdd;">박스</th>
                   <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:right;background:#fff9c4;border:1px solid #cdd;">가져갈 Qty</th>
                   <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;background:#fef3c7;border:1px solid #cdd;">CA Pending</th>
                 </tr>
@@ -38352,7 +38354,8 @@ async function editTransitEta(invoiceNo) {
 }
 
 function openAddScCaTransit() {
-  document.getElementById('sc-ca-transit-modal').style.display = 'flex';
+  // 옛 단순 모달 폐기 — 새 Shipment Builder 로 안내
+  openShipmentBuilder();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -38542,9 +38545,21 @@ function renderShipmentPallets() {
   
   container.innerHTML = _shipmentPallets.map((p, pi) => {
     const totalPcs = p.lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
+    const totalBoxes = p.lines.reduce((s, l) => {
+      const ppb = l.pcs_per_box || 0;
+      return s + (ppb > 0 ? (l.qty_pcs / ppb) : 0);
+    }, 0);
     const linesHtml = p.lines.length === 0 ? 
-      `<tr><td colspan="9" style="padding:14px;text-align:center;color:var(--text3);">라인 없음 — SC Inventory 또는 수동 라인 추가</td></tr>` :
-      p.lines.map((l, li) => `
+      `<tr><td colspan="10" style="padding:14px;text-align:center;color:var(--text3);">라인 없음 — SC Inventory 또는 수동 라인 추가</td></tr>` :
+      p.lines.map((l, li) => {
+        const ppb = l.pcs_per_box || 0;
+        const lineBoxes = ppb > 0 ? (l.qty_pcs / ppb) : 0;
+        const boxesDisplay = ppb > 0 
+          ? (Number.isInteger(lineBoxes) ? lineBoxes : lineBoxes.toFixed(2))
+          : '—';
+        // SKU fallback
+        const computedSku = l.sku || ((l.style_number||'') + (l.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(l.size||''));
+        return `
         <tr style="border-bottom:1px solid #f0f0f0;${l.is_manual?'background:#fef3c7;':''}">
           <td style="padding:4px 6px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">
             ${l.is_manual ? `<input value="${l.style_number||''}" placeholder="Style" onchange="updatePalletLine('${p.id}',${li},'style_number',this.value)" style="width:60px;height:24px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;">` : `#${l.style_number||''}`}
@@ -38556,7 +38571,7 @@ function renderShipmentPallets() {
             ${l.is_manual ? `<input value="${l.size||''}" placeholder="Size" onchange="updatePalletLine('${p.id}',${li},'size',this.value)" style="width:48px;height:24px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;">` : (l.size||'')}
           </td>
           <td style="padding:4px 6px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">
-            ${l.is_manual ? `<input value="${l.sku||''}" placeholder="SKU" onchange="updatePalletLine('${p.id}',${li},'sku',this.value)" style="width:120px;height:24px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;background:#f0fdf4;">` : (l.sku||'—')}
+            ${l.is_manual ? `<input value="${l.sku||''}" placeholder="SKU" onchange="updatePalletLine('${p.id}',${li},'sku',this.value)" style="width:120px;height:24px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;background:#f0fdf4;">` : computedSku}
           </td>
           <td style="padding:4px 6px;border:1px solid #eee;text-align:center;font-size:11px;font-family:'IBM Plex Mono',monospace;">
             ${l.source_bin ? `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:8px;font-weight:700;">${l.source_bin}</span>` : '—'}
@@ -38564,6 +38579,8 @@ function renderShipmentPallets() {
           <td style="padding:4px 6px;border:1px solid #eee;text-align:right;background:#fffde7;">
             <input type="number" value="${l.qty_pcs||0}" min="0" onchange="updatePalletLine('${p.id}',${li},'qty_pcs',this.value)" style="width:60px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
           </td>
+          <td style="padding:4px 6px;border:1px solid #eee;text-align:center;font-size:11px;color:var(--text2);">${ppb || '—'}</td>
+          <td style="padding:4px 6px;border:1px solid #eee;text-align:center;font-size:11px;font-weight:600;">${boxesDisplay}</td>
           <td style="padding:4px 6px;border:1px solid #eee;text-align:center;">
             ${l.pending_ca > 0 ? `<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:8px;font-size:10px;font-weight:700;" title="CA 에서 ${l.pending_ca}pcs 대기 중">⚠️ ${l.pending_ca}</span>` : ''}
           </td>
@@ -38571,13 +38588,15 @@ function renderShipmentPallets() {
             <button onclick="deletePalletLine('${p.id}',${li})" style="border:none;background:none;color:#e53935;cursor:pointer;font-size:14px;font-weight:700;" title="삭제">✕</button>
           </td>
         </tr>
-      `).join('');
+      `;
+    }).join('');
     
+    const totalBoxesDisplay = Number.isInteger(totalBoxes) ? totalBoxes : totalBoxes.toFixed(2);
     return `
       <div style="border:2px solid #d8b4fe;border-radius:8px;background:#fff;">
         <div style="background:#f3e8ff;padding:8px 14px;display:flex;align-items:center;gap:10px;border-radius:6px 6px 0 0;">
           <span style="font-weight:700;color:#7b1fa2;">📦 ${p.label}</span>
-          <span style="color:var(--text2);font-size:11px;">${p.lines.length} 라인 · <b>${totalPcs.toLocaleString()}</b> pcs</span>
+          <span style="color:var(--text2);font-size:11px;">${p.lines.length} 라인 · <b>${totalPcs.toLocaleString()}</b> pcs · <b>${totalBoxesDisplay}</b> 박스</span>
           <button class="btn btn-sm" onclick="openSelectScInventoryForPallet('${p.id}')" style="margin-left:auto;background:#1565c0;color:#fff;">+ SC Inventory</button>
           <button class="btn btn-sm" onclick="addManualLineToPallet('${p.id}')">+ 수동</button>
           <button onclick="deletePallet('${p.id}')" style="border:none;background:#fee2e2;color:#c62828;cursor:pointer;font-size:11px;font-weight:700;padding:4px 8px;border-radius:4px;">✕ 파렛 삭제</button>
@@ -38592,6 +38611,8 @@ function renderShipmentPallets() {
                 <th style="padding:5px;background:#fce7f3;text-align:left;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">SKU</th>
                 <th style="padding:5px;background:#fce7f3;text-align:center;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">SC Bin</th>
                 <th style="padding:5px;background:#fef3c7;text-align:right;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">Qty</th>
+                <th style="padding:5px;background:#fce7f3;text-align:center;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">pcs/box</th>
+                <th style="padding:5px;background:#fce7f3;text-align:center;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">박스</th>
                 <th style="padding:5px;background:#fce7f3;text-align:center;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">CA Pending</th>
                 <th style="padding:5px;background:#fce7f3;width:30px;border:1px solid #fbcfe8;"></th>
               </tr>
@@ -38742,7 +38763,8 @@ function renderScInvTable() {
   const filtered = _scInvCache.filter(r => {
     if (binFilter && !(r.location||'').toUpperCase().includes(binFilter)) return false;
     if (styleFilter) {
-      const haystack = `${r.style_number} ${r.color} ${r.size} ${r.sku||''}`.toLowerCase();
+      const computedSku = r.sku || ((r.style_number||'') + (r.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||''));
+      const haystack = `${r.style_number} ${r.color} ${r.size} ${computedSku}`.toLowerCase();
       if (!haystack.includes(styleFilter)) return false;
     }
     if (showPending && r.ca_pending <= 0) return false;
@@ -38753,6 +38775,18 @@ function renderScInvTable() {
     const sel = _scInvSelected[r.id];
     const checked = !!sel;
     const qtyVal = sel ? sel.qty : r.available;
+    // SKU fallback — DB inventory.sku 가 비어있으면 style+color+size 로 계산
+    const computedSku = r.sku || ((r.style_number||'') + (r.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||''));
+    // 박스 수 계산
+    const ppb = r.pcs_per_box || 0;
+    const totalBoxes = ppb > 0 ? (r.qty_on_hand / ppb) : 0;
+    const boxesDisplay = ppb > 0 
+      ? (Number.isInteger(totalBoxes) ? totalBoxes : totalBoxes.toFixed(2))
+      : '—';
+    const takeBoxes = ppb > 0 ? (qtyVal / ppb) : 0;
+    const takeBoxesDisplay = ppb > 0
+      ? (Number.isInteger(takeBoxes) ? takeBoxes : takeBoxes.toFixed(2))
+      : '';
     return `
       <tr style="border-bottom:1px solid #f0f0f0;${r.ca_pending>0?'background:#fffbeb;':''}${checked?'background:#dcfce7;':''}">
         <td style="padding:4px;text-align:center;border:1px solid #eee;">
@@ -38762,14 +38796,17 @@ function renderScInvTable() {
         <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${r.style_number||''}</td>
         <td style="padding:5px 8px;border:1px solid #eee;font-size:11px;">${r.color||''}</td>
         <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;">${r.size||''}</td>
-        <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${r.sku||'—'}</td>
+        <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${computedSku}</td>
         <td style="padding:5px 8px;border:1px solid #eee;text-align:right;font-weight:700;">${(r.qty_on_hand||0).toLocaleString()}</td>
+        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;color:var(--text2);">${ppb || '—'}</td>
+        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;font-weight:600;">${boxesDisplay}</td>
         <td style="padding:4px;border:1px solid #eee;text-align:right;background:#fffde7;">
           <input type="number" value="${qtyVal}" min="0" max="${r.qty_on_hand||0}" 
             ${!checked?'disabled':''} 
             onchange="scInvUpdateQty('${r.id}', this.value)" 
             style="width:60px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
           <button onclick="scInvSetMax('${r.id}')" style="border:none;background:#bbf7d0;color:#15803d;cursor:pointer;font-size:9px;font-weight:700;padding:2px 4px;border-radius:3px;margin-left:2px;">전체</button>
+          ${takeBoxesDisplay ? `<div style="font-size:9px;color:var(--text3);margin-top:2px;">${takeBoxesDisplay} 박스</div>` : ''}
         </td>
         <td style="padding:5px 8px;border:1px solid #eee;text-align:center;">
           ${r.ca_pending > 0 ? `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;" title="CA 주문 ${r.ca_pending}pcs 대기 중">⚠️ ${r.ca_pending}</span>` : '<span style="color:var(--text3);font-size:11px;">—</span>'}
@@ -38854,13 +38891,15 @@ function addSelectedToShipment() {
   
   entries.forEach(e => {
     const item = e.line;
+    // SKU fallback — DB sku 가 비어있으면 계산
+    const computedSku = item.sku || ((item.style_number||'') + (item.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(item.size||''));
     targetPallet.lines.push({
       is_manual: false,
       inventory_id: item.id,
       style_number: item.style_number,
       color: item.color,
       size: item.size,
-      sku: item.sku,
+      sku: computedSku,
       source_bin: item.location,
       qty_pcs: e.qty,
       pcs_per_box: item.pcs_per_box || 72,
