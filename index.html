@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_001319 — Haiti 작업 자동 백업 (localStorage). Refresh 해도 복원 가능. 24시간 만료 -->
+<!-- BUILD: 20260429_004531 — Draft 복원: confirm 강제 모달 → 배너 (덜 거슬리게) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4037,6 +4037,9 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <input type="file" id="transit-upload-input" accept=".xlsx,.xls" style="display:none" onchange="parseTransitExcel(this)"/>
         <button class="btn" onclick="openAddTransitManual()">+ 수동 입력</button>
       </div>
+
+      <!-- Draft 복원 배너 (이전 작업 있을 때만 표시) -->
+      <div id="transit-draft-banner" style="display:none;margin-bottom:12px;padding:10px 14px;background:#fff7e6;border:1px solid #fbbf24;border-radius:6px;align-items:center;gap:12px;flex-wrap:wrap;"></div>
 
       <!-- Haiti → SC 섹션 -->
       <div class="card" style="margin-bottom:16px;">
@@ -36019,34 +36022,39 @@ function getTransitDraft() {
   }
 }
 
-// 페이지 로드 시 / In Transit 페이지 열 때 호출
-async function checkTransitDraftOnLoad() {
+// 페이지 로드 시 / In Transit 페이지 열 때 호출 — 배너만 표시 (confirm 강제 안 함)
+function checkTransitDraftBanner() {
+  const banner = document.getElementById('transit-draft-banner');
+  if (!banner) return;
   const d = getTransitDraft();
-  if (!d || !d._transitParsed) return false;
+  if (!d || !d._transitParsed) {
+    banner.style.display = 'none';
+    return;
+  }
   const rowCount = d._transitParsed.rows?.length || 0;
   const invNo = d._transitParsed.invoiceNo || '?';
   const minAgo = Math.round((Date.now() - d.ts) / 60000);
-  const ageStr = minAgo < 60 ? `${minAgo}분 전` : `${Math.round(minAgo/60)}시간 전`;
+  const ageStr = minAgo < 1 ? '방금 전' : minAgo < 60 ? `${minAgo}분 전` : `${Math.round(minAgo/60)}시간 전`;
   
-  const proceed = confirm(
-    `이전 작업 발견:\n\n` +
-    `Invoice: ${invNo}\n` +
-    `라인 ${rowCount}개\n` +
-    `${ageStr} 작업\n\n` +
-    `이어서 작업할까요?\n` +
-    `(취소 누르면 이 임시 저장은 삭제됩니다)`
-  );
-  if (!proceed) {
-    clearTransitDraft();
-    return false;
+  banner.innerHTML = 
+    `<span style="font-size:13px;">💾 <b>이전 작업 발견</b> — Invoice <b>${invNo}</b>, ${rowCount}개 라인 · ${ageStr}</span>` +
+    `<div style="display:flex;gap:8px;margin-left:auto;">` +
+    `  <button onclick="resumeTransitDraft()" class="btn btn-sm" style="background:#0f4c8a;color:#fff;border:none;">▶ 이어서 작업</button>` +
+    `  <button onclick="discardTransitDraft()" class="btn btn-sm" style="background:#fff;color:#dc2626;border:1px solid #fecaca;">✕ 삭제</button>` +
+    `</div>`;
+  banner.style.display = 'flex';
+}
+
+// 사용자가 "이어서 작업" 클릭
+function resumeTransitDraft() {
+  const d = getTransitDraft();
+  if (!d || !d._transitParsed) {
+    checkTransitDraftBanner();
+    return;
   }
-  // 복원
   _transitParsed = d._transitParsed;
-  // raw 가 light save 라 없으면 — 원본 view 는 비활성, 나머지는 정상
-  if (!_transitParsed.rawRows) {
-    _transitParsed.rawRows = [];
-  }
-  // 모달 열고 채우기
+  if (!_transitParsed.rawRows) _transitParsed.rawRows = [];
+  
   document.getElementById('transit-preview-modal').style.display = 'flex';
   document.getElementById('transit-preview-info').innerHTML =
     `<div><span style="color:var(--text3);">Invoice</span><br><b>${_transitParsed.invoiceNo||'-'}</b></div>` +
@@ -36054,18 +36062,22 @@ async function checkTransitDraftOnLoad() {
     `<div><span style="color:var(--text3);">Ship Date</span><br><b>${_transitParsed.shipDate||'-'}</b></div>` +
     `<div><span style="color:var(--text3);">총 라인</span><br><b>${(_transitParsed.rows||[]).length}개</b></div>` +
     `<div><span style="color:var(--text3);">총 수량</span><br><b>${(_transitParsed.rows||[]).reduce((s,r)=>s+(r.qty_pcs||0),0).toLocaleString()} pcs</b></div>` +
-    `<div style="background:#fff7e6;padding:4px 8px;border-radius:4px;color:#9a3412;font-size:11px;">⚠️ 이어서 작업 중 (자동 저장)</div>`;
+    `<div style="background:#fff7e6;padding:4px 8px;border-radius:4px;color:#9a3412;font-size:11px;">⚠️ 이어서 작업 중</div>`;
   if (d.eta) document.getElementById('transit-eta-input').value = d.eta;
   if (d.notes) document.getElementById('transit-notes-input').value = d.notes;
   renderTransitEditTable();
-  return true;
+}
+
+// 사용자가 "삭제" 클릭
+function discardTransitDraft() {
+  if (!confirm('임시 저장된 작업을 삭제하시겠습니까?\n복원할 수 없습니다.')) return;
+  clearTransitDraft();
+  checkTransitDraftBanner();
 }
 
 async function loadInTransit() {
-  // 미완성 작업 백업 자동 체크 (refresh 후 복원)
-  if (!_transitParsed && getTransitDraft()) {
-    await checkTransitDraftOnLoad();
-  }
+  // 미완성 작업 백업 자동 체크 — 배너 표시 (강제 confirm 없음)
+  checkTransitDraftBanner();
   
   const { data: rows } = await db.from('in_transit')
     .select('*')
