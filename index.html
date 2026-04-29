@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_014603 — 옛 draft 호환: SKU 누락 자동 채우기 + DB 매칭 -->
+<!-- BUILD: 20260429_020547 — 모든 SKU 다운로드 버튼 (검토용 Excel, 의심 SKU 자동 표시) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4670,9 +4670,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       <div style="font-size:11px;color:#075985;margin-bottom:12px;">새 스타일 추가 · SKU 자동 생성 · Davinci 재고 파일 업로드</div>
 
       <!-- 탭 버튼 -->
-      <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid #e0e7ef;">
+      <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid #e0e7ef;align-items:center;">
         <button id="import-tab-sku" onclick="switchImportTab('sku')" class="import-tab-btn active" style="padding:10px 20px;background:#0284c7;color:#fff;border:none;border-radius:6px 6px 0 0;cursor:pointer;font-weight:700;font-size:13px;">📦 SKU Import</button>
         <button id="import-tab-inv" onclick="switchImportTab('inv')" class="import-tab-btn" style="padding:10px 20px;background:#fff;color:#075985;border:1px solid #e0e7ef;border-radius:6px 6px 0 0;cursor:pointer;font-weight:700;font-size:13px;">📋 Inventory Import</button>
+        <div style="flex:1;"></div>
+        <button onclick="downloadAllSkusXlsx()" style="margin-bottom:0;padding:7px 14px;background:#10b981;color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:700;font-size:12px;" title="DB의 모든 SKU 를 Excel 로 다운로드">📥 모든 SKU 다운로드 (Excel)</button>
       </div>
 
       <!-- ─── Tab 1: SKU Import ─── -->
@@ -11492,6 +11494,136 @@ function previewSkuImport() {
 }
 
 /** SKU 실제 등록 */
+// ── 모든 SKU 를 Excel 로 다운로드 (검토용)
+async function downloadAllSkusXlsx() {
+  const btn = event?.target;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ SKU 가져오는 중...';
+  }
+  try {
+    // 1. skus 테이블 전체 (chunk pagination)
+    const allSkus = [];
+    let from = 0;
+    const PAGE = 1000;
+    while (true) {
+      const { data, error } = await db.from('skus')
+        .select('sku_id, style_number, color, color_code, size, created_at, styles(description)')
+        .order('style_number', { ascending: true })
+        .order('color', { ascending: true })
+        .order('size', { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allSkus.push(...data);
+      if (data.length < PAGE) break;
+      from += PAGE;
+      if (btn) btn.textContent = `⏳ SKU 가져오는 중... ${allSkus.length}개`;
+    }
+    
+    if (allSkus.length === 0) {
+      alert('등록된 SKU 가 없습니다.');
+      return;
+    }
+    
+    // 2. 각 SKU 의 inventory 사용 여부 (재고/commit 합산)
+    if (btn) btn.textContent = `⏳ 재고 매칭 중... ${allSkus.length}개`;
+    const skuUsage = {}; // sku_id → {qty_on_hand, qty_committed}
+    const skuIds = allSkus.map(s => s.sku_id);
+    for (let i = 0; i < skuIds.length; i += 500) {
+      const chunk = skuIds.slice(i, i + 500);
+      const { data } = await db.from('inventory')
+        .select('sku, qty_on_hand, qty_committed')
+        .in('sku', chunk);
+      (data||[]).forEach(r => {
+        if (!r.sku) return;
+        if (!skuUsage[r.sku]) skuUsage[r.sku] = { qty: 0, committed: 0 };
+        skuUsage[r.sku].qty += (r.qty_on_hand || 0);
+        skuUsage[r.sku].committed += (r.qty_committed || 0);
+      });
+    }
+    
+    // 3. Excel 만들기
+    if (btn) btn.textContent = `⏳ Excel 생성 중...`;
+    const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.0/package/xlsx.mjs');
+    
+    // 데이터 변환 + 검토 도움 컬럼들
+    const rows = allSkus.map(s => {
+      const usage = skuUsage[s.sku_id] || { qty: 0, committed: 0 };
+      const skuLower = (s.sku_id||'').toLowerCase();
+      // 검토 도움: SKU 안에 size 가 들어간 형태 의심
+      const hasTToddler = /[2-5]t$/i.test(s.sku_id||'');  // 끝에 2t/3t/4t/5t
+      const hasJustNumber = /[2-5]$/i.test(s.sku_id||'') && !/[a-z][2-5]$/i.test(s.sku_id||'');  // 끝에 그냥 2/3/4/5
+      // 사이즈 일치성: size 필드가 2T 인데 SKU 끝이 2t 면 OK 인지 2 면 inconsistent
+      let suspect = '';
+      if (s.size && /^\dT$/i.test(s.size)) {
+        // toddler size — SKU 안에는 T 없어야 함 (사용자 룰)
+        if (hasTToddler) suspect = '⚠️ SKU 끝에 T 포함 (Davinci 룰: T 없어야 함)';
+      }
+      return {
+        sku_id: s.sku_id,
+        style: s.style_number,
+        color: s.color,
+        color_code: s.color_code || '',
+        size: s.size,
+        description: s.styles?.description || '',
+        qty_on_hand: usage.qty,
+        qty_committed: usage.committed,
+        in_use: (usage.qty > 0 || usage.committed > 0) ? 'YES' : 'no',
+        suspect: suspect,
+        created_at: s.created_at
+      };
+    });
+    
+    const ws = XLSX.utils.json_to_sheet(rows, {
+      header: ['sku_id','style','color','color_code','size','description','qty_on_hand','qty_committed','in_use','suspect','created_at']
+    });
+    // 컬럼 폭
+    ws['!cols'] = [
+      { wch: 22 }, { wch: 8 }, { wch: 18 }, { wch: 10 }, { wch: 6 },
+      { wch: 32 }, { wch: 10 }, { wch: 10 }, { wch: 7 }, { wch: 50 }, { wch: 24 }
+    ];
+    
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'All SKUs');
+    
+    // 통계 sheet 추가
+    const stats = {};
+    rows.forEach(r => {
+      const k = r.size;
+      if (!stats[k]) stats[k] = { size: k, count: 0, in_use: 0, suspect: 0 };
+      stats[k].count++;
+      if (r.in_use === 'YES') stats[k].in_use++;
+      if (r.suspect) stats[k].suspect++;
+    });
+    const statsRows = Object.values(stats).sort((a,b) => a.size.localeCompare(b.size));
+    const ws2 = XLSX.utils.json_to_sheet(statsRows, { header: ['size','count','in_use','suspect'] });
+    ws2['!cols'] = [{ wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Size 분포');
+    
+    // 의심되는 SKU 만 따로 sheet
+    const suspectRows = rows.filter(r => r.suspect);
+    if (suspectRows.length > 0) {
+      const ws3 = XLSX.utils.json_to_sheet(suspectRows);
+      ws3['!cols'] = ws['!cols'];
+      XLSX.utils.book_append_sheet(wb, ws3, '⚠️ 의심');
+    }
+    
+    const ts = new Date().toISOString().slice(0,16).replace(/[:T]/g, '-');
+    XLSX.writeFile(wb, `all_skus_${ts}.xlsx`);
+    
+    showToast?.(`✅ ${rows.length}개 SKU 다운로드 완료 (의심: ${suspectRows.length}개)`);
+  } catch(e) {
+    console.error('[downloadAllSkusXlsx]', e);
+    alert('SKU 다운로드 실패: ' + (e?.message || e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '📥 모든 SKU 다운로드 (Excel)';
+    }
+  }
+}
+
 async function executeSkuImport() {
   if (!_skuImportData) { alert('먼저 미리보기를 해주세요'); return; }
 
