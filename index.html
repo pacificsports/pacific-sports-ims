@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_133537 — Receive 모달 row 안 보이는 문제 fix (브라우저가 tbody.innerHTML 에서 tr/td 를 strip 하는 버그) -->
+<!-- BUILD: 20260429_135151 — Receive 모달 옛 InTransit upload 디자인 그대로 + 목적지/Bin 컬럼 추가 + 일괄 작업 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4136,55 +4136,48 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
     <!-- Receive Modal (도착 후 Packing List 대조 + Location 지정) -->
     <div class="modal-overlay" id="transit-receive-modal" style="display:none;">
-      <div class="modal-box" style="max-width:1400px;width:98vw;max-height:96vh;display:flex;flex-direction:column;">
+      <div class="modal-box" style="max-width:1500px;width:98vw;max-height:96vh;display:flex;flex-direction:column;">
         <div class="modal-head" style="background:#1a5c2a;">
           <span class="modal-title" style="color:#fff;">📦 도착 처리 — Receive & Location 지정</span>
           <button class="modal-close" onclick="document.getElementById('transit-receive-modal').style.display='none'">✕</button>
         </div>
         <div style="padding:14px 16px;overflow-y:auto;flex:1;">
-          <!-- Invoice 정보 + 통계 -->
+          <!-- Invoice 정보 -->
           <div id="receive-invoice-info" style="margin-bottom:10px;padding:10px 14px;background:#f0fff4;border-radius:8px;font-size:12px;"></div>
           
           <!-- 일괄 작업 영역 -->
-          <div style="margin-bottom:12px;padding:12px 14px;background:#fff8e1;border:1px solid #f9a825;border-radius:8px;">
+          <div style="margin-bottom:10px;padding:10px 14px;background:#fff8e1;border:1px solid #f9a825;border-radius:8px;">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;">
-              <span style="font-weight:700;color:#7c2d12;">🎯 선택된 <b id="recv-selected-count">0</b>개 라인 일괄 작업:</span>
+              <span style="font-weight:700;color:#7c2d12;">🎯 선택된 <b id="recv-selected-count">0</b>개 일괄 작업:</span>
               <button class="btn btn-sm" onclick="recvBulkSelectAll()">전체 체크</button>
               <button class="btn btn-sm" onclick="recvBulkSelectNone()">전체 해제</button>
               <span style="color:var(--text3);">|</span>
-              <span style="color:#7c2d12;">목적지:</span>
-              <input id="recv-bulk-bin" placeholder="Bin (예: H1130, 2P-7)" style="width:130px;height:28px;border:1px solid #fbc02d;border-radius:4px;padding:0 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
-              <button class="btn btn-sm" style="background:#1565c0;color:#fff;" onclick="recvBulkApplyBin()">📍 SC bin 으로 적용</button>
-              <span style="color:var(--text3);">또는</span>
-              <button class="btn btn-sm" style="background:#7b1fa2;color:#fff;" onclick="recvBulkApplyCa()">🚚 CA 직송으로 적용</button>
-              <button class="btn btn-sm" onclick="recvBulkClear()">↺ 선택된 거 초기화</button>
+              <input id="recv-bulk-bin" placeholder="Bin (예: H1130)" style="width:120px;height:28px;border:1px solid #fbc02d;border-radius:4px;padding:0 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+              <button class="btn btn-sm" style="background:#1565c0;color:#fff;" onclick="recvBulkApplyBin()">📍 SC bin 으로</button>
+              <button class="btn btn-sm" style="background:#7b1fa2;color:#fff;" onclick="recvBulkApplyCa()">🚚 CA 직송</button>
+              <button class="btn btn-sm" onclick="recvBulkClear()">↺ 초기화</button>
+              <span style="margin-left:auto;font-size:11px;color:var(--text2);">
+                <span id="recv-progress">대기 0/0</span> · 📍SC <b id="recv-progress-sc">0</b> · 🚚CA <b id="recv-progress-ca">0</b> · ⏸보류 <b id="recv-progress-hold">0</b>
+              </span>
             </div>
           </div>
           
-          <!-- 진행 상황 -->
-          <div style="margin-bottom:8px;font-size:11px;color:var(--text2);">
-            <span id="recv-progress">⏳ 처리 안 된 라인: <b>0</b> / 0</span>
-            <span style="margin-left:14px;">📍 SC: <b id="recv-progress-sc">0</b></span>
-            <span style="margin-left:8px;">🚚 CA: <b id="recv-progress-ca">0</b></span>
-            <span style="margin-left:8px;color:#9a3412;">⏸ 보류: <b id="recv-progress-hold">0</b></span>
-          </div>
-          
-          <!-- 테이블 -->
-          <div id="recv-table-wrap" style="border:1px solid #c8e6c9;border-radius:6px;overflow:auto;max-height:calc(96vh - 280px);">
-            <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;">
+          <!-- 테이블 — 옛 InTransit upload 와 같은 구조 -->
+          <div style="border:1px solid #c8e6c9;border-radius:6px;overflow-x:auto;">
+            <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;" id="recv-edit-table">
               <thead>
                 <tr>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 4px;text-align:center;background:#a5d6a7;border:1px solid #81c784;width:32px;"><input type="checkbox" id="recv-check-all" onchange="recvToggleAll(this.checked)" style="cursor:pointer;width:14px;height:14px;"></th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:left;background:#a5d6a7;border:1px solid #81c784;">Style</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:left;background:#a5d6a7;border:1px solid #81c784;">Color</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:center;background:#a5d6a7;border:1px solid #81c784;">Size</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:left;background:#bbf7d0;border:1px solid #81c784;">SKU</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:right;background:#a5d6a7;border:1px solid #81c784;">예상 박스</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:right;background:#fff9c4;border:1px solid #81c784;">실제 박스</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:right;background:#fde68a;border:1px solid #81c784;">pcs/box</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:right;background:#fff9c4;border:1px solid #81c784;">실제 Pcs</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:center;background:#e3f2fd;border:1px solid #81c784;">목적지</th>
-                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:center;background:#a5d6a7;border:1px solid #81c784;">상태</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:6px 4px;text-align:center;border:1px solid #cdd;font-size:10px;color:#0f4c8a;width:36px;background:#dbeafe;"><input type="checkbox" id="recv-check-all" onchange="recvToggleAll(this.checked)" style="cursor:pointer;width:14px;height:14px;"></th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:left;border:1px solid #cdd;background:#dbeafe;">Style #</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:left;border:1px solid #cdd;background:#dbeafe;">Color</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#dbeafe;">Size</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:left;border:1px solid #cdd;background:#bbf7d0;">SKU</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:right;border:1px solid #cdd;background:#dbeafe;">예상박스</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#fff9c4;">실제 박스</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#fde68a;">pcs/box</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#fff9c4;">실제 Pcs</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#e3f2fd;">목적지</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#e3f2fd;">Bin</th>
                 </tr>
               </thead>
               <tbody id="receive-lines-body"></tbody>
@@ -37590,77 +37583,50 @@ function renderRecvTable() {
   const tbody = document.getElementById('receive-lines-body');
   if (!tbody) return;
   
-  // 진짜 브라우저 호환 — table 전체 만들어서 tbody 만 swap
-  const table = tbody.parentElement;
-  const newTbody = document.createElement('tbody');
-  newTbody.id = 'receive-lines-body';
-  
-  const rowsHtml = _recvLines.map((l, i) => {
+  tbody.innerHTML = _recvLines.map((l, i) => {
     const diff = l.actual_pcs - l.expected_pcs;
     const diffStr = diff === 0 ? '' : (diff > 0 ? `+${diff}` : `${diff}`);
     const diffColor = diff === 0 ? '' : (diff > 0 ? '#1565c0' : '#c62828');
     
-    let statusBadge = '';
-    if (l.dest === 'sc') {
-      statusBadge = `<span style="background:#1565c0;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">📍 SC: ${l.bin||'?'}</span>`;
-    } else if (l.dest === 'ca') {
-      statusBadge = `<span style="background:#7b1fa2;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">🚚 CA</span>`;
-    } else if (l.dest === 'hold') {
-      statusBadge = `<span style="background:#9a3412;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">⏸ 보류</span>`;
-    } else {
-      statusBadge = `<span style="color:var(--text3);font-size:11px;">⏳ 미정</span>`;
-    }
+    const rowBg = l.selected ? '#fffde7' : (l.dest === 'sc' ? '#ecfdf5' : (l.dest === 'ca' ? '#f3e8ff' : (l.dest === 'hold' ? '#fef3c7' : '#fff')));
+    const isNs = l.is_nonstandard;
     
-    const rowBg = l.selected ? '#fffde7' : (l.dest ? '#f1f8f1' : '');
-    
-    return `<tr id="recv-row-${i}" style="background:${rowBg};border-bottom:1px solid #e8f5e9;">
-      <td style="padding:4px;text-align:center;border:1px solid #e8f5e9;">
-        <input type="checkbox" ${l.selected?'checked':''} onchange="recvToggleLine(${i}, this.checked)" style="cursor:pointer;width:14px;height:14px;">
+    return `<tr id="recv-row-${i}" style="border-bottom:1px solid #f0f0f0;background:${rowBg};">
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
+        <input type="checkbox" ${l.selected?'checked':''} onchange="recvToggleLine(${i}, this.checked)" style="width:16px;height:16px;cursor:pointer;accent-color:#10b981;">
       </td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${l.style_number}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-size:11px;">${l.color}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:center;font-size:11px;">${l.size}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${l.sku||'—'}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;font-size:11px;color:var(--text3);">${l.expected_boxes}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#fffde7;text-align:right;">
-        <input type="number" value="${l.actual_boxes}" min="0" onfocus="this.select()" onchange="recvOnBoxChange(${i}, this.value)"
-          style="width:54px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
+      <td style="padding:3px 4px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${l.style_number}</td>
+      <td style="padding:3px 4px;border:1px solid #eee;font-size:11px;">${l.color}</td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;font-size:11px;">${l.size}</td>
+      <td style="padding:3px 4px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${l.sku||'—'}</td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;color:var(--text3);font-size:11px;">${l.expected_boxes}</td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:#fffde7;">
+        <input type="number" value="${l.actual_boxes}" min="0" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnBoxChange(${i}, this.value)"
+          style="width:54px;height:26px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;">
       </td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;background:${l.is_nonstandard?'#fff8e1':'#fff9c4'};">
-        <input type="number" value="${l.ppb}" min="1" onfocus="this.select()" onchange="recvOnPpbChange(${i}, this.value)"
-          style="width:50px;height:24px;border:1px solid ${l.is_nonstandard?'#f9a825':'#fbc02d'};border-radius:3px;padding:0 4px;font-size:11px;text-align:right;font-weight:${l.is_nonstandard?'700':'400'};color:${l.is_nonstandard?'#e65100':'inherit'};">
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:${isNs?'#fff8e1':'#fffde7'};">
+        <input type="number" value="${l.ppb}" min="1" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnPpbChange(${i}, this.value)"
+          style="width:54px;height:26px;border:1px solid ${isNs?'#f9a825':'#fbc02d'};border-radius:3px;padding:0 4px;font-size:11px;text-align:center;font-weight:${isNs?'700':'400'};color:${isNs?'#e65100':'inherit'};">
+        ${isNs ? '<div style="font-size:9px;color:#e65100;">⚠️비표준</div>' : ''}
       </td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;background:#fffde7;font-weight:700;">
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:#fffde7;font-weight:700;">
         ${l.actual_pcs.toLocaleString()}
-        ${diff !== 0 ? `<span style="margin-left:4px;font-size:10px;color:${diffColor};">${diffStr}</span>` : ''}
+        ${diff !== 0 ? `<div style="font-size:10px;color:${diffColor};font-weight:700;">${diffStr}</div>` : ''}
       </td>
-      <td style="padding:4px 6px;border:1px solid #e8f5e9;background:#e3f2fd;text-align:center;">
-        <div style="display:flex;gap:3px;align-items:center;">
-          <select onchange="recvOnDestChange(${i}, this.value)" style="height:24px;font-size:11px;border:1px solid #90caf9;border-radius:3px;padding:0 2px;">
-            <option value="" ${!l.dest?'selected':''}>—</option>
-            <option value="sc" ${l.dest==='sc'?'selected':''}>📍 SC bin</option>
-            <option value="ca" ${l.dest==='ca'?'selected':''}>🚚 CA</option>
-            <option value="hold" ${l.dest==='hold'?'selected':''}>⏸ 보류</option>
-          </select>
-          ${l.dest === 'sc' ? `<input value="${l.bin||''}" placeholder="bin" onfocus="this.select()" onchange="recvOnBinChange(${i}, this.value)" style="width:64px;height:24px;border:1px solid #90caf9;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;">` : ''}
-        </div>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:#e3f2fd;">
+        <select onchange="recvOnDestChange(${i}, this.value)" style="height:26px;font-size:11px;border:1px solid #90caf9;border-radius:3px;padding:0 4px;background:#fff;">
+          <option value="" ${!l.dest?'selected':''}>—</option>
+          <option value="sc" ${l.dest==='sc'?'selected':''}>📍 SC</option>
+          <option value="ca" ${l.dest==='ca'?'selected':''}>🚚 CA</option>
+          <option value="hold" ${l.dest==='hold'?'selected':''}>⏸ 보류</option>
+        </select>
       </td>
-      <td style="padding:4px;border:1px solid #e8f5e9;text-align:center;">${statusBadge}</td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:#e3f2fd;">
+        ${l.dest === 'sc' ? `<input value="${l.bin||''}" placeholder="bin" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnBinChange(${i}, this.value)" style="width:80px;height:26px;border:1px solid #90caf9;border-radius:3px;padding:0 6px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;">` : '<span style="color:var(--text3);font-size:10px;">—</span>'}
+      </td>
     </tr>`;
   }).join('');
   
-  // 진짜 브라우저 호환 방법: table.innerHTML 에 set (tbody 까지 포함)
-  // 또는 임시 div 에서 파싱 후 진짜 tr 들 옮기기
-  const temp = document.createElement('table');
-  temp.innerHTML = `<tbody>${rowsHtml}</tbody>`;
-  const parsedTbody = temp.querySelector('tbody');
-  if (parsedTbody) {
-    while (parsedTbody.firstChild) {
-      newTbody.appendChild(parsedTbody.firstChild);
-    }
-  }
-  
-  table.replaceChild(newTbody, tbody);
   recvUpdateProgress();
 }
 
