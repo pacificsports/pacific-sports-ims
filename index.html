@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_121855 — In Transit 화면: DZ → 박스, SKU 추가, ppb 도 보임. 헤더에 총 박스/Pcs/라인 -->
+<!-- BUILD: 20260429_122528 — In Transit 그룹 접기/펼치기 + 자체 스크롤 + sticky 헤더 (여러 컨테이너 보기 편하게) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -36482,20 +36482,16 @@ function renderTransitTable(elId, rows) {
     const etaColor = daysLeft === null ? '#888' : daysLeft < 0 ? '#b42318' : daysLeft <= 3 ? '#b54708' : '#0e7c3a';
     const etaTxt = daysLeft === null ? 'ETA 미정' : daysLeft < 0 ? `${Math.abs(daysLeft)}일 지연` : daysLeft === 0 ? '오늘 도착' : `${daysLeft}일 후 도착`;
 
-    // style별 총 pcs
-    const styleMap = {};
-    g.rows.forEach(r => {
-      const k = r.style_number;
-      if (!styleMap[k]) styleMap[k] = 0;
-      styleMap[k] += r.qty_pcs || 0;
-    });
-
     // 그룹 합계
     const totalBoxes = g.rows.reduce((s, r) => s + (r.qty_boxes || 0), 0);
     const totalPcs = g.rows.reduce((s, r) => s + (r.qty_pcs || 0), 0);
+    
+    // 고유 ID (toggle 용)
+    const groupId = `transit-grp-${(g.invoice_no||'x').replace(/[^a-zA-Z0-9]/g,'_')}-${elId}`;
 
     html += `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden;">
-      <div style="padding:10px 14px;background:#f0f7ff;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div style="padding:10px 14px;background:#f0f7ff;display:flex;align-items:center;gap:12px;flex-wrap:wrap;cursor:pointer;user-select:none;" onclick="toggleTransitGroup('${groupId}')">
+        <span id="${groupId}-arrow" style="font-size:14px;color:var(--text2);transition:transform 0.15s;display:inline-block;width:14px;">▶</span>
         <div>
           <span style="font-weight:700;font-size:13px;">${g.invoice_no||'—'}</span>
           <span style="font-size:11px;color:var(--text3);margin-left:8px;">${g.container_no||''}</span>
@@ -36505,41 +36501,53 @@ function renderTransitTable(elId, rows) {
         <div style="font-size:11px;color:var(--text2);background:#fff;padding:2px 8px;border-radius:10px;border:1px solid #e0e0e0;">
           📦 <b>${totalBoxes}</b> 박스 · <b>${totalPcs.toLocaleString()}</b> pcs · ${g.rows.length} 라인
         </div>
-        <div style="margin-left:auto;display:flex;gap:6px;">
+        <div style="margin-left:auto;display:flex;gap:6px;" onclick="event.stopPropagation()">
           <button class="btn btn-sm" style="background:#1a5c2a;color:#fff;" onclick="openTransitReceive('${g.invoice_no}')">📦 도착 처리 & Receive</button>
           <button class="btn btn-sm" onclick="editTransitEta('${g.invoice_no}')">✏️ ETA 수정</button>
         </div>
       </div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead>
-          <tr style="background:#f8faff;">
-            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);">Style</th>
-            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);">Color</th>
-            <th style="padding:6px 10px;text-align:center;border-bottom:1px solid var(--border);">Size</th>
-            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);background:#f0fdf4;">SKU</th>
-            <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">박스</th>
-            <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">pcs/box</th>
-            <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">Pcs</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${g.rows.map(r => {
-            const isNs = r.is_nonstandard;
-            return `<tr style="border-bottom:1px solid #f5f5f5;${isNs?'background:#fff8e1;':''}">
-              <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;">#${r.style_number}</td>
-              <td style="padding:5px 10px;">${r.color}</td>
-              <td style="padding:5px 10px;text-align:center;">${r.size}</td>
-              <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${r.sku||'—'}</td>
-              <td style="padding:5px 10px;text-align:right;font-weight:700;">${r.qty_boxes||0}</td>
-              <td style="padding:5px 10px;text-align:right;color:${isNs?'#e65100':'inherit'};font-weight:${isNs?'700':'400'};">${r.ppb||'—'}${isNs?' ⚠️':''}</td>
-              <td style="padding:5px 10px;text-align:right;font-weight:700;">${(r.qty_pcs||0).toLocaleString()}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
+      <div id="${groupId}-body" style="display:none;max-height:50vh;overflow:auto;background:#fff;">
+        <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;">
+          <thead>
+            <tr>
+              <th style="position:sticky;top:0;z-index:3;padding:6px 10px;text-align:left;background:#dbeafe;border-bottom:1px solid var(--border);">Style</th>
+              <th style="position:sticky;top:0;z-index:3;padding:6px 10px;text-align:left;background:#dbeafe;border-bottom:1px solid var(--border);">Color</th>
+              <th style="position:sticky;top:0;z-index:3;padding:6px 10px;text-align:center;background:#dbeafe;border-bottom:1px solid var(--border);">Size</th>
+              <th style="position:sticky;top:0;z-index:3;padding:6px 10px;text-align:left;background:#bbf7d0;border-bottom:1px solid var(--border);">SKU</th>
+              <th style="position:sticky;top:0;z-index:3;padding:6px 10px;text-align:right;background:#dbeafe;border-bottom:1px solid var(--border);">박스</th>
+              <th style="position:sticky;top:0;z-index:3;padding:6px 10px;text-align:right;background:#fde68a;border-bottom:1px solid var(--border);">pcs/box</th>
+              <th style="position:sticky;top:0;z-index:3;padding:6px 10px;text-align:right;background:#dbeafe;border-bottom:1px solid var(--border);">Pcs</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${g.rows.map(r => {
+              const isNs = r.is_nonstandard;
+              return `<tr style="border-bottom:1px solid #f5f5f5;${isNs?'background:#fff8e1;':''}">
+                <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;">#${r.style_number}</td>
+                <td style="padding:5px 10px;">${r.color}</td>
+                <td style="padding:5px 10px;text-align:center;">${r.size}</td>
+                <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${r.sku||'—'}</td>
+                <td style="padding:5px 10px;text-align:right;font-weight:700;">${r.qty_boxes||0}</td>
+                <td style="padding:5px 10px;text-align:right;color:${isNs?'#e65100':'inherit'};font-weight:${isNs?'700':'400'};">${r.ppb||'—'}${isNs?' ⚠️':''}</td>
+                <td style="padding:5px 10px;text-align:right;font-weight:700;">${(r.qty_pcs||0).toLocaleString()}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>`;
   });
   document.getElementById(elId).innerHTML = html;
+}
+
+// 그룹 펼치기/접기
+function toggleTransitGroup(groupId) {
+  const body = document.getElementById(groupId + '-body');
+  const arrow = document.getElementById(groupId + '-arrow');
+  if (!body || !arrow) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  arrow.textContent = isOpen ? '▶' : '▼';
 }
 
 // ── Excel 파싱
