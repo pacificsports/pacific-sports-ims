@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_103205 — Haiti parsing SKU 도 sizeForSku 적용 (toddler T 자동 제거) + draft 의 잘못된 SKU 자동 갱신 -->
+<!-- BUILD: 20260429_105545 — Side Seam 체크박스 추가 (Color 와 Size 사이) — 체크 시 SKU 에 자동 +ss -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4110,6 +4110,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                     <th style="padding:6px 4px;text-align:center;border:1px solid #cdd;font-size:10px;color:var(--text3);">원본<br>Row</th>
                     <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Style #</th>
                     <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Color</th>
+                    <th style="padding:6px 4px;text-align:center;border:1px solid #cdd;font-size:10px;color:#7c2d12;width:36px;background:#fef3c7;" title="Side Seam 체크하면 SKU 에 +ss 추가">SS</th>
                     <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Size</th>
                     <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;background:#f0fdf4;">SKU</th>
                     <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">박스수</th>
@@ -36386,7 +36387,12 @@ function autoResumeTransitDraft() {
   let needSkuCheck = false;
   _transitParsed.rows.forEach(r => {
     if (!r.style_number || !r.color || !r.size) return;
-    const correctSku = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||'')).toLowerCase();
+    // is_side_seam 누락 보강
+    if (typeof r.is_side_seam !== 'boolean') {
+      r.is_side_seam = (r.sku||'').toLowerCase().endsWith('+ss');
+    }
+    const base = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||'')).toLowerCase();
+    const correctSku = r.is_side_seam ? `${base}+ss` : base;
     // SKU 누락 또는 잘못된 SKU (사용자가 lock 안 했고, 자동 룰과 다름)
     if (!r.sku || (!r.sku_locked && r.sku !== correctSku)) {
       r.sku = correctSku;
@@ -36865,6 +36871,7 @@ async function parseTransitExcel(input) {
             size: sz,
             sku: sku,                              // 자동 생성, 사용자 수정 가능
             sku_status: 'unchecked',               // unchecked / found / not_found
+            is_side_seam: false,                   // SS 체크박스 (default off)
             qty_dz: dz,
             qty_boxes: boxes,
             ppb: pcsPerBox,
@@ -36942,37 +36949,41 @@ function renderTransitEditTable() {
         ${srcRow}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
-        <input value="${r.style_number}" onchange="onTransitStyleColorSizeChange(${i}, 'style_number', this.value)"
+        <input value="${r.style_number}" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'style_number', this.value)"
           style="width:58px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
-        <input value="${r.color}" onchange="onTransitStyleColorSizeChange(${i}, 'color', this.value)"
+        <input value="${r.color}" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'color', this.value)"
           style="width:140px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;background:#fff;"/>
       </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:${r.is_side_seam?'#fef3c7':'transparent'};" title="Side Seam (SKU 에 +ss 추가)">
+        <input type="checkbox" ${r.is_side_seam?'checked':''} onchange="onTransitSideSeamChange(${i}, this.checked)"
+          style="width:16px;height:16px;cursor:pointer;accent-color:#d97706;"/>
+      </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
-        <input value="${r.size}" onchange="onTransitStyleColorSizeChange(${i}, 'size', this.value)"
+        <input value="${r.size}" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'size', this.value)"
           style="width:42px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;background:#f0fdf4;" title="${skuStatusTitle}">
         <div style="display:flex;align-items:center;gap:3px;">
           <span style="font-size:11px;color:${skuIconColor};font-weight:700;width:14px;flex-shrink:0;text-align:center;">${skuIcon}</span>
-          <input value="${r.sku||''}" onchange="onTransitSkuChange(${i}, this.value)"
+          <input value="${r.sku||''}" onfocus="this.select()" onchange="onTransitSkuChange(${i}, this.value)"
             style="width:100%;min-width:120px;height:26px;border:1px solid ${skuBorderColor};border-radius:3px;padding:0 4px;font-size:10px;font-family:'IBM Plex Mono',monospace;background:${skuBg};color:${skuColor};"/>
         </div>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
-        <input type="number" value="${boxes}" min="0"
+        <input type="number" value="${boxes}" min="0" onfocus="this.select()"
           onchange="onTransitBoxesChange(${i}, this.value)"
           style="width:54px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;background:#fffde7;text-align:center;" id="transit-ppb-cell-${i}">
-        <input type="number" value="${ppb}" min="1"
+        <input type="number" value="${ppb}" min="1" onfocus="this.select()"
           onchange="onTransitPpbChange(${i}, this.value)"
           style="width:54px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:${isNonStd?'#fff8e1':'#fff'};font-weight:${isNonStd?'700':'400'};color:${isNonStd?'#e65100':'inherit'};"/>
         ${isNonStd ? '<span style="font-size:9px;color:#e65100;">⚠️비표준</span>' : ''}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;" id="transit-pcs-${i}">
-        <input type="number" value="${r.qty_pcs||0}" min="0"
+        <input type="number" value="${r.qty_pcs||0}" min="0" onfocus="this.select()"
           onchange="onTransitPcsChange(${i}, this.value)"
           style="width:70px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:12px;font-weight:700;text-align:center;background:${isNonStd?'#fff8e1':'#fff'};color:${isNonStd?'#e65100':'inherit'};"/>
       </td>
@@ -36994,6 +37005,19 @@ function onTransitReviewedChange(i, checked) {
   saveTransitDraft();
 }
 
+// Side Seam 체크 변경 — SKU 자동 +ss 추가/제거
+async function onTransitSideSeamChange(i, checked) {
+  const r = _transitParsed.rows[i];
+  if (!r) return;
+  r.is_side_seam = !!checked;
+  // 사용자가 SKU 직접 수정한 적 있으면 자동 변경 안 함
+  if (!r.sku_locked) {
+    const base = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||'')).toLowerCase();
+    r.sku = checked ? `${base}+ss` : base;
+  }
+  await checkSingleTransitSku(i);
+}
+
 // Style/Color/Size 변경 — SKU 자동 재생성 + DB 매칭 다시
 async function onTransitStyleColorSizeChange(i, field, val) {
   const r = _transitParsed.rows[i];
@@ -37001,7 +37025,8 @@ async function onTransitStyleColorSizeChange(i, field, val) {
   r[field] = val;
   // 사용자가 SKU 를 직접 수정한 적 있으면 자동 재생성 안 함 (sku_locked = true)
   if (!r.sku_locked) {
-    r.sku = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||'')).toLowerCase();
+    const base = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||'')).toLowerCase();
+    r.sku = r.is_side_seam ? `${base}+ss` : base;
   }
   await checkSingleTransitSku(i);
 }
@@ -37357,6 +37382,7 @@ function addTransitRow() {
     ship_date: _transitParsed.shipDate,
     style_number: '', color: '', size: '', 
     sku: '', sku_status: 'unchecked', sku_locked: false,
+    is_side_seam: false,
     qty_pcs: 0, qty_boxes: 0, qty_dz: 0,
     ppb: 72, std_ppb: 72, valid_ppbs: [72], is_nonstandard: false,
     transit_type: 'haiti_sc', status: 'in_transit'
@@ -37392,6 +37418,7 @@ async function saveTransitData() {
     color: r.color,
     size: r.size,
     sku: r.sku || null,
+    is_side_seam: r.is_side_seam || false,
     qty_dz: r.qty_dz || 0,
     qty_boxes: r.qty_boxes || 0,
     ppb: r.ppb || 72,
