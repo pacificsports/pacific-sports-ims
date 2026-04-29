@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_122528 — In Transit 그룹 접기/펼치기 + 자체 스크롤 + sticky 헤더 (여러 컨테이너 보기 편하게) -->
+<!-- BUILD: 20260429_131727 — Receive 시스템 새 디자인: SC bin / CA 직송 / 보류 + 다중 선택 일괄 작업 + SKU 기반 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4136,40 +4136,64 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
 
     <!-- Receive Modal (도착 후 Packing List 대조 + Location 지정) -->
     <div class="modal-overlay" id="transit-receive-modal" style="display:none;">
-      <div class="modal-box" style="max-width:980px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
+      <div class="modal-box" style="max-width:1400px;width:98vw;max-height:96vh;display:flex;flex-direction:column;">
         <div class="modal-head" style="background:#1a5c2a;">
-          <span class="modal-title" style="color:#fff;">📦 도착 처리 — Packing List 대조 & Location 지정</span>
+          <span class="modal-title" style="color:#fff;">📦 도착 처리 — Receive & Location 지정</span>
           <button class="modal-close" onclick="document.getElementById('transit-receive-modal').style.display='none'">✕</button>
         </div>
-        <div style="padding:16px;overflow-y:auto;flex:1;">
-          <div id="receive-invoice-info" style="margin-bottom:12px;padding:10px 14px;background:#f0fff4;border-radius:8px;font-size:12px;"></div>
-          <div style="font-size:11px;color:var(--text3);margin-bottom:10px;">
-            💡 <b>수량을 실제 받은 수량으로 수정</b>하고, 각 라인에 <b>Location(Bin)</b>을 지정한 후 Post하세요.
+        <div style="padding:14px 16px;overflow-y:auto;flex:1;">
+          <!-- Invoice 정보 + 통계 -->
+          <div id="receive-invoice-info" style="margin-bottom:10px;padding:10px 14px;background:#f0fff4;border-radius:8px;font-size:12px;"></div>
+          
+          <!-- 일괄 작업 영역 -->
+          <div style="margin-bottom:12px;padding:12px 14px;background:#fff8e1;border:1px solid #f9a825;border-radius:8px;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;">
+              <span style="font-weight:700;color:#7c2d12;">🎯 선택된 <b id="recv-selected-count">0</b>개 라인 일괄 작업:</span>
+              <button class="btn btn-sm" onclick="recvBulkSelectAll()">전체 체크</button>
+              <button class="btn btn-sm" onclick="recvBulkSelectNone()">전체 해제</button>
+              <span style="color:var(--text3);">|</span>
+              <span style="color:#7c2d12;">목적지:</span>
+              <input id="recv-bulk-bin" placeholder="Bin (예: H1130, 2P-7)" style="width:130px;height:28px;border:1px solid #fbc02d;border-radius:4px;padding:0 8px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+              <button class="btn btn-sm" style="background:#1565c0;color:#fff;" onclick="recvBulkApplyBin()">📍 SC bin 으로 적용</button>
+              <span style="color:var(--text3);">또는</span>
+              <button class="btn btn-sm" style="background:#7b1fa2;color:#fff;" onclick="recvBulkApplyCa()">🚚 CA 직송으로 적용</button>
+              <button class="btn btn-sm" onclick="recvBulkClear()">↺ 선택된 거 초기화</button>
+            </div>
           </div>
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          
+          <!-- 진행 상황 -->
+          <div style="margin-bottom:8px;font-size:11px;color:var(--text2);">
+            <span id="recv-progress">⏳ 처리 안 된 라인: <b>0</b> / 0</span>
+            <span style="margin-left:14px;">📍 SC: <b id="recv-progress-sc">0</b></span>
+            <span style="margin-left:8px;">🚚 CA: <b id="recv-progress-ca">0</b></span>
+            <span style="margin-left:8px;color:#9a3412;">⏸ 보류: <b id="recv-progress-hold">0</b></span>
+          </div>
+          
+          <!-- 테이블 -->
+          <div id="recv-table-wrap" style="border:1px solid #c8e6c9;border-radius:6px;overflow:auto;max-height:calc(96vh - 280px);">
+            <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;">
               <thead>
-                <tr style="background:#e8f5e9;position:sticky;top:0;">
-                  <th style="padding:7px 8px;text-align:left;border:1px solid #c8e6c9;">Style</th>
-                  <th style="padding:7px 8px;text-align:left;border:1px solid #c8e6c9;">Color</th>
-                  <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;">Size</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;">예정 DZ</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;">예정 Pcs</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;background:#fff9c4;">실제 DZ</th>
-                  <th style="padding:7px 8px;text-align:right;border:1px solid #c8e6c9;background:#fff9c4;">실제 Pcs</th>
-                  <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;background:#e3f2fd;">Location (Bin)</th>
-                  <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;background:#fff9c4;">pcs/box</th>
-                  <th style="padding:7px 8px;text-align:center;border:1px solid #c8e6c9;">차이</th>
+                <tr>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 4px;text-align:center;background:#a5d6a7;border:1px solid #81c784;width:32px;"><input type="checkbox" id="recv-check-all" onchange="recvToggleAll(this.checked)" style="cursor:pointer;width:14px;height:14px;"></th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:left;background:#a5d6a7;border:1px solid #81c784;">Style</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:left;background:#a5d6a7;border:1px solid #81c784;">Color</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:center;background:#a5d6a7;border:1px solid #81c784;">Size</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:left;background:#bbf7d0;border:1px solid #81c784;">SKU</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:right;background:#a5d6a7;border:1px solid #81c784;">예상 박스</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:right;background:#fff9c4;border:1px solid #81c784;">실제 박스</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:right;background:#fde68a;border:1px solid #81c784;">pcs/box</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:right;background:#fff9c4;border:1px solid #81c784;">실제 Pcs</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:center;background:#e3f2fd;border:1px solid #81c784;">목적지</th>
+                  <th style="position:sticky;top:0;z-index:3;padding:6px 8px;text-align:center;background:#a5d6a7;border:1px solid #81c784;">상태</th>
                 </tr>
               </thead>
               <tbody id="receive-lines-body"></tbody>
             </table>
           </div>
-          <div id="receive-diff-summary" style="margin-top:10px;padding:10px;border-radius:6px;font-size:12px;"></div>
         </div>
         <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;">
           <button class="btn" onclick="document.getElementById('transit-receive-modal').style.display='none'">취소</button>
-          <button class="btn btn-primary" style="background:#1a5c2a;" onclick="postTransitReceiving()">✅ Post — 재고 반영</button>
+          <button class="btn btn-primary" style="background:#1a5c2a;color:#fff;" onclick="postTransitReceiving()">✅ Post — 재고 반영 + 배송 시작</button>
         </div>
       </div>
     </div>
@@ -37513,153 +37537,399 @@ async function saveTransitData() {
 }
 
 // ── 도착 처리 → Receive 모달
+// ── Receive 시스템 ──
+// 메모리 상태: 사용자가 입력한 값들 (라인별)
+let _recvLines = [];  // [{transitRow, qty_boxes, qty_pcs, ppb, dest, bin, status}]
+
 async function openTransitReceive(invoiceNo) {
   const { data: rows } = await db.from('in_transit')
-    .select('*').eq('invoice_no', invoiceNo).eq('status','in_transit');
-  if (!rows || !rows.length) return;
+    .select('*').eq('invoice_no', invoiceNo).eq('status','in_transit')
+    .order('style_number').order('color').order('size');
+  if (!rows || !rows.length) { alert('라인이 없습니다.'); return; }
 
   const g = rows[0];
+  const totalBoxes = rows.reduce((s, r) => s + (r.qty_boxes || 0), 0);
+  const totalPcs = rows.reduce((s, r) => s + (r.qty_pcs || 0), 0);
+  
   document.getElementById('receive-invoice-info').innerHTML =
-    '<b>Invoice:</b> ' + invoiceNo +
-    ' &nbsp;|&nbsp; <b>Container:</b> ' + (g.container_no||'—') +
-    ' &nbsp;|&nbsp; <b>Ship Date:</b> ' + (g.ship_date||'—') +
-    ' &nbsp;|&nbsp; <b>ETA:</b> ' + (g.eta||'—');
+    `<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
+      <div><b>Invoice:</b> ${invoiceNo}</div>
+      <div><b>Container:</b> ${g.container_no||'—'}</div>
+      <div><b>Ship Date:</b> ${g.ship_date||'—'}</div>
+      <div><b>ETA:</b> ${g.eta||'—'}</div>
+      <div style="margin-left:auto;font-size:11px;color:var(--text2);background:#fff;padding:3px 10px;border-radius:10px;border:1px solid #c8e6c9;">
+        📦 <b>${totalBoxes}</b> 박스 · <b>${totalPcs.toLocaleString()}</b> pcs · ${rows.length} 라인
+      </div>
+    </div>`;
 
-  // Receiving 라인 렌더
-  const tbody = document.getElementById('receive-lines-body');
-  tbody.innerHTML = rows.map((r, i) => {
-    const diffId = 'recv-diff-' + i;
-    return `<tr id="recv-row-${i}" data-id="${r.id}">
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${r.style_number}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-size:11px;">${r.color}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:center;font-size:11px;">${r.size}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;font-size:11px;color:var(--text3);">${r.qty_dz||'—'}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;font-size:11px;color:var(--text3);">${(r.qty_pcs||0).toLocaleString()}</td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#fffde7;">
-        <input type="number" value="${r.qty_dz||0}" min="0" id="recv-dz-${i}"
-          onchange="updateRecvPcs(${i}, ${r.qty_pcs||0})"
-          style="width:55px;height:26px;border:1px solid #f9a825;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;"/>
-      </td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;background:#fffde7;" id="recv-pcs-${i}">
-        <b>${(r.qty_pcs||0).toLocaleString()}</b>
-      </td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#e3f2fd;">
-        <input value="" placeholder="K2B-7" id="recv-loc-${i}"
-          style="width:80px;height:26px;border:1px solid #90caf9;border-radius:3px;padding:0 6px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;"/>
-      </td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#fffde7;text-align:center;">
-        <input type="number" value="${r.ppb||72}" min="1" id="recv-ppb-${i}"
-          style="width:50px;height:26px;border:1px solid ${(r.is_nonstandard)?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:${r.is_nonstandard?'#fff8e1':'#fff'};font-weight:${r.is_nonstandard?'700':'400'};"/>
-      </td>
-      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:center;" id="${diffId}">—</td>
-    </tr>`;
-  }).join('');
-
-  // 인보이스 번호 저장
+  // 메모리 초기화 — 각 라인 상태
+  _recvLines = rows.map(r => ({
+    id: r.id,
+    style_number: r.style_number,
+    color: r.color,
+    size: r.size,
+    sku: r.sku || '',
+    expected_boxes: r.qty_boxes || 0,
+    expected_pcs: r.qty_pcs || 0,
+    actual_boxes: r.qty_boxes || 0,    // default = 예상 박스
+    ppb: r.ppb || 72,
+    actual_pcs: r.qty_pcs || 0,
+    is_nonstandard: !!r.is_nonstandard,
+    dest: '',                            // '', 'sc', 'ca', 'hold'
+    bin: '',
+    selected: false
+  }));
+  
   document.getElementById('transit-receive-modal').dataset.invoiceNo = invoiceNo;
   document.getElementById('transit-receive-modal').style.display = 'flex';
-  document.getElementById('receive-diff-summary').innerHTML = '';
+  renderRecvTable();
+  recvUpdateProgress();
 }
 
-function updateRecvPcs(i, origPcs) {
-  const dz = parseInt(document.getElementById('recv-dz-' + i).value)||0;
-  const pcs = dz * 12;
-  document.getElementById('recv-pcs-' + i).innerHTML = '<b>' + pcs.toLocaleString() + '</b>';
-  const diff = pcs - origPcs;
-  const diffEl = document.getElementById('recv-diff-' + i);
-  if (diffEl) {
-    if (diff === 0) diffEl.innerHTML = '<span style="color:#2e7d32;">✓</span>';
-    else if (diff > 0) diffEl.innerHTML = '<span style="color:#1565c0;font-weight:700;">+' + diff + '</span>';
-    else diffEl.innerHTML = '<span style="color:#c62828;font-weight:700;">' + diff + '</span>';
+function renderRecvTable() {
+  const tbody = document.getElementById('receive-lines-body');
+  if (!tbody) return;
+  tbody.innerHTML = _recvLines.map((l, i) => {
+    const diff = l.actual_pcs - l.expected_pcs;
+    const diffStr = diff === 0 ? '' : (diff > 0 ? `+${diff}` : `${diff}`);
+    const diffColor = diff === 0 ? '' : (diff > 0 ? '#1565c0' : '#c62828');
+    
+    let statusBadge = '';
+    if (l.dest === 'sc') {
+      statusBadge = `<span style="background:#1565c0;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">📍 SC: ${l.bin||'?'}</span>`;
+    } else if (l.dest === 'ca') {
+      statusBadge = `<span style="background:#7b1fa2;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">🚚 CA</span>`;
+    } else if (l.dest === 'hold') {
+      statusBadge = `<span style="background:#9a3412;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">⏸ 보류</span>`;
+    } else {
+      statusBadge = `<span style="color:var(--text3);font-size:11px;">⏳ 미정</span>`;
+    }
+    
+    const rowBg = l.selected ? '#fffde7' : (l.dest ? '#f1f8f1' : '');
+    
+    return `<tr id="recv-row-${i}" style="background:${rowBg};border-bottom:1px solid #e8f5e9;">
+      <td style="padding:4px;text-align:center;border:1px solid #e8f5e9;">
+        <input type="checkbox" ${l.selected?'checked':''} onchange="recvToggleLine(${i}, this.checked)" style="cursor:pointer;width:14px;height:14px;">
+      </td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${l.style_number}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-size:11px;">${l.color}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:center;font-size:11px;">${l.size}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${l.sku||'—'}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;font-size:11px;color:var(--text3);">${l.expected_boxes}</td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;background:#fffde7;text-align:right;">
+        <input type="number" value="${l.actual_boxes}" min="0" onfocus="this.select()" onchange="recvOnBoxChange(${i}, this.value)"
+          style="width:54px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
+      </td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;background:${l.is_nonstandard?'#fff8e1':'#fff9c4'};">
+        <input type="number" value="${l.ppb}" min="1" onfocus="this.select()" onchange="recvOnPpbChange(${i}, this.value)"
+          style="width:50px;height:24px;border:1px solid ${l.is_nonstandard?'#f9a825':'#fbc02d'};border-radius:3px;padding:0 4px;font-size:11px;text-align:right;font-weight:${l.is_nonstandard?'700':'400'};color:${l.is_nonstandard?'#e65100':'inherit'};">
+      </td>
+      <td style="padding:5px 8px;border:1px solid #e8f5e9;text-align:right;background:#fffde7;font-weight:700;">
+        ${l.actual_pcs.toLocaleString()}
+        ${diff !== 0 ? `<span style="margin-left:4px;font-size:10px;color:${diffColor};">${diffStr}</span>` : ''}
+      </td>
+      <td style="padding:4px 6px;border:1px solid #e8f5e9;background:#e3f2fd;text-align:center;">
+        <div style="display:flex;gap:3px;align-items:center;">
+          <select onchange="recvOnDestChange(${i}, this.value)" style="height:24px;font-size:11px;border:1px solid #90caf9;border-radius:3px;padding:0 2px;">
+            <option value="" ${!l.dest?'selected':''}>—</option>
+            <option value="sc" ${l.dest==='sc'?'selected':''}>📍 SC bin</option>
+            <option value="ca" ${l.dest==='ca'?'selected':''}>🚚 CA</option>
+            <option value="hold" ${l.dest==='hold'?'selected':''}>⏸ 보류</option>
+          </select>
+          ${l.dest === 'sc' ? `<input value="${l.bin||''}" placeholder="bin" onfocus="this.select()" onchange="recvOnBinChange(${i}, this.value)" style="width:64px;height:24px;border:1px solid #90caf9;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;">` : ''}
+        </div>
+      </td>
+      <td style="padding:4px;border:1px solid #e8f5e9;text-align:center;">${statusBadge}</td>
+    </tr>`;
+  }).join('');
+  recvUpdateProgress();
+}
+
+// 박스 변경 → pcs 자동 재계산
+function recvOnBoxChange(i, val) {
+  const l = _recvLines[i];
+  l.actual_boxes = parseInt(val) || 0;
+  l.actual_pcs = l.actual_boxes * l.ppb;
+  renderRecvTable();
+}
+
+// ppb 변경 → pcs 자동 재계산 + 비표준 마크
+function recvOnPpbChange(i, val) {
+  const l = _recvLines[i];
+  l.ppb = parseInt(val) || 1;
+  l.actual_pcs = l.actual_boxes * l.ppb;
+  l.is_nonstandard = (l.ppb !== 72 && l.ppb !== 60 && l.ppb !== 48);
+  renderRecvTable();
+}
+
+// 목적지 변경
+function recvOnDestChange(i, val) {
+  _recvLines[i].dest = val;
+  if (val !== 'sc') _recvLines[i].bin = '';
+  renderRecvTable();
+}
+
+// bin 변경
+function recvOnBinChange(i, val) {
+  _recvLines[i].bin = (val||'').trim().toUpperCase();
+  recvUpdateProgress();
+}
+
+// 라인 체크
+function recvToggleLine(i, checked) {
+  _recvLines[i].selected = !!checked;
+  recvUpdateProgress();
+  // header check 도 업데이트
+  const allChecked = _recvLines.every(l => l.selected);
+  const someChecked = _recvLines.some(l => l.selected);
+  const headerCheck = document.getElementById('recv-check-all');
+  if (headerCheck) {
+    headerCheck.checked = allChecked;
+    headerCheck.indeterminate = someChecked && !allChecked;
   }
+  // row 배경색 업데이트만
+  const row = document.getElementById('recv-row-' + i);
+  if (row) {
+    const l = _recvLines[i];
+    row.style.background = l.selected ? '#fffde7' : (l.dest ? '#f1f8f1' : '');
+  }
+}
+
+// 헤더 체크박스
+function recvToggleAll(checked) {
+  _recvLines.forEach(l => { l.selected = !!checked; });
+  renderRecvTable();
+}
+
+// 일괄 작업: 전체 체크
+function recvBulkSelectAll() {
+  _recvLines.forEach(l => { l.selected = true; });
+  renderRecvTable();
+}
+
+function recvBulkSelectNone() {
+  _recvLines.forEach(l => { l.selected = false; });
+  renderRecvTable();
+}
+
+// 일괄: 선택된 라인 모두 SC bin 으로
+function recvBulkApplyBin() {
+  const bin = (document.getElementById('recv-bulk-bin').value||'').trim().toUpperCase();
+  if (!bin) { alert('Bin 코드를 먼저 입력해주세요.'); return; }
+  const selected = _recvLines.filter(l => l.selected);
+  if (selected.length === 0) { alert('선택된 라인이 없습니다.'); return; }
+  selected.forEach(l => {
+    l.dest = 'sc';
+    l.bin = bin;
+  });
+  showToast(`✅ ${selected.length}개 라인 → SC ${bin}`);
+  renderRecvTable();
+}
+
+// 일괄: 선택된 라인 모두 CA 직송
+function recvBulkApplyCa() {
+  const selected = _recvLines.filter(l => l.selected);
+  if (selected.length === 0) { alert('선택된 라인이 없습니다.'); return; }
+  if (!confirm(`${selected.length}개 라인을 CA 직송으로 보내시겠습니까?\n(SC 입고 안 하고 바로 SC→CA 운송 중으로 등록)`)) return;
+  selected.forEach(l => {
+    l.dest = 'ca';
+    l.bin = '';
+  });
+  showToast(`🚚 ${selected.length}개 라인 → CA 직송`);
+  renderRecvTable();
+}
+
+// 일괄: 선택된 라인 초기화
+function recvBulkClear() {
+  const selected = _recvLines.filter(l => l.selected);
+  if (selected.length === 0) { alert('선택된 라인이 없습니다.'); return; }
+  selected.forEach(l => {
+    l.dest = '';
+    l.bin = '';
+  });
+  renderRecvTable();
+}
+
+// 진행 상황 업데이트
+function recvUpdateProgress() {
+  if (!_recvLines.length) return;
+  const sc = _recvLines.filter(l => l.dest === 'sc' && l.bin).length;
+  const ca = _recvLines.filter(l => l.dest === 'ca').length;
+  const hold = _recvLines.filter(l => l.dest === 'hold').length;
+  const pending = _recvLines.length - sc - ca - hold;
+  const selectedCount = _recvLines.filter(l => l.selected).length;
+  
+  const progEl = document.getElementById('recv-progress');
+  if (progEl) progEl.innerHTML = `⏳ 처리 안 된 라인: <b>${pending}</b> / ${_recvLines.length}`;
+  const scEl = document.getElementById('recv-progress-sc');
+  if (scEl) scEl.textContent = sc;
+  const caEl = document.getElementById('recv-progress-ca');
+  if (caEl) caEl.textContent = ca;
+  const holdEl = document.getElementById('recv-progress-hold');
+  if (holdEl) holdEl.textContent = hold;
+  const selEl = document.getElementById('recv-selected-count');
+  if (selEl) selEl.textContent = selectedCount;
 }
 
 // ── Post — 재고 반영
 async function postTransitReceiving() {
   const modal = document.getElementById('transit-receive-modal');
   const invoiceNo = modal.dataset.invoiceNo;
-  const rows = document.querySelectorAll('#receive-lines-body tr');
-
-  let posted = 0, errors = [];
+  
+  // 검증
+  const pending = _recvLines.filter(l => !l.dest);
+  if (pending.length > 0) {
+    if (!confirm(`⚠️ 처리 안 된 라인 ${pending.length}개가 있습니다.\n\n이 라인들은 in_transit 에 그대로 남습니다.\n계속 진행하시겠습니까?`)) return;
+  }
+  
+  const scLines = _recvLines.filter(l => l.dest === 'sc' && l.bin);
+  const caLines = _recvLines.filter(l => l.dest === 'ca');
+  const holdLines = _recvLines.filter(l => l.dest === 'hold');
+  
+  // SC bin 미입력 검증
+  const scNoBin = _recvLines.filter(l => l.dest === 'sc' && !l.bin);
+  if (scNoBin.length > 0) {
+    alert(`⚠️ SC 로 보내려는 라인 중 ${scNoBin.length}개가 bin 미입력입니다.\n각 라인의 bin 을 입력하거나 일괄 작업을 사용해주세요.`);
+    return;
+  }
+  
+  if (scLines.length === 0 && caLines.length === 0 && holdLines.length === 0) {
+    alert('처리할 라인이 없습니다. 각 라인의 목적지를 지정해주세요.');
+    return;
+  }
+  
+  // 최종 확인
+  let msg = `처리 요약:\n`;
+  msg += `\n📍 SC bin 입고: ${scLines.length}개 라인 (${scLines.reduce((s,l)=>s+l.actual_pcs,0).toLocaleString()} pcs)`;
+  msg += `\n🚚 CA 직송: ${caLines.length}개 라인 (${caLines.reduce((s,l)=>s+l.actual_pcs,0).toLocaleString()} pcs)`;
+  msg += `\n⏸ 보류: ${holdLines.length}개 라인`;
+  msg += `\n\n진행하시겠습니까?`;
+  if (!confirm(msg)) return;
+  
   const scWhObj = warehouses.find(w => w.code === 'SC');
-  if (!scWhObj) { alert('SC 창고를 찾을 수 없습니다.'); return; }
-
-  for (const row of rows) {
-    const i = row.id.replace('recv-row-','');
-    const id = row.dataset.id;
-    const dz = parseInt(document.getElementById('recv-dz-' + i)?.value)||0;
-    const pcs = dz * 12;
-    const loc = (document.getElementById('recv-loc-' + i)?.value||'').trim().toUpperCase();
-
-    if (!pcs) continue;
-    if (!loc) { errors.push('Row ' + i + ': Location 미입력'); continue; }
-
-    // in_transit row에서 style/color/size 가져오기
-    const { data: transitRow } = await db.from('in_transit').select('*').eq('id', id).maybeSingle();
-    if (!transitRow) continue;
-
-    // style_id 조회
-    const styleObj = styles.find(s => s.style_number === transitRow.style_number);
-
-    // SC inventory upsert (기존 location 있으면 qty 추가)
-    const { data: existing } = await db.from('inventory')
-      .select('id, qty_on_hand')
-      .eq('warehouse_id', scWhObj.id)
-      .eq('location', loc)
-      .eq('color', (transitRow.color||'').toUpperCase())
-      .eq('size', (transitRow.size||'').toUpperCase())
-      .maybeSingle();
-
-    const ppb = parseInt(document.getElementById('recv-ppb-' + i)?.value) || transitRow.ppb || 72;
-    const isNonStd = ppb !== 72;
-    if (existing) {
-      // ppb가 기존과 다르면 별도 row (비정규 박스)
-      const existingPpb = existing.pcs_per_box || 72;
-      if (ppb !== existingPpb && transitRow.is_nonstandard) {
+  const caWhObj = warehouses.find(w => w.code === 'CA');
+  if (!scWhObj || !caWhObj) { alert('SC 또는 CA 창고를 찾을 수 없습니다.'); return; }
+  
+  let scOk = 0, caOk = 0, holdOk = 0, errors = [];
+  const today = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  })();
+  
+  // 1. SC bin 입고
+  for (const l of scLines) {
+    try {
+      const styleObj = styles.find(s => s.style_number === l.style_number);
+      
+      // 같은 bin 에 같은 SKU 가 있으면 qty 추가, 없으면 새 row
+      const { data: existing } = await db.from('inventory')
+        .select('id, qty_on_hand, pcs_per_box')
+        .eq('warehouse_id', scWhObj.id)
+        .eq('location', l.bin)
+        .eq('sku', l.sku)
+        .maybeSingle();
+      
+      if (existing) {
+        // ppb 가 다르면 별도 row (비표준 박스)
+        if ((existing.pcs_per_box || 72) !== l.ppb) {
+          await db.from('inventory').insert({
+            warehouse_id: scWhObj.id,
+            style_id: styleObj?.id || null,
+            sku: l.sku,
+            color: l.color,
+            size: l.size,
+            location: l.bin,
+            qty_on_hand: l.actual_pcs,
+            qty_committed: 0,
+            pcs_per_box: l.ppb,
+            received_date: today
+          });
+        } else {
+          await db.from('inventory').update({
+            qty_on_hand: existing.qty_on_hand + l.actual_pcs
+          }).eq('id', existing.id);
+        }
+      } else {
         await db.from('inventory').insert({
           warehouse_id: scWhObj.id,
           style_id: styleObj?.id || null,
-          color: transitRow.color,
-          size: transitRow.size,
-          location: loc,
-          qty_on_hand: pcs,
+          sku: l.sku,
+          color: l.color,
+          size: l.size,
+          location: l.bin,
+          qty_on_hand: l.actual_pcs,
           qty_committed: 0,
-          pcs_per_box: ppb,
-          received_date: (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() 
+          pcs_per_box: l.ppb,
+          received_date: today
         });
-      } else {
-        await db.from('inventory').update({ qty_on_hand: existing.qty_on_hand + pcs }).eq('id', existing.id);
       }
-    } else {
-      await db.from('inventory').insert({
-        warehouse_id: scWhObj.id,
-        style_id: styleObj?.id || null,
-        color: transitRow.color,
-        size: transitRow.size,
-        location: loc,
-        qty_on_hand: pcs,
-        qty_committed: 0,
-        pcs_per_box: ppb,
-        received_date: (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() 
-      });
+      
+      // in_transit row → received
+      await db.from('in_transit').update({ status: 'received' }).eq('id', l.id);
+      
+      // Reserved 자동 재확보
+      const restored = await autoRestoreReserved(scWhObj.id, l.color, l.size, l.actual_pcs);
+      if (restored > 0) showToast(`🔒 ${restored} pcs → Reserved PO 재확보`);
+      
+      scOk++;
+    } catch (e) {
+      errors.push(`${l.style_number}/${l.color}/${l.size}: ${e.message}`);
     }
-    // ── Reserved 자동 재확보
-    const restored = await autoRestoreReserved(scWhObj.id, transitRow.color, transitRow.size, pcs);
-    if (restored > 0) showToast(`🔒 ${restored}pcs → Reserved PO 재확보 완료`);
-    posted++;
   }
-
-  if (errors.length) {
-    document.getElementById('receive-diff-summary').innerHTML =
-      '<div style="color:#c62828;padding:8px;background:#fff8f8;border-radius:4px;">⚠️ ' + errors.join('<br>') + '</div>';
-    return;
+  
+  // 2. CA 직송 — 새 in_transit row (sc_ca) 만들고 옛 거 status 'transferred'
+  for (const l of caLines) {
+    try {
+      // 새 sc_ca transit row
+      await db.from('in_transit').insert({
+        invoice_no: `${invoiceNo}-CA-${l.id}`.substring(0, 50),
+        container_no: null,
+        ship_date: today,
+        eta: null,
+        style_number: l.style_number,
+        color: l.color,
+        size: l.size,
+        sku: l.sku,
+        qty_dz: 0,
+        qty_boxes: l.actual_boxes,
+        ppb: l.ppb,
+        is_nonstandard: l.is_nonstandard,
+        qty_pcs: l.actual_pcs,
+        transit_type: 'sc_ca',
+        status: 'in_transit',
+        notes: `Direct from Haiti (${invoiceNo})`
+      });
+      
+      // 옛 row → transferred
+      await db.from('in_transit').update({ status: 'transferred' }).eq('id', l.id);
+      caOk++;
+    } catch (e) {
+      errors.push(`${l.style_number}/${l.color}/${l.size}: ${e.message}`);
+    }
   }
-
-  // in_transit 상태 → arrived
-  await db.from('in_transit').update({ status: 'arrived' }).eq('invoice_no', invoiceNo);
-
+  
+  // 3. 보류 — status 'on_hold'
+  for (const l of holdLines) {
+    try {
+      await db.from('in_transit').update({ status: 'on_hold' }).eq('id', l.id);
+      holdOk++;
+    } catch (e) {
+      errors.push(`${l.style_number}/${l.color}/${l.size}: ${e.message}`);
+    }
+  }
+  
+  // 결과
+  let resultMsg = `✅ 처리 완료\n\n`;
+  resultMsg += `📍 SC 입고: ${scOk}개\n`;
+  resultMsg += `🚚 CA 직송: ${caOk}개\n`;
+  resultMsg += `⏸ 보류: ${holdOk}개\n`;
+  if (errors.length > 0) {
+    resultMsg += `\n❌ 오류 ${errors.length}개:\n${errors.slice(0, 5).join('\n')}`;
+    if (errors.length > 5) resultMsg += `\n...외 ${errors.length-5}개`;
+  }
+  alert(resultMsg);
+  
   modal.style.display = 'none';
-  showToast('✅ ' + posted + '개 라인 재고 반영 완료!');
   await loadScInventory();
   loadInTransit();
 }
