@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_141732 — Receive 모달 + 라인 추가 + 모든 필드 수정 가능 + SKU 미등록 검증 + 안 들어온 라인 자동 보류 안내 -->
+<!-- BUILD: 20260429_142236 — Receive 모달 헤더 sticky + 자체 스크롤 + 새 라인 삭제 버튼 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4165,7 +4165,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           </div>
           
           <!-- 테이블 — 옛 InTransit upload 와 같은 구조 -->
-          <div style="border:1px solid #c8e6c9;border-radius:6px;overflow-x:auto;">
+          <div id="recv-table-wrap" style="border:1px solid #c8e6c9;border-radius:6px;max-height:calc(96vh - 240px);overflow:auto;background:#fff;">
             <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;" id="recv-edit-table">
               <thead>
                 <tr>
@@ -4180,6 +4180,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#fff9c4;">실제 Pcs</th>
                   <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#e3f2fd;">목적지</th>
                   <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;border:1px solid #cdd;background:#e3f2fd;">Bin</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:6px 4px;text-align:center;border:1px solid #cdd;background:#dbeafe;width:36px;">×</th>
                 </tr>
               </thead>
               <tbody id="recv-trans-body"></tbody>
@@ -37666,10 +37667,22 @@ function renderRecvTable() {
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:#e3f2fd;">
         ${l.dest === 'sc' ? `<input value="${l.bin||''}" placeholder="bin" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnBinChange(${i}, this.value)" style="width:80px;height:26px;border:1px solid #90caf9;border-radius:3px;padding:0 6px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;">` : '<span style="color:var(--text3);font-size:10px;">—</span>'}
       </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
+        ${isNew ? `<button onclick="recvDeleteLine(${i})" title="새 라인 삭제" style="border:none;background:none;color:#e53935;cursor:pointer;font-size:14px;font-weight:700;">✕</button>` : '<span style="color:#d1d5db;font-size:11px;" title="원본 라인은 삭제 불가 — 보류로 처리하세요">—</span>'}
+      </td>
     </tr>`;
   }).join('');
   
   recvUpdateProgress();
+}
+
+// 새 라인 삭제 (in_transit DB 영향 없음)
+function recvDeleteLine(i) {
+  const l = _recvLines[i];
+  if (!l || !l.is_new) return;
+  if (!confirm(`이 새 라인을 삭제하시겠습니까?\n${l.style_number||'?'} / ${l.color||'?'} / ${l.size||'?'}`)) return;
+  _recvLines.splice(i, 1);
+  renderRecvTable();
 }
 
 // Style/Color/Size/SKU 변경
