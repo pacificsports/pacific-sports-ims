@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_120119 — 소수점 dz 자동 파싱 (parseFloat) — 2.91 dz × 12 = 35 pcs, 1 box, 35 ppb 정확히 -->
+<!-- BUILD: 20260429_121855 — In Transit 화면: DZ → 박스, SKU 추가, ppb 도 보임. 헤더에 총 박스/Pcs/라인 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -36490,6 +36490,10 @@ function renderTransitTable(elId, rows) {
       styleMap[k] += r.qty_pcs || 0;
     });
 
+    // 그룹 합계
+    const totalBoxes = g.rows.reduce((s, r) => s + (r.qty_boxes || 0), 0);
+    const totalPcs = g.rows.reduce((s, r) => s + (r.qty_pcs || 0), 0);
+
     html += `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden;">
       <div style="padding:10px 14px;background:#f0f7ff;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
         <div>
@@ -36498,6 +36502,9 @@ function renderTransitTable(elId, rows) {
         </div>
         <div style="font-size:11px;color:var(--text3);">출항 ${g.ship_date||'—'}</div>
         <div style="font-weight:700;font-size:12px;color:${etaColor};">🗓 ETA: ${g.eta||'미정'} (${etaTxt})</div>
+        <div style="font-size:11px;color:var(--text2);background:#fff;padding:2px 8px;border-radius:10px;border:1px solid #e0e0e0;">
+          📦 <b>${totalBoxes}</b> 박스 · <b>${totalPcs.toLocaleString()}</b> pcs · ${g.rows.length} 라인
+        </div>
         <div style="margin-left:auto;display:flex;gap:6px;">
           <button class="btn btn-sm" style="background:#1a5c2a;color:#fff;" onclick="openTransitReceive('${g.invoice_no}')">📦 도착 처리 & Receive</button>
           <button class="btn btn-sm" onclick="editTransitEta('${g.invoice_no}')">✏️ ETA 수정</button>
@@ -36509,18 +36516,25 @@ function renderTransitTable(elId, rows) {
             <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);">Style</th>
             <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);">Color</th>
             <th style="padding:6px 10px;text-align:center;border-bottom:1px solid var(--border);">Size</th>
-            <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">DZ</th>
+            <th style="padding:6px 10px;text-align:left;border-bottom:1px solid var(--border);background:#f0fdf4;">SKU</th>
+            <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">박스</th>
+            <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">pcs/box</th>
             <th style="padding:6px 10px;text-align:right;border-bottom:1px solid var(--border);">Pcs</th>
           </tr>
         </thead>
         <tbody>
-          ${g.rows.map(r => `<tr style="border-bottom:1px solid #f5f5f5;">
-            <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;">#${r.style_number}</td>
-            <td style="padding:5px 10px;">${r.color}</td>
-            <td style="padding:5px 10px;text-align:center;">${r.size}</td>
-            <td style="padding:5px 10px;text-align:right;">${r.qty_dz||'—'}</td>
-            <td style="padding:5px 10px;text-align:right;font-weight:700;">${(r.qty_pcs||0).toLocaleString()}</td>
-          </tr>`).join('')}
+          ${g.rows.map(r => {
+            const isNs = r.is_nonstandard;
+            return `<tr style="border-bottom:1px solid #f5f5f5;${isNs?'background:#fff8e1;':''}">
+              <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;">#${r.style_number}</td>
+              <td style="padding:5px 10px;">${r.color}</td>
+              <td style="padding:5px 10px;text-align:center;">${r.size}</td>
+              <td style="padding:5px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${r.sku||'—'}</td>
+              <td style="padding:5px 10px;text-align:right;font-weight:700;">${r.qty_boxes||0}</td>
+              <td style="padding:5px 10px;text-align:right;color:${isNs?'#e65100':'inherit'};font-weight:${isNs?'700':'400'};">${r.ppb||'—'}${isNs?' ⚠️':''}</td>
+              <td style="padding:5px 10px;text-align:right;font-weight:700;">${(r.qty_pcs||0).toLocaleString()}</td>
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>
     </div>`;
