@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_144202 — 새 라인 삭제 시 confirm 없이 바로 삭제 -->
+<!-- BUILD: 20260429_170111 — SC→CA Shipment Builder + Pallet 시스템 + Packing List + CA Receive (통째로/해체) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4054,7 +4054,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <div class="card-head">
           <span class="card-title">🚛 SC → CA Truck (운송 중)</span>
           <span class="card-info" id="transit-ca-count"></span>
-          <button class="btn btn-sm btn-primary" onclick="openAddScCaTransit()" style="margin-left:auto;">+ SC→CA 추가</button>
+          <button class="btn btn-sm btn-primary" onclick="openShipmentBuilder()" style="margin-left:auto;">+ SC→CA Shipment</button>
         </div>
         <div id="transit-ca-body">
           <div class="empty">로딩 중...</div>
@@ -4194,11 +4194,168 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       </div>
     </div>
 
+    <!-- ── 새 Shipment Builder 모달 (SC → CA 운송 단위) ── -->
+    <div class="modal-overlay" id="shipment-builder-modal" style="display:none;">
+      <div class="modal-box" style="max-width:1400px;width:98vw;max-height:96vh;display:flex;flex-direction:column;">
+        <div class="modal-head" style="background:#7b1fa2;">
+          <span class="modal-title" style="color:#fff;">🚛 SC → CA Shipment Builder</span>
+          <button class="modal-close" onclick="closeShipmentBuilder()">✕</button>
+        </div>
+        <div style="padding:14px 16px;overflow-y:auto;flex:1;">
+          <!-- Shipment 헤더 정보 -->
+          <div style="background:#fef3f9;border:1px solid #d8b4fe;border-radius:8px;padding:12px;margin-bottom:12px;">
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:12px;">
+              <div>
+                <label style="font-size:10px;color:var(--text3);">Shipment #</label>
+                <input id="ship-no" placeholder="자동" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);">출발일 *</label>
+                <input id="ship-date" type="date" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);">ETA</label>
+                <input id="ship-eta" type="date" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);">Seal #</label>
+                <input id="ship-seal" placeholder="SEAL12345" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;font-family:'IBM Plex Mono',monospace;">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);">Carrier</label>
+                <input id="ship-carrier" placeholder="OCS / GAU / 기타" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);">Driver</label>
+                <input id="ship-driver" placeholder="John Doe" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);">Phone</label>
+                <input id="ship-phone" placeholder="(555) 555-1234" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
+              </div>
+              <div>
+                <label style="font-size:10px;color:var(--text3);">Truck #</label>
+                <input id="ship-truck" placeholder="123" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
+              </div>
+            </div>
+            <div style="margin-top:8px;">
+              <label style="font-size:10px;color:var(--text3);">메모</label>
+              <input id="ship-notes" placeholder="기타 사항" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
+            </div>
+          </div>
+          
+          <!-- 작업 버튼 -->
+          <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+            <button class="btn" style="background:#1565c0;color:#fff;" onclick="openSelectScInventory()">📦 SC Inventory 에서 선택</button>
+            <button class="btn" onclick="addManualLineToShipment()">+ 수동 라인 추가</button>
+            <button class="btn" onclick="addNewPallet()">📍 + Pallet 추가</button>
+            <span style="margin-left:auto;font-size:11px;color:var(--text2);">
+              📦 <b id="ship-pallet-count">0</b> 파렛 · <b id="ship-line-count">0</b> 라인 · <b id="ship-pcs-count">0</b> pcs
+            </span>
+          </div>
+          
+          <!-- Pallet 들 -->
+          <div id="ship-pallets-container" style="display:flex;flex-direction:column;gap:10px;">
+            <div style="text-align:center;padding:30px;color:var(--text3);background:#f9fafb;border:1px dashed #d1d5db;border-radius:8px;">
+              아직 라인이 없습니다. 위 버튼으로 추가하세요.
+            </div>
+          </div>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;">
+          <button class="btn" onclick="closeShipmentBuilder()">취소</button>
+          <button class="btn" onclick="generatePackingList()" style="background:#0f4c8a;color:#fff;">🖨 Packing List 미리보기/인쇄</button>
+          <button class="btn btn-primary" style="background:#7b1fa2;color:#fff;" onclick="postShipment()">✅ Post — Shipment 시작</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SC Inventory Selector 모달 ── -->
+    <div class="modal-overlay" id="sc-inv-selector-modal" style="display:none;">
+      <div class="modal-box" style="max-width:1300px;width:98vw;max-height:96vh;display:flex;flex-direction:column;">
+        <div class="modal-head" style="background:#1565c0;">
+          <span class="modal-title" style="color:#fff;">📦 SC Inventory 선택</span>
+          <button class="modal-close" onclick="document.getElementById('sc-inv-selector-modal').style.display='none'">✕</button>
+        </div>
+        <div style="padding:14px 16px;overflow-y:auto;flex:1;">
+          <!-- 일괄 작업 영역 -->
+          <div style="background:#fff8e1;border:1px solid #f9a825;border-radius:8px;padding:10px 14px;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;">
+              <span style="font-weight:700;color:#7c2d12;">선택된 <b id="scinv-selected-count">0</b>개 라인 · <b id="scinv-selected-pcs">0</b> pcs</span>
+              <span style="color:var(--text3);">|</span>
+              <button class="btn btn-sm" onclick="scInvSelectAll()">전체 체크</button>
+              <button class="btn btn-sm" onclick="scInvSelectNone()">전체 해제</button>
+              <span style="color:var(--text3);">|</span>
+              <input id="scinv-bin-filter" placeholder="Bin 필터 (예: H1)" oninput="filterScInv()" style="width:120px;height:28px;border:1px solid #ddd;border-radius:4px;padding:0 8px;font-size:11px;">
+              <input id="scinv-style-filter" placeholder="Style/Color/SKU 검색" oninput="filterScInv()" style="width:200px;height:28px;border:1px solid #ddd;border-radius:4px;padding:0 8px;font-size:11px;">
+              <label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;">
+                <input type="checkbox" id="scinv-show-pending" onchange="filterScInv()" style="cursor:pointer;">
+                ⚠️ Pending CA Order 만 보기
+              </label>
+              <button class="btn btn-sm" style="background:#7b1fa2;color:#fff;margin-left:auto;" onclick="addSelectedToShipment()">→ Shipment 에 추가</button>
+            </div>
+          </div>
+          
+          <!-- 인벤토리 테이블 -->
+          <div style="border:1px solid #e3f2fd;border-radius:6px;max-height:calc(96vh - 240px);overflow:auto;background:#fff;">
+            <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;">
+              <thead>
+                <tr>
+                  <th style="position:sticky;top:0;z-index:5;padding:6px 4px;text-align:center;background:#dbeafe;border:1px solid #cdd;width:36px;"><input type="checkbox" id="scinv-check-all" onchange="scInvToggleAll(this.checked)" style="cursor:pointer;width:14px;height:14px;"></th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;background:#dbeafe;border:1px solid #cdd;">Bin</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:left;background:#dbeafe;border:1px solid #cdd;">Style</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:left;background:#dbeafe;border:1px solid #cdd;">Color</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;background:#dbeafe;border:1px solid #cdd;">Size</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:left;background:#bbf7d0;border:1px solid #cdd;">SKU</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:right;background:#dbeafe;border:1px solid #cdd;">SC 재고</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:right;background:#fff9c4;border:1px solid #cdd;">가져갈 Qty</th>
+                  <th style="position:sticky;top:0;z-index:5;padding:7px 8px;text-align:center;background:#fef3c7;border:1px solid #cdd;">CA Pending</th>
+                </tr>
+              </thead>
+              <tbody id="scinv-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Packing List 미리보기 모달 ── -->
+    <div class="modal-overlay" id="packing-list-modal" style="display:none;">
+      <div class="modal-box" style="max-width:900px;width:96vw;max-height:96vh;display:flex;flex-direction:column;">
+        <div class="modal-head" style="background:#0f4c8a;">
+          <span class="modal-title" style="color:#fff;">📋 Packing List 미리보기</span>
+          <button class="modal-close" onclick="document.getElementById('packing-list-modal').style.display='none'">✕</button>
+        </div>
+        <div id="packing-list-content" style="padding:20px;overflow-y:auto;flex:1;background:#f5f5f5;"></div>
+        <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn" onclick="document.getElementById('packing-list-modal').style.display='none'">닫기</button>
+          <button class="btn btn-primary" style="background:#0f4c8a;color:#fff;" onclick="printPackingList()">🖨 인쇄</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CA Receive (도착 처리) 모달 ── -->
+    <div class="modal-overlay" id="sc-ca-receive-modal" style="display:none;">
+      <div class="modal-box" style="max-width:1400px;width:98vw;max-height:96vh;display:flex;flex-direction:column;">
+        <div class="modal-head" style="background:#0f766e;">
+          <span class="modal-title" style="color:#fff;">📦 CA 도착 처리</span>
+          <button class="modal-close" onclick="document.getElementById('sc-ca-receive-modal').style.display='none'">✕</button>
+        </div>
+        <div style="padding:14px 16px;overflow-y:auto;flex:1;">
+          <div id="sc-ca-recv-info" style="margin-bottom:10px;padding:10px 14px;background:#ecfdf5;border-radius:8px;font-size:12px;"></div>
+          <div id="sc-ca-recv-pallets" style="display:flex;flex-direction:column;gap:12px;"></div>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn" onclick="document.getElementById('sc-ca-receive-modal').style.display='none'">취소</button>
+          <button class="btn btn-primary" style="background:#0f766e;color:#fff;" onclick="postScCaReceiving()">✅ Post — CA 입고</button>
+        </div>
+      </div>
+    </div>
+
     <!-- SC→CA Manual Transit Modal -->
     <div class="modal-overlay" id="sc-ca-transit-modal" style="display:none;" onclick="if(event.target===this)this.style.display='none'">
       <div class="modal-box" style="max-width:500px;">
         <div class="modal-head" style="background:#1a5c2a;">
-          <span class="modal-title" style="color:#fff;">🚛 SC → CA 운송 등록</span>
+          <span class="modal-title" style="color:#fff;">🚛 SC → CA 운송 등록 (단일 라인)</span>
           <button class="modal-close" onclick="document.getElementById('sc-ca-transit-modal').style.display='none'">✕</button>
         </div>
         <div style="padding:16px;display:flex;flex-direction:column;gap:12px;">
@@ -4218,6 +4375,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         </div>
       </div>
     </div>
+
+
 
 
   </div><!-- end app-body -->
@@ -36541,7 +36700,9 @@ function renderTransitTable(elId, rows) {
           📦 <b>${totalBoxes}</b> 박스 · <b>${totalPcs.toLocaleString()}</b> pcs · ${g.rows.length} 라인
         </div>
         <div style="margin-left:auto;display:flex;gap:6px;" onclick="event.stopPropagation()">
-          <button class="btn btn-sm" style="background:#1a5c2a;color:#fff;" onclick="openTransitReceive('${g.invoice_no}')">📦 도착 처리 & Receive</button>
+          ${g.rows[0]?.transit_type === 'sc_ca' && g.rows[0]?.shipment_id 
+            ? `<button class="btn btn-sm" style="background:#0f766e;color:#fff;" onclick="openScCaReceive('${g.rows[0].shipment_id}')">📦 CA 도착 처리</button>` 
+            : `<button class="btn btn-sm" style="background:#1a5c2a;color:#fff;" onclick="openTransitReceive('${g.invoice_no}')">📦 도착 처리 & Receive</button>`}
           <button class="btn btn-sm" onclick="editTransitEta('${g.invoice_no}')">✏️ ETA 수정</button>
         </div>
       </div>
@@ -38194,6 +38355,281 @@ function openAddScCaTransit() {
   document.getElementById('sc-ca-transit-modal').style.display = 'flex';
 }
 
+// ════════════════════════════════════════════════════════════
+// SC → CA Shipment Builder (Pallet 기반)
+// ════════════════════════════════════════════════════════════
+let _shipmentPallets = [];  // [{ id, label, lines: [{...}] }]
+let _shipmentInfo = {};
+let _scInvCache = [];       // SC inventory snapshot
+let _scInvSelected = {};    // {invId: {qty, line}}
+let _shipmentTargetPalletId = null;  // SC selector 가 어느 pallet 에 추가할지
+
+// localStorage draft
+const SHIPMENT_DRAFT_KEY = 'shipment_draft_v1';
+const SHIPMENT_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+let _shipmentAutoResumed = false;
+
+function saveShipmentDraft() {
+  if (!_shipmentPallets.length && !_shipmentInfo.shipment_no) return;
+  try {
+    const draft = {
+      ts: Date.now(),
+      info: _shipmentInfo,
+      pallets: _shipmentPallets
+    };
+    localStorage.setItem(SHIPMENT_DRAFT_KEY, JSON.stringify(draft));
+  } catch(e) {}
+}
+
+function clearShipmentDraft() {
+  try { localStorage.removeItem(SHIPMENT_DRAFT_KEY); } catch(e) {}
+}
+
+function getShipmentDraft() {
+  try {
+    const raw = localStorage.getItem(SHIPMENT_DRAFT_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (!d || !d.ts || (Date.now() - d.ts > SHIPMENT_DRAFT_TTL_MS)) {
+      clearShipmentDraft(); return null;
+    }
+    return d;
+  } catch(e) { return null; }
+}
+
+function generateShipmentNo() {
+  const d = new Date();
+  const y = d.getFullYear().toString().slice(-2);
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  const h = String(d.getHours()).padStart(2,'0');
+  const min = String(d.getMinutes()).padStart(2,'0');
+  return `SC-CA-${y}${m}${day}-${h}${min}`;
+}
+
+function openShipmentBuilder() {
+  // draft 자동 복원
+  const draft = getShipmentDraft();
+  if (draft && draft.pallets && draft.pallets.length > 0) {
+    if (confirm(`작업 중인 Shipment draft 가 있습니다.\n복원하시겠습니까?\n\n취소: 새로 시작 (현재 draft 삭제)`)) {
+      _shipmentInfo = draft.info || {};
+      _shipmentPallets = draft.pallets;
+      restoreShipmentInfoToForm();
+      renderShipmentPallets();
+      document.getElementById('shipment-builder-modal').style.display = 'flex';
+      return;
+    } else {
+      clearShipmentDraft();
+    }
+  }
+  
+  // 초기화
+  _shipmentInfo = {};
+  _shipmentPallets = [];
+  
+  const today = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  })();
+  
+  document.getElementById('ship-no').value = generateShipmentNo();
+  document.getElementById('ship-date').value = today;
+  document.getElementById('ship-eta').value = '';
+  document.getElementById('ship-seal').value = '';
+  document.getElementById('ship-carrier').value = '';
+  document.getElementById('ship-driver').value = '';
+  document.getElementById('ship-phone').value = '';
+  document.getElementById('ship-truck').value = '';
+  document.getElementById('ship-notes').value = '';
+  
+  // 자동으로 첫 pallet 추가
+  addNewPallet();
+  
+  document.getElementById('shipment-builder-modal').style.display = 'flex';
+}
+
+function restoreShipmentInfoToForm() {
+  document.getElementById('ship-no').value = _shipmentInfo.shipment_no || generateShipmentNo();
+  document.getElementById('ship-date').value = _shipmentInfo.ship_date || '';
+  document.getElementById('ship-eta').value = _shipmentInfo.eta || '';
+  document.getElementById('ship-seal').value = _shipmentInfo.seal_no || '';
+  document.getElementById('ship-carrier').value = _shipmentInfo.carrier || '';
+  document.getElementById('ship-driver').value = _shipmentInfo.driver_name || '';
+  document.getElementById('ship-phone').value = _shipmentInfo.driver_phone || '';
+  document.getElementById('ship-truck').value = _shipmentInfo.truck_no || '';
+  document.getElementById('ship-notes').value = _shipmentInfo.notes || '';
+}
+
+function captureShipmentInfo() {
+  _shipmentInfo = {
+    shipment_no: document.getElementById('ship-no').value.trim(),
+    ship_date: document.getElementById('ship-date').value,
+    eta: document.getElementById('ship-eta').value,
+    seal_no: document.getElementById('ship-seal').value.trim(),
+    carrier: document.getElementById('ship-carrier').value.trim(),
+    driver_name: document.getElementById('ship-driver').value.trim(),
+    driver_phone: document.getElementById('ship-phone').value.trim(),
+    truck_no: document.getElementById('ship-truck').value.trim(),
+    notes: document.getElementById('ship-notes').value.trim()
+  };
+}
+
+function closeShipmentBuilder() {
+  captureShipmentInfo();
+  saveShipmentDraft();
+  document.getElementById('shipment-builder-modal').style.display = 'none';
+}
+
+function addNewPallet() {
+  const palletId = 'p_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const label = `Pallet ${_shipmentPallets.length + 1}`;
+  _shipmentPallets.push({ id: palletId, label, lines: [] });
+  renderShipmentPallets();
+  saveShipmentDraft();
+}
+
+function deletePallet(palletId) {
+  if (!confirm('이 Pallet 을 삭제하시겠습니까?')) return;
+  _shipmentPallets = _shipmentPallets.filter(p => p.id !== palletId);
+  // 라벨 다시 정렬
+  _shipmentPallets.forEach((p, i) => p.label = `Pallet ${i + 1}`);
+  renderShipmentPallets();
+  saveShipmentDraft();
+}
+
+function deletePalletLine(palletId, lineIdx) {
+  const pallet = _shipmentPallets.find(p => p.id === palletId);
+  if (!pallet) return;
+  pallet.lines.splice(lineIdx, 1);
+  renderShipmentPallets();
+  saveShipmentDraft();
+}
+
+function addManualLineToShipment() {
+  // 첫 pallet 에 빈 라인 추가
+  if (_shipmentPallets.length === 0) addNewPallet();
+  const pallet = _shipmentPallets[_shipmentPallets.length - 1];
+  pallet.lines.push({
+    is_manual: true,
+    style_number: '',
+    color: '',
+    size: '',
+    sku: '',
+    qty_pcs: 0,
+    source_bin: '',
+    inventory_id: null
+  });
+  renderShipmentPallets();
+}
+
+function updatePalletLine(palletId, lineIdx, field, value) {
+  const pallet = _shipmentPallets.find(p => p.id === palletId);
+  if (!pallet) return;
+  pallet.lines[lineIdx][field] = value;
+  if (field === 'qty_pcs') pallet.lines[lineIdx][field] = parseInt(value) || 0;
+  saveShipmentDraft();
+  // 통계만 업데이트 (전체 재렌더 안함)
+  updateShipmentSummary();
+}
+
+function renderShipmentPallets() {
+  const container = document.getElementById('ship-pallets-container');
+  if (_shipmentPallets.length === 0) {
+    container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);background:#f9fafb;border:1px dashed #d1d5db;border-radius:8px;">아직 라인이 없습니다.</div>';
+    updateShipmentSummary();
+    return;
+  }
+  
+  container.innerHTML = _shipmentPallets.map((p, pi) => {
+    const totalPcs = p.lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
+    const linesHtml = p.lines.length === 0 ? 
+      `<tr><td colspan="9" style="padding:14px;text-align:center;color:var(--text3);">라인 없음 — SC Inventory 또는 수동 라인 추가</td></tr>` :
+      p.lines.map((l, li) => `
+        <tr style="border-bottom:1px solid #f0f0f0;${l.is_manual?'background:#fef3c7;':''}">
+          <td style="padding:4px 6px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">
+            ${l.is_manual ? `<input value="${l.style_number||''}" placeholder="Style" onchange="updatePalletLine('${p.id}',${li},'style_number',this.value)" style="width:60px;height:24px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;">` : `#${l.style_number||''}`}
+          </td>
+          <td style="padding:4px 6px;border:1px solid #eee;font-size:11px;">
+            ${l.is_manual ? `<input value="${l.color||''}" placeholder="Color" onchange="updatePalletLine('${p.id}',${li},'color',this.value)" style="width:90px;height:24px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;">` : (l.color||'')}
+          </td>
+          <td style="padding:4px 6px;border:1px solid #eee;text-align:center;font-size:11px;">
+            ${l.is_manual ? `<input value="${l.size||''}" placeholder="Size" onchange="updatePalletLine('${p.id}',${li},'size',this.value)" style="width:48px;height:24px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;">` : (l.size||'')}
+          </td>
+          <td style="padding:4px 6px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">
+            ${l.is_manual ? `<input value="${l.sku||''}" placeholder="SKU" onchange="updatePalletLine('${p.id}',${li},'sku',this.value)" style="width:120px;height:24px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;background:#f0fdf4;">` : (l.sku||'—')}
+          </td>
+          <td style="padding:4px 6px;border:1px solid #eee;text-align:center;font-size:11px;font-family:'IBM Plex Mono',monospace;">
+            ${l.source_bin ? `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:8px;font-weight:700;">${l.source_bin}</span>` : '—'}
+          </td>
+          <td style="padding:4px 6px;border:1px solid #eee;text-align:right;background:#fffde7;">
+            <input type="number" value="${l.qty_pcs||0}" min="0" onchange="updatePalletLine('${p.id}',${li},'qty_pcs',this.value)" style="width:60px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
+          </td>
+          <td style="padding:4px 6px;border:1px solid #eee;text-align:center;">
+            ${l.pending_ca > 0 ? `<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:8px;font-size:10px;font-weight:700;" title="CA 에서 ${l.pending_ca}pcs 대기 중">⚠️ ${l.pending_ca}</span>` : ''}
+          </td>
+          <td style="padding:4px;border:1px solid #eee;text-align:center;">
+            <button onclick="deletePalletLine('${p.id}',${li})" style="border:none;background:none;color:#e53935;cursor:pointer;font-size:14px;font-weight:700;" title="삭제">✕</button>
+          </td>
+        </tr>
+      `).join('');
+    
+    return `
+      <div style="border:2px solid #d8b4fe;border-radius:8px;background:#fff;">
+        <div style="background:#f3e8ff;padding:8px 14px;display:flex;align-items:center;gap:10px;border-radius:6px 6px 0 0;">
+          <span style="font-weight:700;color:#7b1fa2;">📦 ${p.label}</span>
+          <span style="color:var(--text2);font-size:11px;">${p.lines.length} 라인 · <b>${totalPcs.toLocaleString()}</b> pcs</span>
+          <button class="btn btn-sm" onclick="openSelectScInventoryForPallet('${p.id}')" style="margin-left:auto;background:#1565c0;color:#fff;">+ SC Inventory</button>
+          <button class="btn btn-sm" onclick="addManualLineToPallet('${p.id}')">+ 수동</button>
+          <button onclick="deletePallet('${p.id}')" style="border:none;background:#fee2e2;color:#c62828;cursor:pointer;font-size:11px;font-weight:700;padding:4px 8px;border-radius:4px;">✕ 파렛 삭제</button>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;">
+            <thead>
+              <tr>
+                <th style="padding:5px;background:#fce7f3;text-align:left;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">Style</th>
+                <th style="padding:5px;background:#fce7f3;text-align:left;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">Color</th>
+                <th style="padding:5px;background:#fce7f3;text-align:center;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">Size</th>
+                <th style="padding:5px;background:#fce7f3;text-align:left;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">SKU</th>
+                <th style="padding:5px;background:#fce7f3;text-align:center;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">SC Bin</th>
+                <th style="padding:5px;background:#fef3c7;text-align:right;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">Qty</th>
+                <th style="padding:5px;background:#fce7f3;text-align:center;font-size:10px;font-weight:700;border:1px solid #fbcfe8;">CA Pending</th>
+                <th style="padding:5px;background:#fce7f3;width:30px;border:1px solid #fbcfe8;"></th>
+              </tr>
+            </thead>
+            <tbody>${linesHtml}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  updateShipmentSummary();
+}
+
+function updateShipmentSummary() {
+  const totalLines = _shipmentPallets.reduce((s, p) => s + p.lines.length, 0);
+  const totalPcs = _shipmentPallets.reduce((s, p) => s + p.lines.reduce((ss, l) => ss + (l.qty_pcs || 0), 0), 0);
+  document.getElementById('ship-pallet-count').textContent = _shipmentPallets.length;
+  document.getElementById('ship-line-count').textContent = totalLines;
+  document.getElementById('ship-pcs-count').textContent = totalPcs.toLocaleString();
+}
+
+function addManualLineToPallet(palletId) {
+  const pallet = _shipmentPallets.find(p => p.id === palletId);
+  if (!pallet) return;
+  pallet.lines.push({
+    is_manual: true,
+    style_number: '',
+    color: '',
+    size: '',
+    sku: '',
+    qty_pcs: 0,
+    source_bin: '',
+    inventory_id: null
+  });
+  renderShipmentPallets();
+}
+
 async function saveScCaTransit() {
   const style = document.getElementById('scca-style').value.trim();
   const color = document.getElementById('scca-color').value.trim();
@@ -38213,6 +38649,727 @@ async function saveScCaTransit() {
   });
   document.getElementById('sc-ca-transit-modal').style.display = 'none';
   showToast('✅ SC→CA 운송 등록 완료');
+  loadInTransit();
+}
+
+// ════════════════════════════════════════════════════════════
+// SC Inventory Selector
+// ════════════════════════════════════════════════════════════
+async function openSelectScInventory() {
+  // pallet 이 없으면 자동으로 하나 만들고 거기에 추가
+  if (_shipmentPallets.length === 0) addNewPallet();
+  _shipmentTargetPalletId = _shipmentPallets[_shipmentPallets.length - 1].id;
+  await _loadAndShowScInvSelector();
+}
+
+async function openSelectScInventoryForPallet(palletId) {
+  _shipmentTargetPalletId = palletId;
+  await _loadAndShowScInvSelector();
+}
+
+async function _loadAndShowScInvSelector() {
+  // SC inventory 가져오기
+  const scWh = warehouses.find(w => w.code === 'SC');
+  if (!scWh) { alert('SC 창고를 찾을 수 없습니다.'); return; }
+  
+  const { data: inv } = await db.from('inventory')
+    .select('id, sku, color, size, location, qty_on_hand, qty_committed, pcs_per_box, style_id, styles(style_number)')
+    .eq('warehouse_id', scWh.id)
+    .order('location').order('sku');
+  
+  // CA pending qty 계산 (각 SKU 마다 CA 주문에서 미출고된 양)
+  const caPendingMap = await calculateCaPendingMap();
+  
+  _scInvCache = (inv || []).filter(r => (r.qty_on_hand || 0) > 0).map(r => ({
+    ...r,
+    style_number: r.styles?.style_number || '',
+    available: (r.qty_on_hand || 0),  // committed 도 포함 - 사용자가 결정
+    ca_pending: caPendingMap[r.sku] || 0
+  }));
+  
+  _scInvSelected = {};
+  document.getElementById('scinv-bin-filter').value = '';
+  document.getElementById('scinv-style-filter').value = '';
+  document.getElementById('scinv-show-pending').checked = false;
+  
+  renderScInvTable();
+  document.getElementById('sc-inv-selector-modal').style.display = 'flex';
+}
+
+async function calculateCaPendingMap() {
+  // CA 또는 SC&CA 주문 중 미배송 (pending/processing) 의 미출고 라인
+  // qty_pieces - qty_filled = 미출고
+  try {
+    const { data: orders } = await db.from('orders')
+      .select('id, status, wh_code')
+      .in('status', ['pending', 'processing']);
+    if (!orders || !orders.length) return {};
+    
+    const caOrders = orders.filter(o => o.wh_code === 'CA' || o.wh_code === 'SC&CA');
+    if (!caOrders.length) return {};
+    
+    const orderIds = caOrders.map(o => o.id);
+    const { data: lines } = await db.from('order_lines')
+      .select('style_id, color, size, qty_pieces, qty_filled, wh, styles(style_number)')
+      .in('order_id', orderIds);
+    
+    if (!lines) return {};
+    
+    // SKU 키로 합산
+    const map = {};
+    lines.forEach(l => {
+      if (l.wh !== 'CA' && l.wh !== 'SC&CA') return;
+      const remaining = (l.qty_pieces || 0) - (l.qty_filled || 0);
+      if (remaining <= 0) return;
+      const sku = (l.styles?.style_number || '') + (l.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(l.size);
+      map[sku] = (map[sku] || 0) + remaining;
+    });
+    return map;
+  } catch (e) {
+    console.warn('CA pending 계산 실패:', e);
+    return {};
+  }
+}
+
+function renderScInvTable() {
+  const tbody = document.getElementById('scinv-tbody');
+  if (!tbody) return;
+  
+  const binFilter = (document.getElementById('scinv-bin-filter').value||'').toUpperCase().trim();
+  const styleFilter = (document.getElementById('scinv-style-filter').value||'').toLowerCase().trim();
+  const showPending = document.getElementById('scinv-show-pending').checked;
+  
+  const filtered = _scInvCache.filter(r => {
+    if (binFilter && !(r.location||'').toUpperCase().includes(binFilter)) return false;
+    if (styleFilter) {
+      const haystack = `${r.style_number} ${r.color} ${r.size} ${r.sku||''}`.toLowerCase();
+      if (!haystack.includes(styleFilter)) return false;
+    }
+    if (showPending && r.ca_pending <= 0) return false;
+    return true;
+  });
+  
+  tbody.innerHTML = filtered.map(r => {
+    const sel = _scInvSelected[r.id];
+    const checked = !!sel;
+    const qtyVal = sel ? sel.qty : r.available;
+    return `
+      <tr style="border-bottom:1px solid #f0f0f0;${r.ca_pending>0?'background:#fffbeb;':''}${checked?'background:#dcfce7;':''}">
+        <td style="padding:4px;text-align:center;border:1px solid #eee;">
+          <input type="checkbox" ${checked?'checked':''} onchange="scInvToggleLine('${r.id}', this.checked)" style="cursor:pointer;width:16px;height:16px;accent-color:#10b981;">
+        </td>
+        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#dbeafe;color:#1e40af;">${r.location||''}</td>
+        <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${r.style_number||''}</td>
+        <td style="padding:5px 8px;border:1px solid #eee;font-size:11px;">${r.color||''}</td>
+        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;">${r.size||''}</td>
+        <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${r.sku||'—'}</td>
+        <td style="padding:5px 8px;border:1px solid #eee;text-align:right;font-weight:700;">${(r.qty_on_hand||0).toLocaleString()}</td>
+        <td style="padding:4px;border:1px solid #eee;text-align:right;background:#fffde7;">
+          <input type="number" value="${qtyVal}" min="0" max="${r.qty_on_hand||0}" 
+            ${!checked?'disabled':''} 
+            onchange="scInvUpdateQty('${r.id}', this.value)" 
+            style="width:60px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
+          <button onclick="scInvSetMax('${r.id}')" style="border:none;background:#bbf7d0;color:#15803d;cursor:pointer;font-size:9px;font-weight:700;padding:2px 4px;border-radius:3px;margin-left:2px;">전체</button>
+        </td>
+        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;">
+          ${r.ca_pending > 0 ? `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;" title="CA 주문 ${r.ca_pending}pcs 대기 중">⚠️ ${r.ca_pending}</span>` : '<span style="color:var(--text3);font-size:11px;">—</span>'}
+        </td>
+      </tr>
+    `;
+  }).join('');
+  
+  updateScInvSummary();
+}
+
+function scInvToggleLine(invId, checked) {
+  const item = _scInvCache.find(r => r.id === invId);
+  if (!item) return;
+  if (checked) {
+    _scInvSelected[invId] = { qty: item.qty_on_hand, line: item };
+  } else {
+    delete _scInvSelected[invId];
+  }
+  renderScInvTable();
+}
+
+function scInvUpdateQty(invId, val) {
+  if (!_scInvSelected[invId]) return;
+  const item = _scInvCache.find(r => r.id === invId);
+  let qty = parseInt(val) || 0;
+  if (qty < 0) qty = 0;
+  if (qty > (item.qty_on_hand || 0)) qty = item.qty_on_hand;
+  _scInvSelected[invId].qty = qty;
+  updateScInvSummary();
+}
+
+function scInvSetMax(invId) {
+  const item = _scInvCache.find(r => r.id === invId);
+  if (!item) return;
+  if (!_scInvSelected[invId]) {
+    _scInvSelected[invId] = { qty: item.qty_on_hand, line: item };
+  } else {
+    _scInvSelected[invId].qty = item.qty_on_hand;
+  }
+  renderScInvTable();
+}
+
+function scInvToggleAll(checked) {
+  if (checked) {
+    _scInvCache.forEach(item => {
+      _scInvSelected[item.id] = { qty: item.qty_on_hand, line: item };
+    });
+  } else {
+    _scInvSelected = {};
+  }
+  renderScInvTable();
+}
+
+function scInvSelectAll() { scInvToggleAll(true); }
+function scInvSelectNone() { scInvToggleAll(false); }
+
+function updateScInvSummary() {
+  const entries = Object.values(_scInvSelected);
+  const totalLines = entries.length;
+  const totalPcs = entries.reduce((s, e) => s + (e.qty || 0), 0);
+  document.getElementById('scinv-selected-count').textContent = totalLines;
+  document.getElementById('scinv-selected-pcs').textContent = totalPcs.toLocaleString();
+}
+
+function filterScInv() {
+  renderScInvTable();
+}
+
+function addSelectedToShipment() {
+  const targetPallet = _shipmentPallets.find(p => p.id === _shipmentTargetPalletId);
+  if (!targetPallet) {
+    alert('대상 Pallet 을 찾을 수 없습니다.');
+    return;
+  }
+  
+  const entries = Object.values(_scInvSelected).filter(e => e.qty > 0);
+  if (entries.length === 0) {
+    alert('선택된 라인이 없습니다.');
+    return;
+  }
+  
+  entries.forEach(e => {
+    const item = e.line;
+    targetPallet.lines.push({
+      is_manual: false,
+      inventory_id: item.id,
+      style_number: item.style_number,
+      color: item.color,
+      size: item.size,
+      sku: item.sku,
+      source_bin: item.location,
+      qty_pcs: e.qty,
+      pcs_per_box: item.pcs_per_box || 72,
+      ca_pending: item.ca_pending || 0
+    });
+  });
+  
+  document.getElementById('sc-inv-selector-modal').style.display = 'none';
+  showToast(`✅ ${entries.length} 라인 추가됨 (${entries.reduce((s,e)=>s+e.qty,0)} pcs)`);
+  renderShipmentPallets();
+  saveShipmentDraft();
+}
+
+// ════════════════════════════════════════════════════════════
+// Packing List 생성
+// ════════════════════════════════════════════════════════════
+function generatePackingList() {
+  captureShipmentInfo();
+  
+  if (_shipmentPallets.every(p => p.lines.length === 0)) {
+    alert('라인이 없습니다.');
+    return;
+  }
+  
+  const totalPallets = _shipmentPallets.length;
+  const totalLines = _shipmentPallets.reduce((s, p) => s + p.lines.length, 0);
+  const totalPcs = _shipmentPallets.reduce((s, p) => s + p.lines.reduce((ss, l) => ss + (l.qty_pcs || 0), 0), 0);
+  
+  const palletsHtml = _shipmentPallets.map(p => {
+    if (p.lines.length === 0) return '';
+    const palletPcs = p.lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
+    return `
+      <div style="margin-bottom:18px;page-break-inside:avoid;">
+        <div style="background:#f3e8ff;padding:8px 12px;border:1px solid #d8b4fe;border-radius:4px;margin-bottom:6px;font-weight:700;color:#7b1fa2;font-size:14px;">
+          📦 ${p.label} — ${p.lines.length} 라인 · ${palletPcs.toLocaleString()} pcs
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="background:#f3f4f6;">
+              <th style="padding:6px 8px;text-align:left;border:1px solid #ccc;">Style</th>
+              <th style="padding:6px 8px;text-align:left;border:1px solid #ccc;">Color</th>
+              <th style="padding:6px 8px;text-align:center;border:1px solid #ccc;">Size</th>
+              <th style="padding:6px 8px;text-align:left;border:1px solid #ccc;">SKU</th>
+              <th style="padding:6px 8px;text-align:right;border:1px solid #ccc;">Qty (pcs)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${p.lines.map(l => `
+              <tr>
+                <td style="padding:5px 8px;border:1px solid #ccc;font-family:'IBM Plex Mono',monospace;font-weight:700;">${l.style_number||''}</td>
+                <td style="padding:5px 8px;border:1px solid #ccc;">${l.color||''}</td>
+                <td style="padding:5px 8px;border:1px solid #ccc;text-align:center;">${l.size||''}</td>
+                <td style="padding:5px 8px;border:1px solid #ccc;font-family:'IBM Plex Mono',monospace;font-size:10px;">${l.sku||''}</td>
+                <td style="padding:5px 8px;border:1px solid #ccc;text-align:right;font-weight:700;">${(l.qty_pcs||0).toLocaleString()}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }).join('');
+  
+  const html = `
+    <div style="background:#fff;padding:30px;font-family:Arial,sans-serif;max-width:8.5in;margin:0 auto;color:#000;">
+      <div style="text-align:center;margin-bottom:20px;border-bottom:2px solid #000;padding-bottom:10px;">
+        <h1 style="margin:0;font-size:22px;">PACKING LIST</h1>
+        <div style="font-size:12px;margin-top:4px;color:#666;">SC → CA Internal Transfer</div>
+      </div>
+      
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-bottom:18px;font-size:12px;">
+        <div>
+          <div style="font-weight:700;border-bottom:1px solid #ccc;margin-bottom:6px;padding-bottom:2px;">SHIPMENT INFO</div>
+          <div><b>Shipment #:</b> ${_shipmentInfo.shipment_no || '—'}</div>
+          <div><b>Ship Date:</b> ${_shipmentInfo.ship_date || '—'}</div>
+          <div><b>ETA:</b> ${_shipmentInfo.eta || '—'}</div>
+          <div><b>Seal #:</b> ${_shipmentInfo.seal_no || '—'}</div>
+        </div>
+        <div>
+          <div style="font-weight:700;border-bottom:1px solid #ccc;margin-bottom:6px;padding-bottom:2px;">CARRIER / DRIVER</div>
+          <div><b>Carrier:</b> ${_shipmentInfo.carrier || '—'}</div>
+          <div><b>Driver:</b> ${_shipmentInfo.driver_name || '—'}</div>
+          <div><b>Phone:</b> ${_shipmentInfo.driver_phone || '—'}</div>
+          <div><b>Truck #:</b> ${_shipmentInfo.truck_no || '—'}</div>
+        </div>
+      </div>
+      
+      <div style="background:#fef3f9;border:1px solid #d8b4fe;border-radius:4px;padding:8px 14px;margin-bottom:14px;font-size:12px;display:flex;justify-content:space-around;">
+        <div><b>Pallets:</b> ${totalPallets}</div>
+        <div><b>Lines:</b> ${totalLines}</div>
+        <div><b>Total Pcs:</b> ${totalPcs.toLocaleString()}</div>
+      </div>
+      
+      ${_shipmentInfo.notes ? `<div style="background:#fffde7;border:1px solid #fbc02d;padding:6px 10px;font-size:11px;margin-bottom:14px;"><b>Notes:</b> ${_shipmentInfo.notes}</div>` : ''}
+      
+      ${palletsHtml}
+      
+      <div style="margin-top:40px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px;page-break-inside:avoid;">
+        <div>
+          <div style="border-bottom:1px solid #000;height:50px;"></div>
+          <div style="margin-top:4px;">Shipper Signature & Date</div>
+        </div>
+        <div>
+          <div style="border-bottom:1px solid #000;height:50px;"></div>
+          <div style="margin-top:4px;">Driver Signature & Date</div>
+        </div>
+      </div>
+      
+      <div style="margin-top:30px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:12px;page-break-inside:avoid;">
+        <div>
+          <div style="border-bottom:1px solid #000;height:50px;"></div>
+          <div style="margin-top:4px;">CA Receiver Signature & Date</div>
+        </div>
+        <div></div>
+      </div>
+    </div>
+  `;
+  
+  document.getElementById('packing-list-content').innerHTML = html;
+  document.getElementById('packing-list-modal').style.display = 'flex';
+}
+
+function printPackingList() {
+  const content = document.getElementById('packing-list-content').innerHTML;
+  printInNewWindow(content);
+}
+
+// ════════════════════════════════════════════════════════════
+// Post Shipment - DB 저장 + SC inventory 출고
+// ════════════════════════════════════════════════════════════
+async function postShipment() {
+  captureShipmentInfo();
+  
+  // 검증
+  if (!_shipmentInfo.ship_date) { alert('출발일은 필수입니다.'); return; }
+  if (_shipmentPallets.every(p => p.lines.length === 0)) {
+    alert('라인이 없습니다.');
+    return;
+  }
+  
+  // 빈 라인 체크
+  const invalidLines = [];
+  _shipmentPallets.forEach(p => {
+    p.lines.forEach(l => {
+      if (!l.style_number || !l.color || !l.size || !l.sku || (l.qty_pcs || 0) <= 0) {
+        invalidLines.push(`${p.label}: ${l.style_number||'?'}/${l.color||'?'}/${l.size||'?'}`);
+      }
+    });
+  });
+  if (invalidLines.length > 0) {
+    alert(`다음 라인들이 불완전합니다:\n\n${invalidLines.slice(0, 5).join('\n')}\n\n모든 필드를 채워주세요.`);
+    return;
+  }
+  
+  if (!confirm(`${_shipmentPallets.length}개 Pallet, ${_shipmentPallets.reduce((s,p)=>s+p.lines.length,0)} 라인을 SC → CA 운송으로 등록하시겠습니까?\n\nSC 재고가 차감됩니다.`)) return;
+  
+  try {
+    // 1. shipment row 생성
+    const shipNo = _shipmentInfo.shipment_no || generateShipmentNo();
+    const { data: shipRow, error: shipErr } = await db.from('sc_ca_shipments').insert({
+      shipment_no: shipNo,
+      ship_date: _shipmentInfo.ship_date,
+      eta: _shipmentInfo.eta || null,
+      seal_no: _shipmentInfo.seal_no || null,
+      carrier: _shipmentInfo.carrier || null,
+      driver_name: _shipmentInfo.driver_name || null,
+      driver_phone: _shipmentInfo.driver_phone || null,
+      truck_no: _shipmentInfo.truck_no || null,
+      notes: _shipmentInfo.notes || null,
+      status: 'in_transit'
+    }).select().single();
+    
+    if (shipErr) throw shipErr;
+    const shipmentId = shipRow.id;
+    
+    let scOk = 0, errors = [];
+    
+    // 2. 각 pallet 의 각 라인 처리
+    for (const pallet of _shipmentPallets) {
+      const palletId = pallet.id; // memory id 가 아닌 실제 UUID 필요
+      // pallet_id 는 새 UUID 생성
+      const realPalletId = crypto.randomUUID();
+      
+      for (const l of pallet.lines) {
+        try {
+          // SC inventory 차감 (manual 라인 아닐 때만)
+          if (l.inventory_id) {
+            const { data: invRow } = await db.from('inventory')
+              .select('qty_on_hand').eq('id', l.inventory_id).single();
+            if (!invRow) throw new Error(`SC inventory ${l.inventory_id} 없음`);
+            const newQty = (invRow.qty_on_hand || 0) - (l.qty_pcs || 0);
+            if (newQty < 0) throw new Error(`SC ${l.source_bin} ${l.sku}: 재고 부족`);
+            
+            if (newQty === 0) {
+              // qty 0 이면 row 자체 삭제
+              await db.from('inventory').delete().eq('id', l.inventory_id);
+            } else {
+              await db.from('inventory').update({ qty_on_hand: newQty }).eq('id', l.inventory_id);
+            }
+          }
+          
+          // in_transit row 생성
+          await db.from('in_transit').insert({
+            invoice_no: shipNo,
+            shipment_id: shipmentId,
+            pallet_id: realPalletId,
+            pallet_label: pallet.label,
+            source_bin: l.source_bin || null,
+            container_no: null,
+            ship_date: _shipmentInfo.ship_date,
+            eta: _shipmentInfo.eta || null,
+            style_number: l.style_number,
+            color: l.color,
+            size: l.size,
+            sku: l.sku,
+            qty_dz: 0,
+            qty_boxes: l.pcs_per_box ? Math.ceil(l.qty_pcs / l.pcs_per_box) : null,
+            ppb: l.pcs_per_box || 72,
+            is_nonstandard: l.is_nonstandard || false,
+            qty_pcs: l.qty_pcs,
+            transit_type: 'sc_ca',
+            status: 'in_transit',
+            notes: pallet.label
+          });
+          scOk++;
+        } catch (e) {
+          errors.push(`${pallet.label} ${l.style_number}/${l.color}/${l.size}: ${e.message}`);
+        }
+      }
+    }
+    
+    let msg = `✅ Shipment 등록 완료\n\n📦 ${scOk} 라인 등록됨`;
+    if (errors.length > 0) {
+      msg += `\n\n❌ 오류 ${errors.length}개:\n${errors.slice(0, 5).join('\n')}`;
+    }
+    alert(msg);
+    
+    clearShipmentDraft();
+    _shipmentPallets = [];
+    _shipmentInfo = {};
+    document.getElementById('shipment-builder-modal').style.display = 'none';
+    
+    await loadScInventory();
+    loadInTransit();
+    
+  } catch (e) {
+    alert(`저장 실패: ${e.message}`);
+    console.error(e);
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// CA Receive (도착 처리) — Pallet 단위
+// ════════════════════════════════════════════════════════════
+let _scCaRecvShipment = null;
+let _scCaRecvPallets = [];
+
+async function openScCaReceive(shipmentId) {
+  const { data: ship } = await db.from('sc_ca_shipments').select('*').eq('id', shipmentId).single();
+  if (!ship) { alert('Shipment 을 찾을 수 없습니다.'); return; }
+  
+  const { data: lines } = await db.from('in_transit')
+    .select('*').eq('shipment_id', shipmentId).eq('status', 'in_transit');
+  if (!lines || !lines.length) { alert('운송 중 라인이 없습니다.'); return; }
+  
+  _scCaRecvShipment = ship;
+  
+  // pallet 별 그룹화
+  const palletMap = {};
+  lines.forEach(l => {
+    const pid = l.pallet_id || 'no_pallet';
+    if (!palletMap[pid]) {
+      palletMap[pid] = {
+        pallet_id: pid,
+        pallet_label: l.pallet_label || '(파렛 없음)',
+        lines: []
+      };
+    }
+    palletMap[pid].lines.push({
+      ...l,
+      mode: 'whole',  // 'whole' (통째로) or 'split' (해체)
+      target_bin: '',  // whole 모드일 때 모든 라인이 가는 bin
+      line_bins: {}    // split 모드일 때 라인별 bin
+    });
+  });
+  _scCaRecvPallets = Object.values(palletMap);
+  
+  // 헤더
+  const totalPcs = lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
+  document.getElementById('sc-ca-recv-info').innerHTML = `
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
+      <div><b>Shipment:</b> ${ship.shipment_no}</div>
+      <div><b>Ship Date:</b> ${ship.ship_date||'—'}</div>
+      <div><b>ETA:</b> ${ship.eta||'—'}</div>
+      <div><b>Seal:</b> ${ship.seal_no||'—'}</div>
+      <div style="margin-left:auto;font-size:11px;color:var(--text2);background:#fff;padding:3px 10px;border-radius:10px;border:1px solid #c8e6c9;">
+        📦 <b>${_scCaRecvPallets.length}</b> 파렛 · <b>${lines.length}</b> 라인 · <b>${totalPcs.toLocaleString()}</b> pcs
+      </div>
+    </div>
+  `;
+  
+  document.getElementById('sc-ca-receive-modal').dataset.shipmentId = shipmentId;
+  renderScCaRecvPallets();
+  document.getElementById('sc-ca-receive-modal').style.display = 'flex';
+}
+
+function renderScCaRecvPallets() {
+  const container = document.getElementById('sc-ca-recv-pallets');
+  
+  container.innerHTML = _scCaRecvPallets.map((p, pi) => {
+    const totalPcs = p.lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
+    const isWhole = p.lines[0]?.mode === 'whole';
+    
+    let linesHtml;
+    if (isWhole) {
+      // 통째로 모드 — 단일 bin 입력
+      const binVal = p.lines[0]?.target_bin || '';
+      linesHtml = `
+        <div style="padding:12px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:6px;display:flex;align-items:center;gap:12px;">
+          <span style="color:#047857;font-weight:700;">📍 통째로 입고할 bin:</span>
+          <input value="${binVal}" placeholder="X1100" onchange="updatePalletWholeBin(${pi}, this.value)" 
+            style="width:160px;height:32px;border:1px solid #6ee7b7;border-radius:4px;padding:0 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;">
+          <span style="color:var(--text3);font-size:11px;">${p.lines.length} 라인 · ${totalPcs.toLocaleString()} pcs 가 한 bin 으로</span>
+        </div>
+        <div style="padding:8px 0;">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">📋 포함 라인:</div>
+          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead><tr style="background:#f3f4f6;"><th style="padding:4px;text-align:left;border:1px solid #e5e7eb;">Style</th><th style="padding:4px;text-align:left;border:1px solid #e5e7eb;">Color/Size</th><th style="padding:4px;text-align:left;border:1px solid #e5e7eb;">SKU</th><th style="padding:4px;text-align:right;border:1px solid #e5e7eb;">Qty</th></tr></thead>
+            <tbody>
+              ${p.lines.map(l => `<tr><td style="padding:4px 6px;border:1px solid #e5e7eb;font-family:'IBM Plex Mono',monospace;font-weight:700;">${l.style_number||''}</td><td style="padding:4px 6px;border:1px solid #e5e7eb;">${l.color||''} / ${l.size||''}</td><td style="padding:4px 6px;border:1px solid #e5e7eb;font-family:'IBM Plex Mono',monospace;font-size:10px;">${l.sku||''}</td><td style="padding:4px 6px;border:1px solid #e5e7eb;text-align:right;font-weight:700;">${(l.qty_pcs||0).toLocaleString()}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    } else {
+      // 해체 모드 — 각 라인마다 bin 입력
+      linesHtml = `
+        <div style="padding:8px 0;">
+          <div style="background:#fef3c7;border:1px solid #fbbf24;padding:6px 10px;border-radius:4px;font-size:11px;color:#92400e;margin-bottom:8px;">
+            🔧 해체 모드 — 각 라인을 다른 bin 에 배치
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead><tr style="background:#f3f4f6;"><th style="padding:5px;text-align:left;border:1px solid #e5e7eb;">Style</th><th style="padding:5px;text-align:left;border:1px solid #e5e7eb;">Color</th><th style="padding:5px;text-align:center;border:1px solid #e5e7eb;">Size</th><th style="padding:5px;text-align:left;border:1px solid #e5e7eb;">SKU</th><th style="padding:5px;text-align:right;border:1px solid #e5e7eb;">Qty</th><th style="padding:5px;text-align:center;border:1px solid #e5e7eb;background:#fef3c7;">CA Bin</th></tr></thead>
+            <tbody>
+              ${p.lines.map((l, li) => `
+                <tr>
+                  <td style="padding:5px;border:1px solid #e5e7eb;font-family:'IBM Plex Mono',monospace;font-weight:700;">${l.style_number||''}</td>
+                  <td style="padding:5px;border:1px solid #e5e7eb;">${l.color||''}</td>
+                  <td style="padding:5px;border:1px solid #e5e7eb;text-align:center;">${l.size||''}</td>
+                  <td style="padding:5px;border:1px solid #e5e7eb;font-family:'IBM Plex Mono',monospace;font-size:10px;">${l.sku||''}</td>
+                  <td style="padding:5px;border:1px solid #e5e7eb;text-align:right;font-weight:700;">${(l.qty_pcs||0).toLocaleString()}</td>
+                  <td style="padding:3px 5px;border:1px solid #e5e7eb;background:#fffde7;">
+                    <input value="${l.line_bins[l.id]||''}" placeholder="bin" onchange="updatePalletLineBin(${pi}, ${li}, this.value)" 
+                      style="width:100px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 6px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+    
+    return `
+      <div style="border:2px solid #6ee7b7;border-radius:8px;background:#fff;">
+        <div style="background:#d1fae5;padding:8px 14px;display:flex;align-items:center;gap:10px;border-radius:6px 6px 0 0;">
+          <span style="font-weight:700;color:#047857;">📦 ${p.pallet_label}</span>
+          <span style="color:var(--text2);font-size:11px;">${p.lines.length} 라인 · <b>${totalPcs.toLocaleString()}</b> pcs</span>
+          <div style="margin-left:auto;display:flex;gap:6px;">
+            <button class="btn btn-sm" style="${isWhole?'background:#0f766e;color:#fff;':'background:#fff;color:#047857;'}" onclick="setPalletMode(${pi}, 'whole')">📦 통째로</button>
+            <button class="btn btn-sm" style="${!isWhole?'background:#0f766e;color:#fff;':'background:#fff;color:#047857;'}" onclick="setPalletMode(${pi}, 'split')">🔧 해체</button>
+          </div>
+        </div>
+        <div style="padding:10px 14px;">${linesHtml}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function setPalletMode(palletIdx, mode) {
+  _scCaRecvPallets[palletIdx].lines.forEach(l => {
+    l.mode = mode;
+    if (mode === 'whole') {
+      // whole 일 때는 모든 라인이 같은 bin
+    } else {
+      // split — 기존 target_bin 을 line_bins 로 옮김 (옵션)
+    }
+  });
+  renderScCaRecvPallets();
+}
+
+function updatePalletWholeBin(palletIdx, bin) {
+  const cleanBin = (bin||'').trim().toUpperCase();
+  _scCaRecvPallets[palletIdx].lines.forEach(l => {
+    l.target_bin = cleanBin;
+  });
+}
+
+function updatePalletLineBin(palletIdx, lineIdx, bin) {
+  const cleanBin = (bin||'').trim().toUpperCase();
+  const line = _scCaRecvPallets[palletIdx].lines[lineIdx];
+  line.line_bins[line.id] = cleanBin;
+}
+
+async function postScCaReceiving() {
+  // 검증
+  const errors = [];
+  _scCaRecvPallets.forEach((p, pi) => {
+    const isWhole = p.lines[0]?.mode === 'whole';
+    if (isWhole) {
+      const bin = p.lines[0]?.target_bin;
+      if (!bin) errors.push(`${p.pallet_label}: bin 미입력`);
+    } else {
+      p.lines.forEach((l, li) => {
+        if (!l.line_bins[l.id]) errors.push(`${p.pallet_label} 라인 ${li+1}: bin 미입력`);
+      });
+    }
+  });
+  if (errors.length > 0) {
+    alert(`다음 라인들이 bin 미입력입니다:\n\n${errors.slice(0, 5).join('\n')}`);
+    return;
+  }
+  
+  const totalLines = _scCaRecvPallets.reduce((s, p) => s + p.lines.length, 0);
+  if (!confirm(`${_scCaRecvPallets.length}개 Pallet, ${totalLines} 라인을 CA 입고 처리하시겠습니까?`)) return;
+  
+  const caWh = warehouses.find(w => w.code === 'CA');
+  if (!caWh) { alert('CA 창고를 찾을 수 없습니다.'); return; }
+  
+  const today = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  })();
+  
+  let ok = 0, errs = [];
+  
+  for (const pallet of _scCaRecvPallets) {
+    for (const l of pallet.lines) {
+      try {
+        const targetBin = l.mode === 'whole' ? l.target_bin : l.line_bins[l.id];
+        if (!targetBin) continue;
+        
+        // CA inventory 입고 (같은 bin + sku 있으면 합치기)
+        const { data: existing } = await db.from('inventory')
+          .select('id, qty_on_hand, pcs_per_box')
+          .eq('warehouse_id', caWh.id)
+          .eq('location', targetBin)
+          .eq('sku', l.sku)
+          .maybeSingle();
+        
+        if (existing) {
+          if ((existing.pcs_per_box || 72) !== (l.ppb || 72)) {
+            // ppb 다르면 별도 row
+            const styleObj = styles.find(s => s.style_number === l.style_number);
+            await db.from('inventory').insert({
+              warehouse_id: caWh.id,
+              style_id: styleObj?.id || null,
+              sku: l.sku, color: l.color, size: l.size,
+              location: targetBin,
+              qty_on_hand: l.qty_pcs, qty_committed: 0,
+              pcs_per_box: l.ppb || 72,
+              received_date: today
+            });
+          } else {
+            await db.from('inventory').update({
+              qty_on_hand: existing.qty_on_hand + l.qty_pcs
+            }).eq('id', existing.id);
+          }
+        } else {
+          const styleObj = styles.find(s => s.style_number === l.style_number);
+          await db.from('inventory').insert({
+            warehouse_id: caWh.id,
+            style_id: styleObj?.id || null,
+            sku: l.sku, color: l.color, size: l.size,
+            location: targetBin,
+            qty_on_hand: l.qty_pcs, qty_committed: 0,
+            pcs_per_box: l.ppb || 72,
+            received_date: today
+          });
+        }
+        
+        // in_transit row → received
+        await db.from('in_transit').update({ status: 'received' }).eq('id', l.id);
+        
+        // CA reserved 자동 재확보
+        const restored = await autoRestoreReserved(caWh.id, l.color, l.size, l.qty_pcs);
+        if (restored > 0) showToast(`🔒 ${restored} pcs → Reserved PO 재확보`);
+        
+        ok++;
+      } catch (e) {
+        errs.push(`${l.style_number}/${l.color}/${l.size}: ${e.message}`);
+      }
+    }
+  }
+  
+  // shipment status → received
+  const shipmentId = document.getElementById('sc-ca-receive-modal').dataset.shipmentId;
+  if (shipmentId) {
+    await db.from('sc_ca_shipments').update({
+      status: 'received',
+      received_at: new Date().toISOString()
+    }).eq('id', shipmentId);
+  }
+  
+  let msg = `✅ ${ok} 라인 CA 입고 완료`;
+  if (errs.length) msg += `\n\n❌ 오류 ${errs.length}:\n${errs.slice(0,5).join('\n')}`;
+  alert(msg);
+  
+  document.getElementById('sc-ca-receive-modal').style.display = 'none';
+  loadCaInventory && loadCaInventory();
   loadInTransit();
 }
 
