@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_105545 — Side Seam 체크박스 추가 (Color 와 Size 사이) — 체크 시 SKU 에 자동 +ss -->
+<!-- BUILD: 20260429_110343 — SS 체크 시 sku_locked 해제 (강제 적용) + onTransitSkuChange 도 진짜 변경 시만 lock -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -37005,16 +37005,15 @@ function onTransitReviewedChange(i, checked) {
   saveTransitDraft();
 }
 
-// Side Seam 체크 변경 — SKU 자동 +ss 추가/제거
+// Side Seam 체크 변경 — SKU 자동 +ss 추가/제거 (사용자 의도 명확하니 lock 해제)
 async function onTransitSideSeamChange(i, checked) {
   const r = _transitParsed.rows[i];
   if (!r) return;
   r.is_side_seam = !!checked;
-  // 사용자가 SKU 직접 수정한 적 있으면 자동 변경 안 함
-  if (!r.sku_locked) {
-    const base = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||'')).toLowerCase();
-    r.sku = checked ? `${base}+ss` : base;
-  }
+  // SS 체크박스는 사용자가 명시적으로 클릭한 것 — lock 풀고 자동 적용
+  const base = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||'')).toLowerCase();
+  r.sku = checked ? `${base}+ss` : base;
+  r.sku_locked = false;  // SS 적용 후엔 lock 해제 (다른 변경에도 자동 따라가게)
   await checkSingleTransitSku(i);
 }
 
@@ -37035,7 +37034,9 @@ async function onTransitStyleColorSizeChange(i, field, val) {
 async function onTransitSkuChange(i, val) {
   const r = _transitParsed.rows[i];
   if (!r) return;
-  r.sku = (val||'').trim();
+  const newSku = (val||'').trim();
+  if (newSku === (r.sku||'')) return;  // 값 안 바뀌었으면 lock 도 안 함
+  r.sku = newSku;
   r.sku_locked = true;  // 사용자가 직접 수정 → 자동 재생성 안 함
   await checkSingleTransitSku(i);
 }
