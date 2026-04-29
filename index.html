@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_005130 — Refresh = 작업 그대로 (자동 모달 복원, 배너/confirm 제거) -->
+<!-- BUILD: 20260429_005855 — 검토 체크박스 + 중앙정렬 + 진행률 표시 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4106,13 +4106,14 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <table style="width:100%;border-collapse:collapse;font-size:12px;" id="transit-edit-table">
                 <thead>
                   <tr style="background:#f0f7ff;position:sticky;top:0;z-index:1;">
+                    <th style="padding:6px 4px;text-align:center;border:1px solid #cdd;font-size:10px;color:#0f4c8a;width:36px;" title="검토 완료 체크">✓</th>
                     <th style="padding:6px 4px;text-align:center;border:1px solid #cdd;font-size:10px;color:var(--text3);">원본<br>Row</th>
                     <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Style #</th>
                     <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Color</th>
                     <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Size</th>
-                    <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">박스수</th>
-                    <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;background:#fff9c4;">pcs/box</th>
-                    <th style="padding:7px 8px;text-align:right;border:1px solid #cdd;">Pcs 합계</th>
+                    <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">박스수</th>
+                    <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;background:#fff9c4;">pcs/box</th>
+                    <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Pcs 합계</th>
                     <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">삭제</th>
                   </tr>
                 </thead>
@@ -36528,9 +36529,15 @@ function renderTransitEditTable() {
     const boxes = r.qty_boxes || Math.floor((r.qty_pcs||0) / (r.ppb||72));
     const ppb = r.ppb || 72;
     const isNonStd = r.is_nonstandard;
-    const rowBg = isNonStd ? '#fffde7' : '#fff';
+    const isReviewed = r.reviewed === true;
+    const rowBg = isReviewed ? '#ecfdf5' : (isNonStd ? '#fffde7' : '#fff');
+    const rowOpacity = isReviewed ? '0.85' : '1';
     const srcRow = r.source_row ? `R${r.source_row}` : '—';
-    return `<tr id="transit-row-${i}" style="border-bottom:1px solid #f0f0f0;background:${rowBg};">
+    return `<tr id="transit-row-${i}" style="border-bottom:1px solid #f0f0f0;background:${rowBg};opacity:${rowOpacity};">
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:${isReviewed?'#d1fae5':'transparent'};">
+        <input type="checkbox" ${isReviewed?'checked':''} onchange="onTransitReviewedChange(${i}, this.checked)"
+          style="width:16px;height:16px;cursor:pointer;accent-color:#10b981;"/>
+      </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;font-size:10px;color:#0f4c8a;font-family:'IBM Plex Mono',monospace;cursor:pointer;" 
           onclick="scrollOriginalToRow(${r.source_row||0})" title="원본 엑셀 ${srcRow} 으로 이동">
         ${srcRow}
@@ -36545,23 +36552,23 @@ function renderTransitEditTable() {
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
         <input value="${r.size}" onchange="_transitParsed.rows[${i}].size=this.value;saveTransitDraft()"
-          style="width:38px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
+          style="width:42px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
-      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;">
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
         <input type="number" value="${boxes}" min="0"
           onchange="onTransitBoxesChange(${i}, this.value)"
-          style="width:50px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:#fff;"/>
+          style="width:54px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
-      <td style="padding:3px 4px;border:1px solid #eee;background:#fffde7;text-align:right;" id="transit-ppb-cell-${i}">
+      <td style="padding:3px 4px;border:1px solid #eee;background:#fffde7;text-align:center;" id="transit-ppb-cell-${i}">
         <input type="number" value="${ppb}" min="1"
           onchange="onTransitPpbChange(${i}, this.value)"
-          style="width:50px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:right;background:${isNonStd?'#fff8e1':'#fff'};font-weight:${isNonStd?'700':'400'};color:${isNonStd?'#e65100':'inherit'};"/>
+          style="width:54px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:${isNonStd?'#fff8e1':'#fff'};font-weight:${isNonStd?'700':'400'};color:${isNonStd?'#e65100':'inherit'};"/>
         ${isNonStd ? '<span style="font-size:9px;color:#e65100;">⚠️비표준</span>' : ''}
       </td>
-      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;" id="transit-pcs-${i}">
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;" id="transit-pcs-${i}">
         <input type="number" value="${r.qty_pcs||0}" min="0"
           onchange="onTransitPcsChange(${i}, this.value)"
-          style="width:64px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:12px;font-weight:700;text-align:right;background:${isNonStd?'#fff8e1':'#fff'};color:${isNonStd?'#e65100':'inherit'};"/>
+          style="width:70px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:12px;font-weight:700;text-align:center;background:${isNonStd?'#fff8e1':'#fff'};color:${isNonStd?'#e65100':'inherit'};"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
         <button onclick="deleteTransitRow(${i})" style="border:none;background:none;color:#e53935;cursor:pointer;font-size:14px;">✕</button>
@@ -36571,6 +36578,14 @@ function renderTransitEditTable() {
   updateTransitTotal();
   // 원본 패널도 같이 그리기 (처음만)
   renderTransitOriginalView();
+}
+
+// 검토 체크박스 변경
+function onTransitReviewedChange(i, checked) {
+  _transitParsed.rows[i].reviewed = !!checked;
+  // 부분 렌더 — 색깔/체크만 바뀌면 되므로 전체 재렌더
+  renderTransitEditTable();
+  saveTransitDraft();
 }
 
 // ── 원본 엑셀 view (참고용 — read-only, row 번호 표시)
@@ -36823,8 +36838,27 @@ function updateTransitTotal() {
   if (!_transitParsed) return;
   const totalPcs = _transitParsed.rows.reduce((s,r)=>s+(r.qty_pcs||0),0);
   const totalBoxes = _transitParsed.rows.reduce((s,r)=>s+(r.qty_boxes||0),0);
+  const reviewed = _transitParsed.rows.filter(r => r.reviewed).length;
+  const total = _transitParsed.rows.length;
+  const pct = total > 0 ? Math.round(reviewed/total*100) : 0;
+  const reviewClr = pct === 100 ? '#10b981' : pct > 0 ? '#0f4c8a' : '#9ca3af';
   const el = document.getElementById('transit-edit-total');
-  if (el) el.innerHTML = `<b>총 ${_transitParsed.rows.length}개 라인 | ${totalPcs.toLocaleString()} pcs | ${totalBoxes.toLocaleString()} boxes</b>`;
+  if (el) el.innerHTML = 
+    `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:flex-end;">` +
+    `<span style="color:${reviewClr};font-weight:700;">✓ 검토 ${reviewed}/${total} (${pct}%)</span>` +
+    `<button onclick="toggleAllTransitReviewed(true)" class="btn btn-sm" style="background:#ecfdf5;border:1px solid #10b981;color:#065f46;font-size:11px;">전체 체크</button>` +
+    `<button onclick="toggleAllTransitReviewed(false)" class="btn btn-sm" style="font-size:11px;">전체 해제</button>` +
+    `<span style="color:var(--text3);">|</span>` +
+    `<b>총 ${total}개 라인 · ${totalPcs.toLocaleString()} pcs · ${totalBoxes.toLocaleString()} boxes</b>` +
+    `</div>`;
+}
+
+// 일괄 체크/해제
+function toggleAllTransitReviewed(checked) {
+  if (!_transitParsed) return;
+  _transitParsed.rows.forEach(r => { r.reviewed = !!checked; });
+  renderTransitEditTable();
+  saveTransitDraft();
 }
 
 function deleteTransitRow(i) {
