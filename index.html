@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_020547 — 모든 SKU 다운로드 버튼 (검토용 Excel, 의심 SKU 자동 표시) -->
+<!-- BUILD: 20260429_021239 — SKU 다운로드: 사이즈 의류 순서 정렬 (XS→S→M→...→5XL, 2T→3T→4T→5T) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11511,7 +11511,6 @@ async function downloadAllSkusXlsx() {
         .select('sku_id, style_number, color, color_code, size, created_at, styles(description)')
         .order('style_number', { ascending: true })
         .order('color', { ascending: true })
-        .order('size', { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw error;
       if (!data || data.length === 0) break;
@@ -11525,6 +11524,31 @@ async function downloadAllSkusXlsx() {
       alert('등록된 SKU 가 없습니다.');
       return;
     }
+    
+    // 사이즈 의류 순서로 정렬 (XS→S→M→...→5XL, toddler 2T→3T→4T→5T)
+    const SIZE_ORDER = {
+      '2T':1, '3T':2, '4T':3, '5T':4,
+      'XS':10, 'S':11, 'SM':11, 'M':12, 'MD':12, 'L':13, 'LG':13, 
+      'XL':14, '2XL':15, 'XXL':15, '3XL':16, 'XXXL':16, 
+      '4XL':17, 'XXXXL':17, '5XL':18, 'XXXXXL':18,
+      'MIX':50, 'OS':51
+    };
+    const sizeKey = (s) => {
+      const u = String(s||'').toUpperCase().trim();
+      return SIZE_ORDER[u] !== undefined ? SIZE_ORDER[u] : 99;
+    };
+    allSkus.sort((a, b) => {
+      // 1. style
+      if (a.style_number !== b.style_number) return String(a.style_number||'').localeCompare(String(b.style_number||''));
+      // 2. color
+      if ((a.color||'') !== (b.color||'')) return String(a.color||'').localeCompare(String(b.color||''));
+      // 3. size (의류 순서)
+      const ka = sizeKey(a.size);
+      const kb = sizeKey(b.size);
+      if (ka !== kb) return ka - kb;
+      // 4. fallback — sku_id
+      return String(a.sku_id||'').localeCompare(String(b.sku_id||''));
+    });
     
     // 2. 각 SKU 의 inventory 사용 여부 (재고/commit 합산)
     if (btn) btn.textContent = `⏳ 재고 매칭 중... ${allSkus.length}개`;
@@ -11596,7 +11620,7 @@ async function downloadAllSkusXlsx() {
       if (r.in_use === 'YES') stats[k].in_use++;
       if (r.suspect) stats[k].suspect++;
     });
-    const statsRows = Object.values(stats).sort((a,b) => a.size.localeCompare(b.size));
+    const statsRows = Object.values(stats).sort((a,b) => sizeKey(a.size) - sizeKey(b.size));
     const ws2 = XLSX.utils.json_to_sheet(statsRows, { header: ['size','count','in_use','suspect'] });
     ws2['!cols'] = [{ wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'Size 분포');
