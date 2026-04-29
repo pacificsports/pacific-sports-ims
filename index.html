@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_021239 — SKU 다운로드: 사이즈 의류 순서 정렬 (XS→S→M→...→5XL, 2T→3T→4T→5T) -->
+<!-- BUILD: 20260429_100417 — SKU Import 등록 confirm 1개로 통합 (3중 → 1중, 짜증 줄임) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -6751,7 +6751,7 @@ function addGridLinesToOrder(styleNum, color) {
     const loose = qty % ppb;
     const scStock  = getScStock(styleNum, color, size);
     const pcrStock = getPcrStock(styleNum, color, size);
-    const code = styleNum + color.replace(/\s+/g,'').substring(0,6).toUpperCase() + size.replace(/\s+/g,'').toUpperCase();
+    const code = styleNum + color.replace(/\s+/g,'').substring(0,6).toUpperCase() + sizeForSku(size).toUpperCase();
     const _gl = {
       code, styleNum, color, size, wh,
       description: desc, qty, price, ppb, cases, loose,
@@ -7861,7 +7861,7 @@ async function _doSaveInvoice() {
   // ── 1. 라인별 재고 확인 (해당 창고 + SKU)
 
   const lineChecks = await Promise.all(poLines.map(async l => {
-    const sku = (l.styleNum + l.color.replace(/\s+/g,'').substring(0,6) + l.size.replace(/\s+/g,'')).toLowerCase();
+    const sku = (l.styleNum + l.color.replace(/\s+/g,'').substring(0,6) + sizeForSku(l.size)).toLowerCase();
     const lineWh = l.wh || 'SC';
     const isLineSplit = (lineWh === 'SC&CA');
 
@@ -11237,7 +11237,7 @@ function openImportModal() {
   openModal('modal-import');
 }
 
-const IMPORT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+const IMPORT_SIZES = ['2T', '3T', '4T', '5T', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
 const IMPORT_LARGE_SIZES = new Set(['3XL', '4XL', '5XL']);
 
 // Davinci 색상 → 마스터 매핑 (편집 가능)
@@ -11257,6 +11257,17 @@ function colorCode6(color) {
   }
   // 단색
   return (color || '').toLowerCase().replace(/\s+/g, '').replace(/-/g, '').substring(0, 6);
+}
+
+// SKU 안에 들어갈 size 코드 — toddler (2T,3T,4T,5T) 는 T 제거 (Davinci 룰)
+//   size 필드 자체는 '2T' 유지 (디스플레이용), SKU 에만 '2' 들어감
+//   예: '2T' → '2', '3T' → '3', 'XS' → 'xs', '2XL' → '2xl', 'M' → 'm'
+function sizeForSku(size) {
+  if (!size) return '';
+  const s = String(size).trim();
+  // toddler 패턴: 한 자리 숫자 + T (대소문자 무관)
+  if (/^[2-5]T$/i.test(s)) return s.charAt(0);
+  return s.toLowerCase();
 }
 
 function pcsPerBox(size, ppbSmall, ppbLarge) {
@@ -11414,7 +11425,8 @@ function previewSkuImport() {
     sizesForStyle.forEach(size => {
       // SKU 형식: {style}{cc}{size}{+suffix?}{+ss?}
       // 예: 1315charcoxs+ht (Tubular HT), 1315charcoxs+ht+ss (Side Seam HT)
-      const baseSkuId = `${styleNum}${cc}${size.toLowerCase()}${suffixPart}`;
+      // toddler (2T,3T,4T,5T) → SKU 에는 T 떼고 숫자만 (Davinci 룰)
+      const baseSkuId = `${styleNum}${cc}${sizeForSku(size)}${suffixPart}`;
       
       if (variantMode === 'both') {
         skus.push({
@@ -11464,36 +11476,197 @@ function previewSkuImport() {
     warehouses: selectedWarehouses
   };
 
-  // 미리보기 UI
+  // ── 의심 패턴 검증 (사용자가 잘못된 패턴 알아채게)
+  const suspects = [];
+  
+  // 1. toddler size (2T, 3T, 4T, 5T) 인데 SKU 끝에 't' 있는 경우 (Davinci 룰 위반)
+  const toddlerWithT = skus.filter(s => /^[2-5]T$/i.test(s.size) && /[2-5]t$/i.test(s.sku_id));
+  if (toddlerWithT.length > 0) {
+    suspects.push({
+      type: 'toddler-T',
+      severity: 'high',
+      msg: `Toddler 사이즈인데 SKU 끝에 'T' 포함 (Davinci 룰: T 없어야 함)`,
+      examples: toddlerWithT.slice(0, 3).map(s => s.sku_id)
+    });
+  }
+  
+  // 2. 색상 코드가 너무 짧음 (3자 미만)
+  const tooShortCC = skus.filter(s => (s.color_code||'').length < 3);
+  if (tooShortCC.length > 0) {
+    const uniqCC = [...new Set(tooShortCC.map(s => s.color_code))];
+    suspects.push({
+      type: 'short-cc',
+      severity: 'med',
+      msg: `색상 코드가 너무 짧음 (다른 색상과 헷갈릴 수 있음)`,
+      examples: uniqCC.slice(0, 3)
+    });
+  }
+  
+  // 3. SKU 길이 비정상 (8자 미만 또는 30자 초과)
+  const weirdLength = skus.filter(s => s.sku_id.length < 8 || s.sku_id.length > 30);
+  if (weirdLength.length > 0) {
+    suspects.push({
+      type: 'length',
+      severity: 'med',
+      msg: `SKU 길이가 비정상 (8자 미만 또는 30자 초과)`,
+      examples: weirdLength.slice(0, 3).map(s => `${s.sku_id} (${s.sku_id.length}자)`)
+    });
+  }
+  
+  // 4. DB 에 이미 있는 SKU 체크 (chunk 으로 안전하게 — async 라 미리보기 동기 제약)
+  // upsert 면 덮어쓰기 위험 — 사용자에게 알려야
+  // 비동기로 진행하되 먼저 UI 그리고 결과 나오면 업데이트
+  
+  // 색상 코드 자동 생성된 거 vs 커스텀 코드 표시
+  const ccBreakdown = {};
+  skus.forEach(s => {
+    const cc = s.color_code || '';
+    if (!ccBreakdown[s.color]) ccBreakdown[s.color] = cc;
+  });
+  
+  // 미리보기 UI — 의심 패턴 우선 + 펼친 상태
   const invRowCount = skus.length * selectedWarehouses.length;
-  let html = `
+  
+  // 의심 배너 (있으면 맨 위에 큰 빨간 배너)
+  let suspectBanner = '';
+  if (suspects.length > 0) {
+    const high = suspects.filter(s => s.severity === 'high');
+    const bg = high.length > 0 ? '#fef2f2' : '#fff7ed';
+    const border = high.length > 0 ? '#dc2626' : '#ea580c';
+    const txt = high.length > 0 ? '#991b1b' : '#9a3412';
+    suspectBanner = `
+      <div style="background:${bg};border:2px solid ${border};border-radius:6px;padding:14px 16px;margin-bottom:12px;">
+        <div style="font-weight:700;color:${txt};font-size:14px;margin-bottom:8px;">
+          ${high.length > 0 ? '⛔' : '⚠️'} 의심 패턴 ${suspects.length}개 발견 — 등록 전에 확인하세요
+        </div>
+        <ul style="margin:0;padding-left:20px;font-size:12px;color:${txt};line-height:1.7;">
+          ${suspects.map(s => `
+            <li>
+              <b>${s.msg}</b>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7280;margin-top:2px;">
+                예: ${s.examples.join(', ')}
+              </div>
+            </li>
+          `).join('')}
+        </ul>
+      </div>`;
+  }
+  
+  // 색상 코드 요약 (사용자가 색상별로 어떻게 변환되는지 보게)
+  const ccSummaryRows = Object.entries(ccBreakdown).map(([color, cc]) => {
+    const isShort = (cc||'').length < 3;
+    return `<tr>
+      <td style="padding:3px 8px;">${color}</td>
+      <td style="padding:3px 8px;font-family:'IBM Plex Mono',monospace;font-weight:700;color:${isShort?'#dc2626':'#0f4c8a'};">${cc}${isShort?' ⚠️':''}</td>
+    </tr>`;
+  }).join('');
+  
+  let html = suspectBanner + `
     <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:5px;padding:12px;">
-      <div style="font-weight:700;color:#166534;margin-bottom:8px;">✓ 미리보기 OK</div>
-      <div style="font-size:12px;color:#15803d;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:6px;">
+      <div style="font-weight:700;color:#166534;margin-bottom:10px;font-size:13px;">
+        ✓ 미리보기 — 등록 전 확인 필요
+      </div>
+      <div style="font-size:12px;color:#15803d;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px;">
         <div>📦 Style: <strong>${styleNum}</strong></div>
         <div>🎨 색상: <strong>${uniqueColors.length}개</strong></div>
-        <div>📏 사이즈: <strong>9개</strong></div>
+        <div>📏 사이즈: <strong>${sizesForStyle.length}개</strong></div>
         <div>🏷️ 총 SKU: <strong>${skus.length}개</strong></div>
       </div>
       <div style="font-size:11px;color:#15803d;margin-bottom:10px;padding:6px 8px;background:#dcfce7;border-radius:4px;">
         🏬 자리 예약 창고: <strong>${selectedWarehouses.length > 0 ? selectedWarehouses.join(', ') : '없음'}</strong>
         → 총 <strong>${invRowCount.toLocaleString()}</strong> inventory rows 생성됨 (${skus.length} SKU × ${selectedWarehouses.length} 창고)
       </div>
-      <details style="font-size:11px;">
-        <summary style="cursor:pointer;color:#15803d;font-weight:600;">📋 생성될 SKU 미리보기 (처음 12개)</summary>
-        <table style="width:100%;margin-top:8px;font-family:'IBM Plex Mono',monospace;font-size:11px;border-collapse:collapse;">
-          <tr style="background:#e0e7ef;"><th style="padding:4px 8px;text-align:left;">SKU</th><th style="padding:4px 8px;text-align:left;">Color</th><th style="padding:4px 8px;text-align:left;">Size</th><th style="padding:4px 8px;text-align:left;">Variant</th></tr>
-          ${skus.slice(0, 12).map(s => `<tr><td style="padding:3px 8px;">${s.sku_id}</td><td style="padding:3px 8px;">${s.color}</td><td style="padding:3px 8px;">${s.size}</td><td style="padding:3px 8px;">${s.variant}</td></tr>`).join('')}
+      
+      <!-- 색상 → 코드 변환 요약 (펼침 default) -->
+      <div style="background:#fff;border:1px solid #d1fae5;border-radius:4px;padding:8px;margin-bottom:8px;">
+        <div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:4px;">🎨 색상 → 색상 코드 변환</div>
+        <table style="width:100%;font-size:11px;border-collapse:collapse;">
+          <thead><tr style="background:#ecfdf5;"><th style="padding:3px 8px;text-align:left;">색상명</th><th style="padding:3px 8px;text-align:left;">색상 코드 (SKU 안)</th></tr></thead>
+          <tbody>${ccSummaryRows}</tbody>
         </table>
-        ${skus.length > 12 ? `<div style="padding:4px 8px;color:#6b7280;font-size:10px;">...외 ${skus.length - 12}개</div>` : ''}
-      </details>
+      </div>
+      
+      <!-- SKU 미리보기 (펼침 default, 처음 30개) -->
+      <div style="background:#fff;border:1px solid #d1fae5;border-radius:4px;padding:8px;">
+        <div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:4px;">
+          📋 생성될 SKU 목록 (전체 ${skus.length}개 중 처음 30개)
+          <span id="imp-sku-dup-status" style="margin-left:8px;color:#6b7280;font-weight:400;">DB 중복 확인 중...</span>
+        </div>
+        <table style="width:100%;font-family:'IBM Plex Mono',monospace;font-size:11px;border-collapse:collapse;">
+          <thead><tr style="background:#ecfdf5;">
+            <th style="padding:4px 8px;text-align:left;">SKU</th>
+            <th style="padding:4px 8px;text-align:left;">Color</th>
+            <th style="padding:4px 8px;text-align:center;">Size</th>
+            <th style="padding:4px 8px;text-align:left;">Variant</th>
+            <th style="padding:4px 8px;text-align:center;" id="imp-sku-dup-col">DB</th>
+          </tr></thead>
+          <tbody id="imp-sku-preview-tbody">
+            ${skus.slice(0, 30).map(s => {
+              // 의심 row 강조
+              const isToddlerT = /^[2-5]T$/i.test(s.size) && /[2-5]t$/i.test(s.sku_id);
+              const rowBg = isToddlerT ? '#fef2f2' : '';
+              const skuColor = isToddlerT ? '#991b1b' : '#0f4c8a';
+              return `<tr style="background:${rowBg};border-bottom:1px solid #f0fdf4;" data-sku="${s.sku_id}">
+                <td style="padding:3px 8px;font-weight:700;color:${skuColor};">${s.sku_id}${isToddlerT?' ⚠️':''}</td>
+                <td style="padding:3px 8px;">${s.color}</td>
+                <td style="padding:3px 8px;text-align:center;">${s.size}</td>
+                <td style="padding:3px 8px;">${s.variant}</td>
+                <td style="padding:3px 8px;text-align:center;color:#9ca3af;" class="imp-sku-dup-cell">·</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        ${skus.length > 30 ? `<div style="padding:4px 8px;color:#6b7280;font-size:10px;">...외 ${skus.length - 30}개</div>` : ''}
+      </div>
     </div>
   `;
   previewEl.innerHTML = html;
   saveBtn.style.display = 'inline-flex';
+  
+  // ── 비동기로 DB 중복 체크 (UI 업데이트)
+  checkSkuImportDuplicates(skus.map(s => s.sku_id));
 }
 
-/** SKU 실제 등록 */
+// 미리보기 SKU 중에 DB 에 이미 있는 거 체크 — 비동기로 UI 업데이트
+async function checkSkuImportDuplicates(skuIds) {
+  if (!skuIds || skuIds.length === 0) return;
+  const statusEl = document.getElementById('imp-sku-dup-status');
+  try {
+    const foundSet = new Set();
+    for (let i = 0; i < skuIds.length; i += 200) {
+      const chunk = skuIds.slice(i, i + 200);
+      const { data } = await db.from('skus').select('sku_id').in('sku_id', chunk);
+      (data||[]).forEach(s => foundSet.add(s.sku_id));
+    }
+    // 통계
+    const dupCount = foundSet.size;
+    const newCount = skuIds.length - dupCount;
+    if (statusEl) {
+      if (dupCount === 0) {
+        statusEl.innerHTML = `<span style="color:#16a34a;font-weight:700;">✓ 모두 새 SKU (${newCount}개)</span>`;
+      } else {
+        statusEl.innerHTML = `<span style="color:#d97706;font-weight:700;">⚠️ DB 에 이미 있음 ${dupCount}개</span> · 새로 추가 ${newCount}개 (upsert: 기존 정보 덮어쓰기)`;
+      }
+    }
+    // 표시된 row 들에 DB 표시 업데이트
+    const tbody = document.getElementById('imp-sku-preview-tbody');
+    if (tbody) {
+      tbody.querySelectorAll('tr').forEach(tr => {
+        const sku = tr.getAttribute('data-sku');
+        const cell = tr.querySelector('.imp-sku-dup-cell');
+        if (!cell || !sku) return;
+        if (foundSet.has(sku)) {
+          cell.innerHTML = '<span title="DB 에 이미 있음 — upsert 시 덮어쓰기" style="color:#d97706;">⚠️</span>';
+        } else {
+          cell.innerHTML = '<span title="새 SKU" style="color:#16a34a;">+</span>';
+        }
+      });
+    }
+  } catch(e) {
+    console.warn('[checkSkuImportDuplicates]', e);
+    if (statusEl) statusEl.textContent = '(중복 확인 실패)';
+  }
+}
 // ── 모든 SKU 를 Excel 로 다운로드 (검토용)
 async function downloadAllSkusXlsx() {
   const btn = event?.target;
@@ -11650,6 +11823,31 @@ async function downloadAllSkusXlsx() {
 
 async function executeSkuImport() {
   if (!_skuImportData) { alert('먼저 미리보기를 해주세요'); return; }
+
+  const skus = _skuImportData.skus;
+  const skuIds = skus.map(s => s.sku_id);
+  
+  // DB 중복 체크 (한 번만)
+  const foundSet = new Set();
+  for (let i = 0; i < skuIds.length; i += 200) {
+    const chunk = skuIds.slice(i, i + 200);
+    const { data } = await db.from('skus').select('sku_id').in('sku_id', chunk);
+    (data||[]).forEach(s => foundSet.add(s.sku_id));
+  }
+  const newCount = skus.length - foundSet.size;
+  
+  // 한 번에 요약해서 confirm
+  let msg = `Style ${_skuImportData.style.style_number} 등록\n`;
+  msg += `색상 ${_skuImportData.colors.length}개 · 총 ${skus.length}개 SKU`;
+  if (foundSet.size > 0) {
+    msg += `\n  · 새로 추가: ${newCount}개\n  · 덮어쓰기: ${foundSet.size}개 (이미 DB 에 있음)`;
+  }
+  if ((_skuImportData.warehouses||[]).length > 0) {
+    msg += `\nInventory rows: ${(skus.length * _skuImportData.warehouses.length).toLocaleString()}개`;
+  }
+  msg += `\n\n등록하시겠습니까?`;
+  
+  if (!confirm(msg)) return;
 
   const btn = document.getElementById('imp-sku-save-btn');
   btn.disabled = true;
@@ -11875,7 +12073,7 @@ async function previewInventoryImport() {
     for (const row of rows) {
       const parsed = parseDavinciRow(row, styleNum);
       const cc = colorCode6(parsed.color);
-      let sku_id = `${styleNum}${cc}${parsed.size.toLowerCase()}`;
+      let sku_id = `${styleNum}${cc}${sizeForSku(parsed.size)}`;
       if (parsed.isSs) sku_id += '+ss';
       if (parsed.suffix) sku_id += '+' + parsed.suffix;  // +ER, +HT 등
 
@@ -20779,7 +20977,7 @@ async function loadBackOrders() {
       const color = l.color || '';
       const size = l.size || '';
       const normColor = color.replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
-      const itemCode = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + size.replace(/\s+/g,'')).toLowerCase() + (l.is_side_seam?'+ss':'');
+      const itemCode = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + sizeForSku(size)).toLowerCase() + (l.is_side_seam?'+ss':'');
       return {
         styleNum, color, size,
         qty: l.qty_backordered || 0,
@@ -21780,7 +21978,7 @@ async function boAllocFromCard(boOrderId, lineIdx, wh) {
     const color = l.color || '';
     const size = l.size || '';
     const normColor = color.replace(/Heathered/gi,'Htr').replace(/Heather/gi,'Htr').replace(/Hthr/gi,'Htr').trim();
-    const itemCode = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + size.replace(/\s+/g,'')).toLowerCase() + (l.is_side_seam?'+ss':'');
+    const itemCode = (styleNum + normColor.replace(/\s+/g,'').substring(0,6) + sizeForSku(size)).toLowerCase() + (l.is_side_seam?'+ss':'');
     return {
       styleNum, color, size,
       qty: l.qty_backordered || 0,
