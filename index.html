@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_131727 — Receive 시스템 새 디자인: SC bin / CA 직송 / 보류 + 다중 선택 일괄 작업 + SKU 기반 -->
+<!-- BUILD: 20260429_133537 — Receive 모달 row 안 보이는 문제 fix (브라우저가 tbody.innerHTML 에서 tr/td 를 strip 하는 버그) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -37589,7 +37589,13 @@ async function openTransitReceive(invoiceNo) {
 function renderRecvTable() {
   const tbody = document.getElementById('receive-lines-body');
   if (!tbody) return;
-  tbody.innerHTML = _recvLines.map((l, i) => {
+  
+  // 진짜 브라우저 호환 — table 전체 만들어서 tbody 만 swap
+  const table = tbody.parentElement;
+  const newTbody = document.createElement('tbody');
+  newTbody.id = 'receive-lines-body';
+  
+  const rowsHtml = _recvLines.map((l, i) => {
     const diff = l.actual_pcs - l.expected_pcs;
     const diffStr = diff === 0 ? '' : (diff > 0 ? `+${diff}` : `${diff}`);
     const diffColor = diff === 0 ? '' : (diff > 0 ? '#1565c0' : '#c62828');
@@ -37642,6 +37648,19 @@ function renderRecvTable() {
       <td style="padding:4px;border:1px solid #e8f5e9;text-align:center;">${statusBadge}</td>
     </tr>`;
   }).join('');
+  
+  // 진짜 브라우저 호환 방법: table.innerHTML 에 set (tbody 까지 포함)
+  // 또는 임시 div 에서 파싱 후 진짜 tr 들 옮기기
+  const temp = document.createElement('table');
+  temp.innerHTML = `<tbody>${rowsHtml}</tbody>`;
+  const parsedTbody = temp.querySelector('tbody');
+  if (parsedTbody) {
+    while (parsedTbody.firstChild) {
+      newTbody.appendChild(parsedTbody.firstChild);
+    }
+  }
+  
+  table.replaceChild(newTbody, tbody);
   recvUpdateProgress();
 }
 
