@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_014117 — SKU 컬럼 추가 (자동 생성 + DB 매칭 + 수정 가능) + 비표준 룰 fix (혼합 표준 6/4 DZ/CT 지원) -->
+<!-- BUILD: 20260429_014603 — 옛 draft 호환: SKU 누락 자동 채우기 + DB 매칭 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -36028,6 +36028,20 @@ function autoResumeTransitDraft() {
   _transitParsed = d._transitParsed;
   if (!_transitParsed.rawRows) _transitParsed.rawRows = [];
   
+  // 옛 draft 호환: SKU 누락 row 자동 채우기
+  let needSkuCheck = false;
+  _transitParsed.rows.forEach(r => {
+    if (!r.sku && r.style_number && r.color && r.size) {
+      r.sku = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + (r.size||'').replace(/\s+/g,'')).toLowerCase();
+      r.sku_status = 'unchecked';
+      needSkuCheck = true;
+    }
+    // valid_ppbs 누락 보강 (옛 draft)
+    if (!r.valid_ppbs) {
+      r.valid_ppbs = [r.std_ppb || 72];
+    }
+  });
+  
   document.getElementById('transit-preview-modal').style.display = 'flex';
   document.getElementById('transit-preview-info').innerHTML =
     `<div><span style="color:var(--text3);">Invoice</span><br><b>${_transitParsed.invoiceNo||'-'}</b></div>` +
@@ -36038,6 +36052,11 @@ function autoResumeTransitDraft() {
   if (d.eta) document.getElementById('transit-eta-input').value = d.eta;
   if (d.notes) document.getElementById('transit-notes-input').value = d.notes;
   renderTransitEditTable();
+  
+  // SKU 채워준 row 가 있으면 DB 매칭 일괄 시도 (비동기)
+  if (needSkuCheck) {
+    checkAllTransitSkus().catch(e => console.warn('[autoResumeTransitDraft] sku check failed:', e));
+  }
   return true;
 }
 
