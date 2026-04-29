@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_140032 — 진짜 진짜 fix: receive-lines-body ID 가 Return 모달과 충돌. 새 Receive 모달은 recv-trans-body 로 분리 -->
+<!-- BUILD: 20260429_140512 — 사이즈 의류 순서 정렬 (Receive 모달 + In Transit 메인 테이블) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -36483,6 +36483,20 @@ async function loadInTransit() {
 }
 
 function renderTransitTable(elId, rows) {
+  // 사이즈 의류 순서로 정렬
+  const SIZE_ORDER = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL','MIX','OS'];
+  const sizeKey = (s) => {
+    const u = String(s||'').toUpperCase().trim();
+    const idx = SIZE_ORDER.indexOf(u);
+    return idx === -1 ? 99 : idx;
+  };
+  rows = rows.slice().sort((a, b) => {
+    if (a.invoice_no !== b.invoice_no) return String(a.invoice_no||'').localeCompare(String(b.invoice_no||''));
+    if (a.style_number !== b.style_number) return String(a.style_number||'').localeCompare(String(b.style_number||''));
+    if (a.color !== b.color) return String(a.color||'').localeCompare(String(b.color||''));
+    return sizeKey(a.size) - sizeKey(b.size);
+  });
+  
   // 컨테이너/인보이스별 그룹
   const groups = {};
   rows.forEach(r => {
@@ -37537,8 +37551,21 @@ let _recvLines = [];  // [{transitRow, qty_boxes, qty_pcs, ppb, dest, bin, statu
 async function openTransitReceive(invoiceNo) {
   const { data: rows } = await db.from('in_transit')
     .select('*').eq('invoice_no', invoiceNo).eq('status','in_transit')
-    .order('style_number').order('color').order('size');
+    .order('style_number').order('color');
   if (!rows || !rows.length) { alert('라인이 없습니다.'); return; }
+
+  // 사이즈 의류 순서로 정렬 (toddler 2T→5T, adult XS→5XL)
+  const SIZE_ORDER = ['2T','3T','4T','5T','XS','YS','YM','YL','S','M','L','XL','2XL','3XL','4XL','5XL','6XL','MIX','OS'];
+  const sizeKey = (s) => {
+    const u = String(s||'').toUpperCase().trim();
+    const idx = SIZE_ORDER.indexOf(u);
+    return idx === -1 ? 99 : idx;
+  };
+  rows.sort((a, b) => {
+    if (a.style_number !== b.style_number) return String(a.style_number||'').localeCompare(String(b.style_number||''));
+    if (a.color !== b.color) return String(a.color||'').localeCompare(String(b.color||''));
+    return sizeKey(a.size) - sizeKey(b.size);
+  });
 
   const g = rows[0];
   const totalBoxes = rows.reduce((s, r) => s + (r.qty_boxes || 0), 0);
