@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_111421 — 파싱 결과 패널 자체 스크롤 + 헤더 진짜 sticky (스크롤 컨테이너 분리) -->
+<!-- BUILD: 20260429_113359 — Tab 키 = 같은 row 다음 input (Style → Color → SS → Size → SKU → 박스 → ppb → Pcs → 다음 row) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -36770,20 +36770,15 @@ async function parseTransitExcel(input) {
     let c = String(raw).toUpperCase().trim();
     // 괄호 안 모두 제거 (SW, DS 등)
     c = c.replace(/\([^)]*\)/g, '').trim();
-    // 원본에 HTR-숫자 패턴 있었는지 기억
-    const hadDashedHtr = /HTR-\d+/i.test(String(raw).toUpperCase());
     // trailing dash-숫자 제거 (예: HTR-1 → HTR)
     c = c.replace(/-\d+\b/g, '').trim();
     const PREFIX = new Set(['RT', 'US']); // HT, TK 는 사람 판단 영역
     let parts = c.split(/\s+/).filter(Boolean);
-    // leading prefix 제거
+    // leading prefix 제거 (RT, US 만 — 공장 코드)
     while (parts.length > 1 && PREFIX.has(parts[0])) parts.shift();
-    // trailing CVC 항상 제거
+    // trailing CVC 항상 제거 (Davinci 룰)
     while (parts.length > 1 && parts[parts.length-1] === 'CVC') parts.pop();
-    // trailing HTR: dashed 패턴이 아니었던 경우에만 제거
-    if (!hadDashedHtr) {
-      while (parts.length > 1 && parts[parts.length-1] === 'HTR') parts.pop();
-    }
+    // HTR 은 자동 제거 X — NAVY 와 NAVY HTR 가 별개 색상이라 사람이 판단
     return parts.join(' ').trim();
   }
 
@@ -36949,11 +36944,11 @@ function renderTransitEditTable() {
         ${srcRow}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
-        <input value="${r.style_number}" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'style_number', this.value)"
+        <input value="${r.style_number}" onmouseup="setTimeout(()=>this.select(),0)" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'style_number', this.value)"
           style="width:58px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
-        <input value="${r.color}" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'color', this.value)"
+        <input value="${r.color}" onmouseup="setTimeout(()=>this.select(),0)" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'color', this.value)"
           style="width:140px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:${r.is_side_seam?'#fef3c7':'transparent'};" title="Side Seam (SKU 에 +ss 추가)">
@@ -36961,29 +36956,29 @@ function renderTransitEditTable() {
           style="width:16px;height:16px;cursor:pointer;accent-color:#d97706;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
-        <input value="${r.size}" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'size', this.value)"
+        <input value="${r.size}" onmouseup="setTimeout(()=>this.select(),0)" onfocus="this.select()" onchange="onTransitStyleColorSizeChange(${i}, 'size', this.value)"
           style="width:42px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;background:#f0fdf4;" title="${skuStatusTitle}">
         <div style="display:flex;align-items:center;gap:3px;">
           <span style="font-size:11px;color:${skuIconColor};font-weight:700;width:14px;flex-shrink:0;text-align:center;">${skuIcon}</span>
-          <input value="${r.sku||''}" onfocus="this.select()" onchange="onTransitSkuChange(${i}, this.value)"
+          <input value="${r.sku||''}" onmouseup="setTimeout(()=>this.select(),0)" onfocus="this.select()" onchange="onTransitSkuChange(${i}, this.value)"
             style="width:100%;min-width:120px;height:26px;border:1px solid ${skuBorderColor};border-radius:3px;padding:0 4px;font-size:10px;font-family:'IBM Plex Mono',monospace;background:${skuBg};color:${skuColor};"/>
         </div>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
-        <input type="number" value="${boxes}" min="0" onfocus="this.select()"
+        <input type="number" value="${boxes}" min="0" onmouseup="setTimeout(()=>this.select(),0)" onfocus="this.select()"
           onchange="onTransitBoxesChange(${i}, this.value)"
           style="width:54px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;background:#fffde7;text-align:center;" id="transit-ppb-cell-${i}">
-        <input type="number" value="${ppb}" min="1" onfocus="this.select()"
+        <input type="number" value="${ppb}" min="1" onmouseup="setTimeout(()=>this.select(),0)" onfocus="this.select()"
           onchange="onTransitPpbChange(${i}, this.value)"
           style="width:54px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:${isNonStd?'#fff8e1':'#fff'};font-weight:${isNonStd?'700':'400'};color:${isNonStd?'#e65100':'inherit'};"/>
         ${isNonStd ? '<span style="font-size:9px;color:#e65100;">⚠️비표준</span>' : ''}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;" id="transit-pcs-${i}">
-        <input type="number" value="${r.qty_pcs||0}" min="0" onfocus="this.select()"
+        <input type="number" value="${r.qty_pcs||0}" min="0" onmouseup="setTimeout(()=>this.select(),0)" onfocus="this.select()"
           onchange="onTransitPcsChange(${i}, this.value)"
           style="width:70px;height:26px;border:1px solid ${isNonStd?'#f9a825':'#ddd'};border-radius:3px;padding:0 4px;font-size:12px;font-weight:700;text-align:center;background:${isNonStd?'#fff8e1':'#fff'};color:${isNonStd?'#e65100':'inherit'};"/>
       </td>
@@ -36995,6 +36990,59 @@ function renderTransitEditTable() {
   updateTransitTotal();
   // 원본 패널도 같이 그리기 (처음만)
   renderTransitOriginalView();
+  // Tab 키 핸들러 등록 (한 번만)
+  setupTransitTabNavigation();
+}
+
+// ── Tab 키 누르면 같은 row 의 다음 input 으로 (브라우저 default 가 이상해서 직접 처리)
+let _transitTabSetup = false;
+function setupTransitTabNavigation() {
+  if (_transitTabSetup) return;
+  _transitTabSetup = true;
+  const tbody = document.getElementById('transit-edit-body');
+  if (!tbody) { _transitTabSetup = false; return; }
+  tbody.addEventListener('keydown', function(ev) {
+    if (ev.key !== 'Tab') return;
+    const target = ev.target;
+    if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'BUTTON')) return;
+    const row = target.closest('tr');
+    if (!row) return;
+    // 현재 row 의 모든 focusable (input, button) 수집
+    const focusables = Array.from(row.querySelectorAll('input, button'))
+      .filter(el => !el.disabled && el.offsetParent !== null); // 보이는 것만
+    const idx = focusables.indexOf(target);
+    if (idx === -1) return;
+    
+    if (ev.shiftKey) {
+      // Shift+Tab: 이전 input
+      if (idx > 0) {
+        ev.preventDefault();
+        focusables[idx - 1].focus();
+      } else {
+        // 첫 input 에서 Shift+Tab → 위 row 마지막
+        const prevRow = row.previousElementSibling;
+        if (prevRow) {
+          ev.preventDefault();
+          const prevFocusables = Array.from(prevRow.querySelectorAll('input, button')).filter(el => !el.disabled && el.offsetParent !== null);
+          if (prevFocusables.length) prevFocusables[prevFocusables.length - 1].focus();
+        }
+      }
+    } else {
+      // Tab: 다음 input
+      if (idx < focusables.length - 1) {
+        ev.preventDefault();
+        focusables[idx + 1].focus();
+      } else {
+        // 마지막 input 에서 Tab → 아래 row 첫 번째
+        const nextRow = row.nextElementSibling;
+        if (nextRow) {
+          ev.preventDefault();
+          const nextFocusables = Array.from(nextRow.querySelectorAll('input, button')).filter(el => !el.disabled && el.offsetParent !== null);
+          if (nextFocusables.length) nextFocusables[0].focus();
+        }
+      }
+    }
+  });
 }
 
 // 검토 체크박스 변경
