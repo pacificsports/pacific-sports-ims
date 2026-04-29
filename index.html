@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_140938 — Receive 모달 default 목적지 = SC bin (대부분 운영 케이스) -->
+<!-- BUILD: 20260429_141732 — Receive 모달 + 라인 추가 + 모든 필드 수정 가능 + SKU 미등록 검증 + 안 들어온 라인 자동 보류 안내 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4156,6 +4156,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               <button class="btn btn-sm" style="background:#1565c0;color:#fff;" onclick="recvBulkApplyBin()">📍 SC bin 으로</button>
               <button class="btn btn-sm" style="background:#7b1fa2;color:#fff;" onclick="recvBulkApplyCa()">🚚 CA 직송</button>
               <button class="btn btn-sm" onclick="recvBulkClear()">↺ 초기화</button>
+              <span style="color:var(--text3);">|</span>
+              <button class="btn btn-sm" style="background:#16a34a;color:#fff;" onclick="recvAddNewLine()">+ 라인 추가</button>
               <span style="margin-left:auto;font-size:11px;color:var(--text2);">
                 <span id="recv-progress">대기 0/0</span> · 📍SC <b id="recv-progress-sc">0</b> · 🚚CA <b id="recv-progress-ca">0</b> · ⏸보류 <b id="recv-progress-hold">0</b>
               </span>
@@ -37615,18 +37617,31 @@ function renderRecvTable() {
     const diffStr = diff === 0 ? '' : (diff > 0 ? `+${diff}` : `${diff}`);
     const diffColor = diff === 0 ? '' : (diff > 0 ? '#1565c0' : '#c62828');
     
-    const rowBg = l.selected ? '#fffde7' : (l.dest === 'sc' ? '#ecfdf5' : (l.dest === 'ca' ? '#f3e8ff' : (l.dest === 'hold' ? '#fef3c7' : '#fff')));
+    const isNew = !!l.is_new;  // 새로 추가된 라인
+    const rowBg = l.selected ? '#fffde7' : (isNew ? '#fef3c7' : (l.dest === 'sc' ? '#ecfdf5' : (l.dest === 'ca' ? '#f3e8ff' : (l.dest === 'hold' ? '#fef3c7' : '#fff'))));
     const isNs = l.is_nonstandard;
     
     return `<tr id="recv-row-${i}" style="border-bottom:1px solid #f0f0f0;background:${rowBg};">
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
         <input type="checkbox" ${l.selected?'checked':''} onchange="recvToggleLine(${i}, this.checked)" style="width:16px;height:16px;cursor:pointer;accent-color:#10b981;">
       </td>
-      <td style="padding:3px 4px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${l.style_number}</td>
-      <td style="padding:3px 4px;border:1px solid #eee;font-size:11px;">${l.color}</td>
-      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;font-size:11px;">${l.size}</td>
-      <td style="padding:3px 4px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${l.sku||'—'}</td>
-      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;color:var(--text3);font-size:11px;">${l.expected_boxes}</td>
+      <td style="padding:3px 4px;border:1px solid #eee;">
+        <input value="${l.style_number||''}" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnFieldChange(${i}, 'style_number', this.value)"
+          style="width:58px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;">
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;">
+        <input value="${l.color||''}" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnFieldChange(${i}, 'color', this.value)"
+          style="width:120px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;background:#fff;">
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
+        <input value="${l.size||''}" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnFieldChange(${i}, 'size', this.value)"
+          style="width:42px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;">
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;background:#f0fdf4;">
+        <input value="${l.sku||''}" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnFieldChange(${i}, 'sku', this.value)"
+          style="width:130px;height:26px;border:1px solid #86efac;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;background:#f0fdf4;color:#0f4c8a;">
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;text-align:right;color:var(--text3);font-size:11px;">${isNew ? '<span style="color:#16a34a;font-weight:700;">NEW</span>' : l.expected_boxes}</td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:#fffde7;">
         <input type="number" value="${l.actual_boxes}" min="0" onmousedown="if(document.activeElement!==this){event.preventDefault();this.focus();this.select();}" onfocus="this.select()" onchange="recvOnBoxChange(${i}, this.value)"
           style="width:54px;height:26px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;">
@@ -37638,7 +37653,7 @@ function renderRecvTable() {
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:#fffde7;font-weight:700;">
         ${l.actual_pcs.toLocaleString()}
-        ${diff !== 0 ? `<div style="font-size:10px;color:${diffColor};font-weight:700;">${diffStr}</div>` : ''}
+        ${diff !== 0 && !isNew ? `<div style="font-size:10px;color:${diffColor};font-weight:700;">${diffStr}</div>` : ''}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:#e3f2fd;">
         <select onchange="recvOnDestChange(${i}, this.value)" style="height:26px;font-size:11px;border:1px solid #90caf9;border-radius:3px;padding:0 4px;background:#fff;">
@@ -37655,6 +37670,52 @@ function renderRecvTable() {
   }).join('');
   
   recvUpdateProgress();
+}
+
+// Style/Color/Size/SKU 변경
+function recvOnFieldChange(i, field, val) {
+  const l = _recvLines[i];
+  if (!l) return;
+  l[field] = (val||'').trim();
+  // SKU 가 직접 수정되면 lock
+  if (field === 'sku') l.sku_locked = true;
+  // style/color/size 수정 시 SKU 자동 재생성 (lock 안 됐으면)
+  if (['style_number','color','size'].includes(field) && !l.sku_locked && l.style_number && l.color && l.size) {
+    const base = (l.style_number + l.color.replace(/\s+/g,'').substring(0,6) + sizeForSku(l.size)).toLowerCase();
+    l.sku = base;
+    renderRecvTable();
+  }
+}
+
+// 새 라인 추가
+function recvAddNewLine() {
+  _recvLines.push({
+    id: null,
+    style_number: '',
+    color: '',
+    size: '',
+    sku: '',
+    expected_boxes: 0,
+    expected_pcs: 0,
+    actual_boxes: 0,
+    ppb: 72,
+    actual_pcs: 0,
+    is_nonstandard: false,
+    is_new: true,         // 새로 추가된 표시
+    dest: 'sc',
+    bin: '',
+    selected: false
+  });
+  renderRecvTable();
+  // 새 row 로 스크롤 + 첫 input focus
+  setTimeout(() => {
+    const last = document.querySelector('#recv-trans-body tr:last-child');
+    if (last) {
+      last.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const firstInput = last.querySelector('input[value=""]');
+      firstInput?.focus();
+    }
+  }, 100);
 }
 
 // 박스 변경 → pcs 자동 재계산
@@ -37788,18 +37849,33 @@ async function postTransitReceiving() {
   const modal = document.getElementById('transit-receive-modal');
   const invoiceNo = modal.dataset.invoiceNo;
   
+  // 0 박스 라인 자동 감지 — 옛 라인 (in_transit DB) 인데 actual_pcs 0 = 안 들어옴
+  const zeroOldLines = _recvLines.filter(l => !l.is_new && l.actual_pcs === 0 && l.dest === 'sc');
+  if (zeroOldLines.length > 0) {
+    const proceed = confirm(
+      `📭 안 들어온 것으로 보이는 라인 ${zeroOldLines.length}개:\n` +
+      zeroOldLines.slice(0, 5).map(l => `· ${l.style_number}/${l.color}/${l.size}`).join('\n') +
+      (zeroOldLines.length > 5 ? `\n...외 ${zeroOldLines.length-5}개` : '') +
+      `\n\n이 라인들을 자동으로 "보류" 로 변경하시겠습니까?\n(아니오: 그대로 SC 로 처리 — qty 0 으로 inventory 안 들어감)`
+    );
+    if (proceed) {
+      zeroOldLines.forEach(l => { l.dest = 'hold'; });
+      renderRecvTable();
+    }
+  }
+  
   // 검증
   const pending = _recvLines.filter(l => !l.dest);
   if (pending.length > 0) {
     if (!confirm(`⚠️ 처리 안 된 라인 ${pending.length}개가 있습니다.\n\n이 라인들은 in_transit 에 그대로 남습니다.\n계속 진행하시겠습니까?`)) return;
   }
   
-  const scLines = _recvLines.filter(l => l.dest === 'sc' && l.bin);
-  const caLines = _recvLines.filter(l => l.dest === 'ca');
+  const scLines = _recvLines.filter(l => l.dest === 'sc' && l.bin && l.actual_pcs > 0);
+  const caLines = _recvLines.filter(l => l.dest === 'ca' && l.actual_pcs > 0);
   const holdLines = _recvLines.filter(l => l.dest === 'hold');
   
   // SC bin 미입력 검증
-  const scNoBin = _recvLines.filter(l => l.dest === 'sc' && !l.bin);
+  const scNoBin = _recvLines.filter(l => l.dest === 'sc' && !l.bin && l.actual_pcs > 0);
   if (scNoBin.length > 0) {
     alert(`⚠️ SC 로 보내려는 라인 중 ${scNoBin.length}개가 bin 미입력입니다.\n각 라인의 bin 을 입력하거나 일괄 작업을 사용해주세요.`);
     return;
@@ -37831,7 +37907,18 @@ async function postTransitReceiving() {
   // 1. SC bin 입고
   for (const l of scLines) {
     try {
-      const styleObj = styles.find(s => s.style_number === l.style_number);
+      // 검증
+      if (!l.style_number || !l.color || !l.size || !l.sku) {
+        errors.push(`라인 정보 부족: ${l.style_number||'?'}/${l.color||'?'}/${l.size||'?'} (SKU: ${l.sku||'?'})`);
+        continue;
+      }
+      
+      // SKU 가 DB 에 등록됐는지 확인
+      const { data: skuRow } = await db.from('skus').select('sku_id, style_id').eq('sku_id', l.sku).maybeSingle();
+      if (!skuRow) {
+        errors.push(`SKU 미등록: ${l.sku} — 먼저 SKU Import 에서 등록해주세요`);
+        continue;
+      }
       
       // 같은 bin 에 같은 SKU 가 있으면 qty 추가, 없으면 새 row
       const { data: existing } = await db.from('inventory')
@@ -37846,7 +37933,7 @@ async function postTransitReceiving() {
         if ((existing.pcs_per_box || 72) !== l.ppb) {
           await db.from('inventory').insert({
             warehouse_id: scWhObj.id,
-            style_id: styleObj?.id || null,
+            style_id: skuRow.style_id || null,
             sku: l.sku,
             color: l.color,
             size: l.size,
@@ -37864,7 +37951,7 @@ async function postTransitReceiving() {
       } else {
         await db.from('inventory').insert({
           warehouse_id: scWhObj.id,
-          style_id: styleObj?.id || null,
+          style_id: skuRow.style_id || null,
           sku: l.sku,
           color: l.color,
           size: l.size,
@@ -37876,8 +37963,10 @@ async function postTransitReceiving() {
         });
       }
       
-      // in_transit row → received
-      await db.from('in_transit').update({ status: 'received' }).eq('id', l.id);
+      // in_transit row → received (옛 라인만, 새 라인은 id null)
+      if (l.id) {
+        await db.from('in_transit').update({ status: 'received' }).eq('id', l.id);
+      }
       
       // Reserved 자동 재확보
       const restored = await autoRestoreReserved(scWhObj.id, l.color, l.size, l.actual_pcs);
@@ -37894,7 +37983,7 @@ async function postTransitReceiving() {
     try {
       // 새 sc_ca transit row
       await db.from('in_transit').insert({
-        invoice_no: `${invoiceNo}-CA-${l.id}`.substring(0, 50),
+        invoice_no: l.id ? `${invoiceNo}-CA-${l.id}`.substring(0, 50) : `${invoiceNo}-CA-NEW-${Date.now()}`.substring(0, 50),
         container_no: null,
         ship_date: today,
         eta: null,
@@ -37909,21 +37998,45 @@ async function postTransitReceiving() {
         qty_pcs: l.actual_pcs,
         transit_type: 'sc_ca',
         status: 'in_transit',
-        notes: `Direct from Haiti (${invoiceNo})`
+        notes: `Direct from Haiti (${invoiceNo})${l.is_new ? ' [새 라인]' : ''}`
       });
       
-      // 옛 row → transferred
-      await db.from('in_transit').update({ status: 'transferred' }).eq('id', l.id);
+      // 옛 row → transferred (새 라인은 id null)
+      if (l.id) {
+        await db.from('in_transit').update({ status: 'transferred' }).eq('id', l.id);
+      }
       caOk++;
     } catch (e) {
       errors.push(`${l.style_number}/${l.color}/${l.size}: ${e.message}`);
     }
   }
   
-  // 3. 보류 — status 'on_hold'
+  // 3. 보류 — status 'on_hold' (새 라인이면 새로 insert)
   for (const l of holdLines) {
     try {
-      await db.from('in_transit').update({ status: 'on_hold' }).eq('id', l.id);
+      if (l.id) {
+        await db.from('in_transit').update({ status: 'on_hold' }).eq('id', l.id);
+      } else {
+        // 새 라인 — 보류로 직접 insert
+        await db.from('in_transit').insert({
+          invoice_no: invoiceNo,
+          container_no: null,
+          ship_date: today,
+          eta: null,
+          style_number: l.style_number,
+          color: l.color,
+          size: l.size,
+          sku: l.sku,
+          qty_dz: 0,
+          qty_boxes: l.actual_boxes,
+          ppb: l.ppb,
+          is_nonstandard: l.is_nonstandard,
+          qty_pcs: l.actual_pcs,
+          transit_type: 'haiti_sc',
+          status: 'on_hold',
+          notes: '[새 라인 — 보류]'
+        });
+      }
       holdOk++;
     } catch (e) {
       errors.push(`${l.style_number}/${l.color}/${l.size}: ${e.message}`);
