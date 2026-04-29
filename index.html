@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_000856 — BOX 숫자 bold + 진한 색 + 회색 배경 (DZS 와 시각 대조 강화) -->
+<!-- BUILD: 20260429_001319 — Haiti 작업 자동 백업 (localStorage). Refresh 해도 복원 가능. 24시간 만료 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4084,11 +4084,11 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
             <div style="display:flex;align-items:center;gap:6px;">
               <label style="font-size:12px;font-weight:700;white-space:nowrap;">🗓 ETA:</label>
-              <input type="date" id="transit-eta-input" style="height:30px;border:1px solid var(--border);border-radius:4px;padding:0 8px;font-size:12px;"/>
+              <input type="date" id="transit-eta-input" onchange="saveTransitDraft()" style="height:30px;border:1px solid var(--border);border-radius:4px;padding:0 8px;font-size:12px;"/>
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex:1;">
               <label style="font-size:12px;font-weight:700;white-space:nowrap;">메모:</label>
-              <input id="transit-notes-input" placeholder="특이사항 입력" style="flex:1;height:30px;border:1px solid var(--border);border-radius:4px;padding:0 8px;font-size:12px;"/>
+              <input id="transit-notes-input" oninput="saveTransitDraft()" placeholder="특이사항 입력" style="flex:1;height:30px;border:1px solid var(--border);border-radius:4px;padding:0 8px;font-size:12px;"/>
             </div>
             <button class="btn btn-sm" onclick="addTransitRow()" style="white-space:nowrap;">+ 라인 추가</button>
           </div>
@@ -35965,7 +35965,108 @@ function resetModalPosition(overlayId) {
 // ═══════════════════════════════════════════
 let _transitParsed = null;
 
+// ── Haiti Invoice 작업 자동 백업 (localStorage) ──
+//   refresh / 실수 닫기 시 작업 손실 방지. 24시간 후 자동 만료.
+const TRANSIT_DRAFT_KEY = 'transit_draft_v1';
+const TRANSIT_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function saveTransitDraft() {
+  if (!_transitParsed) return;
+  try {
+    const eta = document.getElementById('transit-eta-input')?.value || '';
+    const notes = document.getElementById('transit-notes-input')?.value || '';
+    const draft = {
+      ts: Date.now(),
+      _transitParsed: _transitParsed,
+      eta, notes
+    };
+    localStorage.setItem(TRANSIT_DRAFT_KEY, JSON.stringify(draft));
+  } catch(e) {
+    // 용량 초과 등 — 무시 (rawRows 가 너무 크면 saveLight 로 fallback)
+    console.warn('[saveTransitDraft] full save failed, trying light:', e?.message);
+    try {
+      const draftLight = {
+        ts: Date.now(),
+        _transitParsed: { ..._transitParsed, rawRows: null },  // raw 빼고
+        eta: document.getElementById('transit-eta-input')?.value || '',
+        notes: document.getElementById('transit-notes-input')?.value || '',
+        light: true  // raw 없음 표시
+      };
+      localStorage.setItem(TRANSIT_DRAFT_KEY, JSON.stringify(draftLight));
+    } catch(e2) {
+      console.warn('[saveTransitDraft] even light save failed:', e2?.message);
+    }
+  }
+}
+
+function clearTransitDraft() {
+  try { localStorage.removeItem(TRANSIT_DRAFT_KEY); } catch(e) {}
+}
+
+function getTransitDraft() {
+  try {
+    const raw = localStorage.getItem(TRANSIT_DRAFT_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (!d || !d.ts) return null;
+    if (Date.now() - d.ts > TRANSIT_DRAFT_TTL_MS) {
+      clearTransitDraft();
+      return null;
+    }
+    return d;
+  } catch(e) {
+    return null;
+  }
+}
+
+// 페이지 로드 시 / In Transit 페이지 열 때 호출
+async function checkTransitDraftOnLoad() {
+  const d = getTransitDraft();
+  if (!d || !d._transitParsed) return false;
+  const rowCount = d._transitParsed.rows?.length || 0;
+  const invNo = d._transitParsed.invoiceNo || '?';
+  const minAgo = Math.round((Date.now() - d.ts) / 60000);
+  const ageStr = minAgo < 60 ? `${minAgo}분 전` : `${Math.round(minAgo/60)}시간 전`;
+  
+  const proceed = confirm(
+    `이전 작업 발견:\n\n` +
+    `Invoice: ${invNo}\n` +
+    `라인 ${rowCount}개\n` +
+    `${ageStr} 작업\n\n` +
+    `이어서 작업할까요?\n` +
+    `(취소 누르면 이 임시 저장은 삭제됩니다)`
+  );
+  if (!proceed) {
+    clearTransitDraft();
+    return false;
+  }
+  // 복원
+  _transitParsed = d._transitParsed;
+  // raw 가 light save 라 없으면 — 원본 view 는 비활성, 나머지는 정상
+  if (!_transitParsed.rawRows) {
+    _transitParsed.rawRows = [];
+  }
+  // 모달 열고 채우기
+  document.getElementById('transit-preview-modal').style.display = 'flex';
+  document.getElementById('transit-preview-info').innerHTML =
+    `<div><span style="color:var(--text3);">Invoice</span><br><b>${_transitParsed.invoiceNo||'-'}</b></div>` +
+    `<div><span style="color:var(--text3);">Container</span><br><b>${_transitParsed.containerNo||'-'}</b></div>` +
+    `<div><span style="color:var(--text3);">Ship Date</span><br><b>${_transitParsed.shipDate||'-'}</b></div>` +
+    `<div><span style="color:var(--text3);">총 라인</span><br><b>${(_transitParsed.rows||[]).length}개</b></div>` +
+    `<div><span style="color:var(--text3);">총 수량</span><br><b>${(_transitParsed.rows||[]).reduce((s,r)=>s+(r.qty_pcs||0),0).toLocaleString()} pcs</b></div>` +
+    `<div style="background:#fff7e6;padding:4px 8px;border-radius:4px;color:#9a3412;font-size:11px;">⚠️ 이어서 작업 중 (자동 저장)</div>`;
+  if (d.eta) document.getElementById('transit-eta-input').value = d.eta;
+  if (d.notes) document.getElementById('transit-notes-input').value = d.notes;
+  renderTransitEditTable();
+  return true;
+}
+
 async function loadInTransit() {
+  // 미완성 작업 백업 자동 체크 (refresh 후 복원)
+  if (!_transitParsed && getTransitDraft()) {
+    await checkTransitDraftOnLoad();
+  }
+  
   const { data: rows } = await db.from('in_transit')
     .select('*')
     .eq('status', 'in_transit')
@@ -36427,6 +36528,7 @@ async function parseTransitExcel(input) {
 
   renderTransitEditTable();
   document.getElementById('transit-preview-modal').style.display = 'flex';
+  saveTransitDraft();  // 업로드 직후 자동 백업
 }
 
 // ── 수정 가능한 테이블 렌더링 (박스/ppb/pcs 직접 편집)
@@ -36445,15 +36547,15 @@ function renderTransitEditTable() {
         ${srcRow}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
-        <input value="${r.style_number}" onchange="_transitParsed.rows[${i}].style_number=this.value"
+        <input value="${r.style_number}" onchange="_transitParsed.rows[${i}].style_number=this.value;saveTransitDraft()"
           style="width:58px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
-        <input value="${r.color}" onchange="_transitParsed.rows[${i}].color=this.value"
+        <input value="${r.color}" onchange="_transitParsed.rows[${i}].color=this.value;saveTransitDraft()"
           style="width:140px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
-        <input value="${r.size}" onchange="_transitParsed.rows[${i}].size=this.value"
+        <input value="${r.size}" onchange="_transitParsed.rows[${i}].size=this.value;saveTransitDraft()"
           style="width:38px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:right;">
@@ -36694,6 +36796,7 @@ function onTransitBoxesChange(i, val) {
   r.qty_pcs = r.qty_boxes * ppb;
   r.qty_dz = Math.round((r.qty_pcs / 12) * 100) / 100; // 호환용 — 저장 시 사용
   renderTransitEditTable();
+  saveTransitDraft();
 }
 
 // 사용자가 pcs/box 변경 → pcs 재계산 + 비표준 표시
@@ -36704,6 +36807,7 @@ function onTransitPpbChange(i, val) {
   r.qty_pcs = (r.qty_boxes || 0) * r.ppb;
   r.qty_dz = Math.round((r.qty_pcs / 12) * 100) / 100;
   renderTransitEditTable();
+  saveTransitDraft();
 }
 
 // 사용자가 pcs 직접 변경 → boxes 재계산 (pcs / ppb)
@@ -36719,6 +36823,7 @@ function onTransitPcsChange(i, val) {
     r.is_nonstandard = true;
   }
   renderTransitEditTable();
+  saveTransitDraft();
 }
 
 // 옛 함수들 (호환용 — 이미 onchange 안 쓰는데 외부에서 부를까봐 stub)
@@ -36736,6 +36841,7 @@ function updateTransitTotal() {
 function deleteTransitRow(i) {
   _transitParsed.rows.splice(i, 1);
   renderTransitEditTable();
+  saveTransitDraft();
 }
 
 function addTransitRow() {
@@ -36750,6 +36856,7 @@ function addTransitRow() {
     transit_type: 'haiti_sc', status: 'in_transit'
   });
   renderTransitEditTable();
+  saveTransitDraft();
   // 마지막 행으로 스크롤
   const tbody = document.getElementById('transit-edit-body');
   if (tbody) tbody.lastElementChild?.scrollIntoView({ behavior: 'smooth' });
@@ -36790,6 +36897,7 @@ async function saveTransitData() {
   showToast('🚢 ' + rows.length + '개 라인 In Transit 저장 완료 (ETA: ' + eta + ')');
   loadInTransit();
   _transitParsed = null;
+  clearTransitDraft();  // 저장 성공 → 임시 백업 삭제
 }
 
 // ── 도착 처리 → Receive 모달
