@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_181222 — SC Inv 선택 모달: SKU fallback (DB 빈 값 시 계산) + 박스 컬럼 추가 (pcs/box 와 박스 수) -->
+<!-- BUILD: 20260429_192037 — SC Inv Selector: inventory_bins 기반 진짜 bin 별 row 표시 (1D-2=72, 3A-17=72... 분리) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38373,7 +38373,12 @@ const SHIPMENT_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 let _shipmentAutoResumed = false;
 
 function saveShipmentDraft() {
-  if (!_shipmentPallets.length && !_shipmentInfo.shipment_no) return;
+  // 진짜 라인이 1개라도 있을 때만 저장 (빈 pallet 무시)
+  const hasRealContent = _shipmentPallets.some(p => p.lines && p.lines.length > 0);
+  if (!hasRealContent) {
+    clearShipmentDraft();
+    return;
+  }
   try {
     const draft = {
       ts: Date.now(),
@@ -38411,9 +38416,10 @@ function generateShipmentNo() {
 }
 
 function openShipmentBuilder() {
-  // draft 자동 복원
+  // draft 자동 복원 — 라인이 1개라도 있을 때만 (빈 pallet 만 있으면 무시)
   const draft = getShipmentDraft();
-  if (draft && draft.pallets && draft.pallets.length > 0) {
+  const hasRealContent = draft && draft.pallets && draft.pallets.some(p => p.lines && p.lines.length > 0);
+  if (hasRealContent) {
     if (confirm(`작업 중인 Shipment draft 가 있습니다.\n복원하시겠습니까?\n\n취소: 새로 시작 (현재 draft 삭제)`)) {
       _shipmentInfo = draft.info || {};
       _shipmentPallets = draft.pallets;
@@ -38689,24 +38695,68 @@ async function openSelectScInventoryForPallet(palletId) {
 }
 
 async function _loadAndShowScInvSelector() {
-  // SC inventory 가져오기
+  // SC inventory 가져오기 — inventory_bins 가 진짜 bin 별 source of truth
   const scWh = warehouses.find(w => w.code === 'SC');
   if (!scWh) { alert('SC 창고를 찾을 수 없습니다.'); return; }
   
+  // 1. inventory 의 메타 정보 (style/color/size/sku/ppb)
   const { data: inv } = await db.from('inventory')
-    .select('id, sku, color, size, location, qty_on_hand, qty_committed, pcs_per_box, style_id, styles(style_number)')
+    .select('id, sku, color, size, qty_on_hand, qty_committed, pcs_per_box, style_id, styles(style_number)')
     .eq('warehouse_id', scWh.id)
-    .order('location').order('sku');
+    .gt('qty_on_hand', 0);
   
-  // CA pending qty 계산 (각 SKU 마다 CA 주문에서 미출고된 양)
+  if (!inv || inv.length === 0) { _scInvCache = []; renderScInvTable(); document.getElementById('sc-inv-selector-modal').style.display = 'flex'; return; }
+  
+  const invById = {};
+  inv.forEach(r => { invById[r.id] = r; });
+  
+  // 2. inventory_bins 가져오기 (chunk 처리)
+  const invIds = inv.map(r => r.id);
+  let allBins = [];
+  for (let i = 0; i < invIds.length; i += 500) {
+    const chunk = invIds.slice(i, i + 500);
+    const { data: binChunk } = await db.from('inventory_bins')
+      .select('id, inventory_id, bin_code, qty, pallet_id')
+      .in('inventory_id', chunk)
+      .gt('qty', 0);
+    if (binChunk) allBins = allBins.concat(binChunk);
+  }
+  
+  // 3. CA pending qty 계산
   const caPendingMap = await calculateCaPendingMap();
   
-  _scInvCache = (inv || []).filter(r => (r.qty_on_hand || 0) > 0).map(r => ({
-    ...r,
-    style_number: r.styles?.style_number || '',
-    available: (r.qty_on_hand || 0),  // committed 도 포함 - 사용자가 결정
-    ca_pending: caPendingMap[r.sku] || 0
-  }));
+  // 4. 각 bin row 를 inventory 메타와 join → 진짜 bin 별 row
+  _scInvCache = allBins.map(b => {
+    const meta = invById[b.inventory_id];
+    if (!meta) return null;
+    const sku = meta.sku || ((meta.styles?.style_number||'') + (meta.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(meta.size||''));
+    return {
+      // bin row 의 unique id
+      id: b.id,                          // inventory_bin id (각 bin 별 unique)
+      inventory_id: b.inventory_id,       // 부모 inventory id
+      pallet_id: b.pallet_id,
+      // 메타
+      sku: sku,
+      style_id: meta.style_id,
+      style_number: meta.styles?.style_number || '',
+      color: meta.color,
+      size: meta.size,
+      pcs_per_box: meta.pcs_per_box,
+      // bin 별 데이터
+      location: b.bin_code,
+      qty_on_hand: b.qty,
+      qty_committed: 0,  // bin 별 committed 는 alloc_detail 봐야 함 (추후)
+      available: b.qty,
+      ca_pending: caPendingMap[sku] || 0
+    };
+  }).filter(Boolean);
+  
+  // bin → sku 순 정렬
+  _scInvCache.sort((a, b) => {
+    const locCmp = (a.location || '').localeCompare(b.location || '');
+    if (locCmp !== 0) return locCmp;
+    return (a.sku || '').localeCompare(b.sku || '');
+  });
   
   _scInvSelected = {};
   document.getElementById('scinv-bin-filter').value = '';
