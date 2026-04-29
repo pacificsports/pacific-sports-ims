@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_004531 — Draft 복원: confirm 강제 모달 → 배너 (덜 거슬리게) -->
+<!-- BUILD: 20260429_005130 — Refresh = 작업 그대로 (자동 모달 복원, 배너/confirm 제거) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4038,9 +4038,6 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
         <button class="btn" onclick="openAddTransitManual()">+ 수동 입력</button>
       </div>
 
-      <!-- Draft 복원 배너 (이전 작업 있을 때만 표시) -->
-      <div id="transit-draft-banner" style="display:none;margin-bottom:12px;padding:10px 14px;background:#fff7e6;border:1px solid #fbbf24;border-radius:6px;align-items:center;gap:12px;flex-wrap:wrap;"></div>
-
       <!-- Haiti → SC 섹션 -->
       <div class="card" style="margin-bottom:16px;">
         <div class="card-head">
@@ -4128,7 +4125,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <div id="transit-edit-total" style="margin-top:10px;text-align:right;font-size:12px;color:var(--text3);padding-right:4px;"></div>
         </div>
         <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;">
-          <button class="btn" onclick="document.getElementById('transit-preview-modal').style.display='none'">취소</button>
+          <button class="btn" onclick="cancelTransitDraft()">취소 (작업 삭제)</button>
           <button class="btn btn-primary" onclick="saveTransitData()">🚢 In Transit으로 저장</button>
         </div>
       </div>
@@ -36022,36 +36019,10 @@ function getTransitDraft() {
   }
 }
 
-// 페이지 로드 시 / In Transit 페이지 열 때 호출 — 배너만 표시 (confirm 강제 안 함)
-function checkTransitDraftBanner() {
-  const banner = document.getElementById('transit-draft-banner');
-  if (!banner) return;
+// ── 자동 복원: draft 있으면 그대로 모달 다시 열기 (refresh 처럼)
+function autoResumeTransitDraft() {
   const d = getTransitDraft();
-  if (!d || !d._transitParsed) {
-    banner.style.display = 'none';
-    return;
-  }
-  const rowCount = d._transitParsed.rows?.length || 0;
-  const invNo = d._transitParsed.invoiceNo || '?';
-  const minAgo = Math.round((Date.now() - d.ts) / 60000);
-  const ageStr = minAgo < 1 ? '방금 전' : minAgo < 60 ? `${minAgo}분 전` : `${Math.round(minAgo/60)}시간 전`;
-  
-  banner.innerHTML = 
-    `<span style="font-size:13px;">💾 <b>이전 작업 발견</b> — Invoice <b>${invNo}</b>, ${rowCount}개 라인 · ${ageStr}</span>` +
-    `<div style="display:flex;gap:8px;margin-left:auto;">` +
-    `  <button onclick="resumeTransitDraft()" class="btn btn-sm" style="background:#0f4c8a;color:#fff;border:none;">▶ 이어서 작업</button>` +
-    `  <button onclick="discardTransitDraft()" class="btn btn-sm" style="background:#fff;color:#dc2626;border:1px solid #fecaca;">✕ 삭제</button>` +
-    `</div>`;
-  banner.style.display = 'flex';
-}
-
-// 사용자가 "이어서 작업" 클릭
-function resumeTransitDraft() {
-  const d = getTransitDraft();
-  if (!d || !d._transitParsed) {
-    checkTransitDraftBanner();
-    return;
-  }
+  if (!d || !d._transitParsed) return false;
   _transitParsed = d._transitParsed;
   if (!_transitParsed.rawRows) _transitParsed.rawRows = [];
   
@@ -36061,23 +36032,29 @@ function resumeTransitDraft() {
     `<div><span style="color:var(--text3);">Container</span><br><b>${_transitParsed.containerNo||'-'}</b></div>` +
     `<div><span style="color:var(--text3);">Ship Date</span><br><b>${_transitParsed.shipDate||'-'}</b></div>` +
     `<div><span style="color:var(--text3);">총 라인</span><br><b>${(_transitParsed.rows||[]).length}개</b></div>` +
-    `<div><span style="color:var(--text3);">총 수량</span><br><b>${(_transitParsed.rows||[]).reduce((s,r)=>s+(r.qty_pcs||0),0).toLocaleString()} pcs</b></div>` +
-    `<div style="background:#fff7e6;padding:4px 8px;border-radius:4px;color:#9a3412;font-size:11px;">⚠️ 이어서 작업 중</div>`;
+    `<div><span style="color:var(--text3);">총 수량</span><br><b>${(_transitParsed.rows||[]).reduce((s,r)=>s+(r.qty_pcs||0),0).toLocaleString()} pcs</b></div>`;
   if (d.eta) document.getElementById('transit-eta-input').value = d.eta;
   if (d.notes) document.getElementById('transit-notes-input').value = d.notes;
   renderTransitEditTable();
+  return true;
 }
 
-// 사용자가 "삭제" 클릭
-function discardTransitDraft() {
-  if (!confirm('임시 저장된 작업을 삭제하시겠습니까?\n복원할 수 없습니다.')) return;
+// 사용자가 "취소" 누를 때 — 작업 삭제 (한 번만 확인)
+function cancelTransitDraft() {
+  if (_transitParsed && (_transitParsed.rows||[]).length > 0) {
+    if (!confirm('작업 내용을 모두 삭제하고 닫으시겠습니까?')) return;
+  }
+  _transitParsed = null;
   clearTransitDraft();
-  checkTransitDraftBanner();
+  document.getElementById('transit-preview-modal').style.display = 'none';
+  // input 정리
+  const eta = document.getElementById('transit-eta-input'); if (eta) eta.value = '';
+  const notes = document.getElementById('transit-notes-input'); if (notes) notes.value = '';
 }
 
 async function loadInTransit() {
-  // 미완성 작업 백업 자동 체크 — 배너 표시 (강제 confirm 없음)
-  checkTransitDraftBanner();
+  // 미완성 작업 백업 자동 복원 — 모달 그대로 다시 열기 (refresh 처럼)
+  if (!_transitParsed) autoResumeTransitDraft();
   
   const { data: rows } = await db.from('in_transit')
     .select('*')
