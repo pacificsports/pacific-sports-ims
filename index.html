@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_012254 — 원본 패널 sticky (스크롤해도 왼쪽에 고정, 자체 스크롤 가능) -->
+<!-- BUILD: 20260429_014117 — SKU 컬럼 추가 (자동 생성 + DB 매칭 + 수정 가능) + 비표준 룰 fix (혼합 표준 6/4 DZ/CT 지원) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4111,6 +4111,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                     <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Style #</th>
                     <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;">Color</th>
                     <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Size</th>
+                    <th style="padding:7px 8px;text-align:left;border:1px solid #cdd;background:#f0fdf4;">SKU</th>
                     <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">박스수</th>
                     <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;background:#fff9c4;">pcs/box</th>
                     <th style="padding:7px 8px;text-align:center;border:1px solid #cdd;">Pcs 합계</th>
@@ -36418,6 +36419,7 @@ async function parseTransitExcel(input) {
 
   let invoiceNo = '', containerNo = '', shipDate = '';
   let currentStyle = '', currentSizes = [], currentDzPerBox = 6;
+  let currentValidPpbs = [72]; // 표준 ppb 후보 리스트 (혼합 표준 지원)
   let currentStyleRaw = '', currentSizesRaw = [], currentStyleRow = -1, currentColorHeaderRow = -1;
   const parsed = [];
   let pendingDzsRow = null; // DZS row 임시 저장 (다음 BOXES row와 매칭)
@@ -36436,9 +36438,13 @@ async function parseTransitExcel(input) {
       if (d instanceof Date) shipDate = d.toISOString().slice(0,10);
     }
     if (r0 === 'STYLE :') {
-      // DZ/CT 정보에서 박스당 DZ 파악 (예: "6 DZ / CT" → 6dz/box)
-      const mDz = r1.match(/(\d+)\s*DZ\s*\/\s*CT/i);
-      currentDzPerBox = mDz ? parseInt(mDz[1]) : 6;
+      // DZ/CT 정보 — "6 DZ / CT" 또는 "6 / 4 DZ / CT" 등 다양한 형태
+      // 모든 숫자 추출해서 표준 ppb 후보 리스트로
+      const allNums = [...r1.matchAll(/(\d+)\s*(?:\/|DZ)/gi)].map(m => parseInt(m[1])).filter(n => n > 0 && n <= 12);
+      // 적어도 한 개 있으면 그걸 표준, 없으면 6 (default)
+      currentDzPerBox = allNums[0] || 6;
+      // 표준 ppb 후보 (모든 dz × 12)
+      currentValidPpbs = allNums.length > 0 ? allNums.map(n => n * 12) : [72];
       const mStyle = r1.match(/(\d{4}[A-Z]?)/);
       if (mStyle) currentStyle = mStyle[1].replace(/N$/,'');
       currentStyleRaw = r1;
@@ -36469,8 +36475,11 @@ async function parseTransitExcel(input) {
         const boxes = parseInt(boxVals[i])||0;
         if (dz > 0 && currentStyle) {
           // 실제 pcs/box 계산 (비정규 박스 감지)
-          const pcsPerBox = boxes > 0 ? Math.round((dz * 12) / boxes) : currentDzPerBox * 12;
-          const stdPpb = currentDzPerBox * 12; // 표준 pcs/box
+          const pcsPerBox = boxes > 0 ? Math.round((dz * 12) / boxes) : (currentValidPpbs[0] || 72);
+          // 비표준: 표준 ppb 후보 중 하나에 해당 안 하면
+          const isNonstandard = boxes > 0 && !currentValidPpbs.includes(pcsPerBox);
+          // SKU 자동 생성: {style}{color6글자}{size} 소문자 (시스템 룰)
+          const sku = (currentStyle + (pendingDzsRow.color||'').replace(/\s+/g,'').substring(0,6) + (sz||'').replace(/\s+/g,'')).toLowerCase();
           parsed.push({
             invoice_no: invoiceNo,
             container_no: containerNo,
@@ -36478,16 +36487,19 @@ async function parseTransitExcel(input) {
             style_number: currentStyle,
             color: pendingDzsRow.color,
             size: sz,
+            sku: sku,                              // 자동 생성, 사용자 수정 가능
+            sku_status: 'unchecked',               // unchecked / found / not_found
             qty_dz: dz,
             qty_boxes: boxes,
-            ppb: pcsPerBox,        // 실제 pcs/box
-            std_ppb: stdPpb,       // 표준 pcs/box
-            is_nonstandard: boxes > 0 && pcsPerBox !== stdPpb,
+            ppb: pcsPerBox,
+            std_ppb: currentValidPpbs[0] || 72,
+            valid_ppbs: currentValidPpbs.slice(), // 모든 표준 ppb 후보
+            is_nonstandard: isNonstandard,
             qty_pcs: dz * 12,
             transit_type: 'haiti_sc',
             status: 'in_transit',
             // 원본 추적 (split view 비교용)
-            source_row: pendingDzsRow.sourceRow + 1,  // 1-based for display
+            source_row: pendingDzsRow.sourceRow + 1,
             source_color_raw: pendingDzsRow.colorRaw,
             source_size_raw: String(currentSizesRaw[i] || ''),
             source_style_raw: currentStyleRaw
@@ -36500,6 +36512,9 @@ async function parseTransitExcel(input) {
 
   // 원본 raw rows 도 저장 (split view 표시용)
   _transitParsed = { invoiceNo, containerNo, shipDate, rows: parsed, rawRows: rows };
+
+  // SKU 일괄 DB 매칭 (있으면 ✅, 없으면 ⚠️)
+  await checkAllTransitSkus();
 
   // 헤더 정보
   document.getElementById('transit-preview-info').innerHTML =
@@ -36533,6 +36548,14 @@ function renderTransitEditTable() {
     const rowBg = isReviewed ? '#ecfdf5' : (isNonStd ? '#fffde7' : '#fff');
     const rowOpacity = isReviewed ? '0.85' : '1';
     const srcRow = r.source_row ? `R${r.source_row}` : '—';
+    // SKU 매칭 상태별 시각 처리
+    const skuSt = r.sku_status || 'unchecked';
+    const skuIcon = skuSt === 'found' ? '✅' : skuSt === 'not_found' ? '⚠️' : '·';
+    const skuIconColor = skuSt === 'found' ? '#16a34a' : skuSt === 'not_found' ? '#d97706' : '#9ca3af';
+    const skuBorderColor = skuSt === 'found' ? '#86efac' : skuSt === 'not_found' ? '#fcd34d' : '#ddd';
+    const skuBg = skuSt === 'found' ? '#f0fdf4' : skuSt === 'not_found' ? '#fffbeb' : '#fff';
+    const skuColor = skuSt === 'found' ? '#15803d' : skuSt === 'not_found' ? '#92400e' : '#1f2937';
+    const skuStatusTitle = skuSt === 'found' ? 'DB 매칭 OK' : skuSt === 'not_found' ? 'DB 에 등록 안 됨 — 등록 필요' : '미확인';
     return `<tr id="transit-row-${i}" style="border-bottom:1px solid #f0f0f0;background:${rowBg};opacity:${rowOpacity};">
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;background:${isReviewed?'#d1fae5':'transparent'};">
         <input type="checkbox" ${isReviewed?'checked':''} onchange="onTransitReviewedChange(${i}, this.checked)"
@@ -36543,16 +36566,23 @@ function renderTransitEditTable() {
         ${srcRow}
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
-        <input value="${r.style_number}" onchange="_transitParsed.rows[${i}].style_number=this.value;saveTransitDraft()"
+        <input value="${r.style_number}" onchange="onTransitStyleColorSizeChange(${i}, 'style_number', this.value)"
           style="width:58px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;">
-        <input value="${r.color}" onchange="_transitParsed.rows[${i}].color=this.value;saveTransitDraft()"
+        <input value="${r.color}" onchange="onTransitStyleColorSizeChange(${i}, 'color', this.value)"
           style="width:140px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;background:#fff;"/>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
-        <input value="${r.size}" onchange="_transitParsed.rows[${i}].size=this.value;saveTransitDraft()"
+        <input value="${r.size}" onchange="onTransitStyleColorSizeChange(${i}, 'size', this.value)"
           style="width:42px;height:26px;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:11px;text-align:center;background:#fff;"/>
+      </td>
+      <td style="padding:3px 4px;border:1px solid #eee;background:#f0fdf4;" title="${skuStatusTitle}">
+        <div style="display:flex;align-items:center;gap:3px;">
+          <span style="font-size:11px;color:${skuIconColor};font-weight:700;width:14px;flex-shrink:0;text-align:center;">${skuIcon}</span>
+          <input value="${r.sku||''}" onchange="onTransitSkuChange(${i}, this.value)"
+            style="width:100%;min-width:120px;height:26px;border:1px solid ${skuBorderColor};border-radius:3px;padding:0 4px;font-size:10px;font-family:'IBM Plex Mono',monospace;background:${skuBg};color:${skuColor};"/>
+        </div>
       </td>
       <td style="padding:3px 4px;border:1px solid #eee;text-align:center;">
         <input type="number" value="${boxes}" min="0"
@@ -36584,6 +36614,70 @@ function renderTransitEditTable() {
 function onTransitReviewedChange(i, checked) {
   _transitParsed.rows[i].reviewed = !!checked;
   // 부분 렌더 — 색깔/체크만 바뀌면 되므로 전체 재렌더
+  renderTransitEditTable();
+  saveTransitDraft();
+}
+
+// Style/Color/Size 변경 — SKU 자동 재생성 + DB 매칭 다시
+async function onTransitStyleColorSizeChange(i, field, val) {
+  const r = _transitParsed.rows[i];
+  if (!r) return;
+  r[field] = val;
+  // 사용자가 SKU 를 직접 수정한 적 있으면 자동 재생성 안 함 (sku_locked = true)
+  if (!r.sku_locked) {
+    r.sku = (r.style_number + (r.color||'').replace(/\s+/g,'').substring(0,6) + (r.size||'').replace(/\s+/g,'')).toLowerCase();
+  }
+  await checkSingleTransitSku(i);
+}
+
+// SKU 직접 변경 — lock 플래그 세팅 + DB 매칭
+async function onTransitSkuChange(i, val) {
+  const r = _transitParsed.rows[i];
+  if (!r) return;
+  r.sku = (val||'').trim();
+  r.sku_locked = true;  // 사용자가 직접 수정 → 자동 재생성 안 함
+  await checkSingleTransitSku(i);
+}
+
+// SKU 일괄 매칭 — DB skus 테이블에 있는지 확인 (case-insensitive)
+async function checkAllTransitSkus() {
+  if (!_transitParsed) return;
+  const allSkus = [...new Set(_transitParsed.rows.map(r => (r.sku||'').toLowerCase()).filter(Boolean))];
+  if (allSkus.length === 0) return;
+  // 한 번에 매칭 — chunk 로 안전하게
+  const foundSet = new Set();
+  for (let i = 0; i < allSkus.length; i += 200) {
+    const chunk = allSkus.slice(i, i+200);
+    try {
+      // ilike 는 in 과 안 맞아서 → eq case-insensitive 처리는 별도. 일단 lowercase 매칭
+      const { data } = await db.from('skus').select('sku_id').in('sku_id', chunk);
+      (data||[]).forEach(s => foundSet.add(String(s.sku_id||'').toLowerCase()));
+      // 대소문자 다른 경우 — DB 의 sku_id 가 uppercase 일 수도. 한 번 더 시도.
+      const upperChunk = chunk.map(s => s.toUpperCase());
+      const { data: data2 } = await db.from('skus').select('sku_id').in('sku_id', upperChunk);
+      (data2||[]).forEach(s => foundSet.add(String(s.sku_id||'').toLowerCase()));
+    } catch(e) {
+      console.warn('[checkAllTransitSkus] chunk failed:', e?.message);
+    }
+  }
+  _transitParsed.rows.forEach(r => {
+    r.sku_status = foundSet.has((r.sku||'').toLowerCase()) ? 'found' : 'not_found';
+  });
+  renderTransitEditTable();
+  saveTransitDraft();
+}
+
+// 단일 SKU 매칭 (사용자가 SKU 수정한 후)
+async function checkSingleTransitSku(i) {
+  if (!_transitParsed) return;
+  const r = _transitParsed.rows[i];
+  if (!r || !r.sku) return;
+  try {
+    const { data } = await db.from('skus').select('sku_id').ilike('sku_id', r.sku).limit(1);
+    r.sku_status = (data && data.length > 0) ? 'found' : 'not_found';
+  } catch(e) {
+    r.sku_status = 'unchecked';
+  }
   renderTransitEditTable();
   saveTransitDraft();
 }
@@ -36842,12 +36936,24 @@ function updateTransitTotal() {
   const total = _transitParsed.rows.length;
   const pct = total > 0 ? Math.round(reviewed/total*100) : 0;
   const reviewClr = pct === 100 ? '#10b981' : pct > 0 ? '#0f4c8a' : '#9ca3af';
+  // SKU 매칭 상태
+  const skuFound = _transitParsed.rows.filter(r => r.sku_status === 'found').length;
+  const skuNotFound = _transitParsed.rows.filter(r => r.sku_status === 'not_found').length;
+  const skuUnchecked = _transitParsed.rows.filter(r => !r.sku_status || r.sku_status === 'unchecked').length;
+  let skuBadge = '';
+  if (skuNotFound > 0) {
+    skuBadge = `<span style="color:#d97706;font-weight:700;background:#fffbeb;padding:2px 8px;border-radius:4px;border:1px solid #fcd34d;">⚠️ SKU 등록 필요: ${skuNotFound}개</span>`;
+  } else if (skuFound > 0 && skuUnchecked === 0) {
+    skuBadge = `<span style="color:#16a34a;font-weight:600;">✅ SKU 모두 등록됨</span>`;
+  }
+  
   const el = document.getElementById('transit-edit-total');
   if (el) el.innerHTML = 
     `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:flex-end;">` +
     `<span style="color:${reviewClr};font-weight:700;">✓ 검토 ${reviewed}/${total} (${pct}%)</span>` +
     `<button onclick="toggleAllTransitReviewed(true)" class="btn btn-sm" style="background:#ecfdf5;border:1px solid #10b981;color:#065f46;font-size:11px;">전체 체크</button>` +
     `<button onclick="toggleAllTransitReviewed(false)" class="btn btn-sm" style="font-size:11px;">전체 해제</button>` +
+    (skuBadge ? `<span style="color:var(--text3);">|</span>${skuBadge}` : '') +
     `<span style="color:var(--text3);">|</span>` +
     `<b>총 ${total}개 라인 · ${totalPcs.toLocaleString()} pcs · ${totalBoxes.toLocaleString()} boxes</b>` +
     `</div>`;
@@ -36874,8 +36980,9 @@ function addTransitRow() {
     container_no: _transitParsed.containerNo,
     ship_date: _transitParsed.shipDate,
     style_number: '', color: '', size: '', 
+    sku: '', sku_status: 'unchecked', sku_locked: false,
     qty_pcs: 0, qty_boxes: 0, qty_dz: 0,
-    ppb: 72, std_ppb: 72, is_nonstandard: false,
+    ppb: 72, std_ppb: 72, valid_ppbs: [72], is_nonstandard: false,
     transit_type: 'haiti_sc', status: 'in_transit'
   });
   renderTransitEditTable();
@@ -36895,6 +37002,12 @@ async function saveTransitData() {
   const validRows = _transitParsed.rows.filter(r => r.style_number && r.color && r.size && r.qty_pcs > 0);
   if (!validRows.length) { alert('저장할 라인이 없습니다.'); return; }
 
+  // SKU 등록 안 된 라인 경고 (저장은 가능)
+  const notFoundCount = validRows.filter(r => r.sku_status === 'not_found').length;
+  if (notFoundCount > 0) {
+    if (!confirm(`⚠️ DB 에 등록 안 된 SKU 가 ${notFoundCount}개 있습니다.\n\nIn Transit 으로 저장은 가능하지만, 도착 후 재고 입고 시 SKU 등록이 필요합니다.\n\n계속 저장할까요?`)) return;
+  }
+
   const rows = validRows.map(r => ({
     invoice_no: _transitParsed.invoiceNo || r.invoice_no,
     container_no: r.container_no || _transitParsed.containerNo,
@@ -36902,6 +37015,7 @@ async function saveTransitData() {
     style_number: r.style_number,
     color: r.color,
     size: r.size,
+    sku: r.sku || null,
     qty_dz: r.qty_dz || 0,
     qty_boxes: r.qty_boxes || 0,
     ppb: r.ppb || 72,
