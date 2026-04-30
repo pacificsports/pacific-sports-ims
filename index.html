@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260430_092737 — SC Inv Selector: Pallet 별 그룹화 (보라색 헤더) + Pallet 통째 체크박스 (그 pallet 의 모든 라인 한번에) -->
+<!-- BUILD: 20260430_094035 — SC Inv Selector: Pallet 그룹화 → Bin 그룹화 (같은 H1088 의 라인들 = 1 그룹). Pallet ID 노출 X -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38828,14 +38828,13 @@ function renderScInvTable() {
     return true;
   });
   
-  // Pallet 별 그룹화 — pallet_id 가 있으면 그 키로, 없으면 'no_pallet' 으로
+  // Bin 별 그룹화 — 같은 location 의 라인들을 한 그룹으로
   const groups = {};
-  const groupOrder = [];  // 순서 유지
+  const groupOrder = [];
   filtered.forEach(r => {
-    const key = r.pallet_id || `nopallet_${r.location || 'unknown'}`;
+    const key = r.location || 'unknown';
     if (!groups[key]) {
       groups[key] = {
-        pallet_id: r.pallet_id || null,
         location: r.location || '',
         lines: []
       };
@@ -38844,21 +38843,15 @@ function renderScInvTable() {
     groups[key].lines.push(r);
   });
   
-  // 정렬: location → pallet_id
-  groupOrder.sort((a, b) => {
-    const ga = groups[a], gb = groups[b];
-    const locCmp = (ga.location || '').localeCompare(gb.location || '');
-    if (locCmp !== 0) return locCmp;
-    return (ga.pallet_id || '').localeCompare(gb.pallet_id || '');
-  });
+  // 정렬: location 알파벳/숫자 순
+  groupOrder.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   
   // HTML 빌드
   const rowsHtml = groupOrder.map(key => {
     const g = groups[key];
-    // Pallet 통째 체크 상태: 전체 라인이 다 체크돼있나?
+    // Bin 통째 체크 상태: 전체 라인이 다 체크돼있나?
     const allChecked = g.lines.every(l => _scInvSelected[l.id]);
     const someChecked = g.lines.some(l => _scInvSelected[l.id]);
-    const palletCheckState = allChecked ? 'checked' : (someChecked ? 'indeterminate' : '');
     
     const totalPcs = g.lines.reduce((s, l) => s + (l.qty_on_hand || 0), 0);
     const totalBoxes = g.lines.reduce((s, l) => {
@@ -38867,27 +38860,26 @@ function renderScInvTable() {
     }, 0);
     const totalBoxesDisplay = Number.isInteger(totalBoxes) ? totalBoxes : totalBoxes.toFixed(2);
     
-    const palletShortId = g.pallet_id ? g.pallet_id.substring(0, 8) : '—';
-    const palletKey = key;  // dataset 용
+    const binKey = key;
+    const safeBinId = key.replace(/[^a-zA-Z0-9]/g,'_');
     
-    // Pallet 헤더 row
+    // Bin 헤더 row
     const headerRow = `
-      <tr class="scinv-pallet-header" data-pallet-key="${palletKey.replace(/'/g,'')}" style="background:linear-gradient(90deg,#f3e8ff 0%,#fce7f3 100%);border-top:2px solid #9333ea;">
-        <td style="padding:6px 4px;text-align:center;border:1px solid #d8b4fe;">
-          <input type="checkbox" ${allChecked?'checked':''} onchange="scInvTogglePallet('${palletKey.replace(/'/g,"\\'")}', this.checked)" 
-            style="cursor:pointer;width:18px;height:18px;accent-color:#9333ea;" 
-            id="pallet-cb-${palletKey.replace(/[^a-zA-Z0-9]/g,'_')}">
+      <tr class="scinv-bin-header" style="background:linear-gradient(90deg,#dbeafe 0%,#e0f2fe 100%);border-top:2px solid #1e40af;">
+        <td style="padding:6px 4px;text-align:center;border:1px solid #93c5fd;">
+          <input type="checkbox" ${allChecked?'checked':''} onchange="scInvToggleBin('${binKey.replace(/'/g,"\\'")}', this.checked)" 
+            style="cursor:pointer;width:18px;height:18px;accent-color:#1e40af;" 
+            id="bin-cb-${safeBinId}">
         </td>
-        <td colspan="10" style="padding:6px 10px;border:1px solid #d8b4fe;font-size:12px;color:#7b1fa2;font-weight:700;">
-          📦 Pallet <span style="font-family:'IBM Plex Mono',monospace;background:#fff;padding:1px 6px;border-radius:4px;border:1px solid #d8b4fe;">${palletShortId}</span>
-          <span style="margin-left:10px;background:#fff;padding:1px 8px;border-radius:8px;border:1px solid #93c5fd;color:#1e40af;font-family:'IBM Plex Mono',monospace;">📍 ${g.location}</span>
-          <span style="margin-left:10px;color:var(--text2);font-weight:600;font-size:11px;">${g.lines.length} 라인 · ${totalPcs.toLocaleString()} pcs · ${totalBoxesDisplay} 박스</span>
-          <span style="margin-left:10px;font-size:10px;color:var(--text3);">(체크박스 클릭 → Pallet 통째로 선택/해제)</span>
+        <td colspan="10" style="padding:6px 10px;border:1px solid #93c5fd;font-size:13px;color:#1e40af;font-weight:700;">
+          📍 <span style="font-family:'IBM Plex Mono',monospace;background:#fff;padding:2px 10px;border-radius:6px;border:1px solid #93c5fd;font-size:14px;">${g.location}</span>
+          <span style="margin-left:12px;color:var(--text2);font-weight:600;font-size:11px;">${g.lines.length} 라인 · ${totalPcs.toLocaleString()} pcs · ${totalBoxesDisplay} 박스</span>
+          <span style="margin-left:10px;font-size:10px;color:var(--text3);font-weight:400;">(체크박스 → Bin 통째 선택/해제)</span>
         </td>
       </tr>
     `;
     
-    // Pallet 안의 라인 row 들
+    // Bin 안의 라인 row 들
     const lineRows = g.lines.map(r => {
       const sel = _scInvSelected[r.id];
       const checked = !!sel;
@@ -38935,12 +38927,12 @@ function renderScInvTable() {
   
   tbody.innerHTML = rowsHtml || `<tr><td colspan="11" style="padding:30px;text-align:center;color:var(--text3);">조건에 맞는 재고가 없습니다.</td></tr>`;
   
-  // indeterminate 처리 (HTML 속성으로 안 됨 — JS 로 직접 설정)
+  // indeterminate 처리
   groupOrder.forEach(key => {
     const g = groups[key];
     const allChecked = g.lines.every(l => _scInvSelected[l.id]);
     const someChecked = g.lines.some(l => _scInvSelected[l.id]);
-    const cbId = 'pallet-cb-' + key.replace(/[^a-zA-Z0-9]/g,'_');
+    const cbId = 'bin-cb-' + key.replace(/[^a-zA-Z0-9]/g,'_');
     const cb = document.getElementById(cbId);
     if (cb) {
       cb.indeterminate = (someChecked && !allChecked);
@@ -38982,18 +38974,15 @@ function scInvSetMax(invId) {
   renderScInvTable();
 }
 
-function scInvTogglePallet(palletKey, checked) {
-  // 같은 그룹의 모든 라인 toggle
-  const linesInGroup = _scInvCache.filter(r => {
-    const key = r.pallet_id || `nopallet_${r.location || 'unknown'}`;
-    return key === palletKey;
-  });
+function scInvToggleBin(binKey, checked) {
+  // 같은 location 의 모든 라인 toggle
+  const linesInBin = _scInvCache.filter(r => (r.location || 'unknown') === binKey);
   if (checked) {
-    linesInGroup.forEach(item => {
+    linesInBin.forEach(item => {
       _scInvSelected[item.id] = { qty: item.qty_on_hand, line: item };
     });
   } else {
-    linesInGroup.forEach(item => {
+    linesInBin.forEach(item => {
       delete _scInvSelected[item.id];
     });
   }
