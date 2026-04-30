@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260429_192037 — SC Inv Selector: inventory_bins 기반 진짜 bin 별 row 표시 (1D-2=72, 3A-17=72... 분리) -->
+<!-- BUILD: 20260430_024827 — SC Inv Selector 진짜 ppb: styles 테이블에서 (사이즈에 따라 normal/large 자동) — inventory.pcs_per_box 무시 (잘못된 72 default) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38699,9 +38699,9 @@ async function _loadAndShowScInvSelector() {
   const scWh = warehouses.find(w => w.code === 'SC');
   if (!scWh) { alert('SC 창고를 찾을 수 없습니다.'); return; }
   
-  // 1. inventory 의 메타 정보 (style/color/size/sku/ppb)
+  // 1. inventory 의 메타 정보 (style/color/size/sku) — ppb 는 styles 에서 가져옴 (진짜 source)
   const { data: inv } = await db.from('inventory')
-    .select('id, sku, color, size, qty_on_hand, qty_committed, pcs_per_box, style_id, styles(style_number)')
+    .select('id, sku, color, size, qty_on_hand, qty_committed, style_id, styles(style_number, pcs_per_box, pcs_per_box_large)')
     .eq('warehouse_id', scWh.id)
     .gt('qty_on_hand', 0);
   
@@ -38726,10 +38726,17 @@ async function _loadAndShowScInvSelector() {
   const caPendingMap = await calculateCaPendingMap();
   
   // 4. 각 bin row 를 inventory 메타와 join → 진짜 bin 별 row
+  //    ppb = pcsPerBox(size, styles.pcs_per_box, styles.pcs_per_box_large)
   _scInvCache = allBins.map(b => {
     const meta = invById[b.inventory_id];
     if (!meta) return null;
     const sku = meta.sku || ((meta.styles?.style_number||'') + (meta.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(meta.size||''));
+    // 진짜 ppb — styles 에서, 사이즈 따라 large/normal 결정
+    const ppbBase = meta.styles?.pcs_per_box || 72;
+    const ppbLarge = meta.styles?.pcs_per_box_large || 48;
+    const realPpb = (typeof pcsPerBox === 'function')
+      ? pcsPerBox(meta.size || '', ppbBase, ppbLarge)
+      : (IMPORT_LARGE_SIZES.has(meta.size || '') ? ppbLarge : ppbBase);
     return {
       // bin row 의 unique id
       id: b.id,                          // inventory_bin id (각 bin 별 unique)
@@ -38741,7 +38748,7 @@ async function _loadAndShowScInvSelector() {
       style_number: meta.styles?.style_number || '',
       color: meta.color,
       size: meta.size,
-      pcs_per_box: meta.pcs_per_box,
+      pcs_per_box: realPpb,
       // bin 별 데이터
       location: b.bin_code,
       qty_on_hand: b.qty,
