@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260430_171405 — Draft 시스템 1단계: 라인 추가 시 즉시 DB 저장 + SC 재고 차감 / 라인 삭제 시 reverse / Draft 삭제 / 다시 열기 (DB 에서 불러오기) -->
+<!-- BUILD: 20260430_183058 — In Transit 화면에 Draft Shipment 카드 표시 (📂 이어서 작업 / 🗑 삭제). prompt 입력 폐기 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -36643,13 +36643,158 @@ async function loadInTransit() {
     renderTransitTable('transit-sc-body', scRows);
   }
 
-  // CA 섹션
-  document.getElementById('transit-ca-count').textContent = caRows.length + '건';
-  if (caRows.length === 0) {
-    document.getElementById('transit-ca-body').innerHTML = '<div class="empty">In Transit 없음</div>';
-  } else {
-    renderTransitTable('transit-ca-body', caRows);
+  // CA 섹션 — 진행 중 Draft Shipment 카드 + In Transit 라인
+  await renderScCaSection(caRows);
+}
+
+async function renderScCaSection(caRows) {
+  const body = document.getElementById('transit-ca-body');
+  const cntEl = document.getElementById('transit-ca-count');
+  
+  // 진행 중 Draft Shipment 가져오기
+  const { data: draftShips } = await db.from('sc_ca_shipments')
+    .select('id, shipment_no, ship_date, eta, seal_no, carrier, created_at')
+    .eq('status', 'preparing')
+    .order('created_at', { ascending: false });
+  
+  // 각 draft shipment 의 라인 수 / 합계
+  let draftStats = {};
+  if (draftShips && draftShips.length > 0) {
+    const ids = draftShips.map(s => s.id);
+    const { data: prepLines } = await db.from('in_transit')
+      .select('shipment_id, qty_pcs, ppb')
+      .in('shipment_id', ids)
+      .eq('status', 'preparing');
+    (prepLines || []).forEach(l => {
+      if (!draftStats[l.shipment_id]) draftStats[l.shipment_id] = { lines: 0, pcs: 0, boxes: 0 };
+      draftStats[l.shipment_id].lines++;
+      draftStats[l.shipment_id].pcs += (l.qty_pcs || 0);
+      const ppb = l.ppb || 72;
+      draftStats[l.shipment_id].boxes += (ppb > 0 ? (l.qty_pcs / ppb) : 0);
+    });
   }
+  
+  cntEl.textContent = caRows.length + '건';
+  
+  let html = '';
+  
+  // Draft 카드들
+  if (draftShips && draftShips.length > 0) {
+    html += `<div style="padding:10px 14px 6px 14px;background:#fff8e1;border-bottom:1px solid #fbbf24;">
+      <span style="font-size:12px;font-weight:700;color:#92400e;">📝 작업 중 Draft Shipment ${draftShips.length}개</span>
+      <span style="font-size:10px;color:#92400e;margin-left:6px;">(클릭 → 이어서 작업)</span>
+    </div>`;
+    
+    html += '<div style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;background:#fffdf5;border-bottom:1px solid #fbbf24;">';
+    draftShips.forEach(s => {
+      const stats = draftStats[s.id] || { lines: 0, pcs: 0, boxes: 0 };
+      const boxesDisplay = Number.isInteger(stats.boxes) ? stats.boxes : stats.boxes.toFixed(2);
+      const created = new Date(s.created_at);
+      html += `
+        <div style="display:flex;align-items:center;gap:14px;padding:10px 12px;background:#fff;border:2px solid #fbbf24;border-radius:8px;">
+          <div style="flex:1;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#7b1fa2;font-size:14px;">📦 ${s.shipment_no}</span>
+              ${s.ship_date ? `<span style="font-size:11px;color:var(--text2);">📅 ${s.ship_date}</span>` : ''}
+              ${s.seal_no ? `<span style="font-family:'IBM Plex Mono',monospace;font-size:10px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:8px;">🔒 ${s.seal_no}</span>` : ''}
+            </div>
+            <div style="font-size:11px;color:var(--text2);margin-top:4px;">
+              <b>${stats.lines}</b> 라인 · <b>${stats.pcs.toLocaleString()}</b> pcs · <b>${boxesDisplay}</b> 박스
+              <span style="margin-left:10px;color:var(--text3);">시작: ${created.toLocaleDateString()} ${String(created.getHours()).padStart(2,'0')}:${String(created.getMinutes()).padStart(2,'0')}</span>
+            </div>
+          </div>
+          <button class="btn btn-sm" style="background:#7b1fa2;color:#fff;" onclick="openShipmentBuilder('${s.id}')">📂 이어서 작업</button>
+          <button class="btn btn-sm" style="background:#fee2e2;color:#c62828;" onclick="deleteDraftShipmentFromList('${s.id}', '${s.shipment_no}')">🗑 삭제</button>
+        </div>
+      `;
+    });
+    html += '</div>';
+  }
+  
+  // 진짜 In Transit 라인들
+  if (caRows.length === 0) {
+    html += '<div class="empty" style="padding:20px;">In Transit 없음</div>';
+    body.innerHTML = html;
+  } else {
+    html += '<div id="transit-ca-table"></div>';
+    body.innerHTML = html;
+    renderTransitTable('transit-ca-table', caRows);
+  }
+}
+
+// 카드에서 Draft 직접 삭제
+async function deleteDraftShipmentFromList(shipmentId, shipmentNo) {
+  if (!confirm(`Draft Shipment ${shipmentNo} 을 삭제하시겠습니까?\n\n그 안의 라인이 다 삭제되고 SC 재고가 복원됩니다.`)) return;
+  
+  // 라인들 가져와서 reverse
+  const { data: lines } = await db.from('in_transit')
+    .select('*').eq('shipment_id', shipmentId).eq('status', 'preparing');
+  
+  const scWh = warehouses.find(w => w.code === 'SC');
+  let okCount = 0, errors = [];
+  
+  for (const l of lines || []) {
+    try {
+      // inventory 복원
+      const { data: stRow } = await db.from('styles')
+        .select('id').eq('style_number', l.style_number).maybeSingle();
+      if (!stRow) { errors.push(`style ${l.style_number} 없음`); continue; }
+      
+      const { data: invRows } = await db.from('inventory')
+        .select('id, qty_on_hand')
+        .eq('warehouse_id', scWh.id)
+        .eq('style_id', stRow.id)
+        .eq('color', l.color)
+        .eq('size', l.size);
+      
+      let invId;
+      if (invRows && invRows.length > 0) {
+        invId = invRows[0].id;
+        await db.from('inventory').update({
+          qty_on_hand: invRows[0].qty_on_hand + l.qty_pcs
+        }).eq('id', invId);
+      } else {
+        const { data: newInv } = await db.from('inventory').insert({
+          warehouse_id: scWh.id,
+          style_id: stRow.id,
+          color: l.color, size: l.size, sku: null,
+          location: l.source_bin,
+          qty_on_hand: l.qty_pcs,
+          qty_committed: 0,
+          pcs_per_box: l.ppb || 72
+        }).select('id').single();
+        invId = newInv?.id;
+      }
+      
+      if (invId && l.source_bin) {
+        const { data: existBin } = await db.from('inventory_bins')
+          .select('id, qty').eq('inventory_id', invId).eq('bin_code', l.source_bin).maybeSingle();
+        if (existBin) {
+          await db.from('inventory_bins').update({
+            qty: existBin.qty + l.qty_pcs
+          }).eq('id', existBin.id);
+        } else {
+          await db.from('inventory_bins').insert({
+            inventory_id: invId,
+            bin_code: l.source_bin,
+            qty: l.qty_pcs
+          });
+        }
+      }
+      
+      await db.from('in_transit').delete().eq('id', l.id);
+      okCount++;
+    } catch (e) {
+      errors.push(`${l.sku}: ${e.message}`);
+    }
+  }
+  
+  await db.from('sc_ca_shipments').delete().eq('id', shipmentId);
+  
+  showToast(`🗑 Draft 삭제 완료 (${okCount} 라인 복원)`);
+  if (errors.length) console.error('삭제 오류:', errors);
+  await loadScInventory();
+  loadInTransit();
 }
 
 function renderTransitTable(elId, rows) {
@@ -38636,44 +38781,6 @@ async function openShipmentBuilder(existingShipmentId) {
   if (existingShipmentId) {
     await loadDraftShipment(existingShipmentId);
     return;
-  }
-  
-  // 진행 중 (preparing) shipment 가 있나 확인
-  const { data: prepShips } = await db.from('sc_ca_shipments')
-    .select('id, shipment_no, created_at, ship_date')
-    .eq('status', 'preparing')
-    .order('created_at', { ascending: false });
-  
-  if (prepShips && prepShips.length > 0) {
-    // 라인 수도 같이
-    const ids = prepShips.map(s => s.id);
-    const { data: lines } = await db.from('in_transit')
-      .select('shipment_id')
-      .in('shipment_id', ids)
-      .eq('status', 'preparing');
-    const cntById = {};
-    lines?.forEach(l => { cntById[l.shipment_id] = (cntById[l.shipment_id]||0) + 1; });
-    
-    const list = prepShips.map(s => {
-      const cnt = cntById[s.id] || 0;
-      const t = new Date(s.created_at);
-      return `${s.shipment_no} (${cnt} 라인, ${t.toLocaleDateString()})`;
-    }).join('\n');
-    
-    const choice = prompt(
-      `진행 중인 Draft Shipment ${prepShips.length}개:\n\n${list}\n\n` +
-      `이어서 작업할 Shipment 의 번호를 입력하세요 (예: ${prepShips[0].shipment_no}).\n` +
-      `새 Shipment 만들려면 '새로' 입력 또는 비워두세요.`,
-      prepShips[0].shipment_no
-    );
-    
-    if (choice && choice !== '새로') {
-      const found = prepShips.find(s => s.shipment_no === choice.trim());
-      if (found) {
-        await loadDraftShipment(found.id);
-        return;
-      }
-    }
   }
   
   // 새 Shipment 시작 (메모리만, DB 는 첫 라인 추가 시에 lazy 생성)
