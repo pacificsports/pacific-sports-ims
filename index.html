@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260430_091645 — SC Inv 전체 체크/해제: 현재 필터 적용된 라인만 (보이는 것만 선택) -->
+<!-- BUILD: 20260430_092737 — SC Inv Selector: Pallet 별 그룹화 (보라색 헤더) + Pallet 통째 체크박스 (그 pallet 의 모든 라인 한번에) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38828,49 +38828,124 @@ function renderScInvTable() {
     return true;
   });
   
-  tbody.innerHTML = filtered.map(r => {
-    const sel = _scInvSelected[r.id];
-    const checked = !!sel;
-    const qtyVal = sel ? sel.qty : r.available;
-    // SKU fallback — DB inventory.sku 가 비어있으면 style+color+size 로 계산
-    const computedSku = r.sku || ((r.style_number||'') + (r.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||''));
-    // 박스 수 계산
-    const ppb = r.pcs_per_box || 0;
-    const totalBoxes = ppb > 0 ? (r.qty_on_hand / ppb) : 0;
-    const boxesDisplay = ppb > 0 
-      ? (Number.isInteger(totalBoxes) ? totalBoxes : totalBoxes.toFixed(2))
-      : '—';
-    const takeBoxes = ppb > 0 ? (qtyVal / ppb) : 0;
-    const takeBoxesDisplay = ppb > 0
-      ? (Number.isInteger(takeBoxes) ? takeBoxes : takeBoxes.toFixed(2))
-      : '';
-    return `
-      <tr style="border-bottom:1px solid #f0f0f0;${r.ca_pending>0?'background:#fffbeb;':''}${checked?'background:#dcfce7;':''}">
-        <td style="padding:4px;text-align:center;border:1px solid #eee;">
-          <input type="checkbox" ${checked?'checked':''} onchange="scInvToggleLine('${r.id}', this.checked)" style="cursor:pointer;width:16px;height:16px;accent-color:#10b981;">
+  // Pallet 별 그룹화 — pallet_id 가 있으면 그 키로, 없으면 'no_pallet' 으로
+  const groups = {};
+  const groupOrder = [];  // 순서 유지
+  filtered.forEach(r => {
+    const key = r.pallet_id || `nopallet_${r.location || 'unknown'}`;
+    if (!groups[key]) {
+      groups[key] = {
+        pallet_id: r.pallet_id || null,
+        location: r.location || '',
+        lines: []
+      };
+      groupOrder.push(key);
+    }
+    groups[key].lines.push(r);
+  });
+  
+  // 정렬: location → pallet_id
+  groupOrder.sort((a, b) => {
+    const ga = groups[a], gb = groups[b];
+    const locCmp = (ga.location || '').localeCompare(gb.location || '');
+    if (locCmp !== 0) return locCmp;
+    return (ga.pallet_id || '').localeCompare(gb.pallet_id || '');
+  });
+  
+  // HTML 빌드
+  const rowsHtml = groupOrder.map(key => {
+    const g = groups[key];
+    // Pallet 통째 체크 상태: 전체 라인이 다 체크돼있나?
+    const allChecked = g.lines.every(l => _scInvSelected[l.id]);
+    const someChecked = g.lines.some(l => _scInvSelected[l.id]);
+    const palletCheckState = allChecked ? 'checked' : (someChecked ? 'indeterminate' : '');
+    
+    const totalPcs = g.lines.reduce((s, l) => s + (l.qty_on_hand || 0), 0);
+    const totalBoxes = g.lines.reduce((s, l) => {
+      const ppb = l.pcs_per_box || 0;
+      return s + (ppb > 0 ? (l.qty_on_hand / ppb) : 0);
+    }, 0);
+    const totalBoxesDisplay = Number.isInteger(totalBoxes) ? totalBoxes : totalBoxes.toFixed(2);
+    
+    const palletShortId = g.pallet_id ? g.pallet_id.substring(0, 8) : '—';
+    const palletKey = key;  // dataset 용
+    
+    // Pallet 헤더 row
+    const headerRow = `
+      <tr class="scinv-pallet-header" data-pallet-key="${palletKey.replace(/'/g,'')}" style="background:linear-gradient(90deg,#f3e8ff 0%,#fce7f3 100%);border-top:2px solid #9333ea;">
+        <td style="padding:6px 4px;text-align:center;border:1px solid #d8b4fe;">
+          <input type="checkbox" ${allChecked?'checked':''} onchange="scInvTogglePallet('${palletKey.replace(/'/g,"\\'")}', this.checked)" 
+            style="cursor:pointer;width:18px;height:18px;accent-color:#9333ea;" 
+            id="pallet-cb-${palletKey.replace(/[^a-zA-Z0-9]/g,'_')}">
         </td>
-        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#dbeafe;color:#1e40af;">${r.location||''}</td>
-        <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${r.style_number||''}</td>
-        <td style="padding:5px 8px;border:1px solid #eee;font-size:11px;">${r.color||''}</td>
-        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;">${r.size||''}</td>
-        <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${computedSku}</td>
-        <td style="padding:5px 8px;border:1px solid #eee;text-align:right;font-weight:700;">${(r.qty_on_hand||0).toLocaleString()}</td>
-        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;color:var(--text2);">${ppb || '—'}</td>
-        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;font-weight:600;">${boxesDisplay}</td>
-        <td style="padding:4px;border:1px solid #eee;text-align:right;background:#fffde7;">
-          <input type="number" value="${qtyVal}" min="0" max="${r.qty_on_hand||0}" 
-            ${!checked?'disabled':''} 
-            onchange="scInvUpdateQty('${r.id}', this.value)" 
-            style="width:60px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
-          <button onclick="scInvSetMax('${r.id}')" style="border:none;background:#bbf7d0;color:#15803d;cursor:pointer;font-size:9px;font-weight:700;padding:2px 4px;border-radius:3px;margin-left:2px;">전체</button>
-          ${takeBoxesDisplay ? `<div style="font-size:9px;color:var(--text3);margin-top:2px;">${takeBoxesDisplay} 박스</div>` : ''}
-        </td>
-        <td style="padding:5px 8px;border:1px solid #eee;text-align:center;">
-          ${r.ca_pending > 0 ? `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;" title="CA 주문 ${r.ca_pending}pcs 대기 중">⚠️ ${r.ca_pending}</span>` : '<span style="color:var(--text3);font-size:11px;">—</span>'}
+        <td colspan="10" style="padding:6px 10px;border:1px solid #d8b4fe;font-size:12px;color:#7b1fa2;font-weight:700;">
+          📦 Pallet <span style="font-family:'IBM Plex Mono',monospace;background:#fff;padding:1px 6px;border-radius:4px;border:1px solid #d8b4fe;">${palletShortId}</span>
+          <span style="margin-left:10px;background:#fff;padding:1px 8px;border-radius:8px;border:1px solid #93c5fd;color:#1e40af;font-family:'IBM Plex Mono',monospace;">📍 ${g.location}</span>
+          <span style="margin-left:10px;color:var(--text2);font-weight:600;font-size:11px;">${g.lines.length} 라인 · ${totalPcs.toLocaleString()} pcs · ${totalBoxesDisplay} 박스</span>
+          <span style="margin-left:10px;font-size:10px;color:var(--text3);">(체크박스 클릭 → Pallet 통째로 선택/해제)</span>
         </td>
       </tr>
     `;
+    
+    // Pallet 안의 라인 row 들
+    const lineRows = g.lines.map(r => {
+      const sel = _scInvSelected[r.id];
+      const checked = !!sel;
+      const qtyVal = sel ? sel.qty : r.available;
+      const computedSku = r.sku || ((r.style_number||'') + (r.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||''));
+      const ppb = r.pcs_per_box || 0;
+      const totalBoxesLine = ppb > 0 ? (r.qty_on_hand / ppb) : 0;
+      const boxesDisplay = ppb > 0 
+        ? (Number.isInteger(totalBoxesLine) ? totalBoxesLine : totalBoxesLine.toFixed(2))
+        : '—';
+      const takeBoxes = ppb > 0 ? (qtyVal / ppb) : 0;
+      const takeBoxesDisplay = ppb > 0
+        ? (Number.isInteger(takeBoxes) ? takeBoxes : takeBoxes.toFixed(2))
+        : '';
+      return `
+        <tr style="border-bottom:1px solid #f0f0f0;${r.ca_pending>0?'background:#fffbeb;':''}${checked?'background:#dcfce7;':''}">
+          <td style="padding:4px;text-align:center;border:1px solid #eee;padding-left:24px;">
+            <input type="checkbox" ${checked?'checked':''} onchange="scInvToggleLine('${r.id}', this.checked)" style="cursor:pointer;width:16px;height:16px;accent-color:#10b981;">
+          </td>
+          <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#dbeafe;color:#1e40af;font-size:11px;">${r.location||''}</td>
+          <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${r.style_number||''}</td>
+          <td style="padding:5px 8px;border:1px solid #eee;font-size:11px;">${r.color||''}</td>
+          <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;">${r.size||''}</td>
+          <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0f4c8a;background:#f0fdf4;">${computedSku}</td>
+          <td style="padding:5px 8px;border:1px solid #eee;text-align:right;font-weight:700;">${(r.qty_on_hand||0).toLocaleString()}</td>
+          <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;color:var(--text2);">${ppb || '—'}</td>
+          <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;font-weight:600;">${boxesDisplay}</td>
+          <td style="padding:4px;border:1px solid #eee;text-align:right;background:#fffde7;">
+            <input type="number" value="${qtyVal}" min="0" max="${r.qty_on_hand||0}" 
+              ${!checked?'disabled':''} 
+              onchange="scInvUpdateQty('${r.id}', this.value)" 
+              style="width:60px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
+            <button onclick="scInvSetMax('${r.id}')" style="border:none;background:#bbf7d0;color:#15803d;cursor:pointer;font-size:9px;font-weight:700;padding:2px 4px;border-radius:3px;margin-left:2px;">전체</button>
+            ${takeBoxesDisplay ? `<div style="font-size:9px;color:var(--text3);margin-top:2px;">${takeBoxesDisplay} 박스</div>` : ''}
+          </td>
+          <td style="padding:5px 8px;border:1px solid #eee;text-align:center;">
+            ${r.ca_pending > 0 ? `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;" title="CA 주문 ${r.ca_pending}pcs 대기 중">⚠️ ${r.ca_pending}</span>` : '<span style="color:var(--text3);font-size:11px;">—</span>'}
+          </td>
+        </tr>
+      `;
+    }).join('');
+    
+    return headerRow + lineRows;
   }).join('');
+  
+  tbody.innerHTML = rowsHtml || `<tr><td colspan="11" style="padding:30px;text-align:center;color:var(--text3);">조건에 맞는 재고가 없습니다.</td></tr>`;
+  
+  // indeterminate 처리 (HTML 속성으로 안 됨 — JS 로 직접 설정)
+  groupOrder.forEach(key => {
+    const g = groups[key];
+    const allChecked = g.lines.every(l => _scInvSelected[l.id]);
+    const someChecked = g.lines.some(l => _scInvSelected[l.id]);
+    const cbId = 'pallet-cb-' + key.replace(/[^a-zA-Z0-9]/g,'_');
+    const cb = document.getElementById(cbId);
+    if (cb) {
+      cb.indeterminate = (someChecked && !allChecked);
+    }
+  });
   
   updateScInvSummary();
 }
@@ -38903,6 +38978,24 @@ function scInvSetMax(invId) {
     _scInvSelected[invId] = { qty: item.qty_on_hand, line: item };
   } else {
     _scInvSelected[invId].qty = item.qty_on_hand;
+  }
+  renderScInvTable();
+}
+
+function scInvTogglePallet(palletKey, checked) {
+  // 같은 그룹의 모든 라인 toggle
+  const linesInGroup = _scInvCache.filter(r => {
+    const key = r.pallet_id || `nopallet_${r.location || 'unknown'}`;
+    return key === palletKey;
+  });
+  if (checked) {
+    linesInGroup.forEach(item => {
+      _scInvSelected[item.id] = { qty: item.qty_on_hand, line: item };
+    });
+  } else {
+    linesInGroup.forEach(item => {
+      delete _scInvSelected[item.id];
+    });
   }
   renderScInvTable();
 }
