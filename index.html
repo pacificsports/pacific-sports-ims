@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260430_094035 — SC Inv Selector: Pallet 그룹화 → Bin 그룹화 (같은 H1088 의 라인들 = 1 그룹). Pallet ID 노출 X -->
+<!-- BUILD: 20260430_161658 — Post Shipment fix: inventory_bin_id 와 inventory_id 둘 다 추적, 차감 시 bin row + 부모 inventory 둘 다 업데이트 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -39053,7 +39053,8 @@ function addSelectedToShipment() {
     const computedSku = item.sku || ((item.style_number||'') + (item.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(item.size||''));
     targetPallet.lines.push({
       is_manual: false,
-      inventory_id: item.id,
+      inventory_bin_id: item.id,           // inventory_bins.id (각 bin row)
+      inventory_id: item.inventory_id,     // inventory.id (부모 합산 row)
       style_number: item.style_number,
       color: item.color,
       size: item.size,
@@ -39243,7 +39244,34 @@ async function postShipment() {
       for (const l of pallet.lines) {
         try {
           // SC inventory 차감 (manual 라인 아닐 때만)
-          if (l.inventory_id) {
+          if (l.inventory_bin_id && l.inventory_id) {
+            // 1. inventory_bins (실제 bin 별 row) 차감
+            const { data: binRow } = await db.from('inventory_bins')
+              .select('qty').eq('id', l.inventory_bin_id).single();
+            if (!binRow) throw new Error(`inventory_bin ${l.source_bin}/${l.sku} 없음`);
+            const newBinQty = (binRow.qty || 0) - (l.qty_pcs || 0);
+            if (newBinQty < 0) throw new Error(`SC ${l.source_bin} ${l.sku}: bin 재고 부족 (있는: ${binRow.qty}, 필요: ${l.qty_pcs})`);
+            
+            if (newBinQty === 0) {
+              await db.from('inventory_bins').delete().eq('id', l.inventory_bin_id);
+            } else {
+              await db.from('inventory_bins').update({ qty: newBinQty }).eq('id', l.inventory_bin_id);
+            }
+            
+            // 2. inventory (부모 합계) 차감
+            const { data: invRow } = await db.from('inventory')
+              .select('qty_on_hand').eq('id', l.inventory_id).single();
+            if (!invRow) throw new Error(`inventory ${l.inventory_id} 없음`);
+            const newInvQty = (invRow.qty_on_hand || 0) - (l.qty_pcs || 0);
+            if (newInvQty < 0) throw new Error(`SC ${l.sku}: inventory 합계 부족`);
+            
+            if (newInvQty === 0) {
+              await db.from('inventory').delete().eq('id', l.inventory_id);
+            } else {
+              await db.from('inventory').update({ qty_on_hand: newInvQty }).eq('id', l.inventory_id);
+            }
+          } else if (l.inventory_id && !l.inventory_bin_id) {
+            // 옛 방식 fallback (inventory_id 만 있는 경우)
             const { data: invRow } = await db.from('inventory')
               .select('qty_on_hand').eq('id', l.inventory_id).single();
             if (!invRow) throw new Error(`SC inventory ${l.inventory_id} 없음`);
@@ -39251,7 +39279,6 @@ async function postShipment() {
             if (newQty < 0) throw new Error(`SC ${l.source_bin} ${l.sku}: 재고 부족`);
             
             if (newQty === 0) {
-              // qty 0 이면 row 자체 삭제
               await db.from('inventory').delete().eq('id', l.inventory_id);
             } else {
               await db.from('inventory').update({ qty_on_hand: newQty }).eq('id', l.inventory_id);
