@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260430_161658 — Post Shipment fix: inventory_bin_id 와 inventory_id 둘 다 추적, 차감 시 bin row + 부모 inventory 둘 다 업데이트 -->
+<!-- BUILD: 20260430_162954 — 이미 다른 Pallet 에 추가된 라인은 회색 표시 + 체크박스 disabled (중복 추가 방지) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38817,6 +38817,16 @@ function renderScInvTable() {
   const styleFilter = (document.getElementById('scinv-style-filter').value||'').toLowerCase().trim();
   const showPending = document.getElementById('scinv-show-pending').checked;
   
+  // 이미 다른 pallet 에 있는 inventory_bin_id 들 (현재 편집 중인 shipment 기준)
+  const usedBinIds = new Set();
+  if (typeof _shipmentPallets !== 'undefined' && Array.isArray(_shipmentPallets)) {
+    _shipmentPallets.forEach(p => {
+      (p.lines || []).forEach(l => {
+        if (l.inventory_bin_id) usedBinIds.add(l.inventory_bin_id);
+      });
+    });
+  }
+  
   const filtered = _scInvCache.filter(r => {
     if (binFilter && !(r.location||'').toUpperCase().includes(binFilter)) return false;
     if (styleFilter) {
@@ -38849,9 +38859,11 @@ function renderScInvTable() {
   // HTML 빌드
   const rowsHtml = groupOrder.map(key => {
     const g = groups[key];
-    // Bin 통째 체크 상태: 전체 라인이 다 체크돼있나?
-    const allChecked = g.lines.every(l => _scInvSelected[l.id]);
-    const someChecked = g.lines.some(l => _scInvSelected[l.id]);
+    // Bin 통째 체크 상태: 사용 가능한 라인 (아직 다른 pallet 에 안 들어간) 만 고려
+    const availableLines = g.lines.filter(l => !usedBinIds.has(l.id));
+    const allUsed = availableLines.length === 0;
+    const allChecked = availableLines.length > 0 && availableLines.every(l => _scInvSelected[l.id]);
+    const someChecked = availableLines.some(l => _scInvSelected[l.id]);
     
     const totalPcs = g.lines.reduce((s, l) => s + (l.qty_on_hand || 0), 0);
     const totalBoxes = g.lines.reduce((s, l) => {
@@ -38865,16 +38877,16 @@ function renderScInvTable() {
     
     // Bin 헤더 row
     const headerRow = `
-      <tr class="scinv-bin-header" style="background:linear-gradient(90deg,#dbeafe 0%,#e0f2fe 100%);border-top:2px solid #1e40af;">
+      <tr class="scinv-bin-header" style="background:linear-gradient(90deg,#dbeafe 0%,#e0f2fe 100%);border-top:2px solid #1e40af;${allUsed?'opacity:0.6;':''}">
         <td style="padding:6px 4px;text-align:center;border:1px solid #93c5fd;">
-          <input type="checkbox" ${allChecked?'checked':''} onchange="scInvToggleBin('${binKey.replace(/'/g,"\\'")}', this.checked)" 
-            style="cursor:pointer;width:18px;height:18px;accent-color:#1e40af;" 
+          <input type="checkbox" ${allChecked?'checked':''} ${allUsed?'disabled':''} onchange="scInvToggleBin('${binKey.replace(/'/g,"\\'")}', this.checked)" 
+            style="cursor:${allUsed?'not-allowed':'pointer'};width:18px;height:18px;accent-color:#1e40af;" 
             id="bin-cb-${safeBinId}">
         </td>
         <td colspan="10" style="padding:6px 10px;border:1px solid #93c5fd;font-size:13px;color:#1e40af;font-weight:700;">
           📍 <span style="font-family:'IBM Plex Mono',monospace;background:#fff;padding:2px 10px;border-radius:6px;border:1px solid #93c5fd;font-size:14px;">${g.location}</span>
           <span style="margin-left:12px;color:var(--text2);font-weight:600;font-size:11px;">${g.lines.length} 라인 · ${totalPcs.toLocaleString()} pcs · ${totalBoxesDisplay} 박스</span>
-          <span style="margin-left:10px;font-size:10px;color:var(--text3);font-weight:400;">(체크박스 → Bin 통째 선택/해제)</span>
+          ${allUsed ? '<span style="margin-left:10px;font-size:11px;color:#dc2626;font-weight:700;">⚠️ 모두 다른 Pallet 에 있음</span>' : '<span style="margin-left:10px;font-size:10px;color:var(--text3);font-weight:400;">(체크박스 → Bin 통째 선택/해제)</span>'}
         </td>
       </tr>
     `;
@@ -38883,6 +38895,7 @@ function renderScInvTable() {
     const lineRows = g.lines.map(r => {
       const sel = _scInvSelected[r.id];
       const checked = !!sel;
+      const isUsed = usedBinIds.has(r.id);  // 이미 다른 pallet 에 있음
       const qtyVal = sel ? sel.qty : r.available;
       const computedSku = r.sku || ((r.style_number||'') + (r.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||''));
       const ppb = r.pcs_per_box || 0;
@@ -38894,10 +38907,12 @@ function renderScInvTable() {
       const takeBoxesDisplay = ppb > 0
         ? (Number.isInteger(takeBoxes) ? takeBoxes : takeBoxes.toFixed(2))
         : '';
+      const rowBg = isUsed ? '#f3f4f6' : (r.ca_pending>0 ? '#fffbeb' : (checked?'#dcfce7':''));
+      const rowOpacity = isUsed ? '0.5' : '1';
       return `
-        <tr style="border-bottom:1px solid #f0f0f0;${r.ca_pending>0?'background:#fffbeb;':''}${checked?'background:#dcfce7;':''}">
+        <tr style="border-bottom:1px solid #f0f0f0;background:${rowBg};opacity:${rowOpacity};">
           <td style="padding:4px;text-align:center;border:1px solid #eee;padding-left:24px;">
-            <input type="checkbox" ${checked?'checked':''} onchange="scInvToggleLine('${r.id}', this.checked)" style="cursor:pointer;width:16px;height:16px;accent-color:#10b981;">
+            <input type="checkbox" ${checked?'checked':''} ${isUsed?'disabled':''} onchange="scInvToggleLine('${r.id}', this.checked)" style="cursor:${isUsed?'not-allowed':'pointer'};width:16px;height:16px;accent-color:#10b981;">
           </td>
           <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-family:'IBM Plex Mono',monospace;font-weight:700;background:#dbeafe;color:#1e40af;font-size:11px;">${r.location||''}</td>
           <td style="padding:5px 8px;border:1px solid #eee;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:11px;">#${r.style_number||''}</td>
@@ -38907,13 +38922,15 @@ function renderScInvTable() {
           <td style="padding:5px 8px;border:1px solid #eee;text-align:right;font-weight:700;">${(r.qty_on_hand||0).toLocaleString()}</td>
           <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;color:var(--text2);">${ppb || '—'}</td>
           <td style="padding:5px 8px;border:1px solid #eee;text-align:center;font-size:11px;font-weight:600;">${boxesDisplay}</td>
-          <td style="padding:4px;border:1px solid #eee;text-align:right;background:#fffde7;">
+          <td style="padding:4px;border:1px solid #eee;text-align:right;background:${isUsed?'#f3f4f6':'#fffde7'};">
+            ${isUsed ? '<span style="font-size:10px;color:#dc2626;font-weight:700;">✓ 이미 추가됨</span>' : `
             <input type="number" value="${qtyVal}" min="0" max="${r.qty_on_hand||0}" 
               ${!checked?'disabled':''} 
               onchange="scInvUpdateQty('${r.id}', this.value)" 
               style="width:60px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 4px;font-size:11px;text-align:right;">
             <button onclick="scInvSetMax('${r.id}')" style="border:none;background:#bbf7d0;color:#15803d;cursor:pointer;font-size:9px;font-weight:700;padding:2px 4px;border-radius:3px;margin-left:2px;">전체</button>
             ${takeBoxesDisplay ? `<div style="font-size:9px;color:var(--text3);margin-top:2px;">${takeBoxesDisplay} 박스</div>` : ''}
+            `}
           </td>
           <td style="padding:5px 8px;border:1px solid #eee;text-align:center;">
             ${r.ca_pending > 0 ? `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;" title="CA 주문 ${r.ca_pending}pcs 대기 중">⚠️ ${r.ca_pending}</span>` : '<span style="color:var(--text3);font-size:11px;">—</span>'}
@@ -38975,8 +38992,12 @@ function scInvSetMax(invId) {
 }
 
 function scInvToggleBin(binKey, checked) {
-  // 같은 location 의 모든 라인 toggle
-  const linesInBin = _scInvCache.filter(r => (r.location || 'unknown') === binKey);
+  // 같은 location 의 라인 toggle — 이미 다른 pallet 에 있는 라인은 제외
+  const usedBinIds = new Set();
+  if (typeof _shipmentPallets !== 'undefined' && Array.isArray(_shipmentPallets)) {
+    _shipmentPallets.forEach(p => (p.lines||[]).forEach(l => l.inventory_bin_id && usedBinIds.add(l.inventory_bin_id)));
+  }
+  const linesInBin = _scInvCache.filter(r => (r.location || 'unknown') === binKey && !usedBinIds.has(r.id));
   if (checked) {
     linesInBin.forEach(item => {
       _scInvSelected[item.id] = { qty: item.qty_on_hand, line: item };
@@ -38990,12 +39011,18 @@ function scInvToggleBin(binKey, checked) {
 }
 
 function scInvToggleAll(checked) {
-  // 현재 필터링된 라인만 toggle (보이는 라인만)
+  // 현재 필터링된 라인 + 이미 다른 pallet 에 안 들어간 라인만 toggle
   const binFilter = (document.getElementById('scinv-bin-filter')?.value || '').trim().toUpperCase();
   const styleFilter = (document.getElementById('scinv-style-filter')?.value || '').trim().toLowerCase();
   const showPending = document.getElementById('scinv-show-pending')?.checked;
   
+  const usedBinIds = new Set();
+  if (typeof _shipmentPallets !== 'undefined' && Array.isArray(_shipmentPallets)) {
+    _shipmentPallets.forEach(p => (p.lines||[]).forEach(l => l.inventory_bin_id && usedBinIds.add(l.inventory_bin_id)));
+  }
+  
   const filtered = _scInvCache.filter(r => {
+    if (usedBinIds.has(r.id)) return false;  // 이미 사용 중인 라인 제외
     if (binFilter && !(r.location||'').toUpperCase().includes(binFilter)) return false;
     if (styleFilter) {
       const computedSku = r.sku || ((r.style_number||'') + (r.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(r.size||''));
@@ -39011,7 +39038,6 @@ function scInvToggleAll(checked) {
       _scInvSelected[item.id] = { qty: item.qty_on_hand, line: item };
     });
   } else {
-    // 해제도 현재 필터된 것만
     filtered.forEach(item => {
       delete _scInvSelected[item.id];
     });
