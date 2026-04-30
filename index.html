@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260430_162954 — 이미 다른 Pallet 에 추가된 라인은 회색 표시 + 체크박스 disabled (중복 추가 방지) -->
+<!-- BUILD: 20260430_171405 — Draft 시스템 1단계: 라인 추가 시 즉시 DB 저장 + SC 재고 차감 / 라인 삭제 시 reverse / Draft 삭제 / 다시 열기 (DB 에서 불러오기) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4262,7 +4262,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           </div>
         </div>
         <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;">
-          <button class="btn" onclick="closeShipmentBuilder()">취소</button>
+          <button class="btn" onclick="closeShipmentBuilder()" style="background:#f5f5f5;">📝 닫기 (Draft 유지)</button>
+          <button class="btn" onclick="cancelShipmentDraft()" style="background:#fee2e2;color:#c62828;">🗑 Draft 삭제 (재고 복원)</button>
           <button class="btn" onclick="generatePackingList()" style="background:#0f4c8a;color:#fff;">🖨 Packing List 미리보기/인쇄</button>
           <button class="btn btn-primary" style="background:#7b1fa2;color:#fff;" onclick="postShipment()">✅ Post — Shipment 시작</button>
         </div>
@@ -38363,6 +38364,221 @@ function openAddScCaTransit() {
 // ════════════════════════════════════════════════════════════
 let _shipmentPallets = [];  // [{ id, label, lines: [{...}] }]
 let _shipmentInfo = {};
+let _shipmentDbId = null;  // sc_ca_shipments.id (저장 시점에 할당)
+let _shipmentDbNo = null;  // shipment_no
+
+// ════════════════════════════════════════════════════════════════
+// Draft DB 헬퍼 — 라인 추가/삭제 시 즉시 DB 저장 + 재고 차감/복원
+// ════════════════════════════════════════════════════════════════
+
+// Shipment row 가 아직 없으면 생성 (lazy insert)
+async function _ensureShipmentDbRow() {
+  if (_shipmentDbId) return _shipmentDbId;
+  
+  captureShipmentInfo();
+  const shipNo = _shipmentInfo.shipment_no || generateShipmentNo();
+  const { data, error } = await db.from('sc_ca_shipments').insert({
+    shipment_no: shipNo,
+    ship_date: _shipmentInfo.ship_date || new Date().toISOString().substring(0,10),
+    eta: _shipmentInfo.eta || null,
+    seal_no: _shipmentInfo.seal_no || null,
+    carrier: _shipmentInfo.carrier || null,
+    driver_name: _shipmentInfo.driver_name || null,
+    driver_phone: _shipmentInfo.driver_phone || null,
+    truck_no: _shipmentInfo.truck_no || null,
+    notes: _shipmentInfo.notes || null,
+    status: 'preparing'
+  }).select('id, shipment_no').single();
+  
+  if (error) { alert('Shipment 생성 실패: ' + error.message); return null; }
+  _shipmentDbId = data.id;
+  _shipmentDbNo = data.shipment_no;
+  _shipmentInfo.shipment_no = data.shipment_no;
+  return data.id;
+}
+
+// 라인 추가 — 메모리 + DB + 재고 차감 atomic
+async function _addLineToDraft(palletId, palletLabel, lineData) {
+  // 1. Shipment row 보장
+  const shipId = await _ensureShipmentDbRow();
+  if (!shipId) return false;
+  
+  const { inventory_bin_id, inventory_id, source_bin, sku, qty_pcs } = lineData;
+  
+  try {
+    // 2. inventory_bins 차감 (있으면)
+    if (inventory_bin_id) {
+      const { data: binRow } = await db.from('inventory_bins')
+        .select('qty').eq('id', inventory_bin_id).single();
+      if (!binRow) throw new Error(`bin row ${source_bin} 없음`);
+      const newBinQty = binRow.qty - qty_pcs;
+      if (newBinQty < 0) throw new Error(`${source_bin} 재고 부족 (있음: ${binRow.qty}, 필요: ${qty_pcs})`);
+      
+      if (newBinQty === 0) {
+        await db.from('inventory_bins').delete().eq('id', inventory_bin_id);
+      } else {
+        await db.from('inventory_bins').update({ qty: newBinQty }).eq('id', inventory_bin_id);
+      }
+    }
+    
+    // 3. inventory (부모) 차감
+    if (inventory_id) {
+      const { data: invRow } = await db.from('inventory')
+        .select('qty_on_hand').eq('id', inventory_id).single();
+      if (!invRow) throw new Error(`inventory row 없음`);
+      const newQty = invRow.qty_on_hand - qty_pcs;
+      if (newQty === 0) {
+        await db.from('inventory').delete().eq('id', inventory_id);
+      } else {
+        await db.from('inventory').update({ qty_on_hand: newQty }).eq('id', inventory_id);
+      }
+    }
+    
+    // 4. in_transit insert (status='preparing')
+    const { data: itRow, error: itErr } = await db.from('in_transit').insert({
+      invoice_no: _shipmentDbNo,
+      shipment_id: shipId,
+      pallet_label: palletLabel,
+      source_bin: source_bin || null,
+      ship_date: _shipmentInfo.ship_date || null,
+      eta: _shipmentInfo.eta || null,
+      style_number: lineData.style_number,
+      color: lineData.color,
+      size: lineData.size,
+      sku: sku,
+      qty_dz: 0,
+      qty_pcs: qty_pcs,
+      qty_boxes: lineData.pcs_per_box ? Math.ceil(qty_pcs / lineData.pcs_per_box) : null,
+      ppb: lineData.pcs_per_box || 72,
+      transit_type: 'sc_ca',
+      status: 'preparing',
+      notes: palletLabel
+    }).select('id').single();
+    
+    if (itErr) throw itErr;
+    
+    // 5. 메모리에도 추가 (db_line_id 보관)
+    const pallet = _shipmentPallets.find(p => p.id === palletId);
+    if (pallet) {
+      pallet.lines.push({
+        ...lineData,
+        db_line_id: itRow.id,  // in_transit.id
+        is_manual: lineData.is_manual || false
+      });
+    }
+    
+    return true;
+  } catch (e) {
+    alert(`라인 추가 실패: ${e.message}`);
+    return false;
+  }
+}
+
+// 라인 삭제 — DB delete + 재고 복원
+async function _removeLineFromDraft(palletId, lineIdx) {
+  const pallet = _shipmentPallets.find(p => p.id === palletId);
+  if (!pallet) return false;
+  const line = pallet.lines[lineIdx];
+  if (!line) return false;
+  
+  const { db_line_id, inventory_bin_id, inventory_id, source_bin, qty_pcs, color, size, style_number, sku } = line;
+  
+  try {
+    // 1. in_transit delete
+    if (db_line_id) {
+      await db.from('in_transit').delete().eq('id', db_line_id);
+    }
+    
+    // 2. inventory 복원 (manual 라인 아닐 때만)
+    if (inventory_id) {
+      const { data: invRow } = await db.from('inventory')
+        .select('id, qty_on_hand').eq('id', inventory_id).maybeSingle();
+      if (invRow) {
+        await db.from('inventory').update({
+          qty_on_hand: invRow.qty_on_hand + qty_pcs
+        }).eq('id', inventory_id);
+      } else {
+        // inventory row 자체가 삭제됐으면 다시 생성 — style_id 필요
+        const { data: stRow } = await db.from('styles')
+          .select('id').eq('style_number', style_number).maybeSingle();
+        if (stRow) {
+          const scWh = warehouses.find(w => w.code === 'SC');
+          const { data: newInv } = await db.from('inventory').insert({
+            warehouse_id: scWh.id,
+            style_id: stRow.id,
+            color: color, size: size, sku: null,
+            location: source_bin,
+            qty_on_hand: qty_pcs,
+            qty_committed: 0,
+            pcs_per_box: line.pcs_per_box || 72
+          }).select('id').single();
+          if (newInv) line.inventory_id = newInv.id;
+        }
+      }
+    }
+    
+    // 3. inventory_bins 복원
+    if (inventory_bin_id || (inventory_id && source_bin)) {
+      // bin row 가 아직 있으면 qty 더하기, 없으면 새로 만들기
+      const targetInvId = line.inventory_id;
+      const { data: existBin } = await db.from('inventory_bins')
+        .select('id, qty').eq('inventory_id', targetInvId).eq('bin_code', source_bin).maybeSingle();
+      if (existBin) {
+        await db.from('inventory_bins').update({
+          qty: existBin.qty + qty_pcs
+        }).eq('id', existBin.id);
+      } else {
+        await db.from('inventory_bins').insert({
+          inventory_id: targetInvId,
+          bin_code: source_bin,
+          qty: qty_pcs
+        });
+      }
+    }
+    
+    // 4. 메모리에서 제거
+    pallet.lines.splice(lineIdx, 1);
+    return true;
+  } catch (e) {
+    alert(`라인 삭제 실패: ${e.message}`);
+    return false;
+  }
+}
+
+// Draft 전체 취소 — 모든 라인 reverse + shipment row 삭제
+async function cancelShipmentDraft() {
+  if (!_shipmentDbId) {
+    // DB 에 저장 안 됐으면 그냥 메모리만 비우기
+    _shipmentPallets = [];
+    _shipmentInfo = {};
+    document.getElementById('shipment-builder-modal').style.display = 'none';
+    return;
+  }
+  
+  if (!confirm(`이 Draft Shipment 을 완전 취소하시겠습니까?\n\n라인 ${_shipmentPallets.reduce((s,p)=>s+p.lines.length,0)}개 모두 삭제 + SC 재고 복원됩니다.`)) return;
+  
+  // 모든 라인 reverse (역순)
+  for (let pi = _shipmentPallets.length - 1; pi >= 0; pi--) {
+    const p = _shipmentPallets[pi];
+    for (let li = p.lines.length - 1; li >= 0; li--) {
+      await _removeLineFromDraft(p.id, li);
+    }
+  }
+  
+  // shipment row 삭제
+  await db.from('sc_ca_shipments').delete().eq('id', _shipmentDbId);
+  
+  _shipmentPallets = [];
+  _shipmentInfo = {};
+  _shipmentDbId = null;
+  _shipmentDbNo = null;
+  
+  showToast('🗑 Draft 취소 완료');
+  document.getElementById('shipment-builder-modal').style.display = 'none';
+  await loadScInventory();
+  loadInTransit();
+}
+
 let _scInvCache = [];       // SC inventory snapshot
 let _scInvSelected = {};    // {invId: {qty, line}}
 let _shipmentTargetPalletId = null;  // SC selector 가 어느 pallet 에 추가할지
@@ -38415,26 +38631,56 @@ function generateShipmentNo() {
   return `SC-CA-${y}${m}${day}-${h}${min}`;
 }
 
-function openShipmentBuilder() {
-  // draft 자동 복원 — 라인이 1개라도 있을 때만 (빈 pallet 만 있으면 무시)
-  const draft = getShipmentDraft();
-  const hasRealContent = draft && draft.pallets && draft.pallets.some(p => p.lines && p.lines.length > 0);
-  if (hasRealContent) {
-    if (confirm(`작업 중인 Shipment draft 가 있습니다.\n복원하시겠습니까?\n\n취소: 새로 시작 (현재 draft 삭제)`)) {
-      _shipmentInfo = draft.info || {};
-      _shipmentPallets = draft.pallets;
-      restoreShipmentInfoToForm();
-      renderShipmentPallets();
-      document.getElementById('shipment-builder-modal').style.display = 'flex';
-      return;
-    } else {
-      clearShipmentDraft();
+async function openShipmentBuilder(existingShipmentId) {
+  // existingShipmentId 가 있으면 그 draft 불러오기
+  if (existingShipmentId) {
+    await loadDraftShipment(existingShipmentId);
+    return;
+  }
+  
+  // 진행 중 (preparing) shipment 가 있나 확인
+  const { data: prepShips } = await db.from('sc_ca_shipments')
+    .select('id, shipment_no, created_at, ship_date')
+    .eq('status', 'preparing')
+    .order('created_at', { ascending: false });
+  
+  if (prepShips && prepShips.length > 0) {
+    // 라인 수도 같이
+    const ids = prepShips.map(s => s.id);
+    const { data: lines } = await db.from('in_transit')
+      .select('shipment_id')
+      .in('shipment_id', ids)
+      .eq('status', 'preparing');
+    const cntById = {};
+    lines?.forEach(l => { cntById[l.shipment_id] = (cntById[l.shipment_id]||0) + 1; });
+    
+    const list = prepShips.map(s => {
+      const cnt = cntById[s.id] || 0;
+      const t = new Date(s.created_at);
+      return `${s.shipment_no} (${cnt} 라인, ${t.toLocaleDateString()})`;
+    }).join('\n');
+    
+    const choice = prompt(
+      `진행 중인 Draft Shipment ${prepShips.length}개:\n\n${list}\n\n` +
+      `이어서 작업할 Shipment 의 번호를 입력하세요 (예: ${prepShips[0].shipment_no}).\n` +
+      `새 Shipment 만들려면 '새로' 입력 또는 비워두세요.`,
+      prepShips[0].shipment_no
+    );
+    
+    if (choice && choice !== '새로') {
+      const found = prepShips.find(s => s.shipment_no === choice.trim());
+      if (found) {
+        await loadDraftShipment(found.id);
+        return;
+      }
     }
   }
   
-  // 초기화
+  // 새 Shipment 시작 (메모리만, DB 는 첫 라인 추가 시에 lazy 생성)
   _shipmentInfo = {};
   _shipmentPallets = [];
+  _shipmentDbId = null;
+  _shipmentDbNo = null;
   
   const today = (() => {
     const d = new Date();
@@ -38455,6 +38701,72 @@ function openShipmentBuilder() {
   addNewPallet();
   
   document.getElementById('shipment-builder-modal').style.display = 'flex';
+}
+
+// DB 에서 draft shipment + 라인 불러오기
+async function loadDraftShipment(shipmentId) {
+  const { data: ship } = await db.from('sc_ca_shipments').select('*').eq('id', shipmentId).single();
+  if (!ship) { alert('Shipment 을 찾을 수 없습니다.'); return; }
+  
+  const { data: lines } = await db.from('in_transit')
+    .select('*')
+    .eq('shipment_id', shipmentId)
+    .eq('status', 'preparing')
+    .order('pallet_label, id');
+  
+  // 메모리 초기화
+  _shipmentDbId = ship.id;
+  _shipmentDbNo = ship.shipment_no;
+  _shipmentInfo = {
+    shipment_no: ship.shipment_no,
+    ship_date: ship.ship_date,
+    eta: ship.eta,
+    seal_no: ship.seal_no,
+    carrier: ship.carrier,
+    driver_name: ship.driver_name,
+    driver_phone: ship.driver_phone,
+    truck_no: ship.truck_no,
+    notes: ship.notes
+  };
+  
+  // pallet 별 그룹화
+  _shipmentPallets = [];
+  const palletMap = {};
+  (lines || []).forEach(l => {
+    const lbl = l.pallet_label || 'Pallet 1';
+    if (!palletMap[lbl]) {
+      const pid = 'p_' + Date.now() + '_' + Math.random().toString(36).substring(2,7);
+      palletMap[lbl] = { id: pid, label: lbl, lines: [] };
+      _shipmentPallets.push(palletMap[lbl]);
+    }
+    
+    // SC inventory 에서 inventory_bin_id, inventory_id 다시 매칭
+    palletMap[lbl].lines.push({
+      db_line_id: l.id,
+      style_number: l.style_number,
+      color: l.color,
+      size: l.size,
+      sku: l.sku,
+      source_bin: l.source_bin,
+      qty_pcs: l.qty_pcs,
+      pcs_per_box: l.ppb || 72,
+      // inventory_bin_id, inventory_id 는 deletePallet 때 lookup 필요
+      inventory_bin_id: null,  // 삭제 시 source_bin 으로 복원
+      inventory_id: null,
+      ca_pending: 0,
+      is_manual: false
+    });
+  });
+  
+  // pallet label 재정렬
+  _shipmentPallets.forEach((p, i) => p.label = `Pallet ${i+1}`);
+  
+  if (_shipmentPallets.length === 0) addNewPallet();
+  
+  restoreShipmentInfoToForm();
+  renderShipmentPallets();
+  document.getElementById('shipment-builder-modal').style.display = 'flex';
+  showToast(`📂 ${ship.shipment_no} 불러옴 (${lines?.length || 0} 라인)`);
 }
 
 function restoreShipmentInfoToForm() {
@@ -38483,10 +38795,32 @@ function captureShipmentInfo() {
   };
 }
 
-function closeShipmentBuilder() {
+async function closeShipmentBuilder() {
   captureShipmentInfo();
-  saveShipmentDraft();
+  
+  // DB 에 shipment row 가 있으면 정보 업데이트
+  if (_shipmentDbId) {
+    await db.from('sc_ca_shipments').update({
+      ship_date: _shipmentInfo.ship_date || null,
+      eta: _shipmentInfo.eta || null,
+      seal_no: _shipmentInfo.seal_no || null,
+      carrier: _shipmentInfo.carrier || null,
+      driver_name: _shipmentInfo.driver_name || null,
+      driver_phone: _shipmentInfo.driver_phone || null,
+      truck_no: _shipmentInfo.truck_no || null,
+      notes: _shipmentInfo.notes || null
+    }).eq('id', _shipmentDbId);
+    showToast(`💾 ${_shipmentDbNo} Draft 저장됨 — 나중에 이어서 작업 가능`);
+  }
+  
   document.getElementById('shipment-builder-modal').style.display = 'none';
+  // 메모리 비우기 (다음에 열 때 새로 로드)
+  _shipmentPallets = [];
+  _shipmentInfo = {};
+  _shipmentDbId = null;
+  _shipmentDbNo = null;
+  
+  loadInTransit();
 }
 
 function addNewPallet() {
@@ -38494,24 +38828,61 @@ function addNewPallet() {
   const label = `Pallet ${_shipmentPallets.length + 1}`;
   _shipmentPallets.push({ id: palletId, label, lines: [] });
   renderShipmentPallets();
-  saveShipmentDraft();
 }
 
-function deletePallet(palletId) {
-  if (!confirm('이 Pallet 을 삭제하시겠습니까?')) return;
+async function deletePallet(palletId) {
+  const pallet = _shipmentPallets.find(p => p.id === palletId);
+  if (!pallet) return;
+  
+  if (pallet.lines.length > 0) {
+    if (!confirm(`이 Pallet 안의 ${pallet.lines.length}개 라인을 모두 삭제하고 SC 재고를 복원하시겠습니까?`)) return;
+    // 각 라인 reverse (역순)
+    for (let li = pallet.lines.length - 1; li >= 0; li--) {
+      await _removeLineFromDraft(palletId, li);
+    }
+  } else {
+    if (!confirm('이 Pallet 을 삭제하시겠습니까?')) return;
+  }
+  
   _shipmentPallets = _shipmentPallets.filter(p => p.id !== palletId);
   // 라벨 다시 정렬
   _shipmentPallets.forEach((p, i) => p.label = `Pallet ${i + 1}`);
+  
+  // DB 의 in_transit pallet_label 도 갱신
+  if (_shipmentDbId) {
+    for (const p of _shipmentPallets) {
+      for (const l of p.lines) {
+        if (l.db_line_id) {
+          await db.from('in_transit').update({ 
+            pallet_label: p.label, 
+            notes: p.label 
+          }).eq('id', l.db_line_id);
+        }
+      }
+    }
+  }
+  
   renderShipmentPallets();
-  saveShipmentDraft();
+  await loadScInventory();
 }
 
-function deletePalletLine(palletId, lineIdx) {
+async function deletePalletLine(palletId, lineIdx) {
   const pallet = _shipmentPallets.find(p => p.id === palletId);
   if (!pallet) return;
-  pallet.lines.splice(lineIdx, 1);
+  const line = pallet.lines[lineIdx];
+  if (!line) return;
+  
+  // 진짜 DB 에 저장된 라인이면 reverse 필요
+  if (line.db_line_id) {
+    if (!confirm(`라인 삭제하고 SC 재고를 복원하시겠습니까?\n${line.source_bin} / ${line.sku} / ${line.qty_pcs} pcs`)) return;
+    const ok = await _removeLineFromDraft(palletId, lineIdx);
+    if (!ok) return;
+  } else {
+    pallet.lines.splice(lineIdx, 1);
+  }
+  
   renderShipmentPallets();
-  saveShipmentDraft();
+  await loadScInventory();
 }
 
 function addManualLineToShipment() {
@@ -39060,7 +39431,7 @@ function filterScInv() {
   renderScInvTable();
 }
 
-function addSelectedToShipment() {
+async function addSelectedToShipment() {
   const targetPallet = _shipmentPallets.find(p => p.id === _shipmentTargetPalletId);
   if (!targetPallet) {
     alert('대상 Pallet 을 찾을 수 없습니다.');
@@ -39073,14 +39444,18 @@ function addSelectedToShipment() {
     return;
   }
   
-  entries.forEach(e => {
+  // 라벨 변경 — 진행 중 표시
+  document.getElementById('sc-inv-selector-modal').style.display = 'none';
+  showToast(`💾 ${entries.length} 라인 추가 중...`);
+  
+  let okCount = 0, errors = [];
+  for (const e of entries) {
     const item = e.line;
-    // SKU fallback — DB sku 가 비어있으면 계산
     const computedSku = item.sku || ((item.style_number||'') + (item.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(item.size||''));
-    targetPallet.lines.push({
+    const ok = await _addLineToDraft(targetPallet.id, targetPallet.label, {
       is_manual: false,
-      inventory_bin_id: item.id,           // inventory_bins.id (각 bin row)
-      inventory_id: item.inventory_id,     // inventory.id (부모 합산 row)
+      inventory_bin_id: item.id,
+      inventory_id: item.inventory_id,
       style_number: item.style_number,
       color: item.color,
       size: item.size,
@@ -39090,12 +39465,15 @@ function addSelectedToShipment() {
       pcs_per_box: item.pcs_per_box || 72,
       ca_pending: item.ca_pending || 0
     });
-  });
+    if (ok) okCount++;
+    else errors.push(`${item.location}/${item.color}/${item.size}`);
+  }
   
-  document.getElementById('sc-inv-selector-modal').style.display = 'none';
-  showToast(`✅ ${entries.length} 라인 추가됨 (${entries.reduce((s,e)=>s+e.qty,0)} pcs)`);
+  showToast(`✅ ${okCount}/${entries.length} 라인 추가됨`);
+  if (errors.length) console.error('실패한 라인:', errors);
   renderShipmentPallets();
-  saveShipmentDraft();
+  // SC 재고도 새로 로드 (변경됨)
+  await loadScInventory();
 }
 
 // ════════════════════════════════════════════════════════════
@@ -39224,27 +39602,33 @@ async function postShipment() {
     return;
   }
   
-  // 빈 라인 체크
-  const invalidLines = [];
-  _shipmentPallets.forEach(p => {
-    p.lines.forEach(l => {
-      if (!l.style_number || !l.color || !l.size || !l.sku || (l.qty_pcs || 0) <= 0) {
-        invalidLines.push(`${p.label}: ${l.style_number||'?'}/${l.color||'?'}/${l.size||'?'}`);
-      }
-    });
-  });
-  if (invalidLines.length > 0) {
-    alert(`다음 라인들이 불완전합니다:\n\n${invalidLines.slice(0, 5).join('\n')}\n\n모든 필드를 채워주세요.`);
+  if (!_shipmentDbId) {
+    alert('Shipment DB row 가 없습니다 — 먼저 라인을 추가해주세요.');
     return;
   }
   
-  if (!confirm(`${_shipmentPallets.length}개 Pallet, ${_shipmentPallets.reduce((s,p)=>s+p.lines.length,0)} 라인을 SC → CA 운송으로 등록하시겠습니까?\n\nSC 재고가 차감됩니다.`)) return;
+  if (!confirm(`이 Shipment 을 출발 처리하시겠습니까?\n\n${_shipmentPallets.length}개 Pallet, ${_shipmentPallets.reduce((s,p)=>s+p.lines.length,0)} 라인이 In Transit 상태로 변경됩니다.\n\n(SC 재고는 이미 Draft 시점에 차감되어 있습니다.)`)) return;
   
   try {
-    // 1. shipment row 생성
-    const shipNo = _shipmentInfo.shipment_no || generateShipmentNo();
-    const { data: shipRow, error: shipErr } = await db.from('sc_ca_shipments').insert({
-      shipment_no: shipNo,
+    // Pallet 마다 진짜 pallet_id 생성 (CA 입고 시 그룹화용)
+    for (const pallet of _shipmentPallets) {
+      const realPalletId = crypto.randomUUID();
+      for (const l of pallet.lines) {
+        if (l.db_line_id) {
+          await db.from('in_transit').update({
+            status: 'in_transit',
+            pallet_id: realPalletId,
+            pallet_label: pallet.label,
+            ship_date: _shipmentInfo.ship_date,
+            eta: _shipmentInfo.eta || null
+          }).eq('id', l.db_line_id);
+        }
+      }
+    }
+    
+    // Shipment 정보 업데이트 + status 변경
+    await db.from('sc_ca_shipments').update({
+      status: 'in_transit',
       ship_date: _shipmentInfo.ship_date,
       eta: _shipmentInfo.eta || null,
       seal_no: _shipmentInfo.seal_no || null,
@@ -39252,111 +39636,23 @@ async function postShipment() {
       driver_name: _shipmentInfo.driver_name || null,
       driver_phone: _shipmentInfo.driver_phone || null,
       truck_no: _shipmentInfo.truck_no || null,
-      notes: _shipmentInfo.notes || null,
-      status: 'in_transit'
-    }).select().single();
+      notes: _shipmentInfo.notes || null
+    }).eq('id', _shipmentDbId);
     
-    if (shipErr) throw shipErr;
-    const shipmentId = shipRow.id;
+    const totalLines = _shipmentPallets.reduce((s,p) => s + p.lines.length, 0);
+    alert(`✅ Shipment 등록 완료\n\n📦 ${totalLines} 라인이 In Transit 상태로 변경됨`);
     
-    let scOk = 0, errors = [];
-    
-    // 2. 각 pallet 의 각 라인 처리
-    for (const pallet of _shipmentPallets) {
-      const palletId = pallet.id; // memory id 가 아닌 실제 UUID 필요
-      // pallet_id 는 새 UUID 생성
-      const realPalletId = crypto.randomUUID();
-      
-      for (const l of pallet.lines) {
-        try {
-          // SC inventory 차감 (manual 라인 아닐 때만)
-          if (l.inventory_bin_id && l.inventory_id) {
-            // 1. inventory_bins (실제 bin 별 row) 차감
-            const { data: binRow } = await db.from('inventory_bins')
-              .select('qty').eq('id', l.inventory_bin_id).single();
-            if (!binRow) throw new Error(`inventory_bin ${l.source_bin}/${l.sku} 없음`);
-            const newBinQty = (binRow.qty || 0) - (l.qty_pcs || 0);
-            if (newBinQty < 0) throw new Error(`SC ${l.source_bin} ${l.sku}: bin 재고 부족 (있는: ${binRow.qty}, 필요: ${l.qty_pcs})`);
-            
-            if (newBinQty === 0) {
-              await db.from('inventory_bins').delete().eq('id', l.inventory_bin_id);
-            } else {
-              await db.from('inventory_bins').update({ qty: newBinQty }).eq('id', l.inventory_bin_id);
-            }
-            
-            // 2. inventory (부모 합계) 차감
-            const { data: invRow } = await db.from('inventory')
-              .select('qty_on_hand').eq('id', l.inventory_id).single();
-            if (!invRow) throw new Error(`inventory ${l.inventory_id} 없음`);
-            const newInvQty = (invRow.qty_on_hand || 0) - (l.qty_pcs || 0);
-            if (newInvQty < 0) throw new Error(`SC ${l.sku}: inventory 합계 부족`);
-            
-            if (newInvQty === 0) {
-              await db.from('inventory').delete().eq('id', l.inventory_id);
-            } else {
-              await db.from('inventory').update({ qty_on_hand: newInvQty }).eq('id', l.inventory_id);
-            }
-          } else if (l.inventory_id && !l.inventory_bin_id) {
-            // 옛 방식 fallback (inventory_id 만 있는 경우)
-            const { data: invRow } = await db.from('inventory')
-              .select('qty_on_hand').eq('id', l.inventory_id).single();
-            if (!invRow) throw new Error(`SC inventory ${l.inventory_id} 없음`);
-            const newQty = (invRow.qty_on_hand || 0) - (l.qty_pcs || 0);
-            if (newQty < 0) throw new Error(`SC ${l.source_bin} ${l.sku}: 재고 부족`);
-            
-            if (newQty === 0) {
-              await db.from('inventory').delete().eq('id', l.inventory_id);
-            } else {
-              await db.from('inventory').update({ qty_on_hand: newQty }).eq('id', l.inventory_id);
-            }
-          }
-          
-          // in_transit row 생성
-          await db.from('in_transit').insert({
-            invoice_no: shipNo,
-            shipment_id: shipmentId,
-            pallet_id: realPalletId,
-            pallet_label: pallet.label,
-            source_bin: l.source_bin || null,
-            container_no: null,
-            ship_date: _shipmentInfo.ship_date,
-            eta: _shipmentInfo.eta || null,
-            style_number: l.style_number,
-            color: l.color,
-            size: l.size,
-            sku: l.sku,
-            qty_dz: 0,
-            qty_boxes: l.pcs_per_box ? Math.ceil(l.qty_pcs / l.pcs_per_box) : null,
-            ppb: l.pcs_per_box || 72,
-            is_nonstandard: l.is_nonstandard || false,
-            qty_pcs: l.qty_pcs,
-            transit_type: 'sc_ca',
-            status: 'in_transit',
-            notes: pallet.label
-          });
-          scOk++;
-        } catch (e) {
-          errors.push(`${pallet.label} ${l.style_number}/${l.color}/${l.size}: ${e.message}`);
-        }
-      }
-    }
-    
-    let msg = `✅ Shipment 등록 완료\n\n📦 ${scOk} 라인 등록됨`;
-    if (errors.length > 0) {
-      msg += `\n\n❌ 오류 ${errors.length}개:\n${errors.slice(0, 5).join('\n')}`;
-    }
-    alert(msg);
-    
-    clearShipmentDraft();
     _shipmentPallets = [];
     _shipmentInfo = {};
+    _shipmentDbId = null;
+    _shipmentDbNo = null;
     document.getElementById('shipment-builder-modal').style.display = 'none';
     
     await loadScInventory();
     loadInTransit();
     
   } catch (e) {
-    alert(`저장 실패: ${e.message}`);
+    alert(`Post 실패: ${e.message}`);
     console.error(e);
   }
 }
