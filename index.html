@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260430_183058 — In Transit 화면에 Draft Shipment 카드 표시 (📂 이어서 작업 / 🗑 삭제). prompt 입력 폐기 -->
+<!-- BUILD: 20260430_192357 — Step 1: Order 입력 dropdown 에 'SC → CA' 옵션 추가 + stage_for_ca_truck flag 저장 (warehouse_id=SC, wh=SC, stage_for_ca_truck=true) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7242,10 +7242,11 @@ function renderEntryTable() {
         })()}
       </td>
       <td style="text-align:center;font-size:11px;">
-        <select class="fsel" style="width:72px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;syncWhDropdown();renderEntryTable()">
+        <select class="fsel" style="width:88px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;syncWhDropdown();renderEntryTable()" title="SC → CA: SC 에 있는 재고를 다음 CA 트럭에 실어 CA 에서 출고 (In Transit to CA on Next Truck)">
           <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
           <option value="CA" ${l.wh==='CA'?'selected':''}>CA</option>
           <option value="SC&CA" ${l.wh==='SC&CA'?'selected':''}>SC &amp; CA</option>
+          <option value="SC2CA" ${l.wh==='SC2CA'?'selected':''}>SC → CA</option>
         </select>
       </td>
       <td style="text-align:center;color:#2e7d32">${(function(){
@@ -8292,11 +8293,18 @@ async function _doSaveInvoice() {
 
 
     const _mainBins = Object.keys(l.wh === 'CA' ? _allocObjCA : _allocObjSC).filter(k => !k.includes('PCR') && !k.includes('TRANSFER|'));
+    
+    // SC → CA: warehouse_id 는 SC 이지만 stage_for_ca_truck=true 로 표시 (다음 CA 트럭에 실어 CA 에서 출고)
+    const isStageForCa = (l.wh === 'SC2CA');
+    // SC2CA 의 경우 warehouse_id 는 SC 로 (재고는 SC 에 있음)
+    const realWhId = isStageForCa ? (scWhId || whId) : lineWhId;
+    
     const insertPayload = {
       order_id: order.id,
       style_id: s?.id || null,
-      warehouse_id: lineWhId,
-      wh: l.wh || 'SC',
+      warehouse_id: realWhId,
+      wh: isStageForCa ? 'SC' : (l.wh || 'SC'),  // wh 컬럼은 SC 로 (모든 SC 화면에서 자연스럽게 보임)
+      stage_for_ca_truck: isStageForCa,
       color: l.color, size: l.size,
       qty_pieces: l.qty,
       qty_filled: 0,
@@ -8314,8 +8322,8 @@ async function _doSaveInvoice() {
     const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
     if (lineErr) console.error('[order_lines ERROR]', lineErr.message, lineErr.details, lineErr.hint);
 
-    // qty_committed 예약 — 가용 재고에서 이 오더 수량만큼 잠금
-    const lineWhCode = l.wh || 'SC';
+    // qty_committed 예약 — SC2CA 도 SC 에서 reserve (재고는 SC 에 있으니까)
+    const lineWhCode = isStageForCa ? 'SC' : (l.wh || 'SC');
     const commitWhIds = lineWhCode === 'SC&CA'
       ? [scWhId, caWhId].filter(Boolean)
       : lineWhCode === 'CA' ? [caWhId || whId] : [scWhId || whId];
