@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_174758 — Invoice 이메일 수정: (1) Status Update 의 SC Warehouse 가 SC2CA 라인만 있고 SC 직접 출고 없으면 'Pending Transfer to CA' 표시. (2) Tracking # 가로 콤마 (위아래 → 콤마). (3) Total Shipped + Net Invoice 합치기 → 'Net Invoice (288 pcs):' -->
+<!-- BUILD: 20260501_181500 — Customer POs WH 컬럼: SC&CA split 오더에서 SC2CA 라인 있으면 SC 행에 🚚SC→CA 배지 추가 (이전엔 싱글 WH 만 처리됐음) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -10718,6 +10718,13 @@ function renderCustomerPOTable() {
       const scSt = statusLabel[scStatusKey] || { label: scStatusKey, color: '#6b7280', bg: '#f3f4f6' };
       const caSt = statusLabel[caStatusKey] || { label: caStatusKey, color: '#6b7280', bg: '#f3f4f6' };
 
+      // SC2CA 라인 있는지 체크 (split 오더에서도 SC→CA 배지 SC 행에 보여주기)
+      const splitOls = o.order_lines || [];
+      const splitHasSc2ca = splitOls.some(ol => ol.stage_for_ca_truck === true);
+      const splitSc2caBadge = splitHasSc2ca
+        ? ' <span style="display:inline-flex;align-items:center;background:#92400e;color:#fff;border:1px solid #92400e;padding:2px 8px;border-radius:4px;font-size:10px;font-family:\'IBM Plex Mono\',monospace;font-weight:800;letter-spacing:0.5px;">🚚SC→CA</span>'
+        : '';
+
       const scPcs = o.sc_total_pcs || Math.round((o.total_pcs||0) * 0.5);
       const caPcs = o.ca_total_pcs || ((o.total_pcs||0) - scPcs);
       const scAmt = o.sc_total_amount || 0;
@@ -10760,7 +10767,7 @@ function renderCustomerPOTable() {
       const scRow = '<tr style="cursor:pointer;' + rowBg + 'border-bottom:none;" onclick="openPODetail(\'' + oid + '\'">'
         + '<td style="font-weight:700;color:#111827;border-bottom:none;">' + o.customer_name + '</td>'
         + '<td class="mono" style="font-weight:700;border-bottom:none;">' + (o.customer_po||'—') + (!['shipped','invoiced','cancelled','completed'].includes(o.status) ? ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;font-size:9px;padding:1px 5px;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑 전체삭제</button>' : '') + '</td>'
-        + '<td style="border-bottom:none;"><span class="loc-sc">SC</span></td>'
+        + '<td style="border-bottom:none;"><span class="loc-sc">SC</span>' + splitSc2caBadge + '</td>'
         + '<td style="text-align:center;border-bottom:none;">' + scPcs.toLocaleString() + '</td>'
         + '<td style="font-weight:700;color:var(--primary);border-bottom:none;">' + (scAmt > 0 ? '$' + scAmt.toLocaleString() : '—') + '</td>'
         + '<td style="border-bottom:none;">' + (o.ship_date||'—') + '</td>'
