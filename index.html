@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_100133 — 거래처 이메일에 'In Transit to CA on Next Truck' 컬럼 추가 (CA 와 BackOrder 사이). emailLines 에 sc2ca_qty + 진짜 BO 분리. scTotalPcs/caTotalPcs 도 dropdown 무시하고 진짜 alloc 만 봄 -->
+<!-- BUILD: 20260501_111641 — CA reserve fix (style_id 필터 추가 + 디버그 로그). Order Status 카드 SC→CA 별도 카드 (노란색 테두리, 🚚 SC→CA 배지, '다음 트럭에 실어 CA→ 출고' 라벨). makeCards 가 stage_for_ca_truck=true 라인 있으면 SC2CA 카드 추가 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8363,23 +8363,32 @@ async function _doSaveInvoice() {
       // SC, SC2CA 다 SC inventory 에서 reserve. CA 만 CA 에서.
       const reserveWhId = (areaCode === 'CA') ? (caWhId || whId) : (scWhId || whId);
       let toCommit = qty;
-      const { data: invRows } = await db.from('inventory')
+      const styleId = s?.id || null;
+      const reserveQuery = db.from('inventory')
         .select('id, qty_on_hand, qty_committed')
         .eq('color', (l.color||'').toUpperCase())
         .eq('size', (l.size||'').toUpperCase())
-        .eq('warehouse_id', reserveWhId)
-        .order('qty_on_hand', { ascending: false });
+        .eq('warehouse_id', reserveWhId);
+      if (styleId) reserveQuery.eq('style_id', styleId);  // 같은 style 만 잡기
+      const { data: invRows, error: invErr } = await reserveQuery.order('qty_on_hand', { ascending: false });
+      if (invErr) console.error(`[reserve ${areaCode}] inv query error:`, invErr.message);
+      console.log(`[reserve ${areaCode}] ${l.styleNum} ${l.color} ${l.size} qty=${qty} → ${invRows?.length||0} inv rows found in wh ${reserveWhId}`);
       for (const inv of (invRows || [])) {
         if (toCommit <= 0) break;
         const avail = Math.max(0, (inv.qty_on_hand||0) - (inv.qty_committed||0));
         const commit = Math.min(toCommit, avail);
         if (commit > 0) {
           const newCommit = (inv.qty_committed||0) + commit;
-          await db.from('inventory').update({ qty_committed: newCommit }).eq('id', inv.id);
-          await logInventoryChange(inv.id, inv.qty_committed||0, newCommit, 'commit', _currentEmployee?.name||'system', order?.id, 'order', `PO Save (${areaCode}) - ${l.styleNum||''} ${l.color||''} ${l.size||''}`);
-          toCommit -= commit;
+          const { error: updErr } = await db.from('inventory').update({ qty_committed: newCommit }).eq('id', inv.id);
+          if (updErr) console.error(`[reserve ${areaCode}] update error:`, updErr.message);
+          else {
+            await logInventoryChange(inv.id, inv.qty_committed||0, newCommit, 'commit', _currentEmployee?.name||'system', order?.id, 'order', `PO Save (${areaCode}) - ${l.styleNum||''} ${l.color||''} ${l.size||''}`);
+            toCommit -= commit;
+            console.log(`[reserve ${areaCode}] committed ${commit} on inv ${inv.id} (now ${newCommit})`);
+          }
         }
       }
+      if (toCommit > 0) console.warn(`[reserve ${areaCode}] uncommitted: ${toCommit} pcs (no available stock)`);
     };
     
     // SC 영역
@@ -10800,7 +10809,7 @@ async function loadOrderStatus() {
   );
 
   const { data } = await db.from('orders')
-    .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail)')
+    .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail, stage_for_ca_truck, qty_sc2ca, alloc_sc2ca_detail, qty_pieces)')
     .not('status', 'in', '(cancelled,completed)')
     .order('created_at', { ascending: false })
     .limit(5000);
@@ -10873,6 +10882,7 @@ async function loadOrderStatus() {
   });
 
   // SC&CA 오더는 SC 블록 + CA 블록 두 개로 분리
+  // SC2CA 라인이 있으면 SC→CA 카드도 별도로 (재고는 SC 에 있고 다음 트럭에 실어 CA 도착해서 출고)
   // 각 "가상 카드"를 만들어서 col별로 분류
   const makeCards = (orders) => {
     const cards = [];
@@ -10883,13 +10893,28 @@ async function loadOrderStatus() {
         cards.push({ ...o, _wh: wh, _status: o.status });
         return;
       }
+      // SC2CA 라인 있는지 체크 (stage_for_ca_truck=true 인 line)
+      const ols = o.order_lines || [];
+      const hasSc2caLine = ols.some(ol => ol.stage_for_ca_truck === true);
+      const hasScLine = ols.some(ol => ol.stage_for_ca_truck !== true && (ol.wh === 'SC' || ol.wh === 'SC&CA'));
+      const hasCaLine = ols.some(ol => ol.wh === 'CA' || ol.wh === 'SC&CA');
       const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
+      
       if (isSplit) {
-        cards.push({ ...o, _wh: 'SC', _status: o.sc_status || o.status });
-        cards.push({ ...o, _wh: 'CA', _status: o.ca_status || o.status });
+        if (hasScLine) cards.push({ ...o, _wh: 'SC', _status: o.sc_status || o.status });
+        if (hasCaLine) cards.push({ ...o, _wh: 'CA', _status: o.ca_status || o.status });
+        if (hasSc2caLine) cards.push({ ...o, _wh: 'SC2CA', _status: o.status });
       } else {
         const wh = o.wh_code || o.warehouses?.code || 'SC';
-        cards.push({ ...o, _wh: wh, _status: o.status });
+        // SC2CA 카드 — 단일 창고 Order 라도 SC2CA 라인 있으면 별도 카드
+        if (hasSc2caLine) {
+          // 일반 카드 (SC2CA 외 라인 있을 때만)
+          if (hasScLine || hasCaLine) cards.push({ ...o, _wh: wh, _status: o.status });
+          // SC→CA 카드
+          cards.push({ ...o, _wh: 'SC2CA', _status: o.status });
+        } else {
+          cards.push({ ...o, _wh: wh, _status: o.status });
+        }
       }
     });
     return cards;
@@ -10957,13 +10982,15 @@ async function loadOrderStatus() {
   // 카드 HTML 생성 함수
   function makeCardHtml(o, col) {
     const wh = o._wh;
+    const isSc2ca = (wh === 'SC2CA');  // SC→CA 카드 인지
     const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
-    const whBorderColor = wh === 'CA' ? CA_BORDER : SC_BORDER;
+    // SC2CA 카드는 노란색 테두리
+    const whBorderColor = isSc2ca ? '#92400e' : (wh === 'CA' ? CA_BORDER : SC_BORDER);
     const borderColor = whBorderColor;
     const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
     const isOverdue = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 48;
     const isWarning = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 24 && hoursElapsed <= 48;
-    const cardBg = isSplit ? poColorMap[o.id] : '#fff';
+    const cardBg = isSc2ca ? '#fffbeb' : (isSplit ? poColorMap[o.id] : '#fff');
     const isBack = o._status === 'backordered';
     const isCreditHold = o._status === 'credit_hold';
     const isUrgent = o.priority === 'urgent';
@@ -10971,15 +10998,22 @@ async function loadOrderStatus() {
     const _d = Math.floor(_h / 24);
     const _rem = _h % 24;
     const hoursLabel = _d > 0 ? `${_d}d ${_rem}h ago` : `${_h}h ago`;
-    const whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
-    const displayPcs = o.total_pcs || 0;
+    const whBadge = isSc2ca 
+      ? '<span style="display:inline-flex;align-items:center;background:#92400e;color:#fff;border:1px solid #92400e;padding:2px 8px;border-radius:4px;font-size:10px;font-family:\'IBM Plex Mono\',monospace;font-weight:800;letter-spacing:0.5px;">🚚 SC→CA</span>'
+      : (wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>');
+    // SC2CA 카드의 displayPcs — qty_sc2ca 합계
+    const ols = o.order_lines || [];
+    const sc2caTotalPcs = ols.filter(ol => ol.stage_for_ca_truck === true).reduce((s,ol) => s + (ol.qty_sc2ca || ol.qty_pieces || 0), 0);
+    const displayPcs = isSc2ca ? sc2caTotalPcs : (o.total_pcs || 0);
     const scPcs = o.sc_total_pcs || 0;
     const caPcs = o.ca_total_pcs || 0;
-    const displayAmt = isSplit ? (wh === 'CA' ? (o.ca_total_amount||0) : (o.sc_total_amount||0)) : (o.total_amount||0);
+    const displayAmt = isSc2ca ? 0 : (isSplit ? (wh === 'CA' ? (o.ca_total_amount||0) : (o.sc_total_amount||0)) : (o.total_amount||0));
     const canSeeAmt = _currentEmployee && ['admin','supervisor'].includes(_currentEmployee.role);
-    const pcsLabel = isSplit
-      ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#6b7280;">(SC: ${scPcs.toLocaleString()} / CA: ${caPcs.toLocaleString()})</span>`
-      : `${displayPcs.toLocaleString()} pcs`;
+    const pcsLabel = isSc2ca
+      ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#92400e;">(다음 트럭에 실어 CA→ 출고)</span>`
+      : (isSplit
+        ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#6b7280;">(SC: ${scPcs.toLocaleString()} / CA: ${caPcs.toLocaleString()})</span>`
+        : `${displayPcs.toLocaleString()} pcs`);
 
     const overdueBanner = isOverdue
       ? `<div style="margin:-10px -12px 8px -12px;padding:6px 12px;border-radius:6px 6px 0 0;animation:overdue-blink 1s ease-in-out infinite;display:flex;align-items:center;gap:6px;">
