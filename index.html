@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_193500 — Packing List 모달: (1) X/취소 버튼의 confirm 팝업 제거 → 바로 닫힘 (2) SC2CA 카드에서 PL 띄울 때 빈 데이터로 뜨던 버그 fix — preparationComplete 의 라인 필터 + buildPackingListHtml 의 라인 정규화 추가 (qty_sc2ca/alloc_sc2ca_detail 사용) -->
+<!-- BUILD: 20260501_194500 — rollbackStatus: 진행 흔적도 같이 클리어. PO Entered 로 되돌리면 printed_at, wh_complete_*, pcr_complete_*, pcr_box_allocation 모두 reset → 다시 들어가서 처음부터 진행 가능. Preparing 으로 되돌리면 prepared_at 만 reset (preparing 단계 데이터는 유지) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -22665,16 +22665,34 @@ async function resubmitCreditHold(orderId, orderNumber, customerName, customerPo
 }
 
 async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
-  // 바로 실행 (confirm 팝업 + PIN 모달 모두 제거)
+  // status 되돌릴 때 진행 흔적도 같이 클리어
   await updateWhStatus(orderId, wh, toStatus);
+  
+  const pre = wh === 'CA' ? 'ca_' : (wh === 'SC2CA' ? 'sc2ca_' : 'sc_');
+  const resetFields = {};
+  
   if (toStatus === 'po_entered') {
-    const pre = wh === 'CA' ? 'ca_' : 'sc_';
-    await db.from('orders').update({
-      [pre + 'warehouse_printed_at']: null,
-      [pre + 'pcroom_printed_at']: null
-    }).eq('id', orderId);
+    // PO Entered 로 → preparing 단계의 모든 진행 흔적 클리어
+    resetFields[pre + 'warehouse_printed_at'] = null;
+    resetFields[pre + 'pcroom_printed_at'] = null;
+    resetFields[pre + 'wh_complete_at'] = null;
+    resetFields[pre + 'wh_complete_by'] = null;
+    resetFields[pre + 'wh_prepared_lines'] = null;
+    resetFields[pre + 'pcr_complete_at'] = null;
+    resetFields[pre + 'pcr_complete_by'] = null;
+    resetFields[pre + 'pcr_prepared_lines'] = null;
+    resetFields[pre + 'pcr_box_allocation'] = null;
+  } else if (toStatus === 'preparing') {
+    // Ready to Ship → Preparing 으로 → prepared_at (PL Confirm 흔적) 만 클리어
+    // preparing 단계의 wh/pcr complete 정보는 살려둠 (다시 PL Confirm 만 누르면 되도록)
+    resetFields.prepared_at = null;
   }
-  showToast(`✅ ${toStatus} 으로 되돌림`);
+  
+  if (Object.keys(resetFields).length > 0) {
+    await db.from('orders').update(resetFields).eq('id', orderId);
+  }
+  
+  showToast(`✅ ${toStatus} 으로 되돌림 — 진행 흔적 클리어됨`);
   loadOrderStatus();
 }
 async function updateWhStatus(orderId, wh, newStatus) {
