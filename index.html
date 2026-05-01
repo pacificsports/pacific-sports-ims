@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_161708 — Mark as Shipped fix: CA 카드 ship 할 때 SC2CA 라인 제외 (stage_for_ca_truck!=true 만). 같은 방식으로 SC 카드도 SC2CA 제외. SC2CA 카드는 별도로 stage_for_ca_truck=true 만 처리 -->
+<!-- BUILD: 20260430_183058 — In Transit 화면에 Draft Shipment 카드 표시 (📂 이어서 작업 / 🗑 삭제). prompt 입력 폐기 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -926,8 +926,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <table class="order-line-table" id="order-line-table">
                     <thead><tr>
                       <th>Item Code</th><th>Style</th><th>Color</th><th>Size</th>
-                      <th>Qty(pcs)</th><th>Unit$</th><th style="background:#dbeafe;color:#1e40af;">📍 배분</th><th>SC/SC-PCR</th><th>CA/CA-PCR</th><th style="background:#fef3c7;color:#92400e;">SC→CA</th>
-                      <th>Full Boxes</th><th>Partial Pcs(PCR)</th><th>Back Order</th><th style="color:#a84212;">Transfer</th><th>✕</th>
+                      <th>Qty(pcs)</th><th>Unit$</th><th>SC/SC-PCR</th><th>CA/CA-PCR</th>
+                      <th>Ship</th><th>Full Boxes</th><th>Partial Pcs(PCR)</th><th>Back Order</th><th style="color:#a84212;">Transfer</th><th>✕</th>
                     </tr></thead>
                     <tbody id="po-lines-body"></tbody>
                   </table>
@@ -4223,7 +4223,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
               </div>
               <div>
                 <label style="font-size:10px;color:var(--text3);">Carrier</label>
-                <input id="ship-carrier-truck" placeholder="OCS / GAU / 기타" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
+                <input id="ship-carrier" placeholder="OCS / GAU / 기타" style="width:100%;height:30px;border:1px solid #d8b4fe;border-radius:4px;padding:0 8px;">
               </div>
               <div>
                 <label style="font-size:10px;color:var(--text3);">Driver</label>
@@ -7165,35 +7165,6 @@ function renderEntryTable() {
       <td><input class="fi" value="${l.size}" style="width:50px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].size=this.value;const ppb=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb);poLines[${idx}].loose=poLines[${idx}].qty%ppb;renderEntryTable();liveRenderDocs()"/></td>
       <td style="text-align:center;"><input type="number" class="fi" value="${l.qty}" style="width:72px;height:28px;font-size:16px;padding:2px 6px;text-align:center;font-weight:700;color:#dc2626;border:2px solid #dc2626 !important;border-radius:4px;background:#fff5f5;" onchange="poLines[${idx}].qty=parseInt(this.value)||0;const ppb2=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb2);poLines[${idx}].loose=poLines[${idx}].qty%ppb2;saveDraft();renderEntryTable();liveRenderDocs()"/></td>
       <td><input type="number" class="fi" value="${l.price}" step="0.01" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].price=parseFloat(this.value)||0;renderEntryTable();liveRenderDocs()"/></td>
-      <td style="text-align:center;padding:4px 8px;">
-        ${(function(){
-          const sumAlloc = obj => obj ? Object.entries(obj).filter(([k])=>!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(v||0),0) : 0;
-          const scTotal = sumAlloc(l.allocSC);
-          const caTotal = sumAlloc(l.allocCA);
-          const sc2caTotal = sumAlloc(l.allocSC2CA);
-          const allocTotal = scTotal + caTotal + sc2caTotal;
-          const needQty = l.qty || 0;
-          
-          let label, bg, border, color;
-          if (allocTotal === 0) {
-            label = '📍 배분하기';
-            bg='#fef9c3'; border='#eab308'; color='#854d0e';
-          } else if (allocTotal === needQty) {
-            label = '✓ 배분 완료';
-            bg='#dcfce7'; border='#16a34a'; color='#15803d';
-          } else if (allocTotal < needQty) {
-            label = `⚠️ ${allocTotal}/${needQty}`;
-            bg='#fed7aa'; border='#f97316'; color='#9a3412';
-          } else {
-            label = `❌ ${allocTotal}/${needQty}`;
-            bg='#fee2e2'; border='#ef4444'; color='#991b1b';
-          }
-          
-          return `<button onclick="event.stopPropagation();openAllocModalBoth(${idx})" 
-            style="width:130px;height:30px;font-size:12px;padding:2px 6px;border:1.5px solid ${border};border-radius:6px;background:${bg};cursor:pointer;font-weight:700;color:${color};display:inline-flex;align-items:center;justify-content:center;gap:4px;" 
-            title="📍 통합 배분 모달 클릭">${label}</button>`;
-        })()}
-      </td>
       <td style="padding:4px 8px;">
         ${(function(){
           const k = l.isSideSeam
@@ -7211,7 +7182,6 @@ function renderEntryTable() {
           // main bin alloc vs PCR alloc 분리
           const scMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
           const scPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
-          const scTotalAlloc = scMainAlloc + scPcrAlloc;
           const sqAvail = Math.max(0, sq - scMainAlloc);
           const pqAvail = Math.max(0, pq - scPcrAlloc);
           const warn=l.cases>0&&sqAvail<l.cases*ppb;
@@ -7220,7 +7190,18 @@ function renderEntryTable() {
               <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sqAvail.toLocaleString()}${scMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}${warn?' ⚠️':''}</span>
               <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${pqAvail>0?'#a84212':'#bbb'};">+${pqAvail.toLocaleString()} PCR${scPcrAlloc>0?` <span style="font-size:9px;color:#888">/${pq}</span>`:''}</span>
             </div>
-            ${scTotalAlloc > 0 ? `<span style="font-size:10px;color:var(--sc);font-weight:700;">✓ ${scTotalAlloc} 잡힘</span>` : ''}
+            ${(l.wh||'SC')==='CA'
+              ? `<button class="loc-pick-btn" disabled title="CA 출고 선택됨" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
+                  <span>🔒</span><span class="loc-pick-text" style="max-width:100px;color:#aaa;">CA 전용</span>
+                </button>`
+              : l.wh === 'SC&CA'
+                ? `<button class="loc-pick-btn wh-sc${(l.allocSC&&Object.keys(l.allocSC).length)?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="SC + CA 동시 Bin 배분" style="background:linear-gradient(90deg,#e8f5e9 50%,#fff7ed 50%);border-color:#fdba74;">
+                    <span>📍</span><span class="loc-pick-text" style="max-width:100px;font-size:10px;">SC+CA 배분...</span>
+                  </button>`
+                : `<button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModal(${idx},'SC')" title="SC / SC-PCR Bin 배분">
+                  <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
+                </button>`
+            }
           </div>`;
         })()}
       </td>
@@ -7234,62 +7215,48 @@ function renderEntryTable() {
           const caPcrBins = (window.binInventory?.['CA-PCR']?.[k] || window.binInventory?.['CA-PCR']?.[caPcrCsKey] || []);
           const cpq = caPcrBins.reduce((s,b)=>s+(b.qty||0), 0);
           const alloc=l.allocCA||null;
+          const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
           const caMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
           const caPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
-          const caTotalAlloc = caMainAlloc + caPcrAlloc;
           const cqAvail = Math.max(0, cq - caMainAlloc);
           const cpqAvail = Math.max(0, cpq - caPcrAlloc);
           return `<div style="display:flex;flex-direction:column;gap:3px;">
             <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cqAvail.toLocaleString()}${caMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${cq.toLocaleString()}</span>`:''}</span>
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cqAvail.toLocaleString()}${caMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${cq.toLocaleString()}</span>`:''}
+              </span>
               <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${cpqAvail>0?'#5b21b6':'#bbb'};">+${cpqAvail.toLocaleString()} PCR${caPcrAlloc>0?` <span style="font-size:9px;color:#888">/${cpq}</span>`:''}</span>
             </div>
-            ${caTotalAlloc > 0 ? `<span style="font-size:10px;color:var(--ca);font-weight:700;">✓ ${caTotalAlloc} 잡힘</span>` : ''}
+            ${l.wh === 'SC&CA'
+              ? `<button class="loc-pick-btn wh-ca${(l.allocCA&&Object.keys(l.allocCA).length)?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="SC + CA 동시 Bin 배분" style="background:linear-gradient(90deg,#fff7ed 50%,#e8f5e9 50%);border-color:#86efac;">
+                  <span>📍</span><span class="loc-pick-text" style="max-width:100px;font-size:10px;">SC+CA 배분...</span>
+                </button>`
+              : (l.wh||'SC')==='SC'
+              ? `<button class="loc-pick-btn" disabled title="SC 출고 선택됨" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
+                  <span>🔒</span><span class="loc-pick-text" style="max-width:100px;color:#aaa;">SC 전용</span>
+                </button>`
+              : `<button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModal(${idx},'CA')" title="CA / CA-PCR Bin 배분">
+                  <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
+                </button>`
+            }
           </div>`;
         })()}
       </td>
-      <td style="padding:4px 8px;background:#fffbeb;">
-        ${(function(){
-          // SC→CA 영역: SC inventory 사용 (재고는 SC 에 있음). SC 칸과 똑같은 형식 + 노란색
-          const k = l.isSideSeam
-            ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
-            : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
-          const sq = scInventory[k]?.qty || 0;
-          const pcrCsKey = `|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
-          const scPcrBinsA = window.binInventory?.['SC-PCR']?.[k] || [];
-          const scPcrBinsB = window.binInventory?.['SC-PCR']?.[pcrCsKey] || [];
-          const scPcrBins = scPcrBinsA.length ? scPcrBinsA : scPcrBinsB;
-          const pq = scPcrBins.reduce((s,b)=>s+(b.qty||0), 0);
-          const alloc = l.allocSC2CA || null;
-          const sc2caMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
-          const sc2caPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
-          const sc2caTotalAlloc = sc2caMainAlloc + sc2caPcrAlloc;
-          // 같은 라인 SC alloc (이미 잡힌거)
-          const scAllocOnLine = l.allocSC || {};
-          const scMainAllocOnLine = Object.entries(scAllocOnLine).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
-          const scPcrAllocOnLine  = Object.entries(scAllocOnLine).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
-          // 진짜 사용 가능 = 전체 재고 - SC alloc - SC2CA alloc
-          const sqAvail = Math.max(0, sq - scMainAllocOnLine - sc2caMainAlloc);
-          const pqAvail = Math.max(0, pq - scPcrAllocOnLine - sc2caPcrAlloc);
-          return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#92400e;">${sqAvail.toLocaleString()}${sc2caMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}</span>
-              <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${pqAvail>0?'#a84212':'#bbb'};">+${pqAvail.toLocaleString()} PCR${sc2caPcrAlloc>0?` <span style="font-size:9px;color:#888">/${pq}</span>`:''}</span>
-            </div>
-            ${sc2caTotalAlloc > 0 ? `<span style="font-size:10px;color:#92400e;font-weight:700;">✓ ${sc2caTotalAlloc} 잡힘</span>` : ''}
-          </div>`;
-        })()}
+      <td style="text-align:center;font-size:11px;">
+        <select class="fsel" style="width:72px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;syncWhDropdown();renderEntryTable()">
+          <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
+          <option value="CA" ${l.wh==='CA'?'selected':''}>CA</option>
+          <option value="SC&CA" ${l.wh==='SC&CA'?'selected':''}>SC &amp; CA</option>
+        </select>
       </td>
       <td style="text-align:center;color:#2e7d32">${(function(){
         const allocSC = l.allocSC || {};
         const allocCA = l.allocCA || {};
-        const allocSC2CA = l.allocSC2CA || {};
         const ppb = l.ppb || 72;
         // TRANSFER 제외, PCR 포함한 전체 배분 수량으로 full box 계산
         const filterAlloc = obj => Object.entries(obj)
           .filter(([k]) => !k.includes('TRANSFER|'))
           .reduce((s,[,v]) => s+(v||0), 0);
-        const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA) + filterAlloc(allocSC2CA);
+        const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA);
         const allocBoxes = Math.floor(totalAlloc / ppb);
         return `<span style="font-size:18px;font-weight:700;">${allocBoxes}</span><span style="font-size:10px;font-weight:400;margin-left:3px;">boxes</span>`;
       })()}</td>
@@ -7297,12 +7264,11 @@ function renderEntryTable() {
         ${(function(){
           const allocSC = l.allocSC || {};
           const allocCA = l.allocCA || {};
-          const allocSC2CA = l.allocSC2CA || {};
           // TRANSFER 키만 제외 (PCR은 배정된 수량이므로 포함)
           const filterAllocLoose = obj => Object.entries(obj)
             .filter(([k]) => !k.includes('TRANSFER|'))
             .reduce((s,[,v]) => s+(v||0), 0);
-          const totalAlloc = filterAllocLoose(allocSC) + filterAllocLoose(allocCA) + filterAllocLoose(allocSC2CA);
+          const totalAlloc = filterAllocLoose(allocSC) + filterAllocLoose(allocCA);
           const ppb = l.ppb || 72;
           const allocLoose = totalAlloc > 0 ? totalAlloc % ppb : l.loose;
           const color = allocLoose > 0 ? '#e65100' : '#888';
@@ -7314,12 +7280,11 @@ function renderEntryTable() {
         ${(function(){
           const allocSC = l.allocSC || {};
           const allocCA = l.allocCA || {};
-          const allocSC2CA = l.allocSC2CA || {};
           // TRANSFER 키만 제외 (PCR은 배정된 수량이므로 포함)
           const filterAlloc = obj => Object.entries(obj)
             .filter(([k]) => !k.includes('TRANSFER|'))
             .reduce((s,[,v]) => s+(v||0), 0);
-          const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA) + filterAlloc(allocSC2CA);
+          const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA);
           const backQty = Math.max(0, l.qty - totalAlloc);
           if (backQty <= 0) return '<span style="color:#2e7d32;">—</span>';
           const ppb = l.ppb || 72;
@@ -7335,16 +7300,12 @@ function renderEntryTable() {
       <td style="text-align:center;font-size:12px;">${(function(){
         const scT = (l.pcrTransfersPending||[]).reduce((s,t)=>s+t.boxes,0);
         const caT = (l.caPcrTransfersPending||[]).reduce((s,t)=>s+t.boxes,0);
-        const allocSC2CA = l.allocSC2CA || {};
-        const sc2caTotal = Object.entries(allocSC2CA)
-          .filter(([k]) => !k.includes('TRANSFER|'))
-          .reduce((s,[,v]) => s+(v||0), 0);
-        const total = scT + caT + sc2caTotal;
+        const total = scT + caT;
         if (total === 0) return '<span style="color:#ccc;">—</span>';
         let parts = [];
-        if (sc2caTotal > 0) parts.push(`<span style="color:#92400e;font-weight:700;">🚚 SC→CA: ${sc2caTotal} pcs</span>`);
-        if (scT > 0) parts.push(`<span style="color:#a84212;font-weight:700;">SC PCR: ${scT}박스</span>`);
-        if (caT > 0) parts.push(`<span style="color:#5b21b6;font-weight:700;">CA PCR: ${caT}박스</span>`);
+        if (scT > 0) parts.push(`<span style="color:#a84212;font-weight:700;">SC: ${scT}박스</span>`);
+        if (caT > 0) parts.push(`<span style="color:#5b21b6;font-weight:700;">CA: ${caT}박스</span>`);
+
         return parts.join('<br>');
       })()}</td>
       <td><button class="btn btn-sm" style="color:var(--red);padding:2px 6px" onclick="poLines.splice(${idx},1);renderEntryTable();liveRenderDocs()">✕</button></td>
@@ -8088,37 +8049,33 @@ async function _doSaveInvoice() {
     const isLineSplit = (lineWh === 'SC&CA');
 
     if (isLineSplit) {
-      // SC&CA 라인: canFill = allocSC + allocCA + allocSC2CA 합산
+      // SC&CA 라인: canFill = allocSC + allocCA 합산
       const allocSC = l.allocSC || {};
       const allocCA = l.allocCA || {};
-      const allocSC2CA = l.allocSC2CA || {};
       const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
       const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
-      const sc2caQty = Object.values(allocSC2CA).reduce((s,v)=>s+(v||0),0);
-      const canFill = scQty + caQty + sc2caQty;
+      const canFill = scQty + caQty;
       const backQty = Math.max(0, l.qty - canFill);
-      return { ...l, invRows: [], totalStock: canFill, canFill, backQty, sku, scQty, caQty, sc2caQty };
+      return { ...l, invRows: [], totalStock: canFill, canFill, backQty, sku, scQty, caQty };
     }
 
     // SC 또는 CA 단독 라인: alloc 기준으로 canFill 계산
     const allocSC = l.allocSC || {};
     const allocCA = l.allocCA || {};
-    const allocSC2CA = l.allocSC2CA || {};
     const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
     const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
-    const sc2caQty = Object.values(allocSC2CA).reduce((s,v)=>s+(v||0),0);
-    const allocTotal = scQty + caQty + sc2caQty;
+    const allocTotal = scQty + caQty;
 
     // alloc 기준으로만 canFill 계산 — bin 배분 안 하면 전량 backorder
     if (allocTotal > 0) {
       const canFill = Math.min(l.qty, allocTotal);
       const backQty = Math.max(0, l.qty - canFill);
-      return { ...l, invRows: [], totalStock: allocTotal, canFill, backQty, sku, scQty, caQty, sc2caQty };
+      return { ...l, invRows: [], totalStock: allocTotal, canFill, backQty, sku, scQty, caQty };
     }
 
     // alloc 없음 = bin 배분 안 함 = 전량 backorder
     console.log(`[lineCheck] ${l.color} ${l.size} wh=${lineWh} — no alloc, treating as backorder`);
-    return { ...l, invRows: [], totalStock: 0, canFill: 0, backQty: l.qty, sku, scQty: 0, caQty: 0, sc2caQty: 0 };
+    return { ...l, invRows: [], totalStock: 0, canFill: 0, backQty: l.qty, sku, scQty: 0, caQty: 0 };
   }));
 
   const hasBackorder = false; // 저장 시에는 재고 체크 안 함 — Shipped 단계에서 처리
@@ -8169,12 +8126,12 @@ async function _doSaveInvoice() {
   const scTotalPcs = lineChecks.reduce((s, l) => {
     const allocSC = l.allocSC || {};
     const scQty = Object.values(allocSC).reduce((a,v)=>a+(v||0),0);
-    return s + scQty;
+    return s + (l.wh === 'CA' ? 0 : scQty);  // 항상 실제 배분 수량 사용
   }, 0);
   const caTotalPcs = lineChecks.reduce((s, l) => {
     const allocCA = l.allocCA || {};
     const caQty = Object.values(allocCA).reduce((a,v)=>a+(v||0),0);
-    return s + caQty;
+    return s + (l.wh === 'SC' ? 0 : caQty);  // 항상 실제 배분 수량 사용
   }, 0);
   const scTotalAmt = lineChecks.reduce((s, l) => {
     const allocSC = l.allocSC || {};
@@ -8294,122 +8251,96 @@ async function _doSaveInvoice() {
   // ── 3. Order Lines 저장 + qty_committed 예약 (재고 차감은 Shipped 단계에서)
   for (const l of lineChecks) {
     const s = styles.find(x => x.style_number === l.styleNum);
+    const lineWhId = l.wh === 'CA' ? (caWhId || whId) : (scWhId || whId);
+
+    // alloc_detail: SC빈 상세, alloc_ca_detail: CA빈 상세 (SC&CA 라인 분리 저장)
+    const _allocObjSC = l.allocSC || {};
+    const _allocObjCA = l.allocCA || {};
+    // SC-only or SC&CA → alloc_detail = SC bins
+    // CA-only → alloc_detail = null, alloc_ca_detail = CA bins
+    // SC&CA → alloc_detail = SC bins, alloc_ca_detail = CA bins
+    const _allocDetail = {};
+    const _allocDetailCA = {};
     const ppb = l.ppb || 1;
-    
-    // 새 시스템 — 한 라인이 SC + CA + SC2CA 다 가능. 각 영역별로 row 따로 저장.
-    const sumAlloc = obj => obj ? Object.entries(obj)
-      .filter(([k]) => !k.includes('TRANSFER|'))
-      .reduce((s,[,v]) => s+(v||0), 0) : 0;
-    
-    const scTotal = sumAlloc(l.allocSC);
-    const caTotal = sumAlloc(l.allocCA);
-    const sc2caTotal = sumAlloc(l.allocSC2CA);
-    const totalAlloc = scTotal + caTotal + sc2caTotal;
-    const backorderQty = Math.max(0, l.qty - totalAlloc);
-    
-    console.log(`[saveInvoice] Line ${l.styleNum} ${l.color} ${l.size} qty=${l.qty}: SC=${scTotal}, CA=${caTotal}, SC2CA=${sc2caTotal}, BO=${backorderQty}`);
-    
-    // 헬퍼: 한 영역의 alloc_detail JSONB 만들기
-    const buildAllocDetail = (allocObj, transferList, transferKeyPrefix) => {
-      const detail = {};
-      for (const [bin, pcs] of Object.entries(allocObj || {})) {
+
+    if (l.wh !== 'CA') {
+      // SC or SC&CA: SC bins → alloc_detail
+      for (const [bin, pcs] of Object.entries(_allocObjSC)) {
         if (!pcs) continue;
-        // TRANSFER 키는 건너뛰기 (별도 추가)
-        if (bin.includes('TRANSFER|')) continue;
-        detail[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
+        _allocDetail[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
       }
-      // PCR Transfer 정보 추가 (픽티켓 표시용)
-      for (const t of (transferList || [])) {
-        const transferKey = `${transferKeyPrefix}|${t.fromBin}`;
-        detail[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
+    }
+    if (l.wh === 'CA' || l.wh === 'SC&CA') {
+      // CA or SC&CA: CA bins → alloc_ca_detail
+      for (const [bin, pcs] of Object.entries(_allocObjCA)) {
+        if (!pcs) continue;
+        _allocDetailCA[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
       }
-      return detail;
+    }
+    // PCR Transfer 정보를 alloc_detail/alloc_ca_detail에 추가 (픽티켓 표시용)
+    // SC transfer → alloc_detail, CA transfer → alloc_ca_detail
+    const _scTransferList = l.wh === 'CA' ? [] : (l.pcrTransfersPending || []);
+    const _caTransferList = (l.wh === 'CA' || l.wh === 'SC&CA') ? (l.caPcrTransfersPending || []) : [];
+    for (const t of _scTransferList) {
+      const transferKey = `SC-TRANSFER|${t.fromBin}`;
+      _allocDetail[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
+    }
+    for (const t of _caTransferList) {
+      const transferKey = `CA-TRANSFER|${t.fromBin}`;
+      _allocDetailCA[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
+    }
+
+
+    const _mainBins = Object.keys(l.wh === 'CA' ? _allocObjCA : _allocObjSC).filter(k => !k.includes('PCR') && !k.includes('TRANSFER|'));
+    const insertPayload = {
+      order_id: order.id,
+      style_id: s?.id || null,
+      warehouse_id: lineWhId,
+      wh: l.wh || 'SC',
+      color: l.color, size: l.size,
+      qty_pieces: l.qty,
+      qty_filled: 0,
+      qty_backordered: 0,
+      is_backordered: false,
+      pcs_per_box: l.ppb,
+      qty_boxes: Math.floor(l.qty / l.ppb),
+      qty_loose: l.qty % l.ppb,
+      location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
+      alloc_detail: Object.keys(_allocDetail).length > 0 ? _allocDetail : null,
+      alloc_ca_detail: Object.keys(_allocDetailCA).length > 0 ? _allocDetailCA : null,
+      unit_price: l.price || 0,
+      is_side_seam: !!l.isSideSeam
     };
-    
-    // 영역별로 row 따로 insert
-    const insertOneLine = async (areaCode, qty, allocDetail, allocCaDetail, allocSc2caDetail, isStageForCa) => {
-      const realWhId = areaCode === 'CA' ? (caWhId || whId) : (scWhId || whId);
-      const _mainBins = Object.keys((areaCode === 'CA' ? l.allocCA : (areaCode === 'SC2CA' ? l.allocSC2CA : l.allocSC)) || {})
-        .filter(k => !k.includes('PCR') && !k.includes('TRANSFER|'));
-      
-      const insertPayload = {
-        order_id: order.id,
-        style_id: s?.id || null,
-        warehouse_id: realWhId,
-        wh: areaCode === 'CA' ? 'CA' : 'SC',  // SC2CA 도 wh=SC (재고 위치)
-        stage_for_ca_truck: isStageForCa,
-        color: l.color, size: l.size,
-        qty_pieces: qty,
-        qty_filled: 0,
-        qty_backordered: 0,
-        is_backordered: false,
-        pcs_per_box: ppb,
-        qty_boxes: Math.floor(qty / ppb),
-        qty_loose: qty % ppb,
-        location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
-        alloc_detail: allocDetail && Object.keys(allocDetail).length > 0 ? allocDetail : null,
-        alloc_ca_detail: allocCaDetail && Object.keys(allocCaDetail).length > 0 ? allocCaDetail : null,
-        alloc_sc2ca_detail: allocSc2caDetail && Object.keys(allocSc2caDetail).length > 0 ? allocSc2caDetail : null,
-        qty_sc: areaCode === 'SC' ? qty : 0,
-        qty_ca: areaCode === 'CA' ? qty : 0,
-        qty_sc2ca: areaCode === 'SC2CA' ? qty : 0,
-        unit_price: l.price || 0,
-        is_side_seam: !!l.isSideSeam
-      };
-      const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
-      if (lineErr) console.error('[order_lines ERROR]', areaCode, lineErr.message, lineErr.details, lineErr.hint);
-      
-      // qty_committed reserve — 이 영역의 재고 잡기
-      // SC, SC2CA 다 SC inventory 에서 reserve. CA 만 CA 에서.
-      const reserveWhId = (areaCode === 'CA') ? (caWhId || whId) : (scWhId || whId);
-      let toCommit = qty;
-      const styleId = s?.id || null;
-      const reserveQuery = db.from('inventory')
+    const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
+    if (lineErr) console.error('[order_lines ERROR]', lineErr.message, lineErr.details, lineErr.hint);
+
+    // qty_committed 예약 — 가용 재고에서 이 오더 수량만큼 잠금
+    const lineWhCode = l.wh || 'SC';
+    const commitWhIds = lineWhCode === 'SC&CA'
+      ? [scWhId, caWhId].filter(Boolean)
+      : lineWhCode === 'CA' ? [caWhId || whId] : [scWhId || whId];
+
+    let toCommit = l.qty;
+    for (const cwId of commitWhIds) {
+      if (toCommit <= 0) break;
+      const { data: invRows } = await db.from('inventory')
         .select('id, qty_on_hand, qty_committed')
         .eq('color', (l.color||'').toUpperCase())
         .eq('size', (l.size||'').toUpperCase())
-        .eq('warehouse_id', reserveWhId);
-      if (styleId) reserveQuery.eq('style_id', styleId);  // 같은 style 만 잡기
-      const { data: invRows, error: invErr } = await reserveQuery.order('qty_on_hand', { ascending: false });
-      if (invErr) console.error(`[reserve ${areaCode}] inv query error:`, invErr.message);
-      console.log(`[reserve ${areaCode}] ${l.styleNum} ${l.color} ${l.size} qty=${qty} → ${invRows?.length||0} inv rows found in wh ${reserveWhId}`);
+        .eq('warehouse_id', cwId)
+        .order('qty_on_hand', { ascending: false });
       for (const inv of (invRows || [])) {
         if (toCommit <= 0) break;
         const avail = Math.max(0, (inv.qty_on_hand||0) - (inv.qty_committed||0));
         const commit = Math.min(toCommit, avail);
         if (commit > 0) {
           const newCommit = (inv.qty_committed||0) + commit;
-          const { error: updErr } = await db.from('inventory').update({ qty_committed: newCommit }).eq('id', inv.id);
-          if (updErr) console.error(`[reserve ${areaCode}] update error:`, updErr.message);
-          else {
-            await logInventoryChange(inv.id, inv.qty_committed||0, newCommit, 'commit', _currentEmployee?.name||'system', order?.id, 'order', `PO Save (${areaCode}) - ${l.styleNum||''} ${l.color||''} ${l.size||''}`);
-            toCommit -= commit;
-            console.log(`[reserve ${areaCode}] committed ${commit} on inv ${inv.id} (now ${newCommit})`);
-          }
+          await db.from('inventory').update({ qty_committed: newCommit }).eq('id', inv.id);
+          await logInventoryChange(inv.id, inv.qty_committed||0, newCommit, 'commit', _currentEmployee?.name||'system', order?.id, 'order', `PO Save - ${l.styleNum||''} ${l.color||''} ${l.size||''}`);
+          toCommit -= commit;
         }
       }
-      if (toCommit > 0) console.warn(`[reserve ${areaCode}] uncommitted: ${toCommit} pcs (no available stock)`);
-    };
-    
-    // SC 영역
-    if (scTotal > 0) {
-      const scDetail = buildAllocDetail(l.allocSC, l.pcrTransfersPending, 'SC-TRANSFER');
-      await insertOneLine('SC', scTotal, scDetail, null, null, false);
     }
-    
-    // CA 영역
-    if (caTotal > 0) {
-      const caDetail = buildAllocDetail(l.allocCA, l.caPcrTransfersPending, 'CA-TRANSFER');
-      await insertOneLine('CA', caTotal, null, caDetail, null, false);
-    }
-    
-    // SC2CA 영역 (stage_for_ca_truck=true)
-    if (sc2caTotal > 0) {
-      const sc2caDetail = buildAllocDetail(l.allocSC2CA, l.sc2caPcrTransfersPending, 'SC2CA-TRANSFER');
-      await insertOneLine('SC2CA', sc2caTotal, null, null, sc2caDetail, true);
-    }
-    
-    // BO 처리는 기존 로직에 맡김 (lineChecks 의 backQty 가 있으면 그대로 작동)
   }
 
   // ── Pick Ticket 레코드 생성 (Edit 모드면 이미 있으므로 스킵)
@@ -8437,13 +8368,11 @@ async function _doSaveInvoice() {
       const emailLines = lineChecks.map(l => {
         const allocSC = l.allocSC || {};
         const allocCA = l.allocCA || {};
-        const allocSC2CA = l.allocSC2CA || {};
         const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
         const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
-        const sc2caQty = Object.values(allocSC2CA).reduce((s,v)=>s+(v||0),0);
-        const totalAlloc = scQty + caQty + sc2caQty;
+        const totalAlloc = scQty + caQty;
         const backQty = Math.max(0, l.qty - totalAlloc);
-        console.log(`[email line] ${l.color} ${l.size} qty=${l.qty} scQty=${scQty} caQty=${caQty} sc2caQty=${sc2caQty} back=${backQty}`);
+        console.log(`[email line] ${l.color} ${l.size} qty=${l.qty} scQty=${scQty} caQty=${caQty} back=${backQty}`);
         return {
           style: l.styleNum,
           color: l.isSideSeam ? l.color + ' (Side Seam)' : l.color,
@@ -8453,7 +8382,6 @@ async function _doSaveInvoice() {
           back_qty: backQty,
           sc_qty: scQty,
           ca_qty: caQty,
-          sc2ca_qty: sc2caQty,  // In Transit to CA on Next Truck
           unit_price: l.price || 0,
           is_side_seam: !!l.isSideSeam
         };
@@ -9632,7 +9560,7 @@ async function loadCustomerPOs(subview = null) {
 
   document.getElementById('customerpo-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data } = await db.from('orders')
-    .select('*, warehouses(code,name), order_lines(stage_for_ca_truck, qty_sc2ca, qty_sc, qty_ca)')
+    .select('*, warehouses(code,name)')
     .order('created_at', { ascending: false })
     .limit(5000);
   // BO 오더는 Back Orders 탭에서만 관리 — Customer POs에서 제외
@@ -10655,25 +10583,10 @@ function renderCustomerPOTable() {
       const oid = o.id, onum = o.order_number, ocust = (o.customer_name||'').replace(/'/g,'');
 
       if (!isSplit) {
-        // ── 싱글 WH 오더 (기존 방식) — SC2CA 라인 있으면 추가 배지
+        // ── 싱글 WH 오더 (기존 방식)
         const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
         const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
-        const ols = o.order_lines || [];
-        const hasSc2caLine = ols.some(ol => ol.stage_for_ca_truck === true);
-        const hasScDirect = ols.some(ol => ol.stage_for_ca_truck !== true && (ol.qty_sc||0) > 0);
-        const hasCaDirect = ols.some(ol => ol.stage_for_ca_truck !== true && (ol.qty_ca||0) > 0);
-        const sc2caBadge = '<span style="display:inline-flex;align-items:center;background:#92400e;color:#fff;border:1px solid #92400e;padding:2px 8px;border-radius:4px;font-size:10px;font-family:\'IBM Plex Mono\',monospace;font-weight:800;letter-spacing:0.5px;margin-left:2px;">🚚SC→CA</span>';
-        let whBadge;
-        if (hasSc2caLine && (hasScDirect || hasCaDirect)) {
-          // 진짜 SC 직접 + CA 직접 + SC2CA 다 있는 경우
-          const baseBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
-          whBadge = baseBadge + sc2caBadge;
-        } else if (hasSc2caLine && !hasScDirect && !hasCaDirect) {
-          // 진짜 SC2CA 만 있는 경우 (드물어)
-          whBadge = sc2caBadge;
-        } else {
-          whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
-        }
+        const whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
         // 열기 버튼
         const openBtn = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
         // Documents 버튼들
@@ -10824,7 +10737,7 @@ async function loadOrderStatus() {
   );
 
   const { data } = await db.from('orders')
-    .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail, stage_for_ca_truck, qty_sc2ca, alloc_sc2ca_detail, qty_pieces)')
+    .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail)')
     .not('status', 'in', '(cancelled,completed)')
     .order('created_at', { ascending: false })
     .limit(5000);
@@ -10897,7 +10810,6 @@ async function loadOrderStatus() {
   });
 
   // SC&CA 오더는 SC 블록 + CA 블록 두 개로 분리
-  // SC2CA 라인이 있으면 SC→CA 카드도 별도로 (재고는 SC 에 있고 다음 트럭에 실어 CA 도착해서 출고)
   // 각 "가상 카드"를 만들어서 col별로 분류
   const makeCards = (orders) => {
     const cards = [];
@@ -10908,28 +10820,13 @@ async function loadOrderStatus() {
         cards.push({ ...o, _wh: wh, _status: o.status });
         return;
       }
-      // SC2CA 라인 있는지 체크 (stage_for_ca_truck=true 인 line)
-      const ols = o.order_lines || [];
-      const hasSc2caLine = ols.some(ol => ol.stage_for_ca_truck === true);
-      const hasScLine = ols.some(ol => ol.stage_for_ca_truck !== true && (ol.wh === 'SC' || ol.wh === 'SC&CA'));
-      const hasCaLine = ols.some(ol => ol.wh === 'CA' || ol.wh === 'SC&CA');
       const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
-      
       if (isSplit) {
-        if (hasScLine) cards.push({ ...o, _wh: 'SC', _status: o.sc_status || o.status });
-        if (hasCaLine) cards.push({ ...o, _wh: 'CA', _status: o.ca_status || o.status });
-        if (hasSc2caLine) cards.push({ ...o, _wh: 'SC2CA', _status: o.sc2ca_status || o.status });
+        cards.push({ ...o, _wh: 'SC', _status: o.sc_status || o.status });
+        cards.push({ ...o, _wh: 'CA', _status: o.ca_status || o.status });
       } else {
         const wh = o.wh_code || o.warehouses?.code || 'SC';
-        // SC2CA 카드 — 단일 창고 Order 라도 SC2CA 라인 있으면 별도 카드
-        if (hasSc2caLine) {
-          // 일반 카드 (SC2CA 외 라인 있을 때만)
-          if (hasScLine || hasCaLine) cards.push({ ...o, _wh: wh, _status: o.status });
-          // SC→CA 카드
-          cards.push({ ...o, _wh: 'SC2CA', _status: o.sc2ca_status || o.status });
-        } else {
-          cards.push({ ...o, _wh: wh, _status: o.status });
-        }
+        cards.push({ ...o, _wh: wh, _status: o.status });
       }
     });
     return cards;
@@ -10997,15 +10894,13 @@ async function loadOrderStatus() {
   // 카드 HTML 생성 함수
   function makeCardHtml(o, col) {
     const wh = o._wh;
-    const isSc2ca = (wh === 'SC2CA');  // SC→CA 카드 인지
     const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
-    // SC2CA 카드는 노란색 테두리
-    const whBorderColor = isSc2ca ? '#92400e' : (wh === 'CA' ? CA_BORDER : SC_BORDER);
+    const whBorderColor = wh === 'CA' ? CA_BORDER : SC_BORDER;
     const borderColor = whBorderColor;
     const hoursElapsed = o.created_at ? (Date.now() - new Date(o.created_at).getTime()) / 3600000 : 0;
     const isOverdue = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 48;
     const isWarning = !['shipped','invoiced'].includes(o._status) && hoursElapsed > 24 && hoursElapsed <= 48;
-    const cardBg = isSc2ca ? '#fffbeb' : (isSplit ? poColorMap[o.id] : '#fff');
+    const cardBg = isSplit ? poColorMap[o.id] : '#fff';
     const isBack = o._status === 'backordered';
     const isCreditHold = o._status === 'credit_hold';
     const isUrgent = o.priority === 'urgent';
@@ -11013,22 +10908,15 @@ async function loadOrderStatus() {
     const _d = Math.floor(_h / 24);
     const _rem = _h % 24;
     const hoursLabel = _d > 0 ? `${_d}d ${_rem}h ago` : `${_h}h ago`;
-    const whBadge = isSc2ca 
-      ? '<span style="display:inline-flex;align-items:center;background:#92400e;color:#fff;border:1px solid #92400e;padding:2px 8px;border-radius:4px;font-size:10px;font-family:\'IBM Plex Mono\',monospace;font-weight:800;letter-spacing:0.5px;">🚚 SC→CA</span>'
-      : (wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>');
-    // SC2CA 카드의 displayPcs — qty_sc2ca 합계
-    const ols = o.order_lines || [];
-    const sc2caTotalPcs = ols.filter(ol => ol.stage_for_ca_truck === true).reduce((s,ol) => s + (ol.qty_sc2ca || ol.qty_pieces || 0), 0);
-    const displayPcs = isSc2ca ? sc2caTotalPcs : (o.total_pcs || 0);
+    const whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+    const displayPcs = o.total_pcs || 0;
     const scPcs = o.sc_total_pcs || 0;
     const caPcs = o.ca_total_pcs || 0;
-    const displayAmt = isSc2ca ? 0 : (isSplit ? (wh === 'CA' ? (o.ca_total_amount||0) : (o.sc_total_amount||0)) : (o.total_amount||0));
+    const displayAmt = isSplit ? (wh === 'CA' ? (o.ca_total_amount||0) : (o.sc_total_amount||0)) : (o.total_amount||0);
     const canSeeAmt = _currentEmployee && ['admin','supervisor'].includes(_currentEmployee.role);
-    const pcsLabel = isSc2ca
-      ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#92400e;">(CA 트럭으로 옮긴 후 CA 에서 출고)</span>`
-      : (isSplit
-        ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#6b7280;">(SC: ${scPcs.toLocaleString()} / CA: ${caPcs.toLocaleString()})</span>`
-        : `${displayPcs.toLocaleString()} pcs`);
+    const pcsLabel = isSplit
+      ? `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#6b7280;">(SC: ${scPcs.toLocaleString()} / CA: ${caPcs.toLocaleString()})</span>`
+      : `${displayPcs.toLocaleString()} pcs`;
 
     const overdueBanner = isOverdue
       ? `<div style="margin:-10px -12px 8px -12px;padding:6px 12px;border-radius:6px 6px 0 0;animation:overdue-blink 1s ease-in-out infinite;display:flex;align-items:center;gap:6px;">
@@ -11048,43 +10936,33 @@ async function loadOrderStatus() {
       : `<div style="font-size:11px;font-weight:800;font-family:'IBM Plex Mono',monospace;padding:2px 7px;border-radius:5px;background:#fff;color:#111827;display:inline-block;border:1.5px solid #1f2937;">PO# ${o.customer_po||'—'}</div>`;
 
     const printBtns = col === 'entered' && !isCreditHold && o._status !== 'rejected' ? (() => {
-      const whPre = wh === 'CA' ? 'ca_' : (wh === 'SC2CA' ? 'sc2ca_' : 'sc_');
+      const whPre = wh === 'CA' ? 'ca_' : 'sc_';
       const whPrinted = o[whPre + 'warehouse_printed_at'];
       const pcPrinted = o[whPre + 'pcroom_printed_at'];
 
       // WH별 라인 필터 후 boxes/loose 합산으로 버튼 표시 여부 결정
       const lines = o.order_lines || [];
-      // SC2CA: stage_for_ca_truck=true 라인만
-      // SC: stage_for_ca_truck!=true && (wh=SC or SC&CA)
-      // CA: stage_for_ca_truck!=true && (wh=CA or SC&CA)
-      const isCardSc2ca = (wh === 'SC2CA');
-      const whLines = isCardSc2ca
-        ? lines.filter(l => l.stage_for_ca_truck === true)
-        : isSplit
-          ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
-          : lines.filter(l => l.stage_for_ca_truck !== true);
+      const whLines = isSplit
+        ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+        : lines;
 
       // WH Ticket: full boxes가 하나라도 있는 경우
       const totalBoxes = whLines.reduce((s, l) => s + (l.qty_boxes || 0), 0);
       // Partial Ticket: loose pcs 또는 alloc_detail에 PCR 항목이 있는 경우
       const pcrKey = wh === 'CA' ? 'CA-PCR|PCR' : 'SC-PCR|PCR';
       const totalPcr = whLines.reduce((s, l) => {
-        const allocObj = isCardSc2ca
-          ? (l.alloc_sc2ca_detail || {})
-          : wh === 'CA'
-            ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-            : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+        const allocObj = wh === 'CA'
+          ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+          : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
         return s + Object.entries(allocObj)
           .filter(([k]) => k.includes('PCR|PCR'))
           .reduce((ss, [,v]) => ss + ((typeof v === 'object' ? v.pcs : v) || 0), 0);
       }, 0);
       const totalLoose = whLines.reduce((s, l) => s + (l.qty_loose || 0), 0);
       const totalTransfers = whLines.reduce((s, l) => {
-        const allocObj = isCardSc2ca
-          ? (l.alloc_sc2ca_detail || {})
-          : wh === 'CA'
-            ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-            : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+        const allocObj = wh === 'CA'
+          ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+          : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
         return s + Object.keys(allocObj).filter(k => k.includes('TRANSFER|')).length;
       }, 0);
       const hasWh  = totalBoxes > 0 || totalTransfers > 0;
@@ -22648,14 +22526,8 @@ async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
   loadOrderStatus();
 }
 async function updateWhStatus(orderId, wh, newStatus) {
-  const { data: o } = await db.from('orders').select('sc_status,ca_status,sc2ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
+  const { data: o } = await db.from('orders').select('sc_status,ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
   const isSplit = o?.is_split_warehouse || o?.wh_code === 'SC&CA';
-
-  // SC2CA 카드 — 진짜 sc2ca_status 만 업데이트 (메인 status 안 건드림)
-  if (wh === 'SC2CA') {
-    await db.from('orders').update({ sc2ca_status: newStatus }).eq('id', orderId);
-    return;
-  }
 
   if (!isSplit) {
     // 싱글 WH 오더 — 메인 status + wh status 둘 다 업데이트
@@ -22692,7 +22564,7 @@ async function checkAndMoveToPreparing() {
   if (!orderId || !wh) return;
 
   // 실제로 프린트했을 때 printed_at 기록
-  const whPre = wh === 'CA' ? 'ca_' : (wh === 'SC2CA' ? 'sc2ca_' : 'sc_');
+  const whPre = wh === 'CA' ? 'ca_' : 'sc_';
   const field = whPre + (ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at');
   await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
 
@@ -22701,48 +22573,41 @@ async function checkAndMoveToPreparing() {
   else await markPcrTicketPrinted(orderId);
 
   const { data: updated } = await db.from('orders')
-    .select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, sc2ca_warehouse_printed_at, sc2ca_pcroom_printed_at, status, sc_status, ca_status, sc2ca_status, wh_code, is_split_warehouse')
+    .select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, status, sc_status, ca_status, wh_code, is_split_warehouse')
     .eq('id', orderId).single();
   if (!updated) return;
 
   const { data: allLines } = await db.from('order_lines')
-    .select('qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail, alloc_sc2ca_detail, stage_for_ca_truck')
+    .select('qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail')
     .eq('order_id', orderId);
   const lines = allLines || [];
   const isOrderSplit = updated.wh_code === 'SC&CA' || updated.is_split_warehouse;
-  const isSc2caCard = (wh === 'SC2CA');
-  const whLines = isSc2caCard
-    ? lines.filter(l => l.stage_for_ca_truck === true)
-    : isOrderSplit
-      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
-      : lines.filter(l => l.stage_for_ca_truck !== true);
+  const whLines = isOrderSplit
+    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+    : lines;
 
   const needsWh = whLines.some(l => {
     if ((l.qty_boxes || 0) > 0) return true;
     // PCR TRANSFER (warehouse bin → PC Room) 있으면 WH 티켓 필요
-    const allocObj = isSc2caCard
-      ? (l.alloc_sc2ca_detail || {})
-      : wh === 'CA'
-        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const allocObj = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
     return Object.keys(allocObj).some(k => k.includes('TRANSFER|'));
   });
   const needsPcr = whLines.some(l => {
-    const allocObj = isSc2caCard
-      ? (l.alloc_sc2ca_detail || {})
-      : wh === 'CA'
-        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const allocObj = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
     const hasPcrAlloc = Object.entries(allocObj).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0) > 0);
     return hasPcrAlloc || (l.qty_loose || 0) > 0;
   });
 
-  const whPrinted  = wh === 'CA' ? updated.ca_warehouse_printed_at : (wh === 'SC2CA' ? updated.sc2ca_warehouse_printed_at : updated.sc_warehouse_printed_at);
-  const pcrPrinted = wh === 'CA' ? updated.ca_pcroom_printed_at    : (wh === 'SC2CA' ? updated.sc2ca_pcroom_printed_at    : updated.sc_pcroom_printed_at);
+  const whPrinted  = wh === 'CA' ? updated.ca_warehouse_printed_at : updated.sc_warehouse_printed_at;
+  const pcrPrinted = wh === 'CA' ? updated.ca_pcroom_printed_at    : updated.sc_pcroom_printed_at;
   const whOk  = !needsWh  || !!whPrinted;
   const pcrOk = !needsPcr || !!pcrPrinted;
 
-  const whStatus = wh === 'CA' ? (updated.ca_status || updated.status) : (wh === 'SC2CA' ? (updated.sc2ca_status || updated.status) : (updated.sc_status || updated.status));
+  const whStatus = wh === 'CA' ? (updated.ca_status || updated.status) : (updated.sc_status || updated.status);
   if (whOk && pcrOk && ['po_entered','open','credit_hold','preparing'].includes(whStatus)) {
     await updateWhStatus(orderId, wh, 'preparing');
     showToast(`📦 ${wh} 프린트 완료 — Preparing으로 이동!`);
@@ -22778,26 +22643,18 @@ async function printPickTicket(orderId, wh, ticketType) {
     ? '🖨️ Pick Ticket'
     : (ticketType === 'pcroom' ? '💻 Partial Pick Ticket' : '🏭 Warehouse Pick Ticket');
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
-  const isSc2ca = (wh === 'SC2CA');
 
-  // wh에 해당하는 라인 필터
-  // SC2CA: stage_for_ca_truck=true 라인만
-  // SC: stage_for_ca_truck!=true && (wh=SC or SC&CA)
-  // CA: stage_for_ca_truck!=true && (wh=CA or SC&CA)
-  const filteredLines = isSc2ca
-    ? lines.filter(l => l.stage_for_ca_truck === true)
-    : isSplit
-      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
-      : lines.filter(l => l.stage_for_ca_truck !== true);
+  // wh에 해당하는 라인 필터 (SC&CA 라인도 포함)
+  const filteredLines = isSplit
+    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+    : lines;
 
   // alloc_detail에서 직접 bin location + PCR 수량 보강
   const enrichedLines = filteredLines.map(l => {
     // DB의 alloc_detail 사용 (Order Status 프린트 시 poLines 없으므로)
-    const allocObj = isSc2ca
-      ? (l.alloc_sc2ca_detail || {})
-      : wh === 'CA'
-        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const allocObj = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
 
     const mainBins = Object.entries(allocObj).filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'));
     // SC-PCR|PCR 또는 CA-PCR|PCR 만 (TRANSFER key 제외)
@@ -22817,13 +22674,10 @@ async function printPickTicket(orderId, wh, ticketType) {
 
     // pick ticket용으로 올바른 alloc_detail 설정
     // CA pick ticket이면 alloc_ca_detail을 alloc_detail로, alloc_ca_detail은 null로
-    // SC2CA pick ticket이면 alloc_sc2ca_detail을 alloc_detail로
-    const _effectiveAllocDetail = isSc2ca
-      ? (l.alloc_sc2ca_detail || {})
-      : wh === 'CA'
-        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
-    const _effectiveAllocCaDetail = (isSc2ca || wh === 'CA') ? null : l.alloc_ca_detail;
+    const _effectiveAllocDetail = wh === 'CA'
+      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const _effectiveAllocCaDetail = wh === 'CA' ? null : l.alloc_ca_detail;
 
     return { ...l, location: mainLoc, _pcrQty: pcrQty, _pcrTransfers: transfers,
       alloc_detail: _effectiveAllocDetail,
@@ -26130,14 +25984,9 @@ function toggleShipTrackingLabel() {
     }
     const weightLabel = weightField?.previousElementSibling;
     if (weightLabel) weightLabel.textContent = 'Total Weight (lbs) — 자동 합산';
-    // Total Boxes 자동 (현재 값 유지 — 1로 초기화하지 않음)
+    // Total Boxes 자동
     const boxField = document.getElementById('ship-total-boxes');
-    if (boxField) {
-      // 값이 비어있을 때만 1로 설정, 그 외에는 유지
-      if (!boxField.value || parseInt(boxField.value) < 1) boxField.value = '1';
-      boxField.readOnly = true;
-      boxField.style.background = '#f1f5f9';
-    }
+    if (boxField) { boxField.value = '1'; boxField.readOnly = true; boxField.style.background = '#f1f5f9'; }
   } else if (carrier === 'LTL') {
     trackingWrap.innerHTML =
       '<label style="font-size:11px;font-weight:600;color:#374151;display:block;margin-bottom:4px;">PRO #</label>' +
@@ -26371,8 +26220,6 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const isSplit = true; // 항상 SC/CA 분리 컬럼 표시 (싱글 WH도 동일 포맷)
   const backLines = emailLines.filter(l => l.back_qty > 0);
   const totalBack = backLines.reduce((s,l) => s+(l.back_qty||0), 0);
-  const sc2caTotalPcs = emailLines.reduce((s,l) => s+(l.sc2ca_qty||0), 0);
-  const hasSc2ca = sc2caTotalPcs > 0;
 
   const fmtAmt = n => '$' + (n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 
@@ -26405,7 +26252,6 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const colHeaders = isSplit
     ? `<th style="padding:6px 10px;text-align:center;color:#1e40af;">SC</th>
        <th style="padding:6px 10px;text-align:center;color:#ea580c;">CA</th>
-       ${hasSc2ca ? `<th style="padding:6px 10px;text-align:center;color:#92400e;white-space:nowrap;">🚚 Pending Transfer to CA</th>` : ''}
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`
     : `<th style="padding:6px 10px;text-align:center;">Qty</th>
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`;
@@ -26414,7 +26260,6 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
     const colCells = isSplit
       ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${(l.sc_qty||0)>0?(l.sc_qty||0).toLocaleString():'—'}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#ea580c;">${(l.ca_qty||0)>0?(l.ca_qty||0).toLocaleString():'—'}</td>
-         ${hasSc2ca ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#92400e;">${(l.sc2ca_qty||0)>0?(l.sc2ca_qty||0).toLocaleString():'—'}</td>` : ''}
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`
       : `<td style="padding:6px 10px;text-align:center;font-weight:700;">${(l.fill_qty||0).toLocaleString()}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`;
@@ -26431,9 +26276,8 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
 
   const scRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#1e40af;font-weight:700;">SC Warehouse (Sumter, SC): ${(scTotalPcs||0).toLocaleString()} pcs</span></li>` : '';
   const caRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#ea580c;font-weight:700;">CA Warehouse (Eastvale, CA): ${(caTotalPcs||0).toLocaleString()} pcs</span></li>` : `<li style="margin:2px 0;">${whName}: <strong>${totalPcs.toLocaleString()} pcs</strong></li>`;
-  const sc2caShipRow = hasSc2ca ? `<li style="margin:2px 0;"><span style="color:#92400e;font-weight:700;">🚚 Pending Transfer to CA: ${sc2caTotalPcs.toLocaleString()} pcs</span></li>` : '';
 
-  return `<div style="font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#111;font-size:13px;">
+  return `<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;font-size:13px;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f2744;border-radius:6px 6px 0 0;">
       <tr><td style="padding:14px 20px;">
         <div style="color:#fff;font-size:17px;font-weight:800;">Pacific Sports</div>
@@ -26452,7 +26296,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
       </table>
       <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 16px;margin-bottom:16px;">
         <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px;">📦 Shipping From</div>
-        <ul style="margin:0;padding-left:16px;font-size:13px;">${scRow}${caRow}${sc2caShipRow}</ul>
+        <ul style="margin:0;padding-left:16px;font-size:13px;">${scRow}${caRow}</ul>
       </div>
       ${backSection}
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
@@ -26468,14 +26312,13 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
         <tbody>${lineRows}</tbody>
         <tfoot><tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb;">
           <td colspan="3" style="padding:8px 10px;text-align:right;">Total:</td>
-          <td style="padding:8px 10px;text-align:center;white-space:nowrap;">${totalPcs.toLocaleString()} pcs</td>
+          <td style="padding:8px 10px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
           ${isSplit
-            ? `<td style="padding:8px 10px;text-align:center;color:#1e40af;white-space:nowrap;">${(scTotalPcs||0).toLocaleString()} pcs</td>
-               <td style="padding:8px 10px;text-align:center;color:#ea580c;white-space:nowrap;">${(caTotalPcs||0).toLocaleString()} pcs</td>
-               ${hasSc2ca ? `<td style="padding:8px 10px;text-align:center;color:#92400e;white-space:nowrap;">${sc2caTotalPcs.toLocaleString()} pcs</td>` : ''}
-               <td style="padding:8px 10px;text-align:center;color:#dc2626;white-space:nowrap;">${(totalBack||0).toLocaleString()} pcs</td>`
-            : `<td style="padding:8px 10px;text-align:center;white-space:nowrap;">${totalPcs.toLocaleString()} pcs</td>
-               <td style="padding:8px 10px;text-align:center;color:#dc2626;white-space:nowrap;">${(totalBack||0).toLocaleString()} pcs</td>`}
+            ? `<td style="padding:8px 10px;text-align:center;color:#1e40af;">${(scTotalPcs||0).toLocaleString()} pcs</td>
+               <td style="padding:8px 10px;text-align:center;color:#ea580c;">${(caTotalPcs||0).toLocaleString()} pcs</td>
+               <td style="padding:8px 10px;text-align:center;color:#dc2626;">${(totalBack||0).toLocaleString()} pcs</td>`
+            : `<td style="padding:8px 10px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
+               <td style="padding:8px 10px;text-align:center;color:#dc2626;">${(totalBack||0).toLocaleString()} pcs</td>`}
           <td colspan="2" style="padding:8px 10px;text-align:right;">${fmtAmt(totalAmt)}</td>
         </tr></tfoot>
       </table>
@@ -28483,15 +28326,10 @@ async function _doShippedCoreInner(emp) {
   if (!order || !allLines) return;
 
   // 현재 WH에 해당하는 라인만 처리
-  // SC2CA 카드 → stage_for_ca_truck=true 라인만
-  // SC/CA 카드 → stage_for_ca_truck!=true 라인만 (SC2CA 진짜 제외)
   const isSplitOrder = order.wh_code === 'SC&CA' || order.is_split_warehouse;
-  const isSc2caShip = (wh === 'SC2CA');
-  const lines = isSc2caShip
-    ? allLines.filter(l => l.stage_for_ca_truck === true)
-    : isSplitOrder
-      ? allLines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
-      : allLines.filter(l => l.stage_for_ca_truck !== true);
+  const lines = isSplitOrder
+    ? allLines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+    : allLines;
 
   const warehouses = await db.from('warehouses').select('*').then(r => r.data || []);
   const scWh = warehouses.find(w => w.code === 'SC');
@@ -35540,15 +35378,11 @@ function buildAllocHtml(lineIdx, whGroup) {
   if (!l) return '';
   const k   = `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
   const isSC = whGroup === 'SC';
-  const isSC2CA = whGroup === 'SC2CA';
-  // SC2CA 도 SC bin 사용
-  const usingScBins = isSC || isSC2CA;
   const ppb  = l.ppb || 72;
   const needQty = l.qty || 0;
 
-  // SC2CA 의 경우에도 SC bin 사용 (재고가 SC 에 있으니까)
-  const mainWh  = isSC2CA ? 'SC' : whGroup;
-  const pcrWh   = mainWh + '-PCR';
+  const mainWh  = whGroup;
+  const pcrWh   = whGroup + '-PCR';
   const mainBins = (window.binInventory?.[mainWh]?.[k]) || [];
   // PCR bins: style|color|size 먼저, 없으면 color|size로 fallback
   // (PCR은 같은 color+size면 style 무관하게 같은 셔츠)
@@ -35557,9 +35391,7 @@ function buildAllocHtml(lineIdx, whGroup) {
     ? window.binInventory[pcrWh][k]
     : (window.binInventory?.[pcrWh]?.[csKey] || []);
   const _activePcrKey = window.binInventory?.[pcrWh]?.[k]?.length > 0 ? k : csKey;
-  const prevAlloc = (isSC ? l.allocSC : (isSC2CA ? (l.allocSC2CA || {}) : l.allocCA)) || {};
-  // 같은 라인에서 다른 alloc 이 잡고있는 양 (충돌 방지)
-  const otherAlloc = isSC2CA ? (l.allocSC || {}) : (isSC ? (l.allocSC2CA || {}) : {});
+  const prevAlloc = (isSC ? l.allocSC : l.allocCA) || {};
 
   // 총 재고
   const totalMain = mainBins.reduce((s,b)=>s+b.qty,0);
@@ -35574,11 +35406,10 @@ function buildAllocHtml(lineIdx, whGroup) {
   let html = '';
 
   // ── Main WH Bins (박스 단위)
-  const mainColor = isSC2CA ? '#92400e' : (isSC ? 'var(--sc)' : 'var(--primary)');
-  const mainBg    = isSC2CA ? '#fff7ed' : (isSC ? '#f0faf4' : '#fff7ed');
-  const mainBorder= isSC2CA ? '#fdba74' : (isSC ? '#86efac' : '#fdba74');
-  const mainLabel = isSC2CA ? '🟡 SC 재고 — Sumter Warehouse (다음 CA 트럭에 실음)' 
-                            : (isSC ? '🟢 SC — Sumter Warehouse' : '🔵 CA — Eastvale Warehouse');
+  const mainColor = isSC ? 'var(--sc)' : 'var(--primary)';
+  const mainBg    = isSC ? '#f0faf4'   : '#fff7ed';
+  const mainBorder= isSC ? '#86efac'   : '#fdba74';
+  const mainLabel = isSC ? '🟢 SC — Sumter Warehouse' : '🔵 CA — Eastvale Warehouse';
 
   // 항상 메인 창고 섹션 표시
   html += `<div style="font-size:11px;font-weight:700;color:${mainColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">${mainLabel}</div>`;
@@ -35826,139 +35657,9 @@ function openBinAllocModal() {
   }
 }
 
-// SC2CA 모드 — SC 모달 그대로 사용하되 결과를 allocSC2CA 에 저장 (재고는 SC 에서)
-function openAllocModalSc2Ca(lineIdx) {
-  const l = poLines[lineIdx];
-  if (!l) return;
-  
-  if (window._invLoading) {
-    const _wasRerendering = window._allocRerendering;
-    window._invLoading.then(() => {
-      window._allocRerendering = _wasRerendering;
-      openAllocModalSc2Ca(lineIdx);
-      window._allocRerendering = false;
-    });
-    return;
-  }
-  
-  _allocState = { lineIdx, whGroup: 'SC2CA' };  // SC2CA 모드 표시
-  _pcrSelectedBin = null; _pcrSelectedWh = null;
-  
-  const needQty = l.qty || 0;
-  
-  // PCR transfer 는 일단 SC2CA 에서는 안 쓰는 게 안전 (다음 단계에 추가)
-  if (!window._allocRerendering) {
-    _pcrTransfers = [];
-  }
-  
-  // 헤더 — 노란색 (SC2CA 색깔)
-  const head = document.getElementById('alloc-modal-head');
-  head.style.background = 'linear-gradient(90deg, #92400e, #b45309)';
-  head.style.color = '#ffffff';
-  const titleEl = document.getElementById('alloc-modal-title');
-  titleEl.style.color = '#ffffff';
-  titleEl.style.fontWeight = '700';
-  titleEl.style.fontSize = '14px';
-  titleEl.innerHTML = `🚚 SC → CA Next Truck Bin 배분 &nbsp;—&nbsp; <span style="color:#fde68a;font-weight:800;">📍 SC 재고 사용 (다음 CA 트럭에 실음)</span>`;
-  const closeBtn = head.querySelector('.modal-close');
-  if (closeBtn) { closeBtn.style.color = '#fff'; closeBtn.style.opacity = '0.8'; }
-  
-  document.getElementById('alloc-sku').textContent = `#${l.styleNum} · ${l.color} · ${l.size}`;
-  document.getElementById('alloc-need').textContent = needQty.toLocaleString() + ' pcs';
-  
-  // SC 모드의 buildAllocHtml 사용 — bin 들이 SC 의 것
-  // 단, prevAlloc 은 allocSC 가 아니라 allocSC2CA 봐야 함
-  const html = buildAllocHtmlSc2Ca(lineIdx);
-  document.getElementById('alloc-bins-wrap').innerHTML = html;
-  window._lastAllocHtml = { html, lineIdx, whGroup: 'SC2CA' };
-  updateAllocSum();
-  
-  // PCR transfer 섹션 숨김 (SC2CA 에서는 PCR 이동 안 함)
-  const pcrSec = document.getElementById('pcr-transfer-section');
-  if (pcrSec) pcrSec.style.display = 'none';
-  
-  openModal('modal-alloc');
-}
-
-// SC2CA 용 buildAllocHtml — SC bin 들 (allocSC 도 같이 보여주고, 그 라인이 잡고있는 SC 만큼 빼고 SC2CA 에 사용 가능한 만큼 표시)
-function buildAllocHtmlSc2Ca(lineIdx) {
-  const l = poLines[lineIdx];
-  if (!l) return '';
-  const k   = l.isSideSeam
-    ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
-    : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
-  const ppb  = l.ppb || 72;
-  const needQty = l.qty || 0;
-  
-  const mainBins = (window.binInventory?.['SC']?.[k]) || [];
-  const prevAlloc = l.allocSC2CA || {};
-  // 같은 라인의 SC alloc 도 본다 (이미 잡혔으면 빼야 함)
-  const sc1Alloc = l.allocSC || {};
-  
-  // 재고 0 인 bin 제외
-  const filteredMainBins = mainBins.filter(b => (b.qty + (b.committed||0)) > 0);
-  
-  let html = '';
-  
-  html += `<div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🟡 SC 재고 → CA Next Truck 으로</div>`;
-  
-  if (filteredMainBins.length === 0) {
-    html += `<div style="padding:12px;border:1px dashed #fdba74;border-radius:8px;margin-bottom:8px;background:#fff7ed;opacity:0.6;font-size:12px;color:var(--text3);text-align:center;">SC 재고 없음</div>`;
-  } else {
-    filteredMainBins.forEach(b => {
-      const usedBySc1 = sc1Alloc[b.bin] || 0;  // 같은 라인의 SC alloc 이 이미 잡고있는 양
-      const realAvail = Math.max(0, (b.qty || 0) - usedBySc1);  // 진짜 사용 가능한 양
-      const cur = prevAlloc[b.bin] || 0;
-      const fifoLabel = b.is_fifo ? `<span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px;">FIFO ↑</span>` : '';
-      const usedNote = usedBySc1 > 0 ? `<span style="font-size:10px;color:#dc2626;font-weight:600;">⚠️ 이 라인 SC: ${usedBySc1}</span>` : '';
-      
-      html += `
-        <div style="border:1px solid #fdba74;background:#fff7ed;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;color:#92400e;">${b.bin}${fifoLabel}</div>
-              <div style="font-size:10px;color:var(--text2);margin-top:3px;">
-                재고 <b>${(b.qty||0).toLocaleString()}</b> pcs · 진짜 사용 가능 <b style="color:#92400e;">${realAvail}</b> pcs
-                ${usedNote}
-                ${b.received_date ? `· <span style="color:var(--text3);">${b.received_date}</span>` : ''}
-              </div>
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span style="font-size:10px;color:#92400e;">pcs:</span>
-              <input type="number" min="0" max="${realAvail}" value="${cur}" 
-                data-bin="${b.bin}" data-type="pcs" data-ppb="${ppb}"
-                onchange="onSc2CaBinChange(${lineIdx}, '${b.bin.replace(/'/g, "\\'")}', this.value, ${realAvail})" 
-                style="width:80px;height:26px;border:1px solid #fdba74;border-radius:4px;padding:0 6px;font-size:12px;text-align:right;font-weight:700;color:#92400e;">
-              <span style="font-size:10px;color:var(--text3);">/${realAvail}</span>
-            </div>
-          </div>
-        </div>
-      `;
-    });
-  }
-  
-  return html;
-}
-
-// SC2CA bin 입력 변경
-function onSc2CaBinChange(lineIdx, bin, value, max) {
-  let n = parseInt(value) || 0;
-  if (n < 0) n = 0;
-  if (n > max) n = max;
-  if (!poLines[lineIdx].allocSC2CA) poLines[lineIdx].allocSC2CA = {};
-  if (n === 0) {
-    delete poLines[lineIdx].allocSC2CA[bin];
-  } else {
-    poLines[lineIdx].allocSC2CA[bin] = n;
-  }
-  updateAllocSum();
-}
-
-
 function openAllocModal(lineIdx, whGroup) {
   const l = poLines[lineIdx];
   if (!l) return;
-  
   // 재고 로딩 중이면 완료 후 열기 (rerendering 플래그 유지)
   if (window._invLoading) {
     const _wasRerendering = window._allocRerendering;
@@ -35973,45 +35674,32 @@ function openAllocModal(lineIdx, whGroup) {
   _pcrSelectedBin = null; _pcrSelectedWh = null;
   
   const isSC = whGroup === 'SC';
-  const isSC2CA = whGroup === 'SC2CA';
-  const isCA = whGroup === 'CA';
-  // SC2CA 도 SC bin 사용 (재고는 SC 에 있음)
-  const usingScBins = isSC || isSC2CA;
   const needQty = l.qty || 0;
 
   // 저장된 Transfer 복원 (새로 열 때만 - 재렌더링 중이면 현재 _pcrTransfers 유지)
   if (!window._allocRerendering) {
-    let savedTransfers;
-    if (isSC) savedTransfers = l.pcrTransfersPending || [];
-    else if (isSC2CA) savedTransfers = l.sc2caPcrTransfersPending || [];
-    else savedTransfers = l.caPcrTransfersPending || [];
+    const savedTransfers = isSC ? (l.pcrTransfersPending || []) : (l.caPcrTransfersPending || []);
     _pcrTransfers = savedTransfers.map(t => ({ ...t, whGroup }));
   }
 
   // 헤더 업데이트
   const head = document.getElementById('alloc-modal-head');
-  head.style.background = isSC2CA 
-    ? 'linear-gradient(90deg, #92400e, #b45309)'
-    : (isSC ? '#064e22' : '#0f2744');
+  head.style.background = isSC ? '#064e22' : '#0f2744';
   head.style.color = '#ffffff';
   const titleEl = document.getElementById('alloc-modal-title');
   titleEl.style.color = '#ffffff';
   titleEl.style.fontWeight = '700';
   titleEl.style.fontSize = '14px';
-  if (isSC2CA) {
-    titleEl.innerHTML = `🚚 SC → CA Next Truck Bin 배분 &nbsp;—&nbsp; <span style="color:#fde68a;font-weight:800;">🟡 SC 재고</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ SC-PCR (다음 CA 트럭에 실음)</span>`;
-  } else if (isSC) {
-    titleEl.innerHTML = `📍 Bin 배분 &nbsp;—&nbsp; <span style="color:#86efac;font-weight:800;">🟢 SC</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ SC-PCR</span>`;
-  } else {
-    titleEl.innerHTML = `📍 Bin 배분 &nbsp;—&nbsp; <span style="color:#fdba74;font-weight:800;">🟠 CA</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ CA-PCR</span>`;
-  }
+  titleEl.innerHTML = isSC
+    ? `📍 Bin 배분 &nbsp;—&nbsp; <span style="color:#86efac;font-weight:800;">🟢 SC</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ SC-PCR</span>`
+    : `📍 Bin 배분 &nbsp;—&nbsp; <span style="color:#fdba74;font-weight:800;">🟠 CA</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ CA-PCR</span>`;
   const closeBtn = head.querySelector('.modal-close');
   if (closeBtn) { closeBtn.style.color = '#fff'; closeBtn.style.opacity = '0.8'; }
 
   document.getElementById('alloc-sku').textContent = `#${l.styleNum} · ${l.color} · ${l.size}`;
   document.getElementById('alloc-need').textContent = needQty.toLocaleString() + ' pcs';
 
-  // html 빌드 + 렌더 — SC2CA 도 SC bin 으로 빌드 (usingScBins)
+  // html 빌드 + 렌더
   const html = buildAllocHtml(lineIdx, whGroup);
   document.getElementById('alloc-bins-wrap').innerHTML = html;
   window._lastAllocHtml = { html, lineIdx, whGroup };
@@ -36379,7 +36067,7 @@ function updateAllocSum() {
   const bothModal = document.getElementById('modal-alloc-both');
   const bothOpen = bothModal && (bothModal.style.display === 'flex' || bothModal.classList.contains('open'));
   const wraps = bothOpen
-    ? ['#alloc-both-sc-wrap', '#alloc-both-ca-wrap', '#alloc-both-sc2ca-wrap']
+    ? ['#alloc-both-sc-wrap', '#alloc-both-ca-wrap']
     : ['#alloc-bins-wrap'];
 
   let sum = 0;
@@ -36523,10 +36211,9 @@ function cancelAllocBothModal() {
     const idx = _allocState.lineIdx;
     poLines[idx].allocSC = _allocBothBackup.allocSC;
     poLines[idx].allocCA = _allocBothBackup.allocCA;
-    poLines[idx].allocSC2CA = _allocBothBackup.allocSC2CA;
     poLines[idx].pcrTransfersPending = _allocBothBackup.pcrTransfersPending;
+
     poLines[idx].caPcrTransfersPending = _allocBothBackup.caPcrTransfersPending;
-    poLines[idx].sc2caPcrTransfersPending = _allocBothBackup.sc2caPcrTransfersPending;
     poLines[idx].caPcrBackTransfersPending = _allocBothBackup.caPcrBackTransfersPending;
   }
   _allocBothBackup = null;
@@ -36534,7 +36221,6 @@ function cancelAllocBothModal() {
   closeModal('modal-alloc-both');
   const scWrap = document.getElementById('alloc-both-sc-wrap'); if (scWrap) scWrap.innerHTML = '';
   const caWrap = document.getElementById('alloc-both-ca-wrap'); if (caWrap) caWrap.innerHTML = '';
-  const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap'); if (sc2caWrap) sc2caWrap.innerHTML = '';
   // DB에서 재고 새로 로드 (binInventory 정확히 복원)
   loadScInventory().then(() => renderEntryTable());
 }
@@ -36560,9 +36246,6 @@ function applyAlloc() {
     poLines[lineIdx].pcrTransfersPending = transfers;
     const firstBin = Object.keys(alloc).find(k => !k.includes('PCR'));
     if (firstBin) poLines[lineIdx].location = firstBin;
-  } else if (whGroup === 'SC2CA') {
-    poLines[lineIdx].allocSC2CA = alloc;
-    poLines[lineIdx].sc2caPcrTransfersPending = transfers;
   } else {
     poLines[lineIdx].allocCA = alloc;
     poLines[lineIdx].caPcrTransfersPending = transfers;
@@ -37248,10 +36931,10 @@ function openAllocModalBoth(lineIdx) {
   _allocBothBackup = {
     allocSC: JSON.parse(JSON.stringify(poLines[lineIdx].allocSC || {})),
     allocCA: JSON.parse(JSON.stringify(poLines[lineIdx].allocCA || {})),
-    allocSC2CA: JSON.parse(JSON.stringify(poLines[lineIdx].allocSC2CA || {})),
     pcrTransfersPending: [...(poLines[lineIdx].pcrTransfersPending || [])],
+
     caPcrTransfersPending: [...(poLines[lineIdx].caPcrTransfersPending || [])],
-    sc2caPcrTransfersPending: [...(poLines[lineIdx].sc2caPcrTransfersPending || [])],
+
   };
 
   // 거래처 preference 읽기
@@ -37262,16 +36945,25 @@ function openAllocModalBoth(lineIdx) {
   document.getElementById('alloc-both-sku').textContent = `#${l.styleNum} · ${l.color} · ${l.size}`;
   document.getElementById('alloc-both-need').textContent = needQty.toLocaleString() + ' pcs';
 
-  // SC / CA / SC2CA 섹션 렌더
+  // SC 섹션 렌더
   const scWrap = document.getElementById('alloc-both-sc-wrap');
   const caWrap = document.getElementById('alloc-both-ca-wrap');
-  const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap');
 
-  // 3 컬럼 grid 고정 (preference 순서 적용 안 함 — 항상 SC | CA | SC→CA)
+  // preference에 따라 섹션 순서 바꾸기
   const bothGrid = scWrap.parentElement;
-  bothGrid.style.gridTemplateColumns = '1fr 1fr 1fr';
-  
-  // CA html 먼저 빌드
+  if (scFirst) {
+    bothGrid.style.gridTemplateColumns = '1fr 1fr';
+    scWrap.style.borderRight = '2px solid #e2e8f0';
+    scWrap.style.borderLeft = '';
+    bothGrid.appendChild(caWrap); // SC 왼쪽, CA 오른쪽
+  } else {
+    bothGrid.style.gridTemplateColumns = '1fr 1fr';
+    caWrap.style.borderRight = '2px solid #e2e8f0';
+    scWrap.style.borderRight = '';
+    bothGrid.insertBefore(caWrap, scWrap); // CA 왼쪽, SC 오른쪽
+  }
+
+  // CA html 먼저 빌드 (DOM 오염 방지)
   _allocState = { lineIdx, whGroup: 'CA' };
   const caHtml = buildAllocHtml(lineIdx, 'CA');
   caWrap.innerHTML = caHtml;
@@ -37280,11 +36972,6 @@ function openAllocModalBoth(lineIdx) {
   _allocState = { lineIdx, whGroup: 'SC' };
   const scHtml = buildAllocHtml(lineIdx, 'SC');
   scWrap.innerHTML = scHtml;
-  
-  // SC2CA html 빌드 — SC bin 사용 (재고는 SC 에 있음)
-  _allocState = { lineIdx, whGroup: 'SC2CA' };
-  const sc2caHtml = buildAllocHtml(lineIdx, 'SC2CA');
-  if (sc2caWrap) sc2caWrap.innerHTML = sc2caHtml;
 
   // _allocState를 SC&CA로 복원
   _allocState = { lineIdx, whGroup: 'SC&CA' };
@@ -37295,7 +36982,7 @@ function openAllocModalBoth(lineIdx) {
   renderPcrTransfers(); // 저장된 transfer 목록 표시
 
   // 입력 변경 시 합계 + 박스 힌트 + PCR transfer 섹션 업데이트
-  [scWrap, caWrap, sc2caWrap].filter(Boolean).forEach(wrap => {
+  [scWrap, caWrap].forEach(wrap => {
     wrap.querySelectorAll('input').forEach(inp => {
       inp.addEventListener('input', () => {
         updateAllocBothTotals();
@@ -37317,9 +37004,9 @@ function updateAllocBothTotals() {
   if (!l) return;
   const needQty = l.qty || 0;
 
-  // 현재 입력값 합산 (SC + CA + SC2CA 다)
+  // 현재 입력값 합산
   let total = 0;
-  document.querySelectorAll('#alloc-both-sc-wrap input[data-type="box"], #alloc-both-ca-wrap input[data-type="box"], #alloc-both-sc2ca-wrap input[data-type="box"], #alloc-both-sc-wrap input[data-type="pcs"], #alloc-both-ca-wrap input[data-type="pcs"], #alloc-both-sc2ca-wrap input[data-type="pcs"]').forEach(inp => {
+  document.querySelectorAll('#alloc-both-sc-wrap input[data-type="box"], #alloc-both-ca-wrap input[data-type="box"], #alloc-both-sc-wrap input[data-type="pcs"], #alloc-both-ca-wrap input[data-type="pcs"]').forEach(inp => {
     total += parseInt(inp.value) || 0;
   });
 
@@ -37364,26 +37051,16 @@ function applyAllocBoth() {
     const v = parseInt(inp.value)||0;
     if (v > 0) caAlloc[inp.dataset.bin] = v;
   });
-  
-  // SC2CA 입력값 읽기
-  const sc2caAlloc = {};
-  document.querySelectorAll('#alloc-both-sc2ca-wrap input[data-bin]').forEach(inp => {
-    const v = parseInt(inp.value)||0;
-    if (v > 0) sc2caAlloc[inp.dataset.bin] = v;
-  });
 
   poLines[lineIdx].allocSC = Object.keys(scAlloc).length > 0 ? scAlloc : null;
   poLines[lineIdx].allocCA = Object.keys(caAlloc).length > 0 ? caAlloc : null;
-  poLines[lineIdx].allocSC2CA = Object.keys(sc2caAlloc).length > 0 ? sc2caAlloc : null;
   poLines[lineIdx].pcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC');
   poLines[lineIdx].caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'CA');
-  poLines[lineIdx].sc2caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC2CA');
   _pcrTransfers = [];
   _allocState = null;
   closeModal('modal-alloc-both');
   const scWrap = document.getElementById('alloc-both-sc-wrap'); if (scWrap) scWrap.innerHTML = '';
   const caWrap = document.getElementById('alloc-both-ca-wrap'); if (caWrap) caWrap.innerHTML = '';
-  const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap'); if (sc2caWrap) sc2caWrap.innerHTML = '';
   // BO 탭에서 배분 시 PO 저장/렌더링 스킵 — boRefreshCard만 호출
   if (window._boAllocCallback) {
     boRefreshCard(window._boAllocCallback);
@@ -37393,7 +37070,7 @@ function applyAllocBoth() {
     liveRenderDocs();
   }
 
-  showToast('✅ SC + CA + SC→CA Bin 배분 저장');
+  showToast('✅ SC + CA Bin 배분 저장');
 }
 
 
@@ -41449,9 +41126,9 @@ function showCreditHoldFlash(overAmt) {
 
   <!-- modal-alloc-both -->
 <div class="modal-overlay" id="modal-alloc-both" style="display:none;z-index:99999;">
-  <div class="modal-box" style="max-width:1400px;width:98vw;max-height:92vh;display:flex;flex-direction:column;">
-    <div id="alloc-both-head" class="modal-head" style="background:linear-gradient(90deg,#064e22 33.33%,#0f2744 33.33%,#0f2744 66.66%,#92400e 66.66%);flex-shrink:0;">
-      <span style="color:#fff;font-weight:700;font-size:14px;">📍 Bin 배분 — <span style="color:#86efac;">🟢 SC</span> &nbsp;/&nbsp; <span style="color:#fdba74;">🟠 CA</span> &nbsp;/&nbsp; <span style="color:#fde68a;">🟡 SC → CA Next Truck</span></span>
+  <div class="modal-box" style="max-width:1080px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
+    <div id="alloc-both-head" class="modal-head" style="background:linear-gradient(90deg,#064e22 50%,#0f2744 50%);flex-shrink:0;">
+      <span style="color:#fff;font-weight:700;font-size:14px;">📍 Bin 배분 — <span style="color:#86efac;">🟢 SC</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ SC-PCR</span> &nbsp;/&nbsp; <span style="color:#fdba74;">🟠 CA</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ CA-PCR</span></span>
       <button class="modal-close" style="color:#fff;" onclick="cancelAllocBothModal();">×</button>
     </div>
     <div style="padding:12px 16px;background:#f8fafc;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
@@ -41460,10 +41137,9 @@ function showCreditHoldFlash(overAmt) {
       <div><div style="font-size:10px;color:var(--text3);">배분 합계</div><div style="font-weight:700;font-size:14px;" id="alloc-both-total">0 pcs</div></div>
       <div><div style="font-size:10px;color:var(--text3);">남은 수량</div><div style="font-weight:700;font-size:14px;color:var(--red);" id="alloc-both-remain"></div></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;flex:1;overflow-y:auto;">
-      <div style="padding:14px;border-right:2px solid #e2e8f0;" id="alloc-both-sc-wrap"></div>
-      <div style="padding:14px;border-right:2px solid #e2e8f0;" id="alloc-both-ca-wrap"></div>
-      <div style="padding:14px;background:#fffbeb;" id="alloc-both-sc2ca-wrap"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;flex:1;overflow-y:auto;">
+      <div style="padding:16px;border-right:2px solid #e2e8f0;" id="alloc-both-sc-wrap"></div>
+      <div style="padding:16px;" id="alloc-both-ca-wrap"></div>
     </div>
     <div id="alloc-both-transfers" style="padding:0 16px;background:#fff;flex-shrink:0;"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
