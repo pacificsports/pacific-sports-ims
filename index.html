@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_091817 — fix: SC/CA/SC→CA 칸 표시 복원 (Main 재고 + PCR 재고 따로) + 잡힌 양은 작은 글씨로 (✓ 144 잡힘). PCR 정보 다시 보임 -->
+<!-- BUILD: 20260501_092226 — fix: BACK ORDER + Full Boxes + Partial PCR + TRANSFER 다 SC2CA alloc 도 합산. 진짜 SC + CA + SC→CA 전부 잡혔으면 BackOrder=0. TRANSFER 컬럼에 SC→CA pcs 표시 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7283,12 +7283,13 @@ function renderEntryTable() {
       <td style="text-align:center;color:#2e7d32">${(function(){
         const allocSC = l.allocSC || {};
         const allocCA = l.allocCA || {};
+        const allocSC2CA = l.allocSC2CA || {};
         const ppb = l.ppb || 72;
         // TRANSFER 제외, PCR 포함한 전체 배분 수량으로 full box 계산
         const filterAlloc = obj => Object.entries(obj)
           .filter(([k]) => !k.includes('TRANSFER|'))
           .reduce((s,[,v]) => s+(v||0), 0);
-        const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA);
+        const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA) + filterAlloc(allocSC2CA);
         const allocBoxes = Math.floor(totalAlloc / ppb);
         return `<span style="font-size:18px;font-weight:700;">${allocBoxes}</span><span style="font-size:10px;font-weight:400;margin-left:3px;">boxes</span>`;
       })()}</td>
@@ -7296,11 +7297,12 @@ function renderEntryTable() {
         ${(function(){
           const allocSC = l.allocSC || {};
           const allocCA = l.allocCA || {};
+          const allocSC2CA = l.allocSC2CA || {};
           // TRANSFER 키만 제외 (PCR은 배정된 수량이므로 포함)
           const filterAllocLoose = obj => Object.entries(obj)
             .filter(([k]) => !k.includes('TRANSFER|'))
             .reduce((s,[,v]) => s+(v||0), 0);
-          const totalAlloc = filterAllocLoose(allocSC) + filterAllocLoose(allocCA);
+          const totalAlloc = filterAllocLoose(allocSC) + filterAllocLoose(allocCA) + filterAllocLoose(allocSC2CA);
           const ppb = l.ppb || 72;
           const allocLoose = totalAlloc > 0 ? totalAlloc % ppb : l.loose;
           const color = allocLoose > 0 ? '#e65100' : '#888';
@@ -7312,11 +7314,12 @@ function renderEntryTable() {
         ${(function(){
           const allocSC = l.allocSC || {};
           const allocCA = l.allocCA || {};
+          const allocSC2CA = l.allocSC2CA || {};
           // TRANSFER 키만 제외 (PCR은 배정된 수량이므로 포함)
           const filterAlloc = obj => Object.entries(obj)
             .filter(([k]) => !k.includes('TRANSFER|'))
             .reduce((s,[,v]) => s+(v||0), 0);
-          const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA);
+          const totalAlloc = filterAlloc(allocSC) + filterAlloc(allocCA) + filterAlloc(allocSC2CA);
           const backQty = Math.max(0, l.qty - totalAlloc);
           if (backQty <= 0) return '<span style="color:#2e7d32;">—</span>';
           const ppb = l.ppb || 72;
@@ -7332,12 +7335,16 @@ function renderEntryTable() {
       <td style="text-align:center;font-size:12px;">${(function(){
         const scT = (l.pcrTransfersPending||[]).reduce((s,t)=>s+t.boxes,0);
         const caT = (l.caPcrTransfersPending||[]).reduce((s,t)=>s+t.boxes,0);
-        const total = scT + caT;
+        const allocSC2CA = l.allocSC2CA || {};
+        const sc2caTotal = Object.entries(allocSC2CA)
+          .filter(([k]) => !k.includes('TRANSFER|'))
+          .reduce((s,[,v]) => s+(v||0), 0);
+        const total = scT + caT + sc2caTotal;
         if (total === 0) return '<span style="color:#ccc;">—</span>';
         let parts = [];
-        if (scT > 0) parts.push(`<span style="color:#a84212;font-weight:700;">SC: ${scT}박스</span>`);
-        if (caT > 0) parts.push(`<span style="color:#5b21b6;font-weight:700;">CA: ${caT}박스</span>`);
-
+        if (sc2caTotal > 0) parts.push(`<span style="color:#92400e;font-weight:700;">🚚 SC→CA: ${sc2caTotal} pcs</span>`);
+        if (scT > 0) parts.push(`<span style="color:#a84212;font-weight:700;">SC PCR: ${scT}박스</span>`);
+        if (caT > 0) parts.push(`<span style="color:#5b21b6;font-weight:700;">CA PCR: ${caT}박스</span>`);
         return parts.join('<br>');
       })()}</td>
       <td><button class="btn btn-sm" style="color:var(--red);padding:2px 6px" onclick="poLines.splice(${idx},1);renderEntryTable();liveRenderDocs()">✕</button></td>
