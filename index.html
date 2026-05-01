@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_182300 — SC2CA Warehouse Preparing & PCR Complete 모달 fix: 라인 필터링 stage_for_ca_truck 처리 + alloc_sc2ca_detail 사용 + qty_sc2ca 를 orderQty 로 (이전엔 빈 모달 떴음) -->
+<!-- BUILD: 20260501_191500 — Status 버튼 PIN 우회 fix: Back to PO Entered / Back to Preparing / ✕ Cancel / ↩ Reverse Ship 4개에 PIN 검증 추가. Cancel + Reverse 는 Manager/Supervisor/Admin 권한 필요. (모달 PIN 검증은 이미 다 fix 돼있어서 OK) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -6588,7 +6588,21 @@ async function reverseShipConfirm() {
   }
   
   if (!confirm(`정말로 Ship 을 되돌릴까요?\n\n사유: ${reason}\n\n이 작업은 되돌릴 수 없습니다.`)) return;
-  
+
+  // PIN 검증 — Manager/Supervisor 이상만 Reverse Ship 가능
+  await new Promise((resolve, reject) => {
+    openPinModal('↩', 'Reverse Ship PIN 인증', 'Manager/Supervisor 권한 필요', async (emp) => {
+      if (!emp || !['manager','supervisor','admin','owner'].includes(emp.role)) {
+        showToast('❌ Reverse Ship 권한 없음 — Manager/Supervisor 만 가능');
+        reject(new Error('권한 없음'));
+        return;
+      }
+      window._reverseShipBy = emp.name;
+      resolve();
+    });
+  }).catch(() => null);
+  if (!window._reverseShipBy) return;
+
   try {
     showToast('⏳ Reverse 진행 중...');
     
@@ -6628,7 +6642,7 @@ async function reverseShipConfirm() {
       .eq('order_id', orderId);
     
     // 4. Reverse log
-    const empName = (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
+    const empName = window._reverseShipBy || (typeof _currentEmployee !== 'undefined' && _currentEmployee?.name) || 'system';
     await db.from('inventory_transactions').insert({
       transaction_type: 'order_reverse_ship',
       description: `Reverse Ship — Order ${order.order_number} (${reason})`,
@@ -6657,6 +6671,8 @@ async function reverseShipConfirm() {
   } catch(e) {
     console.error('[Reverse Ship]', e);
     alert('❌ Reverse 실패: ' + e.message);
+  } finally {
+    window._reverseShipBy = null;
   }
 }
 
@@ -13913,14 +13929,21 @@ async function submitCancelOrder() {
   const reason = document.getElementById('cancel-reason').value;
   if (!reason) { alert('취소 사유를 선택해주세요.'); return; }
   const notes = document.getElementById('cancel-notes').value;
-  await restoreOrderInventory(_cancelOrderId);
-  await db.from('orders').update({
-    status: 'cancelled', cancel_reason: reason, cancel_notes: notes,
-    cancelled_at: new Date().toISOString()
-  }).eq('id', _cancelOrderId);
-  document.getElementById('cancel-order-modal').style.display = 'none';
-  showToast('✕ '+_cancelOrderNum+' 취소 완료 — 재고 복구됨');
-  loadCustomerPOs(); loadOrderStatus();
+  // PIN 검증 — Manager/Supervisor/Admin 권한만 취소 가능
+  openPinModal('✕', 'Order Cancel PIN 인증', 'Manager/Supervisor 권한 필요', async (emp) => {
+    if (!emp || !['manager','supervisor','admin','owner'].includes(emp.role)) {
+      showToast('❌ 취소 권한 없음 — Manager/Supervisor 만 가능');
+      return;
+    }
+    await restoreOrderInventory(_cancelOrderId);
+    await db.from('orders').update({
+      status: 'cancelled', cancel_reason: reason, cancel_notes: notes,
+      cancelled_at: new Date().toISOString()
+    }).eq('id', _cancelOrderId);
+    document.getElementById('cancel-order-modal').style.display = 'none';
+    showToast('✕ '+_cancelOrderNum+' 취소 완료 — 재고 복구됨 (' + emp.name + ')');
+    loadCustomerPOs(); loadOrderStatus();
+  });
 }
 
 // ── WH별 라인 삭제 (SC만 or CA만)
@@ -22643,16 +22666,19 @@ async function resubmitCreditHold(orderId, orderNumber, customerName, customerPo
 
 async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
   if (!confirm(`${fromStatus === 'preparing' ? 'Preparing → PO Entered' : 'Ready to Ship → Preparing'} 로 되돌릴까요?`)) return;
-  await updateWhStatus(orderId, wh, toStatus);
-  // PO Entered로 돌아갈 때 → 해당 WH 프린트 플래그 리셋
-  if (toStatus === 'po_entered') {
-    const pre = wh === 'CA' ? 'ca_' : 'sc_';
-    await db.from('orders').update({
-      [pre + 'warehouse_printed_at']: null,
-      [pre + 'pcroom_printed_at']: null
-    }).eq('id', orderId);
-  }
-  loadOrderStatus();
+  // PIN 검증 — 누구든 직원 PIN 필요
+  openPinModal('↩', 'Status 되돌리기 PIN 인증', `${fromStatus} → ${toStatus}`, async (emp) => {
+    await updateWhStatus(orderId, wh, toStatus);
+    if (toStatus === 'po_entered') {
+      const pre = wh === 'CA' ? 'ca_' : 'sc_';
+      await db.from('orders').update({
+        [pre + 'warehouse_printed_at']: null,
+        [pre + 'pcroom_printed_at']: null
+      }).eq('id', orderId);
+    }
+    showToast(`✅ ${toStatus} 으로 되돌림 — ${emp.name}`);
+    loadOrderStatus();
+  });
 }
 async function updateWhStatus(orderId, wh, newStatus) {
   const { data: o } = await db.from('orders').select('sc_status,ca_status,sc2ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
@@ -22998,7 +23024,14 @@ async function verifyWhCompletePin() {
 }
 
 async function submitWhComplete() {
-  if (!_whCompleteEmp) return;
+  // PIN 재검증: 필드 현재값이 4자리이고 _Emp 가 살아있어야 진행
+  const _curPin = document.getElementById('wh-complete-pin')?.value || '';
+  if (!_whCompleteEmp || _curPin.length < 4 || _whCompleteEmp.pin !== _curPin) {
+    const errEl = document.getElementById('wh-complete-pin-error');
+    if (errEl) errEl.textContent = 'PIN을 입력하세요.';
+    document.getElementById('wh-complete-pin')?.focus();
+    return;
+  }
   const whPre = _whCompleteWh === 'CA' ? 'ca_' : 'sc_';
   const empName = _whCompleteEmp.name;
 
@@ -23031,6 +23064,15 @@ async function openPcrComplete(orderId, wh) {
   document.getElementById('pcr-complete-pin-error').textContent = '';
   document.getElementById('pcr-complete-emp-info').style.display = 'none';
   document.getElementById('pcr-complete-btn').disabled = true;
+  // Manager 승인 + PIN 필드 클리어 (잔여 데이터 우회 방지)
+  window._pcrManagerApproved = false;
+  window._pcrManagerEmp = null;
+  const _mgrPinEl = document.getElementById('pcr-manager-pin');
+  if (_mgrPinEl) _mgrPinEl.value = '';
+  const _mgrErrEl = document.getElementById('pcr-manager-pin-error');
+  if (_mgrErrEl) _mgrErrEl.textContent = '';
+  const _mgrOkEl = document.getElementById('pcr-manager-pin-ok');
+  if (_mgrOkEl) _mgrOkEl.style.display = 'none';
 
   const { data: order } = await db.from('orders').select('*, warehouses(code,name)').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', orderId);
@@ -24173,11 +24215,43 @@ async function verifyPcrCompletePin() {
 async function submitPcrComplete() {
   // PIN이 현재 입력칸에 있어야 진행 (지웠으면 차단)
   const _currentPin = document.getElementById('pcr-complete-pin')?.value || '';
-  if (!_pcrCompleteEmp || _currentPin.length < 4) {
+  if (!_pcrCompleteEmp || _currentPin.length < 4 || _pcrCompleteEmp.pin !== _currentPin) {
     document.getElementById('pcr-complete-pin-error').textContent = 'PIN을 입력하세요.';
     document.getElementById('pcr-complete-pin')?.focus();
     return;
   }
+
+  // ─── Manager 승인 케이스 점검 ───
+  // 박스 수/내용이 original 과 다르면 (= Custom 박스 추가, qty 변경) Manager 승인 필요
+  const _boxes = window._pcrBoxes || [];
+  const _origBoxes = window._pcrBoxesOriginal || [];
+  let _needsManagerApproval = false;
+  if (_origBoxes.length > 0) {
+    if (_boxes.length !== _origBoxes.length) _needsManagerApproval = true;
+    else {
+      for (let bi = 0; bi < _boxes.length; bi++) {
+        const b = _boxes[bi];
+        if (b.isCustom) { _needsManagerApproval = true; break; }
+        const ob = _origBoxes[bi];
+        if (b.items.length !== (ob?.items?.length || 0)) { _needsManagerApproval = true; break; }
+        for (let ii = 0; ii < b.items.length; ii++) {
+          if (b.items[ii].qty !== ob?.items?.[ii]?.qty) { _needsManagerApproval = true; break; }
+        }
+        if (_needsManagerApproval) break;
+      }
+    }
+  }
+  if (_needsManagerApproval) {
+    // Manager PIN 검증 — 필드값이 있고 _pcrManagerEmp 와 일치해야 함
+    const _mgrPin = document.getElementById('pcr-manager-pin')?.value || '';
+    if (!window._pcrManagerApproved || !window._pcrManagerEmp || _mgrPin.length < 4 || window._pcrManagerEmp.pin !== _mgrPin) {
+      const errEl = document.getElementById('pcr-manager-pin-error');
+      if (errEl) errEl.textContent = '⚠️ 박스 변경됨 — Manager 승인 + PIN 입력 필수';
+      document.getElementById('pcr-manager-pin')?.focus();
+      return;
+    }
+  }
+
   const whPre = _pcrCompleteWh === 'CA' ? 'ca_' : 'sc_';
   const empName = _pcrCompleteEmp.name;
 
@@ -24506,15 +24580,16 @@ async function verifyPlInlinePin() {
 }
 
 async function doPlConfirm() {
-  if (!window._plApprovedEmp) {
-    // PIN 아직 안 넣었으면 검증 먼저
-    const pin = document.getElementById('pl-pin-inline')?.value || '';
-    const status = document.getElementById('pl-pin-inline-status');
-    if (pin.length < 4) {
-      if (status) { status.textContent = '❌ PIN을 먼저 입력하세요'; status.style.color = '#dc2626'; }
-      document.getElementById('pl-pin-inline')?.focus();
-      return;
-    }
+  // PIN 항상 재검증 — _plApprovedEmp 살아있어도 현재 입력값이 4자리이고 일치해야 진행
+  const pin = document.getElementById('pl-pin-inline')?.value || '';
+  const status = document.getElementById('pl-pin-inline-status');
+  if (pin.length < 4) {
+    if (status) { status.textContent = '❌ PIN을 먼저 입력하세요'; status.style.color = '#dc2626'; }
+    document.getElementById('pl-pin-inline')?.focus();
+    return;
+  }
+  // emp 가 없거나 PIN 이 바뀌었으면 verify 다시
+  if (!window._plApprovedEmp || window._plApprovedEmp.pin !== pin) {
     await verifyPlInlinePin();
     if (!window._plApprovedEmp) return;
   }
@@ -24649,7 +24724,14 @@ async function verifyEmergencyRequestPin() {
 }
 
 async function submitEmergencyRequest() {
-  if (!_emergencyRequestEmp) return;
+  // PIN 재검증
+  const _curPin = document.getElementById('emergency-request-pin')?.value || '';
+  if (!_emergencyRequestEmp || _curPin.length < 4 || _emergencyRequestEmp.pin !== _curPin) {
+    const errEl = document.getElementById('emergency-request-pin-error');
+    if (errEl) errEl.textContent = 'PIN을 입력하세요.';
+    document.getElementById('emergency-request-pin')?.focus();
+    return;
+  }
   const container = document.getElementById('emergency-request-lines');
   const orderId = container.dataset.orderId;
   const wh = container.dataset.wh;
@@ -25204,7 +25286,14 @@ async function verifyEmergencyManagerPin() {
 }
 
 async function approveEmergencyTransfer() {
-  if (!_emergencyManagerEmp || !_emergencyTransferId) return;
+  // PIN 재검증
+  const _curPin = document.getElementById('emergency-manager-pin')?.value || '';
+  if (!_emergencyManagerEmp || !_emergencyTransferId || _curPin.length < 4 || _emergencyManagerEmp.pin !== _curPin) {
+    const errEl = document.getElementById('emergency-manager-pin-error');
+    if (errEl) errEl.textContent = 'Manager PIN을 입력하세요.';
+    document.getElementById('emergency-manager-pin')?.focus();
+    return;
+  }
 
   const items = JSON.parse(document.getElementById('emergency-manager-lines').dataset.items || '[]');
   const approvedItems = items.map((item, i) => {
@@ -28380,8 +28469,11 @@ async function confirmBatchShip() {
   const shipDate = document.getElementById('batch-ship-date').value;
   if (!shipDate) { alert('출고 날짜를 입력해주세요.'); return; }
   const pinError = document.getElementById('batch-ship-pin-error');
-  if (!_batchShipEmp) {
-    if (pinError) pinError.textContent = 'PIN을 먼저 입력하세요.';
+  // PIN 재검증: 필드 현재값이 4자리이고 _Emp 가 살아있어야 진행
+  const _curPin = document.getElementById('batch-ship-pin')?.value || '';
+  if (!_batchShipEmp || _curPin.length < 4 || _batchShipEmp.pin !== _curPin) {
+    if (pinError) pinError.textContent = 'PIN을 입력하세요.';
+    document.getElementById('batch-ship-pin')?.focus();
     return;
   }
   const emp = _batchShipEmp;
@@ -28456,10 +28548,11 @@ async function confirmShipped() {
   const carrier = document.getElementById('ship-carrier').value;
   if (!carrier) { alert('Carrier를 선택해주세요.'); document.getElementById('ship-carrier')?.focus(); return; }
 
-  // 인라인 PIN 체크
-  if (!_shipEmpPin) {
+  // 인라인 PIN 체크 — 필드 현재값이 4자리이고 _Emp 와 일치해야 진행
+  const _shipCurPin = document.getElementById('ship-pin')?.value || '';
+  if (!_shipEmpPin || _shipCurPin.length < 4 || _shipEmpPin.pin !== _shipCurPin) {
     const pinError = document.getElementById('ship-pin-error');
-    if (pinError) pinError.textContent = 'PIN을 먼저 입력하세요.';
+    if (pinError) pinError.textContent = 'PIN을 입력하세요.';
     document.getElementById('ship-pin')?.focus();
     return;
   }
