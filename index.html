@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_121452 — Order Status 카드 SC2CA 진짜 분리: (1) 카드 의 totalBoxes/totalPcr/totalLoose 계산 시 stage_for_ca_truck=true 라인은 SC2CA 카드만 (CA 카드 안 포함). (2) printPickTicket 도 SC2CA 모드 진짜 처리 (alloc_sc2ca_detail 사용) -->
+<!-- BUILD: 20260501_123211 — sc2ca_status 도입: SC→CA 카드 진짜 독립 상태. updateWhStatus 가 SC2CA 면 sc2ca_status 만 업데이트. printPickTicketType 도 sc2ca_warehouse_printed_at / sc2ca_pcroom_printed_at 처리. 카드 표시도 whPre='sc2ca_' -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -10918,7 +10918,7 @@ async function loadOrderStatus() {
       if (isSplit) {
         if (hasScLine) cards.push({ ...o, _wh: 'SC', _status: o.sc_status || o.status });
         if (hasCaLine) cards.push({ ...o, _wh: 'CA', _status: o.ca_status || o.status });
-        if (hasSc2caLine) cards.push({ ...o, _wh: 'SC2CA', _status: o.status });
+        if (hasSc2caLine) cards.push({ ...o, _wh: 'SC2CA', _status: o.sc2ca_status || o.status });
       } else {
         const wh = o.wh_code || o.warehouses?.code || 'SC';
         // SC2CA 카드 — 단일 창고 Order 라도 SC2CA 라인 있으면 별도 카드
@@ -10926,7 +10926,7 @@ async function loadOrderStatus() {
           // 일반 카드 (SC2CA 외 라인 있을 때만)
           if (hasScLine || hasCaLine) cards.push({ ...o, _wh: wh, _status: o.status });
           // SC→CA 카드
-          cards.push({ ...o, _wh: 'SC2CA', _status: o.status });
+          cards.push({ ...o, _wh: 'SC2CA', _status: o.sc2ca_status || o.status });
         } else {
           cards.push({ ...o, _wh: wh, _status: o.status });
         }
@@ -11048,7 +11048,7 @@ async function loadOrderStatus() {
       : `<div style="font-size:11px;font-weight:800;font-family:'IBM Plex Mono',monospace;padding:2px 7px;border-radius:5px;background:#fff;color:#111827;display:inline-block;border:1.5px solid #1f2937;">PO# ${o.customer_po||'—'}</div>`;
 
     const printBtns = col === 'entered' && !isCreditHold && o._status !== 'rejected' ? (() => {
-      const whPre = wh === 'CA' ? 'ca_' : 'sc_';
+      const whPre = wh === 'CA' ? 'ca_' : (wh === 'SC2CA' ? 'sc2ca_' : 'sc_');
       const whPrinted = o[whPre + 'warehouse_printed_at'];
       const pcPrinted = o[whPre + 'pcroom_printed_at'];
 
@@ -22648,8 +22648,14 @@ async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
   loadOrderStatus();
 }
 async function updateWhStatus(orderId, wh, newStatus) {
-  const { data: o } = await db.from('orders').select('sc_status,ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
+  const { data: o } = await db.from('orders').select('sc_status,ca_status,sc2ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
   const isSplit = o?.is_split_warehouse || o?.wh_code === 'SC&CA';
+
+  // SC2CA 카드 — 진짜 sc2ca_status 만 업데이트 (메인 status 안 건드림)
+  if (wh === 'SC2CA') {
+    await db.from('orders').update({ sc2ca_status: newStatus }).eq('id', orderId);
+    return;
+  }
 
   if (!isSplit) {
     // 싱글 WH 오더 — 메인 status + wh status 둘 다 업데이트
@@ -22686,7 +22692,7 @@ async function checkAndMoveToPreparing() {
   if (!orderId || !wh) return;
 
   // 실제로 프린트했을 때 printed_at 기록
-  const whPre = wh === 'CA' ? 'ca_' : 'sc_';
+  const whPre = wh === 'CA' ? 'ca_' : (wh === 'SC2CA' ? 'sc2ca_' : 'sc_');
   const field = whPre + (ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at');
   await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
 
@@ -22695,41 +22701,48 @@ async function checkAndMoveToPreparing() {
   else await markPcrTicketPrinted(orderId);
 
   const { data: updated } = await db.from('orders')
-    .select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, status, sc_status, ca_status, wh_code, is_split_warehouse')
+    .select('sc_warehouse_printed_at, sc_pcroom_printed_at, ca_warehouse_printed_at, ca_pcroom_printed_at, sc2ca_warehouse_printed_at, sc2ca_pcroom_printed_at, status, sc_status, ca_status, sc2ca_status, wh_code, is_split_warehouse')
     .eq('id', orderId).single();
   if (!updated) return;
 
   const { data: allLines } = await db.from('order_lines')
-    .select('qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail')
+    .select('qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail, alloc_sc2ca_detail, stage_for_ca_truck')
     .eq('order_id', orderId);
   const lines = allLines || [];
   const isOrderSplit = updated.wh_code === 'SC&CA' || updated.is_split_warehouse;
-  const whLines = isOrderSplit
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
-    : lines;
+  const isSc2caCard = (wh === 'SC2CA');
+  const whLines = isSc2caCard
+    ? lines.filter(l => l.stage_for_ca_truck === true)
+    : isOrderSplit
+      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
+      : lines.filter(l => l.stage_for_ca_truck !== true);
 
   const needsWh = whLines.some(l => {
     if ((l.qty_boxes || 0) > 0) return true;
     // PCR TRANSFER (warehouse bin → PC Room) 있으면 WH 티켓 필요
-    const allocObj = wh === 'CA'
-      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const allocObj = isSc2caCard
+      ? (l.alloc_sc2ca_detail || {})
+      : wh === 'CA'
+        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
     return Object.keys(allocObj).some(k => k.includes('TRANSFER|'));
   });
   const needsPcr = whLines.some(l => {
-    const allocObj = wh === 'CA'
-      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const allocObj = isSc2caCard
+      ? (l.alloc_sc2ca_detail || {})
+      : wh === 'CA'
+        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
     const hasPcrAlloc = Object.entries(allocObj).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0) > 0);
     return hasPcrAlloc || (l.qty_loose || 0) > 0;
   });
 
-  const whPrinted  = wh === 'CA' ? updated.ca_warehouse_printed_at : updated.sc_warehouse_printed_at;
-  const pcrPrinted = wh === 'CA' ? updated.ca_pcroom_printed_at    : updated.sc_pcroom_printed_at;
+  const whPrinted  = wh === 'CA' ? updated.ca_warehouse_printed_at : (wh === 'SC2CA' ? updated.sc2ca_warehouse_printed_at : updated.sc_warehouse_printed_at);
+  const pcrPrinted = wh === 'CA' ? updated.ca_pcroom_printed_at    : (wh === 'SC2CA' ? updated.sc2ca_pcroom_printed_at    : updated.sc_pcroom_printed_at);
   const whOk  = !needsWh  || !!whPrinted;
   const pcrOk = !needsPcr || !!pcrPrinted;
 
-  const whStatus = wh === 'CA' ? (updated.ca_status || updated.status) : (updated.sc_status || updated.status);
+  const whStatus = wh === 'CA' ? (updated.ca_status || updated.status) : (wh === 'SC2CA' ? (updated.sc2ca_status || updated.status) : (updated.sc_status || updated.status));
   if (whOk && pcrOk && ['po_entered','open','credit_hold','preparing'].includes(whStatus)) {
     await updateWhStatus(orderId, wh, 'preparing');
     showToast(`📦 ${wh} 프린트 완료 — Preparing으로 이동!`);
