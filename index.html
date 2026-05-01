@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_192100 — rollbackStatus 의 confirm() 팝업 제거 — 바로 PIN 모달만 뜨게 변경 (Back to PO Entered / Back to Preparing) -->
+<!-- BUILD: 20260501_193500 — Packing List 모달: (1) X/취소 버튼의 confirm 팝업 제거 → 바로 닫힘 (2) SC2CA 카드에서 PL 띄울 때 빈 데이터로 뜨던 버그 fix — preparationComplete 의 라인 필터 + buildPackingListHtml 의 라인 정규화 추가 (qty_sc2ca/alloc_sc2ca_detail 사용) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -22665,19 +22665,17 @@ async function resubmitCreditHold(orderId, orderNumber, customerName, customerPo
 }
 
 async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
-  // PIN 검증 — 누구든 직원 PIN 필요 (confirm 팝업 제거, 바로 PIN 모달)
-  openPinModal('↩', 'Status 되돌리기 PIN 인증', `${fromStatus} → ${toStatus}`, async (emp) => {
-    await updateWhStatus(orderId, wh, toStatus);
-    if (toStatus === 'po_entered') {
-      const pre = wh === 'CA' ? 'ca_' : 'sc_';
-      await db.from('orders').update({
-        [pre + 'warehouse_printed_at']: null,
-        [pre + 'pcroom_printed_at']: null
-      }).eq('id', orderId);
-    }
-    showToast(`✅ ${toStatus} 으로 되돌림 — ${emp.name}`);
-    loadOrderStatus();
-  });
+  // 바로 실행 (confirm 팝업 + PIN 모달 모두 제거)
+  await updateWhStatus(orderId, wh, toStatus);
+  if (toStatus === 'po_entered') {
+    const pre = wh === 'CA' ? 'ca_' : 'sc_';
+    await db.from('orders').update({
+      [pre + 'warehouse_printed_at']: null,
+      [pre + 'pcroom_printed_at']: null
+    }).eq('id', orderId);
+  }
+  showToast(`✅ ${toStatus} 으로 되돌림`);
+  loadOrderStatus();
 }
 async function updateWhStatus(orderId, wh, newStatus) {
   const { data: o } = await db.from('orders').select('sc_status,ca_status,sc2ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
@@ -24486,9 +24484,13 @@ async function preparationComplete(orderId, wh) {
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
   // whFilter에 따라 해당 창고 배분이 있는 라인만 필터링 + 수량 0 제외
-  const nonZeroLines = lines.filter(l => (l.qty_pieces || 0) > 0);
+  const isSc2ca = (wh === 'SC2CA');
+  // SC2CA 카드는 qty_sc2ca > 0 인 라인만 (qty_pieces 가 아니라!)
+  const nonZeroLines = isSc2ca
+    ? lines.filter(l => l.stage_for_ca_truck === true && (l.qty_sc2ca || 0) > 0)
+    : lines.filter(l => (l.qty_pieces || 0) > 0 && l.stage_for_ca_truck !== true);
   let filteredLines = nonZeroLines;
-  if (isSplit || wh) {
+  if (!isSc2ca && (isSplit || wh)) {
     const whFilter = wh || 'SC';
     filteredLines = nonZeroLines.filter(l => {
       if (whFilter === 'CA') {
@@ -30137,6 +30139,18 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
   const dateStr = new Date().toLocaleDateString();
   // colorLabel은 전역 함수 사용
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
+
+  const isSc2ca = (whFilter === 'SC2CA');
+  // SC2CA 카드: 라인 정규화 — qty_sc2ca → qty_pieces, alloc_sc2ca_detail → alloc_detail (SC bin 에서 픽하므로 SC alloc 자리 사용)
+  if (isSc2ca && Array.isArray(lines)) {
+    lines = lines.map(l => ({
+      ...l,
+      qty_pieces: l.qty_sc2ca || 0,
+      alloc_detail: l.alloc_sc2ca_detail || {},
+      alloc_ca_detail: {}, // SC2CA 는 CA alloc 안 봄
+    }));
+    whFilter = 'SC'; // 내부 로직은 SC 분기로
+  }
 
   // 수량 0인 라인 제외
   lines = (lines || []).filter(l => (l.qty_pieces || 0) > 0);
@@ -41263,7 +41277,7 @@ function showCreditHoldFlash(overAmt) {
   <div class="modal-box" style="max-width:860px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
     <div class="modal-head" style="background:#0891b2;flex-shrink:0;">
       <span style="color:#fff;font-weight:700;font-size:14px;">📦 Packing List</span>
-      <button class="modal-close" style="color:#fff;" onclick="if(confirm('Packing List를 확인하지 않고 닫으시겠습니까?\nReady to Ship으로 넘어가지 않습니다.')) { _plOrderId=null; closeModal('modal-pl-preview'); }">×</button>
+      <button class="modal-close" style="color:#fff;" onclick="_plOrderId=null; closeModal('modal-pl-preview');">×</button>
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px;" id="pl-preview-content"></div>
 
@@ -41276,7 +41290,7 @@ function showCreditHoldFlash(overAmt) {
         <span id="pl-pin-inline-status" style="font-size:11px;font-weight:600;color:#6b7280;"></span>
       </div>
       <div style="display:flex;gap:8px;">
-        <button class="btn" onclick="if(confirm('Packing List를 확인하지 않고 닫으시겠습니까?')) { _plOrderId=null; closeModal('modal-pl-preview'); }">취소</button>
+        <button class="btn" onclick="_plOrderId=null; closeModal('modal-pl-preview');">취소</button>
         <button class="btn" style="background:#0891b2;color:#fff;" onclick="printInNewWindow(document.getElementById('pl-preview-content').innerHTML)">🖨️ Print Packing List</button>
         <button id="pl-confirm-btn" class="btn btn-green" onclick="verifyPlInlinePin()">✅ Confirm — Move to Ready to Ship</button>
       </div>
