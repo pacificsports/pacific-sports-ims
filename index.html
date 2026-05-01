@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260430_192357 — Step 1: Order 입력 dropdown 에 'SC → CA' 옵션 추가 + stage_for_ca_truck flag 저장 (warehouse_id=SC, wh=SC, stage_for_ca_truck=true) -->
+<!-- BUILD: 20260501_011202 — Step 2a: Order Lines 에 'SC→CA' 새 컬럼 추가. SC inventory 에서 자동 배분 (단순 prompt 입력). qty_sc2ca / alloc_sc2ca_detail DB 저장. dropdown 은 일단 유지 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -926,7 +926,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <table class="order-line-table" id="order-line-table">
                     <thead><tr>
                       <th>Item Code</th><th>Style</th><th>Color</th><th>Size</th>
-                      <th>Qty(pcs)</th><th>Unit$</th><th>SC/SC-PCR</th><th>CA/CA-PCR</th>
+                      <th>Qty(pcs)</th><th>Unit$</th><th>SC/SC-PCR</th><th>CA/CA-PCR</th><th style="background:#fef3c7;color:#92400e;">SC→CA</th>
                       <th>Ship</th><th>Full Boxes</th><th>Partial Pcs(PCR)</th><th>Back Order</th><th style="color:#a84212;">Transfer</th><th>✕</th>
                     </tr></thead>
                     <tbody id="po-lines-body"></tbody>
@@ -7241,6 +7241,38 @@ function renderEntryTable() {
           </div>`;
         })()}
       </td>
+      <td style="padding:4px 8px;background:#fffbeb;">
+        ${(function(){
+          // SC→CA 영역: SC inventory 에서 (재고는 SC 에 있음)
+          const k = l.isSideSeam
+            ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
+            : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+          const sq = scInventory[k]?.qty || 0;
+          // 이미 SC, SC2CA 에 reserve 된 양 다 빼야 진짜 사용 가능 양
+          const sc1Alloc = (l.allocSC || {});
+          const sc2Alloc = (l.allocSC2CA || {});
+          const sc1Total = Object.values(sc1Alloc).reduce((s,v)=>s+(v||0), 0);
+          const sc2Total = Object.values(sc2Alloc).reduce((s,v)=>s+(v||0), 0);
+          const scActuallyAvail = Math.max(0, sq - sc1Total - sc2Total);
+          
+          const allocLabel = Object.keys(sc2Alloc).length 
+            ? Object.entries(sc2Alloc).map(([b,q])=>`${b}×${q}`).join(', ')
+            : '';
+          
+          return `<div style="display:flex;flex-direction:column;gap:3px;">
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:10px;color:#92400e;font-weight:700;" title="SC 재고에서 할당">SC ${scActuallyAvail.toLocaleString()}</span>
+              ${sc2Total > 0 ? `<span style="font-size:10px;color:#dc2626;font-weight:700;">→ ${sc2Total}</span>` : ''}
+            </div>
+            <button class="loc-pick-btn${allocLabel?' filled':''}" 
+              onclick="event.stopPropagation();openAllocModal(${idx},'SC2CA')" 
+              title="SC → CA Next Truck (SC 재고에서 다음 CA 트럭에 실어 CA 에서 출고)" 
+              style="background:${allocLabel?'#fed7aa':'#fff7ed'};border:1px solid #fdba74;color:#92400e;">
+              <span>🚚</span><span class="loc-pick-text" style="max-width:100px;font-size:10px;">${allocLabel || 'SC→CA Bin...'}</span>
+            </button>
+          </div>`;
+        })()}
+      </td>
       <td style="text-align:center;font-size:11px;">
         <select class="fsel" style="width:88px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;syncWhDropdown();renderEntryTable()" title="SC → CA: SC 에 있는 재고를 다음 CA 트럭에 실어 CA 에서 출고 (In Transit to CA on Next Truck)">
           <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
@@ -8299,6 +8331,15 @@ async function _doSaveInvoice() {
     // SC2CA 의 경우 warehouse_id 는 SC 로 (재고는 SC 에 있음)
     const realWhId = isStageForCa ? (scWhId || whId) : lineWhId;
     
+    // SC2CA alloc detail (allocSC2CA → JSONB)
+    const _allocSc2ca = {};
+    if (l.allocSC2CA && Object.keys(l.allocSC2CA).length > 0) {
+      Object.entries(l.allocSC2CA).forEach(([bin, qty]) => {
+        if (qty > 0) _allocSc2ca[bin] = { pcs: qty };
+      });
+    }
+    const sc2caQty = Object.values(_allocSc2ca).reduce((s,v) => s + (v.pcs||0), 0);
+    
     const insertPayload = {
       order_id: order.id,
       style_id: s?.id || null,
@@ -8316,6 +8357,8 @@ async function _doSaveInvoice() {
       location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
       alloc_detail: Object.keys(_allocDetail).length > 0 ? _allocDetail : null,
       alloc_ca_detail: Object.keys(_allocDetailCA).length > 0 ? _allocDetailCA : null,
+      alloc_sc2ca_detail: Object.keys(_allocSc2ca).length > 0 ? _allocSc2ca : null,
+      qty_sc2ca: sc2caQty,
       unit_price: l.price || 0,
       is_side_seam: !!l.isSideSeam
     };
@@ -35665,9 +35708,87 @@ function openBinAllocModal() {
   }
 }
 
+// SC → CA Next Truck 용 bin 배분 — SC inventory 에서 (재고는 SC 에 있음)
+async function openSc2CaAllocModal(lineIdx) {
+  const l = poLines[lineIdx];
+  if (!l) return;
+  
+  if (window._invLoading) {
+    await window._invLoading;
+  }
+  
+  const k = l.isSideSeam
+    ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
+    : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+  
+  // SC inventory bin 들 (alloc_detail 에 들어갈 것)
+  const scBins = (window.binInventory?.['SC']?.[k] || []).filter(b => (b.qty||0) > 0);
+  
+  if (!scBins.length) {
+    alert('SC 에 재고가 없어요.\n\n진짜 운영 사용은 다음 Step 에서 정식 모달이 만들어질 거예요.\n지금은 SC 에 진짜 재고가 있어야 SC→CA 로 보낼 수 있어요.');
+    return;
+  }
+  
+  // 이미 SC, SC2CA 에 reserve 된 양 빼서 사용 가능
+  const sc1Alloc = l.allocSC || {};
+  const totalNeed = l.qty || 0;
+  const sc1Sum = Object.values(sc1Alloc).reduce((s,v)=>s+(v||0), 0);
+  const sc2Sum = Object.values(l.allocSC2CA || {}).reduce((s,v)=>s+(v||0), 0);
+  
+  const promptMsg = `🚚 SC → CA Next Truck (Step 1 단순 입력)\n\n` +
+    `Style: ${l.styleNum} / ${l.color} / ${l.size}\n` +
+    `Order Qty: ${totalNeed}\n` +
+    `이미 SC: ${sc1Sum} / 이미 SC→CA: ${sc2Sum}\n` +
+    `남은: ${totalNeed - sc1Sum - sc2Sum}\n\n` +
+    `진짜 사용 가능한 SC bin 들:\n` +
+    scBins.map(b => `  ${b.bin}: ${b.qty}`).join('\n') + 
+    `\n\nSC → CA 로 보낼 양 (pcs)을 입력해주세요:`;
+  
+  const input = prompt(promptMsg, String(totalNeed - sc1Sum - sc2Sum));
+  if (!input) return;
+  
+  let needSc2ca = parseInt(input) || 0;
+  if (needSc2ca <= 0) {
+    // 0 입력 시 → SC2CA 배분 모두 제거
+    poLines[lineIdx].allocSC2CA = {};
+    renderEntryTable();
+    return;
+  }
+  
+  // 자동 배분 — bin 큰 순서대로
+  const sorted = scBins.slice().sort((a,b) => (b.qty||0) - (a.qty||0));
+  const newAlloc = {};
+  let remaining = needSc2ca;
+  for (const b of sorted) {
+    if (remaining <= 0) break;
+    // 이 bin 의 진짜 사용 가능 (SC 에 이미 reserve 된 거 뺌)
+    const usedBySc1 = sc1Alloc[b.bin] || 0;
+    const binAvail = (b.qty || 0) - usedBySc1;
+    if (binAvail <= 0) continue;
+    const take = Math.min(remaining, binAvail);
+    newAlloc[b.bin] = take;
+    remaining -= take;
+  }
+  
+  if (remaining > 0) {
+    alert(`⚠️ ${remaining}pcs 부족합니다 — SC 재고가 충분하지 않아요.\n${needSc2ca - remaining}pcs 만 배분됨.`);
+  }
+  
+  poLines[lineIdx].allocSC2CA = newAlloc;
+  renderEntryTable();
+  liveRenderDocs();
+}
+
+
 function openAllocModal(lineIdx, whGroup) {
   const l = poLines[lineIdx];
   if (!l) return;
+  
+  // SC2CA: 임시 단순 alloc 함수로
+  if (whGroup === 'SC2CA') {
+    return openSc2CaAllocModal(lineIdx);
+  }
+  
   // 재고 로딩 중이면 완료 후 열기 (rerendering 플래그 유지)
   if (window._invLoading) {
     const _wasRerendering = window._allocRerendering;
