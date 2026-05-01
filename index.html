@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_092226 — fix: BACK ORDER + Full Boxes + Partial PCR + TRANSFER 다 SC2CA alloc 도 합산. 진짜 SC + CA + SC→CA 전부 잡혔으면 BackOrder=0. TRANSFER 컬럼에 SC→CA pcs 표시 -->
+<!-- BUILD: 20260501_095226 — Save 로직 새 시스템: 한 라인을 SC + CA + SC2CA 영역별로 row 따로 insert (qty_pieces=각 영역의 합계). qty_committed reserve 도 영역별로. BO 계산도 SC2CA 포함 (canFill = scQty + caQty + sc2caQty) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8088,33 +8088,37 @@ async function _doSaveInvoice() {
     const isLineSplit = (lineWh === 'SC&CA');
 
     if (isLineSplit) {
-      // SC&CA 라인: canFill = allocSC + allocCA 합산
+      // SC&CA 라인: canFill = allocSC + allocCA + allocSC2CA 합산
       const allocSC = l.allocSC || {};
       const allocCA = l.allocCA || {};
+      const allocSC2CA = l.allocSC2CA || {};
       const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
       const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
-      const canFill = scQty + caQty;
+      const sc2caQty = Object.values(allocSC2CA).reduce((s,v)=>s+(v||0),0);
+      const canFill = scQty + caQty + sc2caQty;
       const backQty = Math.max(0, l.qty - canFill);
-      return { ...l, invRows: [], totalStock: canFill, canFill, backQty, sku, scQty, caQty };
+      return { ...l, invRows: [], totalStock: canFill, canFill, backQty, sku, scQty, caQty, sc2caQty };
     }
 
     // SC 또는 CA 단독 라인: alloc 기준으로 canFill 계산
     const allocSC = l.allocSC || {};
     const allocCA = l.allocCA || {};
+    const allocSC2CA = l.allocSC2CA || {};
     const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
     const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
-    const allocTotal = scQty + caQty;
+    const sc2caQty = Object.values(allocSC2CA).reduce((s,v)=>s+(v||0),0);
+    const allocTotal = scQty + caQty + sc2caQty;
 
     // alloc 기준으로만 canFill 계산 — bin 배분 안 하면 전량 backorder
     if (allocTotal > 0) {
       const canFill = Math.min(l.qty, allocTotal);
       const backQty = Math.max(0, l.qty - canFill);
-      return { ...l, invRows: [], totalStock: allocTotal, canFill, backQty, sku, scQty, caQty };
+      return { ...l, invRows: [], totalStock: allocTotal, canFill, backQty, sku, scQty, caQty, sc2caQty };
     }
 
     // alloc 없음 = bin 배분 안 함 = 전량 backorder
     console.log(`[lineCheck] ${l.color} ${l.size} wh=${lineWh} — no alloc, treating as backorder`);
-    return { ...l, invRows: [], totalStock: 0, canFill: 0, backQty: l.qty, sku, scQty: 0, caQty: 0 };
+    return { ...l, invRows: [], totalStock: 0, canFill: 0, backQty: l.qty, sku, scQty: 0, caQty: 0, sc2caQty: 0 };
   }));
 
   const hasBackorder = false; // 저장 시에는 재고 체크 안 함 — Shipped 단계에서 처리
@@ -8290,101 +8294,80 @@ async function _doSaveInvoice() {
   // ── 3. Order Lines 저장 + qty_committed 예약 (재고 차감은 Shipped 단계에서)
   for (const l of lineChecks) {
     const s = styles.find(x => x.style_number === l.styleNum);
-    const lineWhId = l.wh === 'CA' ? (caWhId || whId) : (scWhId || whId);
-
-    // alloc_detail: SC빈 상세, alloc_ca_detail: CA빈 상세 (SC&CA 라인 분리 저장)
-    const _allocObjSC = l.allocSC || {};
-    const _allocObjCA = l.allocCA || {};
-    // SC-only or SC&CA → alloc_detail = SC bins
-    // CA-only → alloc_detail = null, alloc_ca_detail = CA bins
-    // SC&CA → alloc_detail = SC bins, alloc_ca_detail = CA bins
-    const _allocDetail = {};
-    const _allocDetailCA = {};
     const ppb = l.ppb || 1;
-
-    if (l.wh !== 'CA') {
-      // SC or SC&CA: SC bins → alloc_detail
-      for (const [bin, pcs] of Object.entries(_allocObjSC)) {
+    
+    // 새 시스템 — 한 라인이 SC + CA + SC2CA 다 가능. 각 영역별로 row 따로 저장.
+    const sumAlloc = obj => obj ? Object.entries(obj)
+      .filter(([k]) => !k.includes('TRANSFER|'))
+      .reduce((s,[,v]) => s+(v||0), 0) : 0;
+    
+    const scTotal = sumAlloc(l.allocSC);
+    const caTotal = sumAlloc(l.allocCA);
+    const sc2caTotal = sumAlloc(l.allocSC2CA);
+    const totalAlloc = scTotal + caTotal + sc2caTotal;
+    const backorderQty = Math.max(0, l.qty - totalAlloc);
+    
+    console.log(`[saveInvoice] Line ${l.styleNum} ${l.color} ${l.size} qty=${l.qty}: SC=${scTotal}, CA=${caTotal}, SC2CA=${sc2caTotal}, BO=${backorderQty}`);
+    
+    // 헬퍼: 한 영역의 alloc_detail JSONB 만들기
+    const buildAllocDetail = (allocObj, transferList, transferKeyPrefix) => {
+      const detail = {};
+      for (const [bin, pcs] of Object.entries(allocObj || {})) {
         if (!pcs) continue;
-        _allocDetail[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
+        // TRANSFER 키는 건너뛰기 (별도 추가)
+        if (bin.includes('TRANSFER|')) continue;
+        detail[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
       }
-    }
-    if (l.wh === 'CA' || l.wh === 'SC&CA') {
-      // CA or SC&CA: CA bins → alloc_ca_detail
-      for (const [bin, pcs] of Object.entries(_allocObjCA)) {
-        if (!pcs) continue;
-        _allocDetailCA[bin] = { boxes: Math.floor(pcs / ppb), partial: pcs % ppb, pcs };
+      // PCR Transfer 정보 추가 (픽티켓 표시용)
+      for (const t of (transferList || [])) {
+        const transferKey = `${transferKeyPrefix}|${t.fromBin}`;
+        detail[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
       }
-    }
-    // PCR Transfer 정보를 alloc_detail/alloc_ca_detail에 추가 (픽티켓 표시용)
-    // SC transfer → alloc_detail, CA transfer → alloc_ca_detail
-    const _scTransferList = l.wh === 'CA' ? [] : (l.pcrTransfersPending || []);
-    const _caTransferList = (l.wh === 'CA' || l.wh === 'SC&CA') ? (l.caPcrTransfersPending || []) : [];
-    for (const t of _scTransferList) {
-      const transferKey = `SC-TRANSFER|${t.fromBin}`;
-      _allocDetail[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
-    }
-    for (const t of _caTransferList) {
-      const transferKey = `CA-TRANSFER|${t.fromBin}`;
-      _allocDetailCA[transferKey] = { fromBin: t.fromBin, boxes: t.boxes, pcs: t.qty, isTransfer: true };
-    }
-
-
-    const _mainBins = Object.keys(l.wh === 'CA' ? _allocObjCA : _allocObjSC).filter(k => !k.includes('PCR') && !k.includes('TRANSFER|'));
-    
-    // SC → CA: warehouse_id 는 SC 이지만 stage_for_ca_truck=true 로 표시 (다음 CA 트럭에 실어 CA 에서 출고)
-    const isStageForCa = (l.wh === 'SC2CA');
-    // SC2CA 의 경우 warehouse_id 는 SC 로 (재고는 SC 에 있음)
-    const realWhId = isStageForCa ? (scWhId || whId) : lineWhId;
-    
-    // SC2CA alloc detail (allocSC2CA → JSONB)
-    const _allocSc2ca = {};
-    if (l.allocSC2CA && Object.keys(l.allocSC2CA).length > 0) {
-      Object.entries(l.allocSC2CA).forEach(([bin, qty]) => {
-        if (qty > 0) _allocSc2ca[bin] = { pcs: qty };
-      });
-    }
-    const sc2caQty = Object.values(_allocSc2ca).reduce((s,v) => s + (v.pcs||0), 0);
-    
-    const insertPayload = {
-      order_id: order.id,
-      style_id: s?.id || null,
-      warehouse_id: realWhId,
-      wh: isStageForCa ? 'SC' : (l.wh || 'SC'),  // wh 컬럼은 SC 로 (모든 SC 화면에서 자연스럽게 보임)
-      stage_for_ca_truck: isStageForCa,
-      color: l.color, size: l.size,
-      qty_pieces: l.qty,
-      qty_filled: 0,
-      qty_backordered: 0,
-      is_backordered: false,
-      pcs_per_box: l.ppb,
-      qty_boxes: Math.floor(l.qty / l.ppb),
-      qty_loose: l.qty % l.ppb,
-      location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
-      alloc_detail: Object.keys(_allocDetail).length > 0 ? _allocDetail : null,
-      alloc_ca_detail: Object.keys(_allocDetailCA).length > 0 ? _allocDetailCA : null,
-      alloc_sc2ca_detail: Object.keys(_allocSc2ca).length > 0 ? _allocSc2ca : null,
-      qty_sc2ca: sc2caQty,
-      unit_price: l.price || 0,
-      is_side_seam: !!l.isSideSeam
+      return detail;
     };
-    const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
-    if (lineErr) console.error('[order_lines ERROR]', lineErr.message, lineErr.details, lineErr.hint);
-
-    // qty_committed 예약 — SC2CA 도 SC 에서 reserve (재고는 SC 에 있으니까)
-    const lineWhCode = isStageForCa ? 'SC' : (l.wh || 'SC');
-    const commitWhIds = lineWhCode === 'SC&CA'
-      ? [scWhId, caWhId].filter(Boolean)
-      : lineWhCode === 'CA' ? [caWhId || whId] : [scWhId || whId];
-
-    let toCommit = l.qty;
-    for (const cwId of commitWhIds) {
-      if (toCommit <= 0) break;
+    
+    // 영역별로 row 따로 insert
+    const insertOneLine = async (areaCode, qty, allocDetail, allocCaDetail, allocSc2caDetail, isStageForCa) => {
+      const realWhId = areaCode === 'CA' ? (caWhId || whId) : (scWhId || whId);
+      const _mainBins = Object.keys((areaCode === 'CA' ? l.allocCA : (areaCode === 'SC2CA' ? l.allocSC2CA : l.allocSC)) || {})
+        .filter(k => !k.includes('PCR') && !k.includes('TRANSFER|'));
+      
+      const insertPayload = {
+        order_id: order.id,
+        style_id: s?.id || null,
+        warehouse_id: realWhId,
+        wh: areaCode === 'CA' ? 'CA' : 'SC',  // SC2CA 도 wh=SC (재고 위치)
+        stage_for_ca_truck: isStageForCa,
+        color: l.color, size: l.size,
+        qty_pieces: qty,
+        qty_filled: 0,
+        qty_backordered: 0,
+        is_backordered: false,
+        pcs_per_box: ppb,
+        qty_boxes: Math.floor(qty / ppb),
+        qty_loose: qty % ppb,
+        location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
+        alloc_detail: allocDetail && Object.keys(allocDetail).length > 0 ? allocDetail : null,
+        alloc_ca_detail: allocCaDetail && Object.keys(allocCaDetail).length > 0 ? allocCaDetail : null,
+        alloc_sc2ca_detail: allocSc2caDetail && Object.keys(allocSc2caDetail).length > 0 ? allocSc2caDetail : null,
+        qty_sc: areaCode === 'SC' ? qty : 0,
+        qty_ca: areaCode === 'CA' ? qty : 0,
+        qty_sc2ca: areaCode === 'SC2CA' ? qty : 0,
+        unit_price: l.price || 0,
+        is_side_seam: !!l.isSideSeam
+      };
+      const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
+      if (lineErr) console.error('[order_lines ERROR]', areaCode, lineErr.message, lineErr.details, lineErr.hint);
+      
+      // qty_committed reserve — 이 영역의 재고 잡기
+      // SC, SC2CA 다 SC inventory 에서 reserve. CA 만 CA 에서.
+      const reserveWhId = (areaCode === 'CA') ? (caWhId || whId) : (scWhId || whId);
+      let toCommit = qty;
       const { data: invRows } = await db.from('inventory')
         .select('id, qty_on_hand, qty_committed')
         .eq('color', (l.color||'').toUpperCase())
         .eq('size', (l.size||'').toUpperCase())
-        .eq('warehouse_id', cwId)
+        .eq('warehouse_id', reserveWhId)
         .order('qty_on_hand', { ascending: false });
       for (const inv of (invRows || [])) {
         if (toCommit <= 0) break;
@@ -8393,11 +8376,31 @@ async function _doSaveInvoice() {
         if (commit > 0) {
           const newCommit = (inv.qty_committed||0) + commit;
           await db.from('inventory').update({ qty_committed: newCommit }).eq('id', inv.id);
-          await logInventoryChange(inv.id, inv.qty_committed||0, newCommit, 'commit', _currentEmployee?.name||'system', order?.id, 'order', `PO Save - ${l.styleNum||''} ${l.color||''} ${l.size||''}`);
+          await logInventoryChange(inv.id, inv.qty_committed||0, newCommit, 'commit', _currentEmployee?.name||'system', order?.id, 'order', `PO Save (${areaCode}) - ${l.styleNum||''} ${l.color||''} ${l.size||''}`);
           toCommit -= commit;
         }
       }
+    };
+    
+    // SC 영역
+    if (scTotal > 0) {
+      const scDetail = buildAllocDetail(l.allocSC, l.pcrTransfersPending, 'SC-TRANSFER');
+      await insertOneLine('SC', scTotal, scDetail, null, null, false);
     }
+    
+    // CA 영역
+    if (caTotal > 0) {
+      const caDetail = buildAllocDetail(l.allocCA, l.caPcrTransfersPending, 'CA-TRANSFER');
+      await insertOneLine('CA', caTotal, null, caDetail, null, false);
+    }
+    
+    // SC2CA 영역 (stage_for_ca_truck=true)
+    if (sc2caTotal > 0) {
+      const sc2caDetail = buildAllocDetail(l.allocSC2CA, l.sc2caPcrTransfersPending, 'SC2CA-TRANSFER');
+      await insertOneLine('SC2CA', sc2caTotal, null, null, sc2caDetail, true);
+    }
+    
+    // BO 처리는 기존 로직에 맡김 (lineChecks 의 backQty 가 있으면 그대로 작동)
   }
 
   // ── Pick Ticket 레코드 생성 (Edit 모드면 이미 있으므로 스킵)
