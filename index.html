@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_085144 — UNIT$ 다음에 명확한 📍 배분 버튼 추가 (자동 라벨: SC / CA / →CA / SC+CA / SC+CA+→CA 등). SC, CA, SC→CA 칸은 정보만 (작고 흐릿하게). 사용자가 헷갈리지 않도록 명확한 진입점 -->
+<!-- BUILD: 20260501_090410 — Order Lines 진짜 깔끔하게: 배분 버튼 (✓ 배분 완료 / ⚠️ 144/432 / 📍 배분하기), SC/CA/SC→CA 칸 = 재고 + "잡힌 양" 만 표시 (작은 버튼 X) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7167,22 +7167,31 @@ function renderEntryTable() {
       <td><input type="number" class="fi" value="${l.price}" step="0.01" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].price=parseFloat(this.value)||0;renderEntryTable();liveRenderDocs()"/></td>
       <td style="text-align:center;padding:4px 8px;">
         ${(function(){
-          // 배분 상태 자동 라벨 (어디에 alloc 이 있나)
-          const hasSc = l.allocSC && Object.keys(l.allocSC).filter(k=>!k.includes('TRANSFER|')).length > 0;
-          const hasCa = l.allocCA && Object.keys(l.allocCA).filter(k=>!k.includes('TRANSFER|')).length > 0;
-          const hasSc2ca = l.allocSC2CA && Object.keys(l.allocSC2CA).filter(k=>!k.includes('TRANSFER|')).length > 0;
-          let label = '배분 안 됨';
-          let bg = '#f9fafb', border = '#d1d5db', color = '#6b7280';
-          if (hasSc && hasCa && hasSc2ca) { label = 'SC + CA + →CA'; bg='#dbeafe'; border='#3b82f6'; color='#1e40af'; }
-          else if (hasSc && hasCa) { label = 'SC + CA'; bg='#dbeafe'; border='#3b82f6'; color='#1e40af'; }
-          else if (hasSc && hasSc2ca) { label = 'SC + →CA'; bg='#dbeafe'; border='#3b82f6'; color='#1e40af'; }
-          else if (hasCa && hasSc2ca) { label = 'CA + →CA'; bg='#dbeafe'; border='#3b82f6'; color='#1e40af'; }
-          else if (hasSc) { label = 'SC'; bg='#dcfce7'; border='#16a34a'; color='#15803d'; }
-          else if (hasCa) { label = 'CA'; bg='#fed7aa'; border='#f97316'; color='#9a3412'; }
-          else if (hasSc2ca) { label = '→ CA Truck'; bg='#fef3c7'; border='#d97706'; color='#92400e'; }
+          const sumAlloc = obj => obj ? Object.entries(obj).filter(([k])=>!k.includes('TRANSFER|')).reduce((s,[,v])=>s+(v||0),0) : 0;
+          const scTotal = sumAlloc(l.allocSC);
+          const caTotal = sumAlloc(l.allocCA);
+          const sc2caTotal = sumAlloc(l.allocSC2CA);
+          const allocTotal = scTotal + caTotal + sc2caTotal;
+          const needQty = l.qty || 0;
+          
+          let label, bg, border, color;
+          if (allocTotal === 0) {
+            label = '📍 배분하기';
+            bg='#fef9c3'; border='#eab308'; color='#854d0e';
+          } else if (allocTotal === needQty) {
+            label = '✓ 배분 완료';
+            bg='#dcfce7'; border='#16a34a'; color='#15803d';
+          } else if (allocTotal < needQty) {
+            label = `⚠️ ${allocTotal}/${needQty}`;
+            bg='#fed7aa'; border='#f97316'; color='#9a3412';
+          } else {
+            label = `❌ ${allocTotal}/${needQty}`;
+            bg='#fee2e2'; border='#ef4444'; color='#991b1b';
+          }
+          
           return `<button onclick="event.stopPropagation();openAllocModalBoth(${idx})" 
-            style="width:120px;height:28px;font-size:11px;padding:2px 6px;border:1.5px solid ${border};border-radius:6px;background:${bg};cursor:pointer;font-weight:700;color:${color};display:inline-flex;align-items:center;justify-content:center;gap:4px;" 
-            title="📍 통합 배분 모달 (SC + CA + SC→CA 한 번에)">📍 ${label}</button>`;
+            style="width:130px;height:30px;font-size:12px;padding:2px 6px;border:1.5px solid ${border};border-radius:6px;background:${bg};cursor:pointer;font-weight:700;color:${color};display:inline-flex;align-items:center;justify-content:center;gap:4px;" 
+            title="📍 통합 배분 모달 클릭">${label}</button>`;
         })()}
       </td>
       <td style="padding:4px 8px;">
@@ -7202,17 +7211,18 @@ function renderEntryTable() {
           // main bin alloc vs PCR alloc 분리
           const scMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
           const scPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
+          const scTotalAlloc = scMainAlloc + scPcrAlloc;
           const sqAvail = Math.max(0, sq - scMainAlloc);
           const pqAvail = Math.max(0, pq - scPcrAlloc);
           const warn=l.cases>0&&sqAvail<l.cases*ppb;
-          return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sqAvail.toLocaleString()}${scMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}${warn?' ⚠️':''}</span>
-              <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${pqAvail>0?'#a84212':'#bbb'};">+${pqAvail.toLocaleString()} PCR${scPcrAlloc>0?` <span style="font-size:9px;color:#888">/${pq}</span>`:''}</span>
+          return `<div style="display:flex;flex-direction:column;gap:3px;align-items:center;">
+            <div style="display:flex;gap:8px;align-items:baseline;font-size:10px;color:var(--text2);">
+              <span title="현재 SC 재고">📦 ${sq.toLocaleString()}${pq>0?` +${pq.toLocaleString()} PCR`:''}</span>
             </div>
-            <button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="📍 배분 (위쪽 통합 배분 버튼 권장)" style="opacity:0.85;font-size:10px;">
-              <span class="loc-pick-text" style="max-width:120px;">${allocLabel||'—'}</span>
-            </button>
+            ${scTotalAlloc > 0 
+              ? `<span style="font-size:13px;font-weight:700;color:var(--sc);font-family:'IBM Plex Mono',monospace;">${scTotalAlloc.toLocaleString()}<span style="font-size:9px;color:#888;font-weight:400;"> 잡힘</span></span>`
+              : `<span style="font-size:11px;color:#bbb;">—</span>`
+            }
           </div>`;
         })()}
       </td>
@@ -7226,52 +7236,44 @@ function renderEntryTable() {
           const caPcrBins = (window.binInventory?.['CA-PCR']?.[k] || window.binInventory?.['CA-PCR']?.[caPcrCsKey] || []);
           const cpq = caPcrBins.reduce((s,b)=>s+(b.qty||0), 0);
           const alloc=l.allocCA||null;
-          const allocLabel=alloc?Object.entries(alloc).map(([b,q])=>`${b}×${q}`).join(', '):'';
           const caMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
           const caPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
-          const cqAvail = Math.max(0, cq - caMainAlloc);
-          const cpqAvail = Math.max(0, cpq - caPcrAlloc);
-          return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cqAvail.toLocaleString()}${caMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${cq.toLocaleString()}</span>`:''}
-              </span>
-              <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${cpqAvail>0?'#5b21b6':'#bbb'};">+${cpqAvail.toLocaleString()} PCR${caPcrAlloc>0?` <span style="font-size:9px;color:#888">/${cpq}</span>`:''}</span>
+          const caTotalAlloc = caMainAlloc + caPcrAlloc;
+          return `<div style="display:flex;flex-direction:column;gap:3px;align-items:center;">
+            <div style="display:flex;gap:8px;align-items:baseline;font-size:10px;color:var(--text2);">
+              <span title="현재 CA 재고">📦 ${cq.toLocaleString()}${cpq>0?` +${cpq.toLocaleString()} PCR`:''}</span>
             </div>
-            <button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="📍 배분 (위쪽 통합 배분 버튼 권장)" style="opacity:0.85;font-size:10px;">
-              <span class="loc-pick-text" style="max-width:120px;">${allocLabel||'—'}</span>
-            </button>
+            ${caTotalAlloc > 0 
+              ? `<span style="font-size:13px;font-weight:700;color:var(--ca);font-family:'IBM Plex Mono',monospace;">${caTotalAlloc.toLocaleString()}<span style="font-size:9px;color:#888;font-weight:400;"> 잡힘</span></span>`
+              : `<span style="font-size:11px;color:#bbb;">—</span>`
+            }
           </div>`;
         })()}
       </td>
       <td style="padding:4px 8px;background:#fffbeb;">
         ${(function(){
-          // SC→CA 영역: SC inventory 에서 (재고는 SC 에 있음)
+          // SC→CA 영역: SC inventory 사용 (재고는 SC 에 있음). SC 칸과 똑같은 형식 + 노란색
           const k = l.isSideSeam
             ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
             : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
           const sq = scInventory[k]?.qty || 0;
-          // 이미 SC, SC2CA 에 reserve 된 양 다 빼야 진짜 사용 가능 양
-          const sc1Alloc = (l.allocSC || {});
-          const sc2Alloc = (l.allocSC2CA || {});
-          const sc1Total = Object.values(sc1Alloc).reduce((s,v)=>s+(v||0), 0);
-          const sc2Total = Object.values(sc2Alloc).reduce((s,v)=>s+(v||0), 0);
-          const scActuallyAvail = Math.max(0, sq - sc1Total - sc2Total);
-          
-          const allocLabel = Object.keys(sc2Alloc).length 
-            ? Object.entries(sc2Alloc).map(([b,q])=>`${b}×${q}`).join(', ')
-            : '';
-          
-          return `<div style="display:flex;flex-direction:column;gap:3px;">
-            <div style="display:flex;gap:6px;align-items:center;">
-              <span style="font-size:10px;color:#92400e;font-weight:700;" title="SC 재고에서 할당">SC ${scActuallyAvail.toLocaleString()}</span>
-              ${sc2Total > 0 ? `<span style="font-size:10px;color:#dc2626;font-weight:700;">→ ${sc2Total}</span>` : ''}
+          const pcrCsKey = `|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+          const scPcrBinsA = window.binInventory?.['SC-PCR']?.[k] || [];
+          const scPcrBinsB = window.binInventory?.['SC-PCR']?.[pcrCsKey] || [];
+          const scPcrBins = scPcrBinsA.length ? scPcrBinsA : scPcrBinsB;
+          const pq = scPcrBins.reduce((s,b)=>s+(b.qty||0), 0);
+          const alloc = l.allocSC2CA || null;
+          const sc2caMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
+          const sc2caPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
+          const sc2caTotalAlloc = sc2caMainAlloc + sc2caPcrAlloc;
+          return `<div style="display:flex;flex-direction:column;gap:3px;align-items:center;">
+            <div style="display:flex;gap:8px;align-items:baseline;font-size:10px;color:#92400e;">
+              <span title="SC 재고 (다음 트럭 가능)">📦 ${sq.toLocaleString()}${pq>0?` +${pq.toLocaleString()} PCR`:''}</span>
             </div>
-            <button class="loc-pick-btn${allocLabel?' filled':''}" 
-              onclick="event.stopPropagation();openAllocModalBoth(${idx})" 
-              title="📍 배분 (위쪽 통합 배분 버튼 권장)" 
-              style="background:${allocLabel?'#fed7aa':'#fff7ed'};border:1px solid #fdba74;color:#92400e;opacity:0.85;font-size:10px;">
-              <span class="loc-pick-text" style="max-width:120px;">${allocLabel || '—'}</span>
-            </button>
+            ${sc2caTotalAlloc > 0 
+              ? `<span style="font-size:13px;font-weight:700;color:#92400e;font-family:'IBM Plex Mono',monospace;">${sc2caTotalAlloc.toLocaleString()}<span style="font-size:9px;color:#888;font-weight:400;"> 잡힘</span></span>`
+              : `<span style="font-size:11px;color:#bbb;">—</span>`
+            }
           </div>`;
         })()}
       </td>
