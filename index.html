@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_095226 — Save 로직 새 시스템: 한 라인을 SC + CA + SC2CA 영역별로 row 따로 insert (qty_pieces=각 영역의 합계). qty_committed reserve 도 영역별로. BO 계산도 SC2CA 포함 (canFill = scQty + caQty + sc2caQty) -->
+<!-- BUILD: 20260501_100133 — 거래처 이메일에 'In Transit to CA on Next Truck' 컬럼 추가 (CA 와 BackOrder 사이). emailLines 에 sc2ca_qty + 진짜 BO 분리. scTotalPcs/caTotalPcs 도 dropdown 무시하고 진짜 alloc 만 봄 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8169,12 +8169,12 @@ async function _doSaveInvoice() {
   const scTotalPcs = lineChecks.reduce((s, l) => {
     const allocSC = l.allocSC || {};
     const scQty = Object.values(allocSC).reduce((a,v)=>a+(v||0),0);
-    return s + (l.wh === 'CA' ? 0 : scQty);  // 항상 실제 배분 수량 사용
+    return s + scQty;
   }, 0);
   const caTotalPcs = lineChecks.reduce((s, l) => {
     const allocCA = l.allocCA || {};
     const caQty = Object.values(allocCA).reduce((a,v)=>a+(v||0),0);
-    return s + (l.wh === 'SC' ? 0 : caQty);  // 항상 실제 배분 수량 사용
+    return s + caQty;
   }, 0);
   const scTotalAmt = lineChecks.reduce((s, l) => {
     const allocSC = l.allocSC || {};
@@ -8428,11 +8428,13 @@ async function _doSaveInvoice() {
       const emailLines = lineChecks.map(l => {
         const allocSC = l.allocSC || {};
         const allocCA = l.allocCA || {};
+        const allocSC2CA = l.allocSC2CA || {};
         const scQty = Object.values(allocSC).reduce((s,v)=>s+(v||0),0);
         const caQty = Object.values(allocCA).reduce((s,v)=>s+(v||0),0);
-        const totalAlloc = scQty + caQty;
+        const sc2caQty = Object.values(allocSC2CA).reduce((s,v)=>s+(v||0),0);
+        const totalAlloc = scQty + caQty + sc2caQty;
         const backQty = Math.max(0, l.qty - totalAlloc);
-        console.log(`[email line] ${l.color} ${l.size} qty=${l.qty} scQty=${scQty} caQty=${caQty} back=${backQty}`);
+        console.log(`[email line] ${l.color} ${l.size} qty=${l.qty} scQty=${scQty} caQty=${caQty} sc2caQty=${sc2caQty} back=${backQty}`);
         return {
           style: l.styleNum,
           color: l.isSideSeam ? l.color + ' (Side Seam)' : l.color,
@@ -8442,6 +8444,7 @@ async function _doSaveInvoice() {
           back_qty: backQty,
           sc_qty: scQty,
           ca_qty: caQty,
+          sc2ca_qty: sc2caQty,  // In Transit to CA on Next Truck
           unit_price: l.price || 0,
           is_side_seam: !!l.isSideSeam
         };
@@ -26280,6 +26283,8 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const isSplit = true; // 항상 SC/CA 분리 컬럼 표시 (싱글 WH도 동일 포맷)
   const backLines = emailLines.filter(l => l.back_qty > 0);
   const totalBack = backLines.reduce((s,l) => s+(l.back_qty||0), 0);
+  const sc2caTotalPcs = emailLines.reduce((s,l) => s+(l.sc2ca_qty||0), 0);
+  const hasSc2ca = sc2caTotalPcs > 0;
 
   const fmtAmt = n => '$' + (n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 
@@ -26312,6 +26317,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const colHeaders = isSplit
     ? `<th style="padding:6px 10px;text-align:center;color:#1e40af;">SC</th>
        <th style="padding:6px 10px;text-align:center;color:#ea580c;">CA</th>
+       ${hasSc2ca ? `<th style="padding:6px 10px;text-align:center;color:#92400e;background:#fef3c7;">🚚 In Transit to CA</th>` : ''}
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`
     : `<th style="padding:6px 10px;text-align:center;">Qty</th>
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`;
@@ -26320,6 +26326,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
     const colCells = isSplit
       ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${(l.sc_qty||0)>0?(l.sc_qty||0).toLocaleString():'—'}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#ea580c;">${(l.ca_qty||0)>0?(l.ca_qty||0).toLocaleString():'—'}</td>
+         ${hasSc2ca ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#92400e;background:#fffbeb;">${(l.sc2ca_qty||0)>0?(l.sc2ca_qty||0).toLocaleString():'—'}</td>` : ''}
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`
       : `<td style="padding:6px 10px;text-align:center;font-weight:700;">${(l.fill_qty||0).toLocaleString()}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`;
@@ -26336,6 +26343,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
 
   const scRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#1e40af;font-weight:700;">SC Warehouse (Sumter, SC): ${(scTotalPcs||0).toLocaleString()} pcs</span></li>` : '';
   const caRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#ea580c;font-weight:700;">CA Warehouse (Eastvale, CA): ${(caTotalPcs||0).toLocaleString()} pcs</span></li>` : `<li style="margin:2px 0;">${whName}: <strong>${totalPcs.toLocaleString()} pcs</strong></li>`;
+  const sc2caShipRow = hasSc2ca ? `<li style="margin:2px 0;"><span style="color:#92400e;font-weight:700;">🚚 In Transit to CA on Next Truck: ${sc2caTotalPcs.toLocaleString()} pcs</span></li>` : '';
 
   return `<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;font-size:13px;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f2744;border-radius:6px 6px 0 0;">
@@ -26356,7 +26364,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
       </table>
       <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 16px;margin-bottom:16px;">
         <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px;">📦 Shipping From</div>
-        <ul style="margin:0;padding-left:16px;font-size:13px;">${scRow}${caRow}</ul>
+        <ul style="margin:0;padding-left:16px;font-size:13px;">${scRow}${caRow}${sc2caShipRow}</ul>
       </div>
       ${backSection}
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
@@ -26376,6 +26384,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
           ${isSplit
             ? `<td style="padding:8px 10px;text-align:center;color:#1e40af;">${(scTotalPcs||0).toLocaleString()} pcs</td>
                <td style="padding:8px 10px;text-align:center;color:#ea580c;">${(caTotalPcs||0).toLocaleString()} pcs</td>
+               ${hasSc2ca ? `<td style="padding:8px 10px;text-align:center;color:#92400e;background:#fffbeb;">${sc2caTotalPcs.toLocaleString()} pcs</td>` : ''}
                <td style="padding:8px 10px;text-align:center;color:#dc2626;">${(totalBack||0).toLocaleString()} pcs</td>`
             : `<td style="padding:8px 10px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
                <td style="padding:8px 10px;text-align:center;color:#dc2626;">${(totalBack||0).toLocaleString()} pcs</td>`}
