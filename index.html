@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_205000 — SC2CA 트럭 흐름 1단계: Ready to Ship 카드에서 [Add to CA Truck] 누르면 in_transit 추가 + SC inventory 차감 + sc2ca_status='in_transit'. 트럭 실린 카드는 [Received] 또는 [Cancel Truck Load] 표시. Received 누르면 in_transit→received + sc2ca_status='invoiced' + qty_filled 채워서 invoice 발송 가능 상태로. Cancel Truck Load 는 inventory 복구 -->
+<!-- BUILD: 20260501_212000 — SC2CA Add to CA Truck → Shipment Builder 통합. Add to CA Truck 누르면 옵션 모달 (새 트럭 / 기존 draft 트럭 이어서). 선택 시 Shipment Builder 가 열리고 이 오더의 SC2CA 라인이 자동으로 새 pallet 에 등록됨. sc2ca_status='staged_for_truck' 단계 추가 — 빌더에 등록됐지만 출발 안 한 상태. 카드에 [트럭 빌더로 이동] [트럭 빌더에서 제거] 버튼. 트럭 출발 확정 후엔 sc2ca_status='in_transit' 으로 (기존 in_transit 흐름과 통합) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11262,6 +11262,14 @@ async function loadOrderStatus() {
               <div style="margin-top:8px;font-size:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:6px;padding:6px 10px;text-align:center;font-weight:600;">🚚 In Transit to CA</div>
               <button class="btn btn-sm btn-green" style="width:100%;margin-top:6px;font-size:10px;" onclick="event.stopPropagation();sc2caReceived('${o.id}')">📦 Received (CA 도착)</button>
               <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();sc2caRevertTruck('${o.id}')">↩ Cancel Truck Load</button>
+            `;
+          }
+          if (sc2caStatus === 'staged_for_truck') {
+            // 트럭 빌더에 등록됨 — 출발 대기 중
+            return `
+              <div style="margin-top:8px;font-size:10px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:6px;padding:6px 10px;text-align:center;font-weight:600;">📦 트럭 빌더에 등록됨</div>
+              <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#1e40af;color:#fff;border-color:#1e40af;" onclick="event.stopPropagation();sc2caOpenStagedShipment('${o.id}')">📂 트럭 빌더로 이동</button>
+              <button class="btn btn-sm" style="width:100%;margin-top:4px;font-size:10px;background:#fef2f2;color:#b91c1c;border-color:#fca5a5;" onclick="event.stopPropagation();sc2caRemoveFromStaging('${o.id}')">✕ 트럭 빌더에서 제거</button>
             `;
           }
           // 아직 트럭 안 실음 — Add to CA Truck
@@ -22690,10 +22698,8 @@ async function resubmitCreditHold(orderId, orderNumber, customerName, customerPo
 // SC→CA TRUCK 시스템 — Add to CA Truck / Received / Cancel
 // ══════════════════════════════════════════════════════
 async function sc2caAddToCaTruck(orderId) {
-  if (!confirm('이 오더의 SC2CA 라인을 CA 트럭에 실으시겠습니까?\n- in_transit 에 추가됨\n- SC inventory 차감')) return;
-  
   // 1. 오더 + SC2CA 라인 가져오기
-  const { data: order } = await db.from('orders').select('*, customers(name)').eq('id', orderId).single();
+  const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
   const { data: lines } = await db.from('order_lines')
     .select('*, styles(style_number)')
     .eq('order_id', orderId)
@@ -22704,126 +22710,169 @@ async function sc2caAddToCaTruck(orderId) {
     return;
   }
   
-  showToast('⏳ CA 트럭에 추가 중...');
+  const totalPcs = lines.reduce((s, l) => s + (l.qty_sc2ca || 0), 0);
+  if (totalPcs <= 0) {
+    showToast('❌ SC2CA 수량이 0입니다.');
+    return;
+  }
   
-  // ship_txn_id 만들기 (transaction grouping 용)
-  const txnId = crypto.randomUUID();
-  const today = new Date().toISOString().substring(0, 10);
-  const errors = [];
+  // 2. 진행 중 (preparing) 인 draft shipment 들 가져오기
+  const { data: draftShips } = await db.from('sc_ca_shipments')
+    .select('id, shipment_no, ship_date, eta, truck_no, driver_name')
+    .eq('status', 'preparing')
+    .order('created_at', { ascending: false });
   
-  // 2. 각 라인 처리 — alloc_sc2ca_detail 기준으로 bin 차감 + in_transit 추가
+  // 3. 옵션 선택 모달 — 새 트럭 / 기존 draft 에 이어서
+  const modalHtml = `
+    <div style="background:#fff;border-radius:12px;padding:24px;width:560px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div style="font-size:16px;font-weight:700;margin-bottom:8px;">🚚 Add to CA Truck</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:16px;"><b>${order.customer_name}</b> · PO# ${order.customer_po||'—'} · ${totalPcs} pcs</div>
+      
+      <div style="margin-bottom:14px;">
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:8px;">옵션 선택:</div>
+        <button class="btn" style="width:100%;background:#7c2d12;color:#fff;border-color:#7c2d12;font-weight:700;margin-bottom:6px;" onclick="sc2caStartNewShipment('${orderId}')">+ 새 트럭 시작</button>
+        ${(draftShips||[]).length > 0 ? `
+          <div style="font-size:11px;color:#6b7280;margin:10px 0 4px;">또는 진행 중인 트럭에 이어서:</div>
+          ${draftShips.map(s => `
+            <button class="btn btn-sm" style="width:100%;text-align:left;background:#f9fafb;border-color:#d1d5db;margin-bottom:4px;font-size:11px;padding:8px 10px;" onclick="sc2caJoinExistingShipment('${orderId}','${s.id}')">
+              📂 <b>${s.shipment_no}</b> · ${s.ship_date||'—'}${s.truck_no ? ' · 트럭 '+s.truck_no : ''}${s.driver_name ? ' · '+s.driver_name : ''}
+            </button>
+          `).join('')}
+        ` : ''}
+      </div>
+      
+      <div style="text-align:right;border-top:1px solid #e5e7eb;padding-top:12px;">
+        <button class="btn" onclick="document.getElementById('sc2ca-pick-shipment-modal').remove()">취소</button>
+      </div>
+    </div>
+  `;
+  
+  // 모달 표시
+  const wrap = document.createElement('div');
+  wrap.id = 'sc2ca-pick-shipment-modal';
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+  wrap.innerHTML = modalHtml;
+  wrap.addEventListener('click', (e) => { if (e.target === wrap) wrap.remove(); });
+  document.body.appendChild(wrap);
+}
+
+// 새 트럭 시작 — Shipment Builder 열고 SC2CA 라인 자동 추가
+async function sc2caStartNewShipment(orderId) {
+  document.getElementById('sc2ca-pick-shipment-modal')?.remove();
+  // Shipment Builder 모달 열기 (새 shipment)
+  await openShipmentBuilder();
+  // 약간 대기 후 라인 추가 (모달 렌더 완료 보장)
+  setTimeout(() => sc2caAutoAddLines(orderId), 300);
+}
+
+// 기존 draft 에 이어서
+async function sc2caJoinExistingShipment(orderId, shipmentId) {
+  document.getElementById('sc2ca-pick-shipment-modal')?.remove();
+  await openShipmentBuilder(shipmentId);
+  setTimeout(() => sc2caAutoAddLines(orderId), 300);
+}
+
+// SC2CA 라인을 자동으로 Shipment Builder 의 새 pallet 에 추가
+async function sc2caAutoAddLines(orderId) {
+  const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
+  const { data: lines } = await db.from('order_lines')
+    .select('*, styles(style_number)')
+    .eq('order_id', orderId)
+    .eq('stage_for_ca_truck', true);
+  
+  if (!lines || lines.length === 0) return;
+  
+  // 새 pallet 추가 (이 오더 전용 pallet)
+  const palletId = 'pallet_' + Date.now();
+  const palletLabel = `${order.customer_name} (PO# ${order.customer_po||'—'})`;
+  _shipmentPallets.push({ id: palletId, label: palletLabel, lines: [] });
+  
+  showToast(`⏳ ${order.customer_name} 라인 추가 중...`);
+  
+  let okCount = 0, errors = [];
+  
+  // 각 라인의 alloc_sc2ca_detail 기준으로 bin 별 라인 만들어서 _addLineToDraft 호출
   for (const l of lines) {
-    const qtyTotal = l.qty_sc2ca || 0;
-    if (qtyTotal <= 0) continue;
-    
     const allocSc2ca = l.alloc_sc2ca_detail || {};
-    let totalDeducted = 0;
     
-    // alloc 의 각 bin 별로 차감
     for (const [allocKey, val] of Object.entries(allocSc2ca)) {
       const ppb = l.pcs_per_box || 72;
       const valPcs = typeof val === 'object' ? (val.pcs || (val.boxes||0) * ppb) : val;
       if (!valPcs || valPcs <= 0) continue;
       
-      // allocKey 형식: "bin_code" 또는 "TRANSFER|bin_code" 또는 "SC-PCR|PCR" 등
-      // PCR 는 PC Room bin 자체에서 picking — bin_code 추출
+      // bin_code 추출
       let binCode = allocKey;
       if (allocKey.includes('|')) {
         const parts = allocKey.split('|');
-        if (allocKey.includes('TRANSFER|')) binCode = parts[1]; // TRANSFER|XXX
-        else if (allocKey.includes('PCR|PCR')) binCode = parts[0]; // SC-PCR|PCR
+        if (allocKey.includes('TRANSFER|')) binCode = parts[1];
+        else if (allocKey.includes('PCR|PCR')) binCode = parts[0];
         else binCode = parts[parts.length - 1];
       }
       
-      // 해당 bin 의 inventory_bins 찾아서 차감
+      // 해당 bin 의 inventory_bins 찾기
       const { data: binRows } = await db.from('inventory_bins')
-        .select('id, qty, inventory!inner(id, color, size)')
+        .select('id, qty, inventory_id, inventory!inner(id, color, size)')
         .eq('bin_code', binCode)
         .eq('inventory.color', (l.color||'').toUpperCase())
         .eq('inventory.size', (l.size||'').toUpperCase())
         .gt('qty', 0);
       
-      let stillToDeduct = valPcs;
+      let stillToAdd = valPcs;
       for (const br of (binRows || [])) {
-        if (stillToDeduct <= 0) break;
-        const binDeduct = Math.min(stillToDeduct, br.qty || 0);
+        if (stillToAdd <= 0) break;
+        const takePcs = Math.min(stillToAdd, br.qty || 0);
         
-        const result = await changeInventory({
-          transaction_id: txnId,
+        const sku = (l.styles?.style_number || '') + (l.color||'').toLowerCase().replace(/\s+/g,'').substring(0,6) + sizeForSku(l.size||'');
+        
+        const ok = await _addLineToDraft(palletId, palletLabel, {
+          is_manual: false,
+          inventory_bin_id: br.id,
           inventory_id: br.inventory.id,
-          bin_code: binCode,
-          delta: -binDeduct,
-          action: 'sc2ca_truck_load',
-          detail_metadata: {
-            order_id: orderId,
-            order_line_id: l.id,
-            order_number: order.order_number,
-            customer_name: order.customer_name
-          }
+          style_number: l.styles?.style_number || '',
+          color: l.color,
+          size: l.size,
+          sku: sku,
+          source_bin: binCode,
+          qty_pcs: takePcs,
+          pcs_per_box: ppb,
+          ca_pending: 0,
+          // 메타데이터 (in_transit notes 에 들어감)
+          source_order_id: orderId,
+          source_order_line_id: l.id,
+          source_order_number: order.order_number
         });
         
-        if (!result.success) {
-          errors.push(`${l.color}/${l.size} bin ${binCode}: ${result.error}`);
-          continue;
+        if (ok) {
+          okCount++;
+          stillToAdd -= takePcs;
+        } else {
+          errors.push(`${l.color}/${l.size} bin ${binCode}`);
         }
-        
-        // qty_committed 차감
-        const { data: invRow } = await db.from('inventory')
-          .select('qty_committed').eq('id', br.inventory.id).single();
-        if (invRow) {
-          const commitRelease = Math.min(invRow.qty_committed || 0, binDeduct);
-          if (commitRelease > 0) {
-            await db.from('inventory').update({
-              qty_committed: Math.max(0, (invRow.qty_committed || 0) - commitRelease)
-            }).eq('id', br.inventory.id);
-          }
-        }
-        
-        stillToDeduct -= binDeduct;
-        totalDeducted += binDeduct;
       }
-    }
-    
-    // 3. in_transit 에 행 추가 (라인별)
-    if (totalDeducted > 0) {
-      const ppb = l.pcs_per_box || 72;
-      const insertResult = await db.from('in_transit').insert({
-        invoice_no: `SC2CA-${order.order_number}-${l.id.substring(0,8)}`.substring(0, 50),
-        ship_date: today,
-        eta: null,
-        style_number: l.styles?.style_number || '',
-        color: l.color,
-        size: l.size,
-        sku: l.sku || null,
-        qty_dz: 0,
-        qty_boxes: Math.floor(totalDeducted / ppb),
-        ppb: ppb,
-        is_nonstandard: false,
-        qty_pcs: totalDeducted,
-        transit_type: 'sc_ca_order',
-        status: 'in_transit',
-        notes: `Order ${order.order_number} (${order.customer_name}) — Direct to customer after CA arrival`
-      });
-      if (insertResult.error) {
-        console.error('[sc2ca] in_transit insert error:', insertResult.error);
-        errors.push(`${l.color}/${l.size}: in_transit insert 실패`);
+      
+      if (stillToAdd > 0) {
+        errors.push(`${l.color}/${l.size}: ${stillToAdd} pcs 부족`);
       }
     }
   }
   
-  // 4. order status 업데이트
-  await db.from('orders').update({
-    sc2ca_status: 'in_transit',
-    sc2ca_truck_loaded_at: new Date().toISOString()
-  }).eq('id', orderId);
+  // 오더에 표시 — 이 오더는 이 shipment 에 등록됨
+  if (okCount > 0 && _shipmentDbId) {
+    await db.from('orders').update({
+      sc2ca_shipment_id: _shipmentDbId,
+      sc2ca_status: 'staged_for_truck'  // 트럭 빌더에 등록됨, 출발 전
+    }).eq('id', orderId);
+  }
+  
+  // UI 새로고침
+  if (typeof renderShipmentPallets === 'function') renderShipmentPallets();
   
   if (errors.length > 0) {
-    showToast(`⚠️ 일부 실패: ${errors.length}건 (콘솔 확인)`);
-    console.warn('[sc2caAddToCaTruck] errors:', errors);
+    showToast(`⚠️ ${okCount}개 추가됨, ${errors.length}개 실패`);
+    console.warn('[sc2caAutoAddLines] errors:', errors);
   } else {
-    showToast(`✅ CA 트럭에 실음 — ${order.customer_name}`);
+    showToast(`✅ ${okCount}개 라인 추가됨 — 트럭 정보 입력 후 출발 확정하세요`);
   }
-  loadOrderStatus();
 }
 
 async function sc2caReceived(orderId) {
@@ -22948,6 +22997,99 @@ async function sc2caRevertTruck(orderId) {
   }).eq('id', orderId);
   
   showToast('✅ 적재 취소 완료');
+  loadOrderStatus();
+}
+
+// 트럭 빌더에 등록된 오더 — 빌더 다시 열기
+async function sc2caOpenStagedShipment(orderId) {
+  const { data: order } = await db.from('orders').select('sc2ca_shipment_id').eq('id', orderId).single();
+  if (!order || !order.sc2ca_shipment_id) {
+    showToast('❌ Shipment ID 없음');
+    return;
+  }
+  await openShipmentBuilder(order.sc2ca_shipment_id);
+}
+
+// 트럭 빌더에서 해당 오더 라인들 제거 + sc2ca_status='ready_to_ship' 복원
+async function sc2caRemoveFromStaging(orderId) {
+  if (!confirm('이 오더를 트럭 빌더에서 제거하시겠습니까?\n해당 라인들이 빌더에서 빠지고 inventory 가 복구됩니다.')) return;
+  
+  const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
+  if (!order || !order.sc2ca_shipment_id) {
+    showToast('❌ Shipment 정보 없음');
+    return;
+  }
+  
+  showToast('⏳ 빌더에서 제거 중...');
+  
+  // 1. in_transit 에서 이 오더의 라인들 가져오기 (status='preparing' 인 것만 — 출발 안 한 트럭 한정)
+  const { data: transitRows } = await db.from('in_transit')
+    .select('*')
+    .eq('shipment_id', order.sc2ca_shipment_id)
+    .eq('status', 'preparing');
+  
+  // 이 오더에 속한 라인만 필터 (notes 또는 별도 메타데이터 기반)
+  // _addLineToDraft 가 source_order_id 를 어디 저장하는지에 따라 다름. 
+  // 일단 색상/사이즈/스타일 매칭으로 — 안전하게 sc2ca_lines 조회 후 매칭
+  const { data: orderLines } = await db.from('order_lines')
+    .select('*, styles(style_number)')
+    .eq('order_id', orderId)
+    .eq('stage_for_ca_truck', true);
+  
+  const matchKeys = new Set();
+  (orderLines || []).forEach(ol => {
+    matchKeys.add(`${ol.styles?.style_number||''}|${(ol.color||'').toUpperCase()}|${(ol.size||'').toUpperCase()}`);
+  });
+  
+  const myTransitRows = (transitRows || []).filter(r => 
+    matchKeys.has(`${r.style_number||''}|${(r.color||'').toUpperCase()}|${(r.size||'').toUpperCase()}`)
+  );
+  
+  // 2. inventory 복구 + in_transit 행 삭제
+  for (const r of myTransitRows) {
+    // bin 으로 다시 +
+    if (r.source_bin && r.qty_pcs) {
+      const { data: invRow } = await db.from('inventory')
+        .select('id')
+        .eq('color', (r.color||'').toUpperCase())
+        .eq('size', (r.size||'').toUpperCase())
+        .single();
+      if (invRow) {
+        // bin 에 다시 추가 (inventory_bins upsert 유사)
+        const { data: existingBin } = await db.from('inventory_bins')
+          .select('id, qty')
+          .eq('bin_code', r.source_bin)
+          .eq('inventory_id', invRow.id)
+          .maybeSingle();
+        if (existingBin) {
+          await db.from('inventory_bins').update({
+            qty: (existingBin.qty || 0) + r.qty_pcs
+          }).eq('id', existingBin.id);
+        } else {
+          await db.from('inventory_bins').insert({
+            bin_code: r.source_bin,
+            inventory_id: invRow.id,
+            qty: r.qty_pcs
+          });
+        }
+        // inventory 부모도 +
+        const { data: parent } = await db.from('inventory').select('qty_on_hand').eq('id', invRow.id).single();
+        await db.from('inventory').update({
+          qty_on_hand: (parent?.qty_on_hand || 0) + r.qty_pcs
+        }).eq('id', invRow.id);
+      }
+    }
+    // in_transit 행 삭제
+    await db.from('in_transit').delete().eq('id', r.id);
+  }
+  
+  // 3. order 상태 복원
+  await db.from('orders').update({
+    sc2ca_status: 'ready_to_ship',
+    sc2ca_shipment_id: null
+  }).eq('id', orderId);
+  
+  showToast(`✅ ${myTransitRows.length}개 라인 제거됨`);
   loadOrderStatus();
 }
 
@@ -40505,6 +40647,20 @@ async function postShipment() {
       notes: _shipmentInfo.notes || null
     }).eq('id', _shipmentDbId);
     
+    // 🚚 SC2CA: 이 shipment 에 등록된 거래처 오더들도 sc2ca_status='in_transit' 로
+    const { data: stagedOrders } = await db.from('orders')
+      .select('id')
+      .eq('sc2ca_shipment_id', _shipmentDbId)
+      .eq('sc2ca_status', 'staged_for_truck');
+    if (stagedOrders && stagedOrders.length > 0) {
+      const orderIds = stagedOrders.map(o => o.id);
+      await db.from('orders').update({
+        sc2ca_status: 'in_transit',
+        sc2ca_truck_loaded_at: new Date().toISOString()
+      }).in('id', orderIds);
+      console.log(`[Shipment depart] ${orderIds.length} SC2CA orders → in_transit`);
+    }
+    
     const totalLines = _shipmentPallets.reduce((s,p) => s + p.lines.length, 0);
     alert(`✅ Shipment 등록 완료\n\n📦 ${totalLines} 라인이 In Transit 상태로 변경됨`);
     
@@ -40774,6 +40930,34 @@ async function postScCaReceiving() {
       status: 'received',
       received_at: new Date().toISOString()
     }).eq('id', shipmentId);
+    
+    // 🚚 SC2CA: 이 shipment 에 묶인 거래처 오더들 자동으로 invoiced 단계로
+    const { data: receivedOrders } = await db.from('orders')
+      .select('id, order_number')
+      .eq('sc2ca_shipment_id', shipmentId)
+      .eq('sc2ca_status', 'in_transit');
+    
+    for (const o of (receivedOrders || [])) {
+      // qty_filled 채우기 (invoice 가 인식하도록)
+      const { data: sc2caLines } = await db.from('order_lines')
+        .select('id, qty_sc2ca, qty_filled')
+        .eq('order_id', o.id)
+        .eq('stage_for_ca_truck', true);
+      for (const l of (sc2caLines || [])) {
+        await db.from('order_lines').update({
+          qty_filled: (l.qty_filled || 0) + (l.qty_sc2ca || 0)
+        }).eq('id', l.id);
+      }
+      // 오더 status 업데이트
+      await db.from('orders').update({
+        sc2ca_status: 'invoiced',
+        sc2ca_received_at: new Date().toISOString(),
+        sc2ca_shipped_at: new Date().toISOString()
+      }).eq('id', o.id);
+    }
+    if ((receivedOrders||[]).length > 0) {
+      console.log(`[CA Receive] ${receivedOrders.length} SC2CA orders → invoiced`);
+    }
   }
   
   let msg = `✅ ${ok} 라인 CA 입고 완료`;
