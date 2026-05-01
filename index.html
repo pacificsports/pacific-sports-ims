@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_194500 — rollbackStatus: 진행 흔적도 같이 클리어. PO Entered 로 되돌리면 printed_at, wh_complete_*, pcr_complete_*, pcr_box_allocation 모두 reset → 다시 들어가서 처음부터 진행 가능. Preparing 으로 되돌리면 prepared_at 만 reset (preparing 단계 데이터는 유지) -->
+<!-- BUILD: 20260501_195500 — rollbackStatus 디버깅 로그 추가 + makeCards preparing 단계 SC2CA prefix 처리 (이전엔 sc2ca 카드도 sc_*  컬럼 봐서 흔적 reset 안 보였음) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11167,7 +11167,7 @@ async function loadOrderStatus() {
       ${o._status==='rejected'?`<div style="font-size:10px;color:#dc2626;font-weight:600;margin-top:4px;">🔴 Rejected</div><button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#fff7ed;color:#c2410c;border-color:#fb923c;" onclick="event.stopPropagation();resubmitCreditHold('${o.id}','${o.order_number}','${o.customer_name}','${o.customer_po||''}')">🔄 Resubmit for Approval</button>`:''}
       ${printBtns}
       ${col==='preparing'?(()=>{
-        const whPre2 = wh === 'CA' ? 'ca_' : 'sc_';
+        const whPre2 = wh === 'CA' ? 'ca_' : (wh === 'SC2CA' ? 'sc2ca_' : 'sc_');
         const whDone = o[whPre2+'wh_complete_at'];
         const pcrDone = o[whPre2+'pcr_complete_at'];
         const whBy = o[whPre2+'wh_complete_by'] || '';
@@ -22665,6 +22665,7 @@ async function resubmitCreditHold(orderId, orderNumber, customerName, customerPo
 }
 
 async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
+  console.log('[rollbackStatus]', { orderId, wh, fromStatus, toStatus });
   // status 되돌릴 때 진행 흔적도 같이 클리어
   await updateWhStatus(orderId, wh, toStatus);
   
@@ -22688,11 +22689,19 @@ async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
     resetFields.prepared_at = null;
   }
   
+  console.log('[rollbackStatus] resetFields:', resetFields);
+  
   if (Object.keys(resetFields).length > 0) {
-    await db.from('orders').update(resetFields).eq('id', orderId);
+    const { data, error } = await db.from('orders').update(resetFields).eq('id', orderId).select();
+    if (error) {
+      console.error('[rollbackStatus] UPDATE ERROR:', error);
+      showToast('❌ Reset 실패: ' + error.message);
+    } else {
+      console.log('[rollbackStatus] UPDATE OK, rows:', data?.length, 'row[0]:', data?.[0]);
+    }
   }
   
-  showToast(`✅ ${toStatus} 으로 되돌림 — 진행 흔적 클리어됨`);
+  showToast(`✅ ${toStatus} 으로 되돌림`);
   loadOrderStatus();
 }
 async function updateWhStatus(orderId, wh, newStatus) {
