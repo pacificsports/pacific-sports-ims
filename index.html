@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_090410 — Order Lines 진짜 깔끔하게: 배분 버튼 (✓ 배분 완료 / ⚠️ 144/432 / 📍 배분하기), SC/CA/SC→CA 칸 = 재고 + "잡힌 양" 만 표시 (작은 버튼 X) -->
+<!-- BUILD: 20260501_091817 — fix: SC/CA/SC→CA 칸 표시 복원 (Main 재고 + PCR 재고 따로) + 잡힌 양은 작은 글씨로 (✓ 144 잡힘). PCR 정보 다시 보임 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7215,14 +7215,12 @@ function renderEntryTable() {
           const sqAvail = Math.max(0, sq - scMainAlloc);
           const pqAvail = Math.max(0, pq - scPcrAlloc);
           const warn=l.cases>0&&sqAvail<l.cases*ppb;
-          return `<div style="display:flex;flex-direction:column;gap:3px;align-items:center;">
-            <div style="display:flex;gap:8px;align-items:baseline;font-size:10px;color:var(--text2);">
-              <span title="현재 SC 재고">📦 ${sq.toLocaleString()}${pq>0?` +${pq.toLocaleString()} PCR`:''}</span>
+          return `<div style="display:flex;flex-direction:column;gap:3px;">
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sqAvail.toLocaleString()}${scMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}${warn?' ⚠️':''}</span>
+              <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${pqAvail>0?'#a84212':'#bbb'};">+${pqAvail.toLocaleString()} PCR${scPcrAlloc>0?` <span style="font-size:9px;color:#888">/${pq}</span>`:''}</span>
             </div>
-            ${scTotalAlloc > 0 
-              ? `<span style="font-size:13px;font-weight:700;color:var(--sc);font-family:'IBM Plex Mono',monospace;">${scTotalAlloc.toLocaleString()}<span style="font-size:9px;color:#888;font-weight:400;"> 잡힘</span></span>`
-              : `<span style="font-size:11px;color:#bbb;">—</span>`
-            }
+            ${scTotalAlloc > 0 ? `<span style="font-size:10px;color:var(--sc);font-weight:700;">✓ ${scTotalAlloc} 잡힘</span>` : ''}
           </div>`;
         })()}
       </td>
@@ -7239,14 +7237,14 @@ function renderEntryTable() {
           const caMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
           const caPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
           const caTotalAlloc = caMainAlloc + caPcrAlloc;
-          return `<div style="display:flex;flex-direction:column;gap:3px;align-items:center;">
-            <div style="display:flex;gap:8px;align-items:baseline;font-size:10px;color:var(--text2);">
-              <span title="현재 CA 재고">📦 ${cq.toLocaleString()}${cpq>0?` +${cpq.toLocaleString()} PCR`:''}</span>
+          const cqAvail = Math.max(0, cq - caMainAlloc);
+          const cpqAvail = Math.max(0, cpq - caPcrAlloc);
+          return `<div style="display:flex;flex-direction:column;gap:3px;">
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--ca);">${cqAvail.toLocaleString()}${caMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${cq.toLocaleString()}</span>`:''}</span>
+              <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${cpqAvail>0?'#5b21b6':'#bbb'};">+${cpqAvail.toLocaleString()} PCR${caPcrAlloc>0?` <span style="font-size:9px;color:#888">/${cpq}</span>`:''}</span>
             </div>
-            ${caTotalAlloc > 0 
-              ? `<span style="font-size:13px;font-weight:700;color:var(--ca);font-family:'IBM Plex Mono',monospace;">${caTotalAlloc.toLocaleString()}<span style="font-size:9px;color:#888;font-weight:400;"> 잡힘</span></span>`
-              : `<span style="font-size:11px;color:#bbb;">—</span>`
-            }
+            ${caTotalAlloc > 0 ? `<span style="font-size:10px;color:var(--ca);font-weight:700;">✓ ${caTotalAlloc} 잡힘</span>` : ''}
           </div>`;
         })()}
       </td>
@@ -7266,14 +7264,19 @@ function renderEntryTable() {
           const sc2caMainAlloc = alloc ? Object.entries(alloc).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
           const sc2caPcrAlloc  = alloc ? Object.entries(alloc).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0) : 0;
           const sc2caTotalAlloc = sc2caMainAlloc + sc2caPcrAlloc;
-          return `<div style="display:flex;flex-direction:column;gap:3px;align-items:center;">
-            <div style="display:flex;gap:8px;align-items:baseline;font-size:10px;color:#92400e;">
-              <span title="SC 재고 (다음 트럭 가능)">📦 ${sq.toLocaleString()}${pq>0?` +${pq.toLocaleString()} PCR`:''}</span>
+          // 같은 라인 SC alloc (이미 잡힌거)
+          const scAllocOnLine = l.allocSC || {};
+          const scMainAllocOnLine = Object.entries(scAllocOnLine).filter(([b])=>!b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+          const scPcrAllocOnLine  = Object.entries(scAllocOnLine).filter(([b])=> b.includes('PCR')).reduce((s,[,v])=>s+(v||0),0);
+          // 진짜 사용 가능 = 전체 재고 - SC alloc - SC2CA alloc
+          const sqAvail = Math.max(0, sq - scMainAllocOnLine - sc2caMainAlloc);
+          const pqAvail = Math.max(0, pq - scPcrAllocOnLine - sc2caPcrAlloc);
+          return `<div style="display:flex;flex-direction:column;gap:3px;">
+            <div style="display:flex;gap:6px;align-items:center;">
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:#92400e;">${sqAvail.toLocaleString()}${sc2caMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}</span>
+              <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${pqAvail>0?'#a84212':'#bbb'};">+${pqAvail.toLocaleString()} PCR${sc2caPcrAlloc>0?` <span style="font-size:9px;color:#888">/${pq}</span>`:''}</span>
             </div>
-            ${sc2caTotalAlloc > 0 
-              ? `<span style="font-size:13px;font-weight:700;color:#92400e;font-family:'IBM Plex Mono',monospace;">${sc2caTotalAlloc.toLocaleString()}<span style="font-size:9px;color:#888;font-weight:400;"> 잡힘</span></span>`
-              : `<span style="font-size:11px;color:#bbb;">—</span>`
-            }
+            ${sc2caTotalAlloc > 0 ? `<span style="font-size:10px;color:#92400e;font-weight:700;">✓ ${sc2caTotalAlloc} 잡힘</span>` : ''}
           </div>`;
         })()}
       </td>
