@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_181500 — Customer POs WH 컬럼: SC&CA split 오더에서 SC2CA 라인 있으면 SC 행에 🚚SC→CA 배지 추가 (이전엔 싱글 WH 만 처리됐음) -->
+<!-- BUILD: 20260501_182300 — SC2CA Warehouse Preparing & PCR Complete 모달 fix: 라인 필터링 stage_for_ca_truck 처리 + alloc_sc2ca_detail 사용 + qty_sc2ca 를 orderQty 로 (이전엔 빈 모달 떴음) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -22900,13 +22900,26 @@ async function openWhComplete(orderId, wh) {
     '<b>'+order.customer_name+'</b> &nbsp;|&nbsp; PO# '+(order.customer_po||'—');
 
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
-  const filteredLines = isSplit
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
-    : lines;
+  const isSc2ca = (wh === 'SC2CA');
+  // SC2CA: stage_for_ca_truck=true 라인만
+  // SC/CA split: stage_for_ca_truck!=true && wh 일치
+  // 싱글: stage_for_ca_truck!=true 만
+  const filteredLines = isSc2ca
+    ? lines.filter(l => l.stage_for_ca_truck === true)
+    : isSplit
+      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
+      : lines.filter(l => l.stage_for_ca_truck !== true);
 
-  // Full Box가 있는 라인만 (alloc_detail의 non-PCR, non-TRANSFER boxes 합산)
+  // 라인의 alloc 선택 헬퍼
+  const pickAlloc = (l) => isSc2ca
+    ? (l.alloc_sc2ca_detail || {})
+    : wh === 'CA'
+      ? (l.alloc_ca_detail || l.alloc_detail || {})
+      : (l.alloc_detail || l.alloc_ca_detail || {});
+
+  // Full Box가 있는 라인만 (alloc의 non-PCR, non-TRANSFER boxes 합산)
   const whLines = filteredLines.filter(l => {
-    const alloc = wh === 'CA' ? (l.alloc_ca_detail || l.alloc_detail || {}) : (l.alloc_detail || l.alloc_ca_detail || {});
+    const alloc = pickAlloc(l);
     return Object.entries(alloc).some(([k,v]) => 
       !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|') && 
       (typeof v==='object' ? (v.boxes||0) > 0 : (v||0) > 0)
@@ -22924,9 +22937,9 @@ async function openWhComplete(orderId, wh) {
 
   _whCompleteLines = whLines.map((l,i) => {
     const ppb = l.pcs_per_box || 72;
-    // SC&CA 라인은 해당 WH의 alloc만 사용
-    const alloc = wh === 'CA' ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
-    // alloc_detail의 non-PCR, non-TRANSFER boxes 합산
+    // SC2CA: alloc_sc2ca_detail / SC&CA split 라인: 해당 WH의 alloc만 사용
+    const alloc = pickAlloc(l);
+    // alloc의 non-PCR, non-TRANSFER boxes 합산
     const fullBoxes = Object.entries(alloc)
       .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0) : Math.floor((v||0)/ppb)), 0);
@@ -22934,9 +22947,11 @@ async function openWhComplete(orderId, wh) {
     const pcrPcs = Object.entries(alloc)
       .filter(([k]) => k.includes('PCR|PCR'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
-    const totalBoxes = Math.floor((l.qty_pieces||0) / ppb);
-    const partialPcs = (l.qty_pieces||0) % ppb;
-    return { idx: i, lineId: l.id, styleNum: l.styles?.style_number||'', color: l.color||'', size: l.size||'', orderQty: l.qty_pieces||0, fullBoxes, ppb, totalBoxes, partialPcs, pcrPcs };
+    // SC2CA 카드의 orderQty 는 qty_sc2ca, 그 외는 qty_pieces
+    const lineQty = isSc2ca ? (l.qty_sc2ca || 0) : (l.qty_pieces || 0);
+    const totalBoxes = Math.floor(lineQty / ppb);
+    const partialPcs = lineQty % ppb;
+    return { idx: i, lineId: l.id, styleNum: l.styles?.style_number||'', color: l.color||'', size: l.size||'', orderQty: lineQty, fullBoxes, ppb, totalBoxes, partialPcs, pcrPcs };
   });
 
   const tbody = document.getElementById('wh-complete-lines');
@@ -23028,30 +23043,39 @@ async function openPcrComplete(orderId, wh) {
     + '<div style="font-size:11px;color:#6b7280;margin-top:1px;">PO# '+(order.customer_po||'—')+'</div>';
 
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
-  const filteredLines = isSplit
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
-    : lines;
+  const isSc2ca = (wh === 'SC2CA');
+  const filteredLines = isSc2ca
+    ? lines.filter(l => l.stage_for_ca_truck === true)
+    : isSplit
+      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
+      : lines.filter(l => l.stage_for_ca_truck !== true);
 
-  // Partial pcs가 있는 라인만 (wh에 따라 SC-PCR 또는 CA-PCR 기준)
-  // Back Order 수량 = alloc 배정 합계와 qty_pieces의 차이로 계산 (qty_backordered 필드는 0으로 저장됨)
+  // Partial pcs가 있는 라인만 (wh에 따라 SC-PCR / CA-PCR / SC2CA 의 SC-PCR 기준)
+  // SC2CA: alloc_sc2ca_detail 사용 (SC bin 에서 픽하므로 SC-PCR prefix)
   const pcrKeyPrefix = wh === 'CA' ? 'CA-PCR|PCR' : 'SC-PCR|PCR';
+  const pickPcrAlloc = (l) => isSc2ca
+    ? (l.alloc_sc2ca_detail || {})
+    : wh === 'CA'
+      ? (l.alloc_ca_detail || {})
+      : (l.alloc_detail || {});
   // PCR 배정이 있는 라인만 — 배정 수량이 곧 실제 출고 수량 (back order는 배정 안 됨)
   const pcrLines = filteredLines.filter(l => {
-    const alloc = wh === 'CA' ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
+    const alloc = pickPcrAlloc(l);
     const pcrPcs = Object.entries(alloc).filter(([k]) => k.includes(pcrKeyPrefix)).reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
     return pcrPcs > 0;
   });
 
   _pcrCompleteLines = pcrLines.map((l,i) => {
     const ppb = l.pcs_per_box || 72;
-    const alloc = wh === 'CA' ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
+    const alloc = pickPcrAlloc(l);
     const pcrEntry = Object.entries(alloc).find(([k]) => k.includes(pcrKeyPrefix));
     const partialQty = pcrEntry ? (typeof pcrEntry[1]==='object' ? (pcrEntry[1].pcs||0) : (pcrEntry[1]||0)) : 0;
     const pcrBinId = pcrEntry ? pcrEntry[0] : null;
     const fullBoxes = Object.entries(alloc)
       .filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? (v.boxes||0) : Math.floor((v||0)/ppb)), 0);
-    return { idx: i, lineId: l.id, styleNum: l.styles?.style_number||'', color: l.color||'', size: l.size||'', orderQty: l.qty_pieces||0, partialQty, ppb, pcrBinId, fullBoxes };
+    const lineQty = isSc2ca ? (l.qty_sc2ca || 0) : (l.qty_pieces || 0);
+    return { idx: i, lineId: l.id, styleNum: l.styles?.style_number||'', color: l.color||'', size: l.size||'', orderQty: lineQty, partialQty, ppb, pcrBinId, fullBoxes };
   });
 
   const container = document.getElementById('pcr-complete-lines');
