@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_120804 — 이메일 표 깔끔하게: max-width 680→760px (더 넓게), Total 행 모든 셀 white-space:nowrap (288 pcs 한 줄), Pending Transfer to CA 헤더 + line cell 의 노란 배경 빼기 (color 만 노란색) -->
+<!-- BUILD: 20260501_121452 — Order Status 카드 SC2CA 진짜 분리: (1) 카드 의 totalBoxes/totalPcr/totalLoose 계산 시 stage_for_ca_truck=true 라인은 SC2CA 카드만 (CA 카드 안 포함). (2) printPickTicket 도 SC2CA 모드 진짜 처리 (alloc_sc2ca_detail 사용) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11054,27 +11054,37 @@ async function loadOrderStatus() {
 
       // WH별 라인 필터 후 boxes/loose 합산으로 버튼 표시 여부 결정
       const lines = o.order_lines || [];
-      const whLines = isSplit
-        ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
-        : lines;
+      // SC2CA: stage_for_ca_truck=true 라인만
+      // SC: stage_for_ca_truck!=true && (wh=SC or SC&CA)
+      // CA: stage_for_ca_truck!=true && (wh=CA or SC&CA)
+      const isCardSc2ca = (wh === 'SC2CA');
+      const whLines = isCardSc2ca
+        ? lines.filter(l => l.stage_for_ca_truck === true)
+        : isSplit
+          ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
+          : lines.filter(l => l.stage_for_ca_truck !== true);
 
       // WH Ticket: full boxes가 하나라도 있는 경우
       const totalBoxes = whLines.reduce((s, l) => s + (l.qty_boxes || 0), 0);
       // Partial Ticket: loose pcs 또는 alloc_detail에 PCR 항목이 있는 경우
       const pcrKey = wh === 'CA' ? 'CA-PCR|PCR' : 'SC-PCR|PCR';
       const totalPcr = whLines.reduce((s, l) => {
-        const allocObj = wh === 'CA'
-          ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-          : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+        const allocObj = isCardSc2ca
+          ? (l.alloc_sc2ca_detail || {})
+          : wh === 'CA'
+            ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+            : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
         return s + Object.entries(allocObj)
           .filter(([k]) => k.includes('PCR|PCR'))
           .reduce((ss, [,v]) => ss + ((typeof v === 'object' ? v.pcs : v) || 0), 0);
       }, 0);
       const totalLoose = whLines.reduce((s, l) => s + (l.qty_loose || 0), 0);
       const totalTransfers = whLines.reduce((s, l) => {
-        const allocObj = wh === 'CA'
-          ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-          : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+        const allocObj = isCardSc2ca
+          ? (l.alloc_sc2ca_detail || {})
+          : wh === 'CA'
+            ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+            : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
         return s + Object.keys(allocObj).filter(k => k.includes('TRANSFER|')).length;
       }, 0);
       const hasWh  = totalBoxes > 0 || totalTransfers > 0;
@@ -22755,18 +22765,26 @@ async function printPickTicket(orderId, wh, ticketType) {
     ? '🖨️ Pick Ticket'
     : (ticketType === 'pcroom' ? '💻 Partial Pick Ticket' : '🏭 Warehouse Pick Ticket');
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+  const isSc2ca = (wh === 'SC2CA');
 
-  // wh에 해당하는 라인 필터 (SC&CA 라인도 포함)
-  const filteredLines = isSplit
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
-    : lines;
+  // wh에 해당하는 라인 필터
+  // SC2CA: stage_for_ca_truck=true 라인만
+  // SC: stage_for_ca_truck!=true && (wh=SC or SC&CA)
+  // CA: stage_for_ca_truck!=true && (wh=CA or SC&CA)
+  const filteredLines = isSc2ca
+    ? lines.filter(l => l.stage_for_ca_truck === true)
+    : isSplit
+      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
+      : lines.filter(l => l.stage_for_ca_truck !== true);
 
   // alloc_detail에서 직접 bin location + PCR 수량 보강
   const enrichedLines = filteredLines.map(l => {
     // DB의 alloc_detail 사용 (Order Status 프린트 시 poLines 없으므로)
-    const allocObj = wh === 'CA'
-      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const allocObj = isSc2ca
+      ? (l.alloc_sc2ca_detail || {})
+      : wh === 'CA'
+        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
 
     const mainBins = Object.entries(allocObj).filter(([k]) => !k.toUpperCase().includes('PCR') && !k.includes('TRANSFER|'));
     // SC-PCR|PCR 또는 CA-PCR|PCR 만 (TRANSFER key 제외)
@@ -22786,10 +22804,13 @@ async function printPickTicket(orderId, wh, ticketType) {
 
     // pick ticket용으로 올바른 alloc_detail 설정
     // CA pick ticket이면 alloc_ca_detail을 alloc_detail로, alloc_ca_detail은 null로
-    const _effectiveAllocDetail = wh === 'CA'
-      ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-      : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
-    const _effectiveAllocCaDetail = wh === 'CA' ? null : l.alloc_ca_detail;
+    // SC2CA pick ticket이면 alloc_sc2ca_detail을 alloc_detail로
+    const _effectiveAllocDetail = isSc2ca
+      ? (l.alloc_sc2ca_detail || {})
+      : wh === 'CA'
+        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const _effectiveAllocCaDetail = (isSc2ca || wh === 'CA') ? null : l.alloc_ca_detail;
 
     return { ...l, location: mainLoc, _pcrQty: pcrQty, _pcrTransfers: transfers,
       alloc_detail: _effectiveAllocDetail,
