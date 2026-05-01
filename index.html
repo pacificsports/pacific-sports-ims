@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_114508 — SC2CA 라벨 변경: 'In Transit to CA' → 'Pending Transfer to CA' (이메일 헤더 + Shipping From + Order Status 카드 pcs 라벨). 거래처 오해 방지 (이미 트럭에 실어 출발한 게 아니라 곧 옮길 예정) -->
+<!-- BUILD: 20260501_120804 — 이메일 표 깔끔하게: max-width 680→760px (더 넓게), Total 행 모든 셀 white-space:nowrap (288 pcs 한 줄), Pending Transfer to CA 헤더 + line cell 의 노란 배경 빼기 (color 만 노란색) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -9632,7 +9632,7 @@ async function loadCustomerPOs(subview = null) {
 
   document.getElementById('customerpo-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data } = await db.from('orders')
-    .select('*, warehouses(code,name)')
+    .select('*, warehouses(code,name), order_lines(stage_for_ca_truck, qty_sc2ca, qty_sc, qty_ca)')
     .order('created_at', { ascending: false })
     .limit(5000);
   // BO 오더는 Back Orders 탭에서만 관리 — Customer POs에서 제외
@@ -10655,10 +10655,25 @@ function renderCustomerPOTable() {
       const oid = o.id, onum = o.order_number, ocust = (o.customer_name||'').replace(/'/g,'');
 
       if (!isSplit) {
-        // ── 싱글 WH 오더 (기존 방식)
+        // ── 싱글 WH 오더 (기존 방식) — SC2CA 라인 있으면 추가 배지
         const st = statusLabel[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
         const wh = (o.wh_code === 'CA') ? 'CA' : 'SC';
-        const whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+        const ols = o.order_lines || [];
+        const hasSc2caLine = ols.some(ol => ol.stage_for_ca_truck === true);
+        const hasScDirect = ols.some(ol => ol.stage_for_ca_truck !== true && (ol.qty_sc||0) > 0);
+        const hasCaDirect = ols.some(ol => ol.stage_for_ca_truck !== true && (ol.qty_ca||0) > 0);
+        const sc2caBadge = '<span style="display:inline-flex;align-items:center;background:#92400e;color:#fff;border:1px solid #92400e;padding:2px 8px;border-radius:4px;font-size:10px;font-family:\'IBM Plex Mono\',monospace;font-weight:800;letter-spacing:0.5px;margin-left:2px;">🚚SC→CA</span>';
+        let whBadge;
+        if (hasSc2caLine && (hasScDirect || hasCaDirect)) {
+          // 진짜 SC 직접 + CA 직접 + SC2CA 다 있는 경우
+          const baseBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+          whBadge = baseBadge + sc2caBadge;
+        } else if (hasSc2caLine && !hasScDirect && !hasCaDirect) {
+          // 진짜 SC2CA 만 있는 경우 (드물어)
+          whBadge = sc2caBadge;
+        } else {
+          whBadge = wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>';
+        }
         // 열기 버튼
         const openBtn = '<button class="btn btn-sm" onclick="event.stopPropagation();openPODetail(\'' + oid + '\')">열기 →</button>';
         // Documents 버튼들
@@ -26351,7 +26366,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const colHeaders = isSplit
     ? `<th style="padding:6px 10px;text-align:center;color:#1e40af;">SC</th>
        <th style="padding:6px 10px;text-align:center;color:#ea580c;">CA</th>
-       ${hasSc2ca ? `<th style="padding:6px 10px;text-align:center;color:#92400e;background:#fef3c7;">🚚 Pending Transfer to CA</th>` : ''}
+       ${hasSc2ca ? `<th style="padding:6px 10px;text-align:center;color:#92400e;white-space:nowrap;">🚚 Pending Transfer to CA</th>` : ''}
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`
     : `<th style="padding:6px 10px;text-align:center;">Qty</th>
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`;
@@ -26360,7 +26375,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
     const colCells = isSplit
       ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${(l.sc_qty||0)>0?(l.sc_qty||0).toLocaleString():'—'}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#ea580c;">${(l.ca_qty||0)>0?(l.ca_qty||0).toLocaleString():'—'}</td>
-         ${hasSc2ca ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#92400e;background:#fffbeb;">${(l.sc2ca_qty||0)>0?(l.sc2ca_qty||0).toLocaleString():'—'}</td>` : ''}
+         ${hasSc2ca ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#92400e;">${(l.sc2ca_qty||0)>0?(l.sc2ca_qty||0).toLocaleString():'—'}</td>` : ''}
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`
       : `<td style="padding:6px 10px;text-align:center;font-weight:700;">${(l.fill_qty||0).toLocaleString()}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`;
@@ -26379,7 +26394,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const caRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#ea580c;font-weight:700;">CA Warehouse (Eastvale, CA): ${(caTotalPcs||0).toLocaleString()} pcs</span></li>` : `<li style="margin:2px 0;">${whName}: <strong>${totalPcs.toLocaleString()} pcs</strong></li>`;
   const sc2caShipRow = hasSc2ca ? `<li style="margin:2px 0;"><span style="color:#92400e;font-weight:700;">🚚 Pending Transfer to CA: ${sc2caTotalPcs.toLocaleString()} pcs</span></li>` : '';
 
-  return `<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;font-size:13px;">
+  return `<div style="font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#111;font-size:13px;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f2744;border-radius:6px 6px 0 0;">
       <tr><td style="padding:14px 20px;">
         <div style="color:#fff;font-size:17px;font-weight:800;">Pacific Sports</div>
@@ -26414,14 +26429,14 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
         <tbody>${lineRows}</tbody>
         <tfoot><tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e5e7eb;">
           <td colspan="3" style="padding:8px 10px;text-align:right;">Total:</td>
-          <td style="padding:8px 10px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
+          <td style="padding:8px 10px;text-align:center;white-space:nowrap;">${totalPcs.toLocaleString()} pcs</td>
           ${isSplit
-            ? `<td style="padding:8px 10px;text-align:center;color:#1e40af;">${(scTotalPcs||0).toLocaleString()} pcs</td>
-               <td style="padding:8px 10px;text-align:center;color:#ea580c;">${(caTotalPcs||0).toLocaleString()} pcs</td>
-               ${hasSc2ca ? `<td style="padding:8px 10px;text-align:center;color:#92400e;background:#fffbeb;">${sc2caTotalPcs.toLocaleString()} pcs</td>` : ''}
-               <td style="padding:8px 10px;text-align:center;color:#dc2626;">${(totalBack||0).toLocaleString()} pcs</td>`
-            : `<td style="padding:8px 10px;text-align:center;">${totalPcs.toLocaleString()} pcs</td>
-               <td style="padding:8px 10px;text-align:center;color:#dc2626;">${(totalBack||0).toLocaleString()} pcs</td>`}
+            ? `<td style="padding:8px 10px;text-align:center;color:#1e40af;white-space:nowrap;">${(scTotalPcs||0).toLocaleString()} pcs</td>
+               <td style="padding:8px 10px;text-align:center;color:#ea580c;white-space:nowrap;">${(caTotalPcs||0).toLocaleString()} pcs</td>
+               ${hasSc2ca ? `<td style="padding:8px 10px;text-align:center;color:#92400e;white-space:nowrap;">${sc2caTotalPcs.toLocaleString()} pcs</td>` : ''}
+               <td style="padding:8px 10px;text-align:center;color:#dc2626;white-space:nowrap;">${(totalBack||0).toLocaleString()} pcs</td>`
+            : `<td style="padding:8px 10px;text-align:center;white-space:nowrap;">${totalPcs.toLocaleString()} pcs</td>
+               <td style="padding:8px 10px;text-align:center;color:#dc2626;white-space:nowrap;">${(totalBack||0).toLocaleString()} pcs</td>`}
           <td colspan="2" style="padding:8px 10px;text-align:right;">${fmtAmt(totalAmt)}</td>
         </tr></tfoot>
       </table>
