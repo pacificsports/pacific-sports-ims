@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_011202 — Step 2a: Order Lines 에 'SC→CA' 새 컬럼 추가. SC inventory 에서 자동 배분 (단순 prompt 입력). qty_sc2ca / alloc_sc2ca_detail DB 저장. dropdown 은 일단 유지 -->
+<!-- BUILD: 20260501_012428 — Step 2a-v2: SC→CA 칸도 진짜 모달 (location bin 별로 입력) — SC 와 같은 스타일, 노란색 헤더, 진짜 사용 가능량 (SC alloc 빼고) 표시 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -35708,75 +35708,132 @@ function openBinAllocModal() {
   }
 }
 
-// SC → CA Next Truck 용 bin 배분 — SC inventory 에서 (재고는 SC 에 있음)
-async function openSc2CaAllocModal(lineIdx) {
+// SC2CA 모드 — SC 모달 그대로 사용하되 결과를 allocSC2CA 에 저장 (재고는 SC 에서)
+function openAllocModalSc2Ca(lineIdx) {
   const l = poLines[lineIdx];
   if (!l) return;
   
   if (window._invLoading) {
-    await window._invLoading;
+    const _wasRerendering = window._allocRerendering;
+    window._invLoading.then(() => {
+      window._allocRerendering = _wasRerendering;
+      openAllocModalSc2Ca(lineIdx);
+      window._allocRerendering = false;
+    });
+    return;
   }
   
-  const k = l.isSideSeam
+  _allocState = { lineIdx, whGroup: 'SC2CA' };  // SC2CA 모드 표시
+  _pcrSelectedBin = null; _pcrSelectedWh = null;
+  
+  const needQty = l.qty || 0;
+  
+  // PCR transfer 는 일단 SC2CA 에서는 안 쓰는 게 안전 (다음 단계에 추가)
+  if (!window._allocRerendering) {
+    _pcrTransfers = [];
+  }
+  
+  // 헤더 — 노란색 (SC2CA 색깔)
+  const head = document.getElementById('alloc-modal-head');
+  head.style.background = 'linear-gradient(90deg, #92400e, #b45309)';
+  head.style.color = '#ffffff';
+  const titleEl = document.getElementById('alloc-modal-title');
+  titleEl.style.color = '#ffffff';
+  titleEl.style.fontWeight = '700';
+  titleEl.style.fontSize = '14px';
+  titleEl.innerHTML = `🚚 SC → CA Next Truck Bin 배분 &nbsp;—&nbsp; <span style="color:#fde68a;font-weight:800;">📍 SC 재고 사용 (다음 CA 트럭에 실음)</span>`;
+  const closeBtn = head.querySelector('.modal-close');
+  if (closeBtn) { closeBtn.style.color = '#fff'; closeBtn.style.opacity = '0.8'; }
+  
+  document.getElementById('alloc-sku').textContent = `#${l.styleNum} · ${l.color} · ${l.size}`;
+  document.getElementById('alloc-need').textContent = needQty.toLocaleString() + ' pcs';
+  
+  // SC 모드의 buildAllocHtml 사용 — bin 들이 SC 의 것
+  // 단, prevAlloc 은 allocSC 가 아니라 allocSC2CA 봐야 함
+  const html = buildAllocHtmlSc2Ca(lineIdx);
+  document.getElementById('alloc-bins-wrap').innerHTML = html;
+  window._lastAllocHtml = { html, lineIdx, whGroup: 'SC2CA' };
+  updateAllocSum();
+  
+  // PCR transfer 섹션 숨김 (SC2CA 에서는 PCR 이동 안 함)
+  const pcrSec = document.getElementById('pcr-transfer-section');
+  if (pcrSec) pcrSec.style.display = 'none';
+  
+  openModal('modal-alloc');
+}
+
+// SC2CA 용 buildAllocHtml — SC bin 들 (allocSC 도 같이 보여주고, 그 라인이 잡고있는 SC 만큼 빼고 SC2CA 에 사용 가능한 만큼 표시)
+function buildAllocHtmlSc2Ca(lineIdx) {
+  const l = poLines[lineIdx];
+  if (!l) return '';
+  const k   = l.isSideSeam
     ? `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}|SS`
     : `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
+  const ppb  = l.ppb || 72;
+  const needQty = l.qty || 0;
   
-  // SC inventory bin 들 (alloc_detail 에 들어갈 것)
-  const scBins = (window.binInventory?.['SC']?.[k] || []).filter(b => (b.qty||0) > 0);
-  
-  if (!scBins.length) {
-    alert('SC 에 재고가 없어요.\n\n진짜 운영 사용은 다음 Step 에서 정식 모달이 만들어질 거예요.\n지금은 SC 에 진짜 재고가 있어야 SC→CA 로 보낼 수 있어요.');
-    return;
-  }
-  
-  // 이미 SC, SC2CA 에 reserve 된 양 빼서 사용 가능
+  const mainBins = (window.binInventory?.['SC']?.[k]) || [];
+  const prevAlloc = l.allocSC2CA || {};
+  // 같은 라인의 SC alloc 도 본다 (이미 잡혔으면 빼야 함)
   const sc1Alloc = l.allocSC || {};
-  const totalNeed = l.qty || 0;
-  const sc1Sum = Object.values(sc1Alloc).reduce((s,v)=>s+(v||0), 0);
-  const sc2Sum = Object.values(l.allocSC2CA || {}).reduce((s,v)=>s+(v||0), 0);
   
-  const promptMsg = `🚚 SC → CA Next Truck (Step 1 단순 입력)\n\n` +
-    `Style: ${l.styleNum} / ${l.color} / ${l.size}\n` +
-    `Order Qty: ${totalNeed}\n` +
-    `이미 SC: ${sc1Sum} / 이미 SC→CA: ${sc2Sum}\n` +
-    `남은: ${totalNeed - sc1Sum - sc2Sum}\n\n` +
-    `진짜 사용 가능한 SC bin 들:\n` +
-    scBins.map(b => `  ${b.bin}: ${b.qty}`).join('\n') + 
-    `\n\nSC → CA 로 보낼 양 (pcs)을 입력해주세요:`;
+  // 재고 0 인 bin 제외
+  const filteredMainBins = mainBins.filter(b => (b.qty + (b.committed||0)) > 0);
   
-  const input = prompt(promptMsg, String(totalNeed - sc1Sum - sc2Sum));
-  if (!input) return;
+  let html = '';
   
-  let needSc2ca = parseInt(input) || 0;
-  if (needSc2ca <= 0) {
-    // 0 입력 시 → SC2CA 배분 모두 제거
-    poLines[lineIdx].allocSC2CA = {};
-    renderEntryTable();
-    return;
+  html += `<div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🟡 SC 재고 → CA Next Truck 으로</div>`;
+  
+  if (filteredMainBins.length === 0) {
+    html += `<div style="padding:12px;border:1px dashed #fdba74;border-radius:8px;margin-bottom:8px;background:#fff7ed;opacity:0.6;font-size:12px;color:var(--text3);text-align:center;">SC 재고 없음</div>`;
+  } else {
+    filteredMainBins.forEach(b => {
+      const usedBySc1 = sc1Alloc[b.bin] || 0;  // 같은 라인의 SC alloc 이 이미 잡고있는 양
+      const realAvail = Math.max(0, (b.qty || 0) - usedBySc1);  // 진짜 사용 가능한 양
+      const cur = prevAlloc[b.bin] || 0;
+      const fifoLabel = b.is_fifo ? `<span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px;">FIFO ↑</span>` : '';
+      const usedNote = usedBySc1 > 0 ? `<span style="font-size:10px;color:#dc2626;font-weight:600;">⚠️ 이 라인 SC: ${usedBySc1}</span>` : '';
+      
+      html += `
+        <div style="border:1px solid #fdba74;background:#fff7ed;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;color:#92400e;">${b.bin}${fifoLabel}</div>
+              <div style="font-size:10px;color:var(--text2);margin-top:3px;">
+                재고 <b>${(b.qty||0).toLocaleString()}</b> pcs · 진짜 사용 가능 <b style="color:#92400e;">${realAvail}</b> pcs
+                ${usedNote}
+                ${b.received_date ? `· <span style="color:var(--text3);">${b.received_date}</span>` : ''}
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:10px;color:#92400e;">pcs:</span>
+              <input type="number" min="0" max="${realAvail}" value="${cur}" 
+                data-bin="${b.bin}" data-type="pcs" data-ppb="${ppb}"
+                onchange="onSc2CaBinChange(${lineIdx}, '${b.bin.replace(/'/g, "\\'")}', this.value, ${realAvail})" 
+                style="width:80px;height:26px;border:1px solid #fdba74;border-radius:4px;padding:0 6px;font-size:12px;text-align:right;font-weight:700;color:#92400e;">
+              <span style="font-size:10px;color:var(--text3);">/${realAvail}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    });
   }
   
-  // 자동 배분 — bin 큰 순서대로
-  const sorted = scBins.slice().sort((a,b) => (b.qty||0) - (a.qty||0));
-  const newAlloc = {};
-  let remaining = needSc2ca;
-  for (const b of sorted) {
-    if (remaining <= 0) break;
-    // 이 bin 의 진짜 사용 가능 (SC 에 이미 reserve 된 거 뺌)
-    const usedBySc1 = sc1Alloc[b.bin] || 0;
-    const binAvail = (b.qty || 0) - usedBySc1;
-    if (binAvail <= 0) continue;
-    const take = Math.min(remaining, binAvail);
-    newAlloc[b.bin] = take;
-    remaining -= take;
+  return html;
+}
+
+// SC2CA bin 입력 변경
+function onSc2CaBinChange(lineIdx, bin, value, max) {
+  let n = parseInt(value) || 0;
+  if (n < 0) n = 0;
+  if (n > max) n = max;
+  if (!poLines[lineIdx].allocSC2CA) poLines[lineIdx].allocSC2CA = {};
+  if (n === 0) {
+    delete poLines[lineIdx].allocSC2CA[bin];
+  } else {
+    poLines[lineIdx].allocSC2CA[bin] = n;
   }
-  
-  if (remaining > 0) {
-    alert(`⚠️ ${remaining}pcs 부족합니다 — SC 재고가 충분하지 않아요.\n${needSc2ca - remaining}pcs 만 배분됨.`);
-  }
-  
-  poLines[lineIdx].allocSC2CA = newAlloc;
-  renderEntryTable();
-  liveRenderDocs();
+  updateAllocSum();
 }
 
 
@@ -36375,6 +36432,8 @@ function applyAlloc() {
     poLines[lineIdx].pcrTransfersPending = transfers;
     const firstBin = Object.keys(alloc).find(k => !k.includes('PCR'));
     if (firstBin) poLines[lineIdx].location = firstBin;
+  } else if (whGroup === 'SC2CA') {
+    poLines[lineIdx].allocSC2CA = alloc;
   } else {
     poLines[lineIdx].allocCA = alloc;
     poLines[lineIdx].caPcrTransfersPending = transfers;
