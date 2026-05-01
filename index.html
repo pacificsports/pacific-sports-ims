@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_161708 — Mark as Shipped fix: CA 카드 ship 할 때 SC2CA 라인 제외 (stage_for_ca_truck!=true 만). 같은 방식으로 SC 카드도 SC2CA 제외. SC2CA 카드는 별도로 stage_for_ca_truck=true 만 처리 -->
+<!-- BUILD: 20260501_174758 — Invoice 이메일 수정: (1) Status Update 의 SC Warehouse 가 SC2CA 라인만 있고 SC 직접 출고 없으면 'Pending Transfer to CA' 표시. (2) Tracking # 가로 콤마 (위아래 → 콤마). (3) Total Shipped + Net Invoice 합치기 → 'Net Invoice (288 pcs):' -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -24490,10 +24490,6 @@ async function doPlConfirm() {
   await confirmMoveToReady();
 }
 
-async function doPlConfirm() {
-  await confirmMoveToReady();
-}
-
 async function confirmMoveToReady() {
   closeModal('modal-pl-preview');
   if (!_plOrderId) return;
@@ -26665,16 +26661,20 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
     </table>` : '';
 
   // 라인 테이블
+  const hasSc2caLine = lineItems.some(l => (l.sc2ca_qty||0) > 0);
   const colHeader = isSplit
-    ? `<th style="padding:8px 10px;text-align:center;color:#1e40af;font-weight:700;">SC Shipped</th>
+    ? `<th style="padding:8px 10px;text-align:center;color:#1e40af;font-weight:700;">SC Status</th>
        <th style="padding:8px 10px;text-align:center;color:#ea580c;font-weight:700;">CA Status</th>
+       ${hasSc2caLine ? `<th style="padding:8px 10px;text-align:center;color:#92400e;font-weight:700;white-space:nowrap;">🚚 Pending Transfer to CA</th>` : ''}
        <th style="padding:8px 10px;text-align:center;color:#dc2626;font-weight:600;">Back Order</th>`
-    : `<th style="padding:8px 10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};font-weight:700;">Shipped</th>
+    : `<th style="padding:8px 10px;text-align:center;color:${currentWh==='CA'?'#ea580c':'#1e40af'};font-weight:700;">Status</th>
+       ${hasSc2caLine ? `<th style="padding:8px 10px;text-align:center;color:#92400e;font-weight:700;white-space:nowrap;">🚚 Pending Transfer to CA</th>` : ''}
        <th style="padding:8px 10px;text-align:center;color:#dc2626;font-weight:600;">Back Order</th>`;
 
   const renderRow = l => {
     const scQty = l.sc_qty||0;
     const caQty = l.ca_qty||0;
+    const sc2caQty = l.sc2ca_qty||0;
     const backQty = l.back_qty||0;
 
     // scCell: SC 수량이 있고 실제로 SC가 shipped된 경우만 체크마크
@@ -26685,7 +26685,7 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
       : null;
     const scCell = scQty > 0
       ? scActuallyShipped
-        ? `<td style="padding:7px 10px;text-align:center;"><span style="color:#1e40af;font-weight:800;">&#10003;</span>${scDisplayDate?`<div style="font-size:10px;color:#6b7280;">${scDisplayDate}</div>`:''}<div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
+        ? `<td style="padding:7px 10px;text-align:center;"><span style="color:#1e40af;font-weight:800;">&#10003; Shipped</span>${scDisplayDate?`<div style="font-size:10px;color:#6b7280;">${scDisplayDate}</div>`:''}<div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
         : `<td style="padding:7px 10px;text-align:center;"><div style="font-size:11px;color:#d97706;font-weight:600;">${order.sc_status==='ready_to_ship'?'Ready':'Preparing'}</div><div style="font-size:12px;font-weight:700;color:#1e40af;">${scQty} pcs</div></td>`
       : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
 
@@ -26702,11 +26702,11 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
     let caStatusText;
     if (caQty > 0) {
       if (caDisplayDate) {
-        // 날짜 있으면 체크마크 + 날짜 + 수량
-        caStatusText = `<span style="color:#16a34a;font-weight:700;">&#10003;</span><div style="font-size:10px;color:#6b7280;">${caDisplayDate}</div><div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`;
+        // 날짜 있으면 체크마크 + Shipped 텍스트 + 날짜 + 수량
+        caStatusText = `<span style="color:#16a34a;font-weight:700;">&#10003; Shipped</span><div style="font-size:10px;color:#6b7280;">${caDisplayDate}</div><div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`;
       } else if (['shipped','invoiced','completed'].includes(order.ca_status)) {
-        // 날짜 없어도 shipped면 체크마크 + 수량
-        caStatusText = `<span style="color:#16a34a;font-weight:700;">&#10003;</span><div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`;
+        // 날짜 없어도 shipped면 체크마크 + Shipped 텍스트 + 수량
+        caStatusText = `<span style="color:#16a34a;font-weight:700;">&#10003; Shipped</span><div style="font-size:12px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`;
       } else {
         const caStatusLabel = order.ca_status === 'ready_to_ship' ? 'Ready to Ship' : 'Preparing';
         caStatusText = `<div style="font-size:12px;color:#ea580c;font-weight:600;">${caStatusLabel}</div><div style="font-size:11px;font-weight:700;color:#ea580c;">${caQty} pcs</div>`;
@@ -26715,6 +26715,13 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
       caStatusText = `<span style="color:#d1d5db;">&mdash;</span>`;
     }
     const caStatusCell = `<td style="padding:7px 10px;text-align:center;">${caStatusText}</td>`;
+
+    // SC2CA cell
+    const sc2caCell = hasSc2caLine
+      ? (sc2caQty > 0
+        ? `<td style="padding:7px 10px;text-align:center;color:#92400e;font-weight:700;white-space:nowrap;">${sc2caQty} pcs</td>`
+        : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`)
+      : '';
 
     const backCell = backQty > 0
       ? `<td style="padding:7px 10px;text-align:center;color:#dc2626;font-weight:700;">${backQty}</td>`
@@ -26726,26 +26733,26 @@ function buildShippedEmailHtml(order, shippingInfo, lineItems) {
         <td style="padding:7px 10px;">${l.color}${l.is_side_seam?' <span style="font-size:10px;color:#7c3aed;font-weight:600;">(Side Seam)</span>':''}</td>
         <td style="padding:7px 10px;text-align:center;">${l.size}</td>
         <td style="padding:7px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
-        ${scCell}${caStatusCell}${backCell}
+        ${scCell}${caStatusCell}${sc2caCell}${backCell}
       </tr>`;
     } else {
       const whQty = currentWh==='CA' ? caQty : scQty;
       const whColor = currentWh==='CA' ? '#ea580c' : '#1e40af';
       const whDate = currentWh==='CA' ? caShippedDate : scShippedDate;
       const shipCell = whQty > 0
-        ? `<td style="padding:7px 10px;text-align:center;"><span style="color:${whColor};font-weight:800;">&#10003;</span>${whDate?`<div style="font-size:10px;color:#6b7280;">${whDate}</div>`:''}<div style="font-size:12px;font-weight:700;color:${whColor};">${whQty} pcs</div></td>`
+        ? `<td style="padding:7px 10px;text-align:center;"><span style="color:${whColor};font-weight:800;">&#10003; Shipped</span>${whDate?`<div style="font-size:10px;color:#6b7280;">${whDate}</div>`:''}<div style="font-size:12px;font-weight:700;color:${whColor};">${whQty} pcs</div></td>`
         : `<td style="padding:7px 10px;text-align:center;color:#d1d5db;">&mdash;</td>`;
       return `<tr style="border-bottom:1px solid #f3f4f6;">
         <td style="padding:7px 10px;font-weight:600;">${l.style}</td>
         <td style="padding:7px 10px;">${l.color}${l.is_side_seam?' <span style="font-size:10px;color:#7c3aed;font-weight:600;">(Side Seam)</span>':''}</td>
         <td style="padding:7px 10px;text-align:center;">${l.size}</td>
         <td style="padding:7px 10px;text-align:center;color:#6b7280;">${l.qty}</td>
-        ${shipCell}${backCell}
+        ${shipCell}${sc2caCell}${backCell}
       </tr>`;
     }
   };
 
-  const allLines = lineItems.filter(l => (l.sc_qty||0)+(l.ca_qty||0)+(l.back_qty||0) > 0);
+  const allLines = lineItems.filter(l => (l.sc_qty||0)+(l.ca_qty||0)+(l.sc2ca_qty||0)+(l.back_qty||0) > 0);
 
   return `
   <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto;color:#111;">
@@ -26912,6 +26919,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
       qty: l.qty_pieces || 0,
       sc_qty: scQty,
       ca_qty: caQty,
+      sc2ca_qty: l.qty_sc2ca || 0,
       back_qty: backQty,
       sc_shipped: scShippedNow,
       ca_shipped: caShippedNow,
@@ -30634,6 +30642,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const paymentLines = (paymentInfo||'').replace(/\\n/g,'<br>').replace(/\n/g,'<br>');
 
   // STATUS UPDATE 섹션
+  const hasSc2caInOrder = (order.order_lines || []).some(l => l.stage_for_ca_truck === true);
   const getWhStatusLabel = (wh) => {
     const st = wh === 'CA' ? order.ca_status : order.sc_status;
     const shippedAt = wh === 'CA' ? order.ca_shipped_at : order.sc_shipped_at;
@@ -30644,6 +30653,11 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     // shipped면 Shipped
     if (shippedAt || st === 'shipped') return { label: 'Shipped ✓', color: '#16a34a' };
     if (st === 'ready_to_ship') return { label: 'Ready to Ship', color: '#0891b2' };
+    // SC: SC 직접 출고 없고 SC2CA 만 있으면 Pending Transfer to CA
+    if (wh === 'SC' && hasSc2caInOrder) {
+      const hasScDirect = (order.order_lines || []).some(l => l.stage_for_ca_truck !== true && (l.qty_sc||0) > 0);
+      if (!hasScDirect) return { label: 'Pending Transfer to CA', color: '#92400e' };
+    }
     if (st === 'preparing' || st === 'po_entered') return { label: 'Preparing for Shipment', color: '#d97706' };
     return { label: 'Pending', color: '#6b7280' };
   };
@@ -30825,7 +30839,7 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
                   return tracking.split(',').map(t => t.trim()).filter(Boolean).map(t => {
                     const url = getUrl(t);
                     return url ? '<a href="' + url + '" target="_blank" style="color:#1e40af;font-family:monospace;">' + t + ' ↗</a>' : t;
-                  }).join('<br>');
+                  }).join(', ');
                 })()}</td>
               </tr>` : ''}
             </table>
@@ -30848,23 +30862,20 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
           <tbody>${rows}</tbody>
           <tfoot>
             <tr>
-              <td colspan="4" style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Total Shipped:</td>
-              <td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${totalShipped.toLocaleString()} pcs</td>
-              <td style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td>
+              <td colspan="6" style="padding:6px 10px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice (${totalShipped.toLocaleString()} pcs):</td>
               <td style="padding:6px 10px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td>
             </tr>
             ${freight > 0 ? `<tr>
-              <td colspan="5"></td>
-              <td style="padding:4px 10px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td>
+              <td colspan="6" style="padding:4px 10px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td>
               <td style="padding:4px 10px;text-align:right;">$${freight.toFixed(2)}</td>
             </tr>` : ''}
             <tr style="background:#0f2744;">
-              <td colspan="5" style="padding:10px;text-align:right;font-weight:700;font-size:13px;color:#fff;">INVOICE TOTAL:</td>
-              <td colspan="2" style="padding:10px;text-align:right;font-weight:900;font-size:16px;color:#fff;">$${(totalAmt+freight).toFixed(2)}</td>
+              <td colspan="6" style="padding:10px;text-align:right;font-weight:700;font-size:13px;color:#fff;">INVOICE TOTAL:</td>
+              <td style="padding:10px;text-align:right;font-weight:900;font-size:16px;color:#fff;">$${(totalAmt+freight).toFixed(2)}</td>
             </tr>
             <tr style="background:#f1f5f9;">
-              <td colspan="5" style="padding:8px 10px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE DUE:</td>
-              <td colspan="2" style="padding:8px 10px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td>
+              <td colspan="6" style="padding:8px 10px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE DUE:</td>
+              <td style="padding:8px 10px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td>
             </tr>
           </tfoot>
         </table>
