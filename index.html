@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_014520 — SC→CA 도 SC/CA 와 똑같은 강력한 모달 사용 (박스+loose 입력, PCR 영역, PCR Transfer 다 가능). 차이는 헤더 색깔 + alloc 저장 위치 (allocSC2CA) 만 -->
+<!-- BUILD: 20260501_021045 — Step 2b: 통합 모달 (SC + CA + SC→CA 3 영역). dropdown 폐기. 모든 라인의 모든 버튼이 openAllocModalBoth 호출. 진짜 작동하는 부품 (buildAllocHtml, applyAlloc) 그대로 재사용 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7190,18 +7190,9 @@ function renderEntryTable() {
               <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sqAvail.toLocaleString()}${scMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}${warn?' ⚠️':''}</span>
               <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${pqAvail>0?'#a84212':'#bbb'};">+${pqAvail.toLocaleString()} PCR${scPcrAlloc>0?` <span style="font-size:9px;color:#888">/${pq}</span>`:''}</span>
             </div>
-            ${(l.wh||'SC')==='CA'
-              ? `<button class="loc-pick-btn" disabled title="CA 출고 선택됨" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
-                  <span>🔒</span><span class="loc-pick-text" style="max-width:100px;color:#aaa;">CA 전용</span>
-                </button>`
-              : l.wh === 'SC&CA'
-                ? `<button class="loc-pick-btn wh-sc${(l.allocSC&&Object.keys(l.allocSC).length)?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="SC + CA 동시 Bin 배분" style="background:linear-gradient(90deg,#e8f5e9 50%,#fff7ed 50%);border-color:#fdba74;">
-                    <span>📍</span><span class="loc-pick-text" style="max-width:100px;font-size:10px;">SC+CA 배분...</span>
-                  </button>`
-                : `<button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModal(${idx},'SC')" title="SC / SC-PCR Bin 배분">
-                  <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
-                </button>`
-            }
+            <button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="📍 통합 Bin 배분 (SC + CA + SC→CA)">
+              <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
+            </button>
           </div>`;
         })()}
       </td>
@@ -7226,18 +7217,9 @@ function renderEntryTable() {
               </span>
               <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${cpqAvail>0?'#5b21b6':'#bbb'};">+${cpqAvail.toLocaleString()} PCR${caPcrAlloc>0?` <span style="font-size:9px;color:#888">/${cpq}</span>`:''}</span>
             </div>
-            ${l.wh === 'SC&CA'
-              ? `<button class="loc-pick-btn wh-ca${(l.allocCA&&Object.keys(l.allocCA).length)?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="SC + CA 동시 Bin 배분" style="background:linear-gradient(90deg,#fff7ed 50%,#e8f5e9 50%);border-color:#86efac;">
-                  <span>📍</span><span class="loc-pick-text" style="max-width:100px;font-size:10px;">SC+CA 배분...</span>
-                </button>`
-              : (l.wh||'SC')==='SC'
-              ? `<button class="loc-pick-btn" disabled title="SC 출고 선택됨" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
-                  <span>🔒</span><span class="loc-pick-text" style="max-width:100px;color:#aaa;">SC 전용</span>
-                </button>`
-              : `<button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModal(${idx},'CA')" title="CA / CA-PCR Bin 배분">
-                  <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
-                </button>`
-            }
+            <button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="📍 통합 Bin 배분 (SC + CA + SC→CA)">
+              <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
+            </button>
           </div>`;
         })()}
       </td>
@@ -7265,7 +7247,7 @@ function renderEntryTable() {
               ${sc2Total > 0 ? `<span style="font-size:10px;color:#dc2626;font-weight:700;">→ ${sc2Total}</span>` : ''}
             </div>
             <button class="loc-pick-btn${allocLabel?' filled':''}" 
-              onclick="event.stopPropagation();openAllocModal(${idx},'SC2CA')" 
+              onclick="event.stopPropagation();openAllocModalBoth(${idx})" 
               title="SC → CA Next Truck (SC 재고에서 다음 CA 트럭에 실어 CA 에서 출고)" 
               style="background:${allocLabel?'#fed7aa':'#fff7ed'};border:1px solid #fdba74;color:#92400e;">
               <span>🚚</span><span class="loc-pick-text" style="max-width:100px;font-size:10px;">${allocLabel || 'SC→CA Bin...'}</span>
@@ -7274,12 +7256,23 @@ function renderEntryTable() {
         })()}
       </td>
       <td style="text-align:center;font-size:11px;">
-        <select class="fsel" style="width:88px;height:22px;font-size:10px;padding:0 2px;" onchange="poLines[${idx}].wh=this.value;syncWhDropdown();renderEntryTable()" title="SC → CA: SC 에 있는 재고를 다음 CA 트럭에 실어 CA 에서 출고 (In Transit to CA on Next Truck)">
-          <option value="SC" ${(l.wh||'SC')==='SC'?'selected':''}>SC</option>
-          <option value="CA" ${l.wh==='CA'?'selected':''}>CA</option>
-          <option value="SC&CA" ${l.wh==='SC&CA'?'selected':''}>SC &amp; CA</option>
-          <option value="SC2CA" ${l.wh==='SC2CA'?'selected':''}>SC → CA</option>
-        </select>
+        ${(function(){
+          // wh 자동 결정: 어디에 alloc 이 있나
+          const hasSc = l.allocSC && Object.keys(l.allocSC).filter(k=>!k.includes('TRANSFER|')).length > 0;
+          const hasCa = l.allocCA && Object.keys(l.allocCA).filter(k=>!k.includes('TRANSFER|')).length > 0;
+          const hasSc2ca = l.allocSC2CA && Object.keys(l.allocSC2CA).filter(k=>!k.includes('TRANSFER|')).length > 0;
+          let label = '—';
+          if (hasSc && hasCa && hasSc2ca) label = 'SC+CA+→CA';
+          else if (hasSc && hasCa) label = 'SC + CA';
+          else if (hasSc && hasSc2ca) label = 'SC + →CA';
+          else if (hasCa && hasSc2ca) label = 'CA + →CA';
+          else if (hasSc) label = 'SC';
+          else if (hasCa) label = 'CA';
+          else if (hasSc2ca) label = '→CA Truck';
+          return `<button onclick="event.stopPropagation();openAllocModalBoth(${idx})" 
+            style="width:90px;height:24px;font-size:10px;padding:0 4px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer;font-weight:600;color:var(--primary);" 
+            title="SC + CA + SC→CA 통합 배분">📍 ${label}</button>`;
+        })()}
       </td>
       <td style="text-align:center;color:#2e7d32">${(function(){
         const allocSC = l.allocSC || {};
@@ -36268,7 +36261,7 @@ function updateAllocSum() {
   const bothModal = document.getElementById('modal-alloc-both');
   const bothOpen = bothModal && (bothModal.style.display === 'flex' || bothModal.classList.contains('open'));
   const wraps = bothOpen
-    ? ['#alloc-both-sc-wrap', '#alloc-both-ca-wrap']
+    ? ['#alloc-both-sc-wrap', '#alloc-both-ca-wrap', '#alloc-both-sc2ca-wrap']
     : ['#alloc-bins-wrap'];
 
   let sum = 0;
@@ -36412,9 +36405,10 @@ function cancelAllocBothModal() {
     const idx = _allocState.lineIdx;
     poLines[idx].allocSC = _allocBothBackup.allocSC;
     poLines[idx].allocCA = _allocBothBackup.allocCA;
+    poLines[idx].allocSC2CA = _allocBothBackup.allocSC2CA;
     poLines[idx].pcrTransfersPending = _allocBothBackup.pcrTransfersPending;
-
     poLines[idx].caPcrTransfersPending = _allocBothBackup.caPcrTransfersPending;
+    poLines[idx].sc2caPcrTransfersPending = _allocBothBackup.sc2caPcrTransfersPending;
     poLines[idx].caPcrBackTransfersPending = _allocBothBackup.caPcrBackTransfersPending;
   }
   _allocBothBackup = null;
@@ -36422,6 +36416,7 @@ function cancelAllocBothModal() {
   closeModal('modal-alloc-both');
   const scWrap = document.getElementById('alloc-both-sc-wrap'); if (scWrap) scWrap.innerHTML = '';
   const caWrap = document.getElementById('alloc-both-ca-wrap'); if (caWrap) caWrap.innerHTML = '';
+  const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap'); if (sc2caWrap) sc2caWrap.innerHTML = '';
   // DB에서 재고 새로 로드 (binInventory 정확히 복원)
   loadScInventory().then(() => renderEntryTable());
 }
@@ -37135,10 +37130,10 @@ function openAllocModalBoth(lineIdx) {
   _allocBothBackup = {
     allocSC: JSON.parse(JSON.stringify(poLines[lineIdx].allocSC || {})),
     allocCA: JSON.parse(JSON.stringify(poLines[lineIdx].allocCA || {})),
+    allocSC2CA: JSON.parse(JSON.stringify(poLines[lineIdx].allocSC2CA || {})),
     pcrTransfersPending: [...(poLines[lineIdx].pcrTransfersPending || [])],
-
     caPcrTransfersPending: [...(poLines[lineIdx].caPcrTransfersPending || [])],
-
+    sc2caPcrTransfersPending: [...(poLines[lineIdx].sc2caPcrTransfersPending || [])],
   };
 
   // 거래처 preference 읽기
@@ -37149,25 +37144,16 @@ function openAllocModalBoth(lineIdx) {
   document.getElementById('alloc-both-sku').textContent = `#${l.styleNum} · ${l.color} · ${l.size}`;
   document.getElementById('alloc-both-need').textContent = needQty.toLocaleString() + ' pcs';
 
-  // SC 섹션 렌더
+  // SC / CA / SC2CA 섹션 렌더
   const scWrap = document.getElementById('alloc-both-sc-wrap');
   const caWrap = document.getElementById('alloc-both-ca-wrap');
+  const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap');
 
-  // preference에 따라 섹션 순서 바꾸기
+  // 3 컬럼 grid 고정 (preference 순서 적용 안 함 — 항상 SC | CA | SC→CA)
   const bothGrid = scWrap.parentElement;
-  if (scFirst) {
-    bothGrid.style.gridTemplateColumns = '1fr 1fr';
-    scWrap.style.borderRight = '2px solid #e2e8f0';
-    scWrap.style.borderLeft = '';
-    bothGrid.appendChild(caWrap); // SC 왼쪽, CA 오른쪽
-  } else {
-    bothGrid.style.gridTemplateColumns = '1fr 1fr';
-    caWrap.style.borderRight = '2px solid #e2e8f0';
-    scWrap.style.borderRight = '';
-    bothGrid.insertBefore(caWrap, scWrap); // CA 왼쪽, SC 오른쪽
-  }
-
-  // CA html 먼저 빌드 (DOM 오염 방지)
+  bothGrid.style.gridTemplateColumns = '1fr 1fr 1fr';
+  
+  // CA html 먼저 빌드
   _allocState = { lineIdx, whGroup: 'CA' };
   const caHtml = buildAllocHtml(lineIdx, 'CA');
   caWrap.innerHTML = caHtml;
@@ -37176,6 +37162,11 @@ function openAllocModalBoth(lineIdx) {
   _allocState = { lineIdx, whGroup: 'SC' };
   const scHtml = buildAllocHtml(lineIdx, 'SC');
   scWrap.innerHTML = scHtml;
+  
+  // SC2CA html 빌드 — SC bin 사용 (재고는 SC 에 있음)
+  _allocState = { lineIdx, whGroup: 'SC2CA' };
+  const sc2caHtml = buildAllocHtml(lineIdx, 'SC2CA');
+  if (sc2caWrap) sc2caWrap.innerHTML = sc2caHtml;
 
   // _allocState를 SC&CA로 복원
   _allocState = { lineIdx, whGroup: 'SC&CA' };
@@ -37186,7 +37177,7 @@ function openAllocModalBoth(lineIdx) {
   renderPcrTransfers(); // 저장된 transfer 목록 표시
 
   // 입력 변경 시 합계 + 박스 힌트 + PCR transfer 섹션 업데이트
-  [scWrap, caWrap].forEach(wrap => {
+  [scWrap, caWrap, sc2caWrap].filter(Boolean).forEach(wrap => {
     wrap.querySelectorAll('input').forEach(inp => {
       inp.addEventListener('input', () => {
         updateAllocBothTotals();
@@ -37208,9 +37199,9 @@ function updateAllocBothTotals() {
   if (!l) return;
   const needQty = l.qty || 0;
 
-  // 현재 입력값 합산
+  // 현재 입력값 합산 (SC + CA + SC2CA 다)
   let total = 0;
-  document.querySelectorAll('#alloc-both-sc-wrap input[data-type="box"], #alloc-both-ca-wrap input[data-type="box"], #alloc-both-sc-wrap input[data-type="pcs"], #alloc-both-ca-wrap input[data-type="pcs"]').forEach(inp => {
+  document.querySelectorAll('#alloc-both-sc-wrap input[data-type="box"], #alloc-both-ca-wrap input[data-type="box"], #alloc-both-sc2ca-wrap input[data-type="box"], #alloc-both-sc-wrap input[data-type="pcs"], #alloc-both-ca-wrap input[data-type="pcs"], #alloc-both-sc2ca-wrap input[data-type="pcs"]').forEach(inp => {
     total += parseInt(inp.value) || 0;
   });
 
@@ -37255,16 +37246,26 @@ function applyAllocBoth() {
     const v = parseInt(inp.value)||0;
     if (v > 0) caAlloc[inp.dataset.bin] = v;
   });
+  
+  // SC2CA 입력값 읽기
+  const sc2caAlloc = {};
+  document.querySelectorAll('#alloc-both-sc2ca-wrap input[data-bin]').forEach(inp => {
+    const v = parseInt(inp.value)||0;
+    if (v > 0) sc2caAlloc[inp.dataset.bin] = v;
+  });
 
   poLines[lineIdx].allocSC = Object.keys(scAlloc).length > 0 ? scAlloc : null;
   poLines[lineIdx].allocCA = Object.keys(caAlloc).length > 0 ? caAlloc : null;
+  poLines[lineIdx].allocSC2CA = Object.keys(sc2caAlloc).length > 0 ? sc2caAlloc : null;
   poLines[lineIdx].pcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC');
   poLines[lineIdx].caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'CA');
+  poLines[lineIdx].sc2caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC2CA');
   _pcrTransfers = [];
   _allocState = null;
   closeModal('modal-alloc-both');
   const scWrap = document.getElementById('alloc-both-sc-wrap'); if (scWrap) scWrap.innerHTML = '';
   const caWrap = document.getElementById('alloc-both-ca-wrap'); if (caWrap) caWrap.innerHTML = '';
+  const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap'); if (sc2caWrap) sc2caWrap.innerHTML = '';
   // BO 탭에서 배분 시 PO 저장/렌더링 스킵 — boRefreshCard만 호출
   if (window._boAllocCallback) {
     boRefreshCard(window._boAllocCallback);
@@ -37274,7 +37275,7 @@ function applyAllocBoth() {
     liveRenderDocs();
   }
 
-  showToast('✅ SC + CA Bin 배분 저장');
+  showToast('✅ SC + CA + SC→CA Bin 배분 저장');
 }
 
 
@@ -41330,9 +41331,9 @@ function showCreditHoldFlash(overAmt) {
 
   <!-- modal-alloc-both -->
 <div class="modal-overlay" id="modal-alloc-both" style="display:none;z-index:99999;">
-  <div class="modal-box" style="max-width:1080px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
-    <div id="alloc-both-head" class="modal-head" style="background:linear-gradient(90deg,#064e22 50%,#0f2744 50%);flex-shrink:0;">
-      <span style="color:#fff;font-weight:700;font-size:14px;">📍 Bin 배분 — <span style="color:#86efac;">🟢 SC</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ SC-PCR</span> &nbsp;/&nbsp; <span style="color:#fdba74;">🟠 CA</span> <span style="color:#fff;font-weight:400;font-size:12px;">+ CA-PCR</span></span>
+  <div class="modal-box" style="max-width:1400px;width:98vw;max-height:92vh;display:flex;flex-direction:column;">
+    <div id="alloc-both-head" class="modal-head" style="background:linear-gradient(90deg,#064e22 33.33%,#0f2744 33.33%,#0f2744 66.66%,#92400e 66.66%);flex-shrink:0;">
+      <span style="color:#fff;font-weight:700;font-size:14px;">📍 Bin 배분 — <span style="color:#86efac;">🟢 SC</span> &nbsp;/&nbsp; <span style="color:#fdba74;">🟠 CA</span> &nbsp;/&nbsp; <span style="color:#fde68a;">🟡 SC → CA Next Truck</span></span>
       <button class="modal-close" style="color:#fff;" onclick="cancelAllocBothModal();">×</button>
     </div>
     <div style="padding:12px 16px;background:#f8fafc;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
@@ -41341,9 +41342,10 @@ function showCreditHoldFlash(overAmt) {
       <div><div style="font-size:10px;color:var(--text3);">배분 합계</div><div style="font-weight:700;font-size:14px;" id="alloc-both-total">0 pcs</div></div>
       <div><div style="font-size:10px;color:var(--text3);">남은 수량</div><div style="font-weight:700;font-size:14px;color:var(--red);" id="alloc-both-remain"></div></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;flex:1;overflow-y:auto;">
-      <div style="padding:16px;border-right:2px solid #e2e8f0;" id="alloc-both-sc-wrap"></div>
-      <div style="padding:16px;" id="alloc-both-ca-wrap"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;flex:1;overflow-y:auto;">
+      <div style="padding:14px;border-right:2px solid #e2e8f0;" id="alloc-both-sc-wrap"></div>
+      <div style="padding:14px;border-right:2px solid #e2e8f0;" id="alloc-both-ca-wrap"></div>
+      <div style="padding:14px;background:#fffbeb;" id="alloc-both-sc2ca-wrap"></div>
     </div>
     <div id="alloc-both-transfers" style="padding:0 16px;background:#fff;flex-shrink:0;"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
