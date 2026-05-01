@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_021045 — Step 2b: 통합 모달 (SC + CA + SC→CA 3 영역). dropdown 폐기. 모든 라인의 모든 버튼이 openAllocModalBoth 호출. 진짜 작동하는 부품 (buildAllocHtml, applyAlloc) 그대로 재사용 -->
+<!-- BUILD: 20260501_085144 — UNIT$ 다음에 명확한 📍 배분 버튼 추가 (자동 라벨: SC / CA / →CA / SC+CA / SC+CA+→CA 등). SC, CA, SC→CA 칸은 정보만 (작고 흐릿하게). 사용자가 헷갈리지 않도록 명확한 진입점 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -926,8 +926,8 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
                   <table class="order-line-table" id="order-line-table">
                     <thead><tr>
                       <th>Item Code</th><th>Style</th><th>Color</th><th>Size</th>
-                      <th>Qty(pcs)</th><th>Unit$</th><th>SC/SC-PCR</th><th>CA/CA-PCR</th><th style="background:#fef3c7;color:#92400e;">SC→CA</th>
-                      <th>Ship</th><th>Full Boxes</th><th>Partial Pcs(PCR)</th><th>Back Order</th><th style="color:#a84212;">Transfer</th><th>✕</th>
+                      <th>Qty(pcs)</th><th>Unit$</th><th style="background:#dbeafe;color:#1e40af;">📍 배분</th><th>SC/SC-PCR</th><th>CA/CA-PCR</th><th style="background:#fef3c7;color:#92400e;">SC→CA</th>
+                      <th>Full Boxes</th><th>Partial Pcs(PCR)</th><th>Back Order</th><th style="color:#a84212;">Transfer</th><th>✕</th>
                     </tr></thead>
                     <tbody id="po-lines-body"></tbody>
                   </table>
@@ -7165,6 +7165,26 @@ function renderEntryTable() {
       <td><input class="fi" value="${l.size}" style="width:50px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].size=this.value;const ppb=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb);poLines[${idx}].loose=poLines[${idx}].qty%ppb;renderEntryTable();liveRenderDocs()"/></td>
       <td style="text-align:center;"><input type="number" class="fi" value="${l.qty}" style="width:72px;height:28px;font-size:16px;padding:2px 6px;text-align:center;font-weight:700;color:#dc2626;border:2px solid #dc2626 !important;border-radius:4px;background:#fff5f5;" onchange="poLines[${idx}].qty=parseInt(this.value)||0;const ppb2=poLines[${idx}].ppb||72;poLines[${idx}].cases=Math.floor(poLines[${idx}].qty/ppb2);poLines[${idx}].loose=poLines[${idx}].qty%ppb2;saveDraft();renderEntryTable();liveRenderDocs()"/></td>
       <td><input type="number" class="fi" value="${l.price}" step="0.01" style="width:65px;height:24px;font-size:11px;padding:2px 4px;text-align:center;" onchange="poLines[${idx}].price=parseFloat(this.value)||0;renderEntryTable();liveRenderDocs()"/></td>
+      <td style="text-align:center;padding:4px 8px;">
+        ${(function(){
+          // 배분 상태 자동 라벨 (어디에 alloc 이 있나)
+          const hasSc = l.allocSC && Object.keys(l.allocSC).filter(k=>!k.includes('TRANSFER|')).length > 0;
+          const hasCa = l.allocCA && Object.keys(l.allocCA).filter(k=>!k.includes('TRANSFER|')).length > 0;
+          const hasSc2ca = l.allocSC2CA && Object.keys(l.allocSC2CA).filter(k=>!k.includes('TRANSFER|')).length > 0;
+          let label = '배분 안 됨';
+          let bg = '#f9fafb', border = '#d1d5db', color = '#6b7280';
+          if (hasSc && hasCa && hasSc2ca) { label = 'SC + CA + →CA'; bg='#dbeafe'; border='#3b82f6'; color='#1e40af'; }
+          else if (hasSc && hasCa) { label = 'SC + CA'; bg='#dbeafe'; border='#3b82f6'; color='#1e40af'; }
+          else if (hasSc && hasSc2ca) { label = 'SC + →CA'; bg='#dbeafe'; border='#3b82f6'; color='#1e40af'; }
+          else if (hasCa && hasSc2ca) { label = 'CA + →CA'; bg='#dbeafe'; border='#3b82f6'; color='#1e40af'; }
+          else if (hasSc) { label = 'SC'; bg='#dcfce7'; border='#16a34a'; color='#15803d'; }
+          else if (hasCa) { label = 'CA'; bg='#fed7aa'; border='#f97316'; color='#9a3412'; }
+          else if (hasSc2ca) { label = '→ CA Truck'; bg='#fef3c7'; border='#d97706'; color='#92400e'; }
+          return `<button onclick="event.stopPropagation();openAllocModalBoth(${idx})" 
+            style="width:120px;height:28px;font-size:11px;padding:2px 6px;border:1.5px solid ${border};border-radius:6px;background:${bg};cursor:pointer;font-weight:700;color:${color};display:inline-flex;align-items:center;justify-content:center;gap:4px;" 
+            title="📍 통합 배분 모달 (SC + CA + SC→CA 한 번에)">📍 ${label}</button>`;
+        })()}
+      </td>
       <td style="padding:4px 8px;">
         ${(function(){
           const k = l.isSideSeam
@@ -7190,8 +7210,8 @@ function renderEntryTable() {
               <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:${warn?'var(--red)':'var(--sc)'};">${sqAvail.toLocaleString()}${scMainAlloc>0?`<span style="font-size:9px;color:#888;font-weight:400;"> /${sq.toLocaleString()}</span>`:''}${warn?' ⚠️':''}</span>
               <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${pqAvail>0?'#a84212':'#bbb'};">+${pqAvail.toLocaleString()} PCR${scPcrAlloc>0?` <span style="font-size:9px;color:#888">/${pq}</span>`:''}</span>
             </div>
-            <button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="📍 통합 Bin 배분 (SC + CA + SC→CA)">
-              <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
+            <button class="loc-pick-btn wh-sc${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="📍 배분 (위쪽 통합 배분 버튼 권장)" style="opacity:0.85;font-size:10px;">
+              <span class="loc-pick-text" style="max-width:120px;">${allocLabel||'—'}</span>
             </button>
           </div>`;
         })()}
@@ -7217,8 +7237,8 @@ function renderEntryTable() {
               </span>
               <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:${cpqAvail>0?'#5b21b6':'#bbb'};">+${cpqAvail.toLocaleString()} PCR${caPcrAlloc>0?` <span style="font-size:9px;color:#888">/${cpq}</span>`:''}</span>
             </div>
-            <button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="📍 통합 Bin 배분 (SC + CA + SC→CA)">
-              <span>📍</span><span class="loc-pick-text" style="max-width:100px;">${allocLabel||'Bin 배분...'}</span>
+            <button class="loc-pick-btn wh-ca${allocLabel?' filled':''}" onclick="event.stopPropagation();openAllocModalBoth(${idx})" title="📍 배분 (위쪽 통합 배분 버튼 권장)" style="opacity:0.85;font-size:10px;">
+              <span class="loc-pick-text" style="max-width:120px;">${allocLabel||'—'}</span>
             </button>
           </div>`;
         })()}
@@ -7248,30 +7268,11 @@ function renderEntryTable() {
             </div>
             <button class="loc-pick-btn${allocLabel?' filled':''}" 
               onclick="event.stopPropagation();openAllocModalBoth(${idx})" 
-              title="SC → CA Next Truck (SC 재고에서 다음 CA 트럭에 실어 CA 에서 출고)" 
-              style="background:${allocLabel?'#fed7aa':'#fff7ed'};border:1px solid #fdba74;color:#92400e;">
-              <span>🚚</span><span class="loc-pick-text" style="max-width:100px;font-size:10px;">${allocLabel || 'SC→CA Bin...'}</span>
+              title="📍 배분 (위쪽 통합 배분 버튼 권장)" 
+              style="background:${allocLabel?'#fed7aa':'#fff7ed'};border:1px solid #fdba74;color:#92400e;opacity:0.85;font-size:10px;">
+              <span class="loc-pick-text" style="max-width:120px;">${allocLabel || '—'}</span>
             </button>
           </div>`;
-        })()}
-      </td>
-      <td style="text-align:center;font-size:11px;">
-        ${(function(){
-          // wh 자동 결정: 어디에 alloc 이 있나
-          const hasSc = l.allocSC && Object.keys(l.allocSC).filter(k=>!k.includes('TRANSFER|')).length > 0;
-          const hasCa = l.allocCA && Object.keys(l.allocCA).filter(k=>!k.includes('TRANSFER|')).length > 0;
-          const hasSc2ca = l.allocSC2CA && Object.keys(l.allocSC2CA).filter(k=>!k.includes('TRANSFER|')).length > 0;
-          let label = '—';
-          if (hasSc && hasCa && hasSc2ca) label = 'SC+CA+→CA';
-          else if (hasSc && hasCa) label = 'SC + CA';
-          else if (hasSc && hasSc2ca) label = 'SC + →CA';
-          else if (hasCa && hasSc2ca) label = 'CA + →CA';
-          else if (hasSc) label = 'SC';
-          else if (hasCa) label = 'CA';
-          else if (hasSc2ca) label = '→CA Truck';
-          return `<button onclick="event.stopPropagation();openAllocModalBoth(${idx})" 
-            style="width:90px;height:24px;font-size:10px;padding:0 4px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer;font-weight:600;color:var(--primary);" 
-            title="SC + CA + SC→CA 통합 배분">📍 ${label}</button>`;
         })()}
       </td>
       <td style="text-align:center;color:#2e7d32">${(function(){
