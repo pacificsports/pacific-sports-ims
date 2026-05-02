@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_222500 — + New Customer PO 누르면 draft localStorage 무시하고 항상 빈 화면으로 시작. 이전 작업 내용 자동 복원되던 문제 fix -->
+<!-- BUILD: 20260501_223300 — Shipped 이메일 Back Order 잘못 계산되던 버그 fix: 27460 줄에서 totalAllocated 가 SC + CA 만 보고 SC2CA 빠져서 SC2CA 수량이 Back Order 로 잘못 표시됐음. sc2caQty 도 포함하도록 수정 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -27454,9 +27454,11 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
 
     let scQty = getActualQty(allocSC, 'sc_pcr_prepared_lines');
     let caQty = getActualQty(allocCA, 'ca_pcr_prepared_lines');
+    const sc2caQty = l.qty_sc2ca || 0;
 
-    // back qty: 총 주문 - SC alloc - CA alloc
-    const totalAllocated = scQty + caQty;
+    // back qty: 총 주문 - SC alloc - CA alloc - SC2CA alloc
+    // (SC2CA 도 출고 예정이므로 back_qty 에서 제외)
+    const totalAllocated = scQty + caQty + sc2caQty;
     const backQty = Math.max(0, (l.qty_pieces || 0) - totalAllocated);
 
     // 날짜 포맷 M/D
@@ -27482,7 +27484,7 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
       qty: l.qty_pieces || 0,
       sc_qty: scQty,
       ca_qty: caQty,
-      sc2ca_qty: l.qty_sc2ca || 0,
+      sc2ca_qty: sc2caQty,
       back_qty: backQty,
       sc_shipped: scShippedNow,
       ca_shipped: caShippedNow,
@@ -29566,8 +29568,20 @@ async function reviewAndSendInvoice(orderId, wh) {
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
   // wh에 해당하는 라인만 필터
+  // SC2CA 라인 (stage_for_ca_truck=true) 은 CA 출고분과 같이 처리 (CA 에서 거래처로 출고됨)
   const filteredLines = isSplit && wh
-    ? lines.filter(l => wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh))
+    ? lines.filter(l => {
+        const isSc2ca = l.stage_for_ca_truck === true;
+        if (wh === 'CA') {
+          // CA invoice: CA 라인 + SC&CA 라인 + SC2CA 라인
+          if (isSc2ca) return (l.qty_sc2ca || 0) > 0;
+          return l.wh === 'CA' || l.wh === 'SC&CA';
+        } else {
+          // SC invoice: SC 라인 + SC&CA 라인 (SC2CA 제외)
+          if (isSc2ca) return false;
+          return l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh;
+        }
+      })
     : lines;
 
   // DB에 저장된 freight_amount 불러오기
@@ -31649,6 +31663,13 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     // SC&CA 라인의 shipped qty: alloc pcs 기준 (WH별로 정확히 분리)
     const getWhShippedQty = (l) => {
       const ppb = l.pcs_per_box || 72;
+      
+      // SC2CA 라인 — CA invoice 에서만 표시, qty_sc2ca + alloc_sc2ca_detail 사용
+      if (l.stage_for_ca_truck === true) {
+        if (sectionWh !== 'CA') return 0;
+        return l.qty_sc2ca || 0;
+      }
+      
       const alloc = l.wh === 'SC&CA'
         ? (sectionWh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{}))
         : (l.wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{}));
@@ -31726,10 +31747,18 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     return `<div style="font-family:Arial,sans-serif;font-size:12px;color:#111;width:100%;"><div style="background:#111827;padding:14px 24px;display:flex;justify-content:space-between;align-items:center;"><img src="${LOGO_B64}" style="height:44px;width:auto;"><div style="text-align:right;"><div style="color:#fff;font-size:24px;font-weight:900;letter-spacing:3px;">INVOICE</div><div style="color:#9ca3af;font-size:10px;margin-top:2px;">Page: 1</div></div></div><table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e5e7eb;border-top:none;margin-bottom:14px;"><tr><td style="padding:10px 24px;vertical-align:top;font-size:11px;color:#374151;line-height:1.6;"><div style="font-weight:700;font-size:12px;">PEACE TEXTILE AMERICA, INC.</div><div>d.b.a Pacific Sports</div><div>1605 South Guignard Parkway, Sumter SC 29150</div><div>Ph: (803) 760-6251</div></td><td style="padding:10px 24px;vertical-align:top;text-align:right;font-size:11px;color:#374151;line-height:1.8;"><div style="font-weight:700;font-size:12px;">INV #: ${invNo}</div><div style="font-weight:700;">INVOICE DATE: ${invoiceDate}</div><div style="font-weight:700;">DUE DATE: ${dueDate}</div><div style="margin-top:6px;border-top:1px solid #d1d5db;padding-top:6px;">ORDER DATE: ${orderDate}</div><div>SHIP DATE: ${shipDate}</div></td></tr></table><table style="width:100%;border-collapse:collapse;margin-bottom:12px;"><tr><td style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;width:33%;vertical-align:top;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SOLD TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'—'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${billAddr}</div></td><td style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;width:33%;vertical-align:top;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SHIP TO:</div><div style="font-size:11px;font-weight:700;">${order.customer_name||'—'}</div><div style="font-size:11px;color:#374151;margin-top:2px;line-height:1.5;">${shipAddr}</div></td><td style="border:1px solid #e5e7eb;border-radius:6px;padding:10px;width:33%;vertical-align:top;"><div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:5px;">SEND PAYMENT TO:</div><div style="font-size:11px;color:#374151;line-height:1.5;">${paymentLines}</div></td></tr></table><table style="width:100%;border-collapse:collapse;margin-bottom:12px;background:#f1f5f9;border-radius:6px;"><tr><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Customer P.O.</div><div style="font-weight:700;font-size:13px;">${order.customer_po||'—'}</div></td><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Terms</div><div style="font-weight:700;">${order.terms||'Net 30'}</div></td><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Ship From</div><div style="font-weight:700;">${whLabelInv}</div></td><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Ship Via</div><div style="font-weight:700;">${shipViaStr}</div></td><td style="padding:8px 10px;font-size:10px;vertical-align:top;"><div style="color:#6b7280;text-transform:uppercase;margin-bottom:3px;">Tracking / PRO #</div><div style="font-weight:600;font-family:monospace;font-size:11px;">${trackingStr}</div></td></tr></table><table style="width:100%;border-collapse:collapse;margin-bottom:0;"><thead><tr style="background:#111827;color:#fff;"><th style="padding:7px 8px;text-align:left;font-size:11px;">STYLE</th><th style="padding:7px 8px;text-align:left;font-size:11px;width:30%;">DESCRIPTION</th><th style="padding:7px 8px;text-align:center;font-size:11px;">COLOR</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SIZE</th><th style="padding:7px 8px;text-align:center;font-size:11px;">SHIPPED</th><th style="padding:7px 8px;text-align:center;font-size:11px;">UNIT</th><th style="padding:7px 8px;text-align:right;font-size:11px;">PRICE</th><th style="padding:7px 8px;text-align:right;font-size:11px;">AMOUNT</th></tr></thead><tbody>${rows}${emptyRows}</tbody><tfoot><tr><td colspan="6" style="padding:6px;text-align:right;font-size:11px;color:#6b7280;">Net Invoice:</td><td colspan="2" style="padding:6px;text-align:right;font-weight:700;">$${totalAmt.toFixed(2)}</td></tr>${freight > 0 ? '<tr><td colspan="6" style="padding:4px 6px;text-align:right;font-size:11px;color:#6b7280;">Freight:</td><td colspan="2" style="padding:4px 6px;text-align:right;">$'+ freight.toFixed(2) +'</td></tr>' : ''}<tr style="background:#111827;color:#fff;"><td colspan="6" style="padding:10px 6px;text-align:right;font-weight:700;font-size:13px;">INVOICE TOTAL:</td><td colspan="2" style="padding:10px 6px;text-align:right;font-weight:900;font-size:16px;">$${(totalAmt+freight).toFixed(2)}</td></tr><tr style="background:#f1f5f9;"><td colspan="6" style="padding:8px 6px;text-align:right;font-weight:700;font-size:12px;">INVOICE BALANCE:</td><td colspan="2" style="padding:8px 6px;text-align:right;font-weight:800;font-size:14px;color:#1a3a5c;">$${(totalAmt+freight).toFixed(2)}</td></tr><tr><td colspan="8" style="padding:10px 8px;border-top:1px solid #e5e7eb;font-size:10px;color:#374151;"><span style="font-weight:700;">RETURN POLICY: </span><span style="line-height:1.5;">${returnPolicy}</span></td></tr></tfoot></table></div>`;
   };
   if (isSplit) {
-    // SC&CA 라인은 양쪽 섹션 모두에 포함 (qty_filled는 WH별로 따로 계산 필요)
-    const scLines = lines.filter(l => !l.wh || l.wh === 'SC' || l.wh === 'SC&CA');
-    const caLines = lines.filter(l => l.wh === 'CA' || l.wh === 'SC&CA');
-    return renderSection(scLines, '-SC') + (caLines.length ? '<div style="page-break-before:always;margin-top:32px;">' + renderSection(caLines, '-CA') + '</div>' : '');
+    // SC&CA 라인은 양쪽 섹션 모두에 포함, SC2CA 라인은 CA 만 (CA 출고분)
+    const scLines = lines.filter(l => l.stage_for_ca_truck !== true && (!l.wh || l.wh === 'SC' || l.wh === 'SC&CA'));
+    const caLines = lines.filter(l => l.stage_for_ca_truck === true || l.wh === 'CA' || l.wh === 'SC&CA');
+    
+    // 빈 페이지 방지 — 라인 있는 섹션만 렌더링
+    const scHtml = scLines.length > 0 ? renderSection(scLines, '-SC') : '';
+    const caHtml = caLines.length > 0 ? renderSection(caLines, '-CA') : '';
+    
+    if (scHtml && caHtml) {
+      return scHtml + '<div style="page-break-before:always;margin-top:32px;">' + caHtml + '</div>';
+    }
+    return scHtml || caHtml;
   }
   return renderSection(lines, '');
 }
