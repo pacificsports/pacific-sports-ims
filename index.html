@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_215000 — CA 도착 모달에 거래처 오더 라인 별도 섹션 추가. 자주색 박스로 표시 + [📋 Received (거래처 출고)] / [❌ Cancelled] 버튼. Received 누르면 in_transit→received + sc2ca_status='invoiced' + qty_filled 채워서 invoice 발송 가능. Cancelled 는 CA bin 입력받아 재고 흡수 + 오더 cancel. _addLineToDraft 가 in_transit.source_order_id/source_order_line_id/source_order_number 저장. 새 SQL 필요 -->
+<!-- BUILD: 20260501_222500 — + New Customer PO 누르면 draft localStorage 무시하고 항상 빈 화면으로 시작. 이전 작업 내용 자동 복원되던 문제 fix -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -6193,6 +6193,18 @@ function backToPoList() {
 }
 
 function openNewInvoice() {
+  // + New Customer PO 명시적 클릭 — draft 무시하고 항상 빈 화면으로 시작
+  try {
+    if (typeof clearDraft === 'function') clearDraft();
+    // 혹시 다른 키로 저장됐을 수 있으니 localStorage 의 draft 관련 키 다 정리
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith('po_draft') || k.startsWith('inv_draft') || k.includes('_draft_')) {
+        localStorage.removeItem(k);
+      }
+    });
+  } catch(e) { console.warn('[openNewInvoice] draft clear:', e); }
+  window._boSkipDraft = true; // _openNewInvoiceInner 가 draft 안 부르도록
+  
   // 패널 활성화만 (loadCustomerPOs 재호출 없이)
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.ntab').forEach(t => t.classList.remove('active'));
