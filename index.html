@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260501_213500 — SC2CA 카드 컬럼 분류 fix: sc2ca_status='staged_for_truck' / 'in_transit' 인 카드도 Ready to Ship 컬럼에 표시 (이전엔 매칭 안 돼서 PO Entered 로 빠짐). 'invoiced' 는 Shipped 컬럼으로 -->
+<!-- BUILD: 20260501_215000 — CA 도착 모달에 거래처 오더 라인 별도 섹션 추가. 자주색 박스로 표시 + [📋 Received (거래처 출고)] / [❌ Cancelled] 버튼. Received 누르면 in_transit→received + sc2ca_status='invoiced' + qty_filled 채워서 invoice 발송 가능. Cancelled 는 CA bin 입력받아 재고 흡수 + 오더 cancel. _addLineToDraft 가 in_transit.source_order_id/source_order_line_id/source_order_number 저장. 새 SQL 필요 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -39496,9 +39496,13 @@ async function _addLineToDraft(palletId, palletLabel, lineData) {
       qty_pcs: qty_pcs,
       qty_boxes: lineData.pcs_per_box ? Math.ceil(qty_pcs / lineData.pcs_per_box) : null,
       ppb: lineData.pcs_per_box || 72,
-      transit_type: 'sc_ca',
+      transit_type: lineData.source_order_id ? 'sc_ca_order' : 'sc_ca',
       status: 'preparing',
-      notes: palletLabel
+      notes: palletLabel,
+      // 거래처 오더에서 온 라인이면 추적 정보
+      source_order_id: lineData.source_order_id || null,
+      source_order_line_id: lineData.source_order_line_id || null,
+      source_order_number: lineData.source_order_number || null
     }).select('id').single();
     
     if (itErr) throw itErr;
@@ -40684,6 +40688,7 @@ async function postShipment() {
 // ════════════════════════════════════════════════════════════
 let _scCaRecvShipment = null;
 let _scCaRecvPallets = [];
+let _scCaRecvOrders = []; // 거래처 오더에서 온 라인들
 
 async function openScCaReceive(shipmentId) {
   const { data: ship } = await db.from('sc_ca_shipments').select('*').eq('id', shipmentId).single();
@@ -40695,9 +40700,25 @@ async function openScCaReceive(shipmentId) {
   
   _scCaRecvShipment = ship;
   
-  // pallet 별 그룹화
+  // pallet 별 그룹화 — 거래처 오더 라인은 별도 처리
   const palletMap = {};
+  const orderLineMap = {}; // source_order_id → { order, lines[] }
+  
   lines.forEach(l => {
+    // 거래처 오더 라인 (source_order_id 있음) 은 별도 그룹
+    if (l.source_order_id) {
+      if (!orderLineMap[l.source_order_id]) {
+        orderLineMap[l.source_order_id] = {
+          order_id: l.source_order_id,
+          order_number: l.source_order_number || '',
+          lines: []
+        };
+      }
+      orderLineMap[l.source_order_id].lines.push({ ...l, mode: 'order_ship' });
+      return;
+    }
+    
+    // 일반 재고 라인은 pallet 단위
     const pid = l.pallet_id || 'no_pallet';
     if (!palletMap[pid]) {
       palletMap[pid] = {
@@ -40709,11 +40730,25 @@ async function openScCaReceive(shipmentId) {
     palletMap[pid].lines.push({
       ...l,
       mode: 'whole',  // 'whole' (통째로) or 'split' (해체)
-      target_bin: '',  // whole 모드일 때 모든 라인이 가는 bin
-      line_bins: {}    // split 모드일 때 라인별 bin
+      target_bin: '',
+      line_bins: {}
     });
   });
   _scCaRecvPallets = Object.values(palletMap);
+  
+  // 거래처 오더 라인은 customer_name 보강
+  _scCaRecvOrders = [];
+  for (const ord of Object.values(orderLineMap)) {
+    const { data: orderInfo } = await db.from('orders')
+      .select('id, order_number, customer_name, customer_po, total_amount')
+      .eq('id', ord.order_id).single();
+    _scCaRecvOrders.push({
+      ...ord,
+      customer_name: orderInfo?.customer_name || '(unknown)',
+      customer_po: orderInfo?.customer_po || '',
+      total_amount: orderInfo?.total_amount || 0
+    });
+  }
   
   // 헤더
   const totalPcs = lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
@@ -40805,6 +40840,47 @@ function renderScCaRecvPallets() {
       </div>
     `;
   }).join('');
+  
+  // 🚚 거래처 오더 라인 섹션
+  if (_scCaRecvOrders && _scCaRecvOrders.length > 0) {
+    const ordersHtml = _scCaRecvOrders.map((ord, oi) => {
+      const totalPcs = ord.lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
+      return `
+        <div style="border:2px solid #c084fc;border-radius:8px;background:#fff;margin-top:14px;">
+          <div style="background:#f3e8ff;padding:10px 14px;display:flex;align-items:center;gap:10px;border-radius:6px 6px 0 0;flex-wrap:wrap;">
+            <span style="font-weight:700;color:#7c3aed;font-size:13px;">🚚 거래처 오더 — ${ord.customer_name}</span>
+            <span style="background:#fff;padding:2px 8px;border-radius:10px;border:1px solid #c084fc;font-size:11px;color:#7c3aed;font-weight:700;">PO# ${ord.customer_po||'—'}</span>
+            <span style="color:var(--text2);font-size:11px;">${ord.lines.length} 라인 · <b>${totalPcs.toLocaleString()}</b> pcs · $${(ord.total_amount||0).toLocaleString()}</span>
+            <div style="margin-left:auto;display:flex;gap:6px;">
+              <button class="btn btn-sm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="sc2caRecvOrderShipped('${ord.order_id}')">📋 Received (거래처 출고)</button>
+              <button class="btn btn-sm" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700;" onclick="sc2caRecvOrderCancelled('${ord.order_id}', ${oi})">❌ Cancelled</button>
+            </div>
+          </div>
+          <div style="padding:10px 14px;">
+            <div style="font-size:11px;color:#6b7280;margin-bottom:6px;">📋 라인 내용:</div>
+            <table style="width:100%;border-collapse:collapse;font-size:11px;">
+              <thead><tr style="background:#fafaf9;"><th style="padding:5px;text-align:left;border:1px solid #e5e7eb;">Style</th><th style="padding:5px;text-align:left;border:1px solid #e5e7eb;">Color/Size</th><th style="padding:5px;text-align:left;border:1px solid #e5e7eb;">SKU</th><th style="padding:5px;text-align:right;border:1px solid #e5e7eb;">Qty</th></tr></thead>
+              <tbody>
+                ${ord.lines.map(l => `
+                  <tr>
+                    <td style="padding:5px;border:1px solid #e5e7eb;font-family:'IBM Plex Mono',monospace;font-weight:700;">${l.style_number||''}</td>
+                    <td style="padding:5px;border:1px solid #e5e7eb;">${l.color||''} / ${l.size||''}</td>
+                    <td style="padding:5px;border:1px solid #e5e7eb;font-family:'IBM Plex Mono',monospace;font-size:10px;">${l.sku||''}</td>
+                    <td style="padding:5px;border:1px solid #e5e7eb;text-align:right;font-weight:700;">${(l.qty_pcs||0).toLocaleString()}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <div style="margin-top:8px;font-size:10px;color:#6b7280;background:#fafaf9;padding:6px 10px;border-radius:4px;">
+              💡 <b>Received</b> 누르면 → invoice 자동 생성 + 카드가 Shipped & Invoiced 컬럼으로<br>
+              💡 <b>Cancelled</b> 누르면 → 오더 취소 + 재고는 CA bin 지정해서 흡수
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    container.innerHTML += ordersHtml;
+  }
 }
 
 function setPalletMode(palletIdx, mode) {
@@ -40830,6 +40906,150 @@ function updatePalletLineBin(palletIdx, lineIdx, bin) {
   const cleanBin = (bin||'').trim().toUpperCase();
   const line = _scCaRecvPallets[palletIdx].lines[lineIdx];
   line.line_bins[line.id] = cleanBin;
+}
+
+// 🚚 거래처 오더 — Received (CA 도착 → 거래처로 출고 처리)
+async function sc2caRecvOrderShipped(orderId) {
+  if (!confirm('이 오더를 Received 처리하시겠습니까?\n• 거래처로 출고 완료\n• Invoice 자동 생성됨\n• 카드가 Shipped & Invoiced 컬럼으로 이동')) return;
+  
+  showToast('⏳ Received 처리 중...');
+  
+  try {
+    // 1. in_transit 의 이 오더 라인들 status='received'
+    const { error: itErr } = await db.from('in_transit')
+      .update({ status: 'received', received_at: new Date().toISOString() })
+      .eq('source_order_id', orderId)
+      .eq('status', 'in_transit');
+    
+    if (itErr) {
+      // 'in_transit' status 없으면 'preparing' 도 시도 (출발 전인데 받았다고 처리하는 케이스)
+      await db.from('in_transit')
+        .update({ status: 'received', received_at: new Date().toISOString() })
+        .eq('source_order_id', orderId)
+        .in('status', ['preparing', 'in_transit']);
+    }
+    
+    // 2. 오더 상태 업데이트
+    await db.from('orders').update({
+      sc2ca_status: 'invoiced',
+      sc2ca_received_at: new Date().toISOString(),
+      sc2ca_shipped_at: new Date().toISOString()
+    }).eq('id', orderId);
+    
+    // 3. order_lines 의 qty_filled 채우기 (invoice 가 인식하도록)
+    const { data: sc2caLines } = await db.from('order_lines')
+      .select('id, qty_sc2ca, qty_filled')
+      .eq('order_id', orderId)
+      .eq('stage_for_ca_truck', true);
+    for (const l of (sc2caLines || [])) {
+      await db.from('order_lines').update({
+        qty_filled: (l.qty_filled || 0) + (l.qty_sc2ca || 0)
+      }).eq('id', l.id);
+    }
+    
+    showToast('✅ Received 완료 — Invoice 화면에서 리뷰 후 발송하세요');
+    
+    // 모달 새로고침 — 이 오더만 _scCaRecvOrders 에서 제거
+    _scCaRecvOrders = _scCaRecvOrders.filter(o => o.order_id !== orderId);
+    renderScCaRecvPallets();
+    
+    // 카드도 새로고침
+    if (typeof loadOrderStatus === 'function') loadOrderStatus();
+    
+    // 모든 처리 완료시 모달 자동 닫기
+    if (_scCaRecvOrders.length === 0 && _scCaRecvPallets.length === 0) {
+      setTimeout(() => {
+        document.getElementById('sc-ca-receive-modal').style.display = 'none';
+      }, 800);
+    }
+  } catch(e) {
+    console.error('[sc2caRecvOrderShipped]', e);
+    showToast('❌ 처리 실패: ' + e.message);
+  }
+}
+
+// 🚚 거래처 오더 — Cancelled (운송 도중 취소 → CA bin 으로 흡수)
+async function sc2caRecvOrderCancelled(orderId, orderIdx) {
+  // bin 입력 모달
+  const bin = prompt('재고를 흡수할 CA bin 을 입력하세요 (예: X1100):');
+  if (!bin) return;
+  const cleanBin = bin.trim().toUpperCase();
+  if (!cleanBin) { showToast('❌ Bin 코드가 비어있습니다'); return; }
+  
+  const cancelReason = prompt('취소 사유 (선택):') || 'Cancelled in transit';
+  
+  if (!confirm(`이 오더를 취소 처리하시겠습니까?\n• 오더 → cancelled\n• 재고는 CA bin "${cleanBin}" 으로 흡수\n• in_transit 행 제거`)) return;
+  
+  showToast('⏳ Cancelled 처리 중...');
+  
+  try {
+    // 1. 이 오더의 in_transit 라인 가져오기
+    const { data: transitRows } = await db.from('in_transit')
+      .select('*')
+      .eq('source_order_id', orderId)
+      .in('status', ['in_transit', 'preparing']);
+    
+    // 2. 각 라인의 qty 를 CA bin 에 입고 (inventory_bins + inventory)
+    const txnId = crypto.randomUUID();
+    for (const r of (transitRows || [])) {
+      // inventory 레코드 찾기 (color/size 매칭)
+      const { data: invRow } = await db.from('inventory')
+        .select('id, qty_on_hand')
+        .eq('color', (r.color||'').toUpperCase())
+        .eq('size', (r.size||'').toUpperCase())
+        .single();
+      
+      if (!invRow) {
+        console.warn(`[Cancel] inventory 없음: ${r.color}/${r.size}`);
+        continue;
+      }
+      
+      // changeInventory 헬퍼로 안전하게 + 트랜잭션 로그
+      await changeInventory({
+        transaction_id: txnId,
+        inventory_id: invRow.id,
+        bin_code: cleanBin,
+        delta: r.qty_pcs,
+        action: 'sc2ca_cancelled_absorb',
+        detail_metadata: {
+          source_order_id: orderId,
+          source_order_number: r.source_order_number,
+          in_transit_id: r.id,
+          reason: cancelReason
+        }
+      });
+    }
+    
+    // 3. in_transit 행 삭제
+    await db.from('in_transit').delete().eq('source_order_id', orderId).in('status', ['in_transit', 'preparing']);
+    
+    // 4. order 상태 cancelled 처리
+    await db.from('orders').update({
+      status: 'cancelled',
+      sc2ca_status: 'cancelled',
+      cancel_reason: 'in_transit_cancel',
+      cancel_notes: cancelReason,
+      cancelled_at: new Date().toISOString()
+    }).eq('id', orderId);
+    
+    showToast(`✅ 취소 완료 — 재고 ${cleanBin} 으로 흡수됨`);
+    
+    // 모달 새로고침
+    _scCaRecvOrders = _scCaRecvOrders.filter((_, i) => i !== orderIdx);
+    renderScCaRecvPallets();
+    
+    if (typeof loadOrderStatus === 'function') loadOrderStatus();
+    if (typeof loadCustomerPOs === 'function') loadCustomerPOs();
+    
+    if (_scCaRecvOrders.length === 0 && _scCaRecvPallets.length === 0) {
+      setTimeout(() => {
+        document.getElementById('sc-ca-receive-modal').style.display = 'none';
+      }, 800);
+    }
+  } catch(e) {
+    console.error('[sc2caRecvOrderCancelled]', e);
+    showToast('❌ 취소 실패: ' + e.message);
+  }
 }
 
 async function postScCaReceiving() {
