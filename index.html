@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260503_213000 — PO 저장 시 SC2CA 라인 있으면 자동으로 wh_code='SC&CA' + is_split_warehouse=true 처리. 이전엔 사용자가 Warehouse 드롭다운에서 명시적으로 SC&CA 골라야만 split 인식되어, CA 단일로 만든 후 SC2CA 라인 있으면 wh_code='CA' 저장 → CA 카드에 432 (전체) 잘못 표시됐음 -->
+<!-- BUILD: 20260503_213500 — hasSc2caLine 체크 fix: 이전 BUILD 에선 stage_for_ca_truck/qty_sc2ca 속성을 체크했는데 poLines 의 라인 객체엔 그 속성이 없었음. 실제로는 allocSC2CA 객체에 값 있는지 체크해야 함 — fix 됨 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7995,8 +7995,11 @@ async function _doSaveInvoice() {
   if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
 
   // SC&CA 혼합이면 SC를 주 창고로, is_split_warehouse = true
-  // 또는 SC2CA 라인 (stage_for_ca_truck=true) 이 있으면 자동으로 split 인식
-  const hasSc2caLine = poLines.some(l => l.stage_for_ca_truck === true || (l.qty_sc2ca||0) > 0);
+  // 또는 SC2CA 라인 (allocSC2CA 에 값이 있는 라인) 이 있으면 자동으로 split 인식
+  const hasSc2caLine = poLines.some(l => {
+    const alloc = l.allocSC2CA || {};
+    return Object.values(alloc).some(v => (v||0) > 0);
+  });
   const isSplitWh = (whId === 'SC&CA') || hasSc2caLine;
   let effectiveWhId = whId;
   const scWh = warehouses.find(w => w.code === 'SC');
