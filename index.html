@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260503_212000 — SC2CA 흐름 사용자 명세 그대로 구현: (1) CA 카드 SC→CA 대기시 [Mark as Shipped] 회색 비활성화 + 별도 [💼 Ship CA Portion First] 노란 작은 버튼. (2) CA 도착 모달의 거래처 오더 섹션이 caAlreadyShipped 따라 분기: CA 미출고 → [📦 Received] (한꺼번에 케이스), CA 출고됨 → [📋 Receive & Invoice] (따로 케이스). (3) sc2caRecvOrderInvoice 신규 함수: Receive 처리 후 자동으로 sc2caMarkShipped 호출 → SC2CA portion invoice 발송 흐름 시작 -->
+<!-- BUILD: 20260503_213000 — PO 저장 시 SC2CA 라인 있으면 자동으로 wh_code='SC&CA' + is_split_warehouse=true 처리. 이전엔 사용자가 Warehouse 드롭다운에서 명시적으로 SC&CA 골라야만 split 인식되어, CA 단일로 만든 후 SC2CA 라인 있으면 wh_code='CA' 저장 → CA 카드에 432 (전체) 잘못 표시됐음 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7995,7 +7995,9 @@ async function _doSaveInvoice() {
   if (poLines.length === 0) { alert('최소 1개 라인을 추가해 주세요.'); return; }
 
   // SC&CA 혼합이면 SC를 주 창고로, is_split_warehouse = true
-  const isSplitWh = (whId === 'SC&CA');
+  // 또는 SC2CA 라인 (stage_for_ca_truck=true) 이 있으면 자동으로 split 인식
+  const hasSc2caLine = poLines.some(l => l.stage_for_ca_truck === true || (l.qty_sc2ca||0) > 0);
+  const isSplitWh = (whId === 'SC&CA') || hasSc2caLine;
   let effectiveWhId = whId;
   const scWh = warehouses.find(w => w.code === 'SC');
   const caWh = warehouses.find(w => w.code === 'CA');
@@ -8230,7 +8232,7 @@ async function _doSaveInvoice() {
       customer_po: po,
       customer_id: custSelId || null,
       warehouse_id: effectiveWhId,
-      wh_code: document.getElementById('inv-wh-sel')?.selectedOptions[0]?.dataset?.code || 'SC',
+      wh_code: hasSc2caLine ? 'SC&CA' : (document.getElementById('inv-wh-sel')?.selectedOptions[0]?.dataset?.code || 'SC'),
       is_split_warehouse: isSplitWh,
       ship_date: shipDate || null,
       total_pcs: totalPcs,
@@ -8279,7 +8281,7 @@ async function _doSaveInvoice() {
       customer_po: po,
       customer_id: custSelId || null,
       warehouse_id: effectiveWhId,
-      wh_code: document.getElementById('inv-wh-sel')?.selectedOptions[0]?.dataset?.code || 'SC',
+      wh_code: hasSc2caLine ? 'SC&CA' : (document.getElementById('inv-wh-sel')?.selectedOptions[0]?.dataset?.code || 'SC'),
       is_split_warehouse: isSplitWh,
       ship_date: shipDate || null,
       status: orderStatus,
