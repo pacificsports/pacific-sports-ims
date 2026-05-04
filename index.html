@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260504_133000 — AP Invoice 상세 PDF 미리보기 fix: 인보이스 자체 PDF 가 없어도 첨부 파일 중 PDF 가 있으면 그걸 우측 미리보기에 표시. 첨부 업로드 시에도 자동으로 우측에 PDF 표시됨 -->
+<!-- BUILD: 20260504_150000 — AP Invoice 일괄 파싱 리뷰의 Account 검색 dropdown 에서 모든 type 의 account 가 검색되게 fix (이전엔 expense/liability 만). 일괄 적용 input 도 동일하게 풀어줌 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -46744,7 +46744,7 @@ function renderBatchCard(item) {
         </div>
       </td>
       <td style="padding:4px 6px;">
-        <input type="text" value="${l.description}" style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:3px;padding:3px;" oninput="_apBatchItems[${item.id}].lines[${li}].description=this.value">
+        <input type="text" value="${l.description}" style="width:100%;font-size:11px;border:1px solid #e5e7eb;border-radius:3px;padding:3px;" oninput="_apBatchItems[${item.id}].lines[${li}].description=this.value;refreshBatchJEPreview(${item.id})">
       </td>
       <td style="padding:4px 6px;width:110px;">
         <input type="number" value="${l.amount.toFixed(2)}" step="0.01" style="width:100%;font-size:11px;text-align:right;border:1px solid #e5e7eb;border-radius:3px;padding:3px;font-family:'IBM Plex Mono',monospace;color:#7f1d1d;font-weight:700;" oninput="_apBatchItems[${item.id}].lines[${li}].amount=parseFloat(this.value)||0;updateBatchSummary();refreshBatchJEPreview(${item.id});updateBatchTotalDisplay(${item.id})">
@@ -53339,9 +53339,11 @@ function navBulkAcct(e, itemId) {
     items[curIdx].classList.add('kbd-active');
     items[curIdx].style.background = '#dbeafe';
     items[curIdx].scrollIntoView({ block: 'nearest' });
-  } else if (e.key === 'Enter') {
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
     e.preventDefault();
-    if (cur) cur.dispatchEvent(new MouseEvent('mousedown'));
+    // 현재 선택된 게 있으면 그거, 없으면 첫 번째 항목 자동 적용
+    const target = cur || items[0];
+    if (target) target.dispatchEvent(new MouseEvent('mousedown'));
   } else if (e.key === 'Escape') {
     dd.style.display = 'none';
   }
@@ -53352,8 +53354,9 @@ function filterBulkAcct(itemId, query) {
   if (!dd) return;
   const q = (query || '').toLowerCase().trim();
 
+  // 모든 active account 검색 가능
   const filtered = _glAccounts
-    .filter(a => ['expense','liability'].includes(a.type))
+    .filter(a => a.is_active !== false)
     .filter(a => !q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
     .slice(0, 25);
 
@@ -53415,9 +53418,11 @@ function navBatchAcct(e, itemId, lineIdx) {
     items[curIdx].classList.add('kbd-active');
     items[curIdx].style.background = '#dbeafe';
     items[curIdx].scrollIntoView({ block: 'nearest' });
-  } else if (e.key === 'Enter') {
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
     e.preventDefault();
-    if (cur) cur.dispatchEvent(new MouseEvent('mousedown'));
+    // 현재 선택된 게 있으면 그거, 없으면 첫 번째 항목 자동 적용
+    const target = cur || items[0];
+    if (target) target.dispatchEvent(new MouseEvent('mousedown'));
   } else if (e.key === 'Escape') {
     dd.style.display = 'none';
   }
@@ -53447,9 +53452,11 @@ function navVendorAcct(e) {
     items[curIdx].classList.add('kbd-active');
     items[curIdx].style.background = '#dbeafe';
     items[curIdx].scrollIntoView({ block: 'nearest' });
-  } else if (e.key === 'Enter') {
+  } else if (e.key === 'Enter' || e.key === 'Tab') {
     e.preventDefault();
-    if (cur) cur.dispatchEvent(new MouseEvent('mousedown'));
+    // 현재 선택된 게 있으면 그거, 없으면 첫 번째 항목 자동 적용
+    const target = cur || items[0];
+    if (target) target.dispatchEvent(new MouseEvent('mousedown'));
   } else if (e.key === 'Escape') {
     dd.style.display = 'none';
   }
@@ -53460,8 +53467,9 @@ function filterBatchAcct(itemId, lineIdx, query) {
   if (!dropdown) return;
   const q = (query || '').toLowerCase().trim();
 
+  // 모든 active account 검색 가능 (expense/liability/asset/revenue/equity 다 포함)
   const filtered = _glAccounts
-    .filter(a => ['expense','liability'].includes(a.type))
+    .filter(a => a.is_active !== false)
     .filter(a => !q || a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
     .slice(0, 25);
 
