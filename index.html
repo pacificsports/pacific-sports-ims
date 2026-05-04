@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260504_080000 — 진짜 핵심 fix: getColForCard 함수가 'staged_for_truck'/'in_transit'/'ca_received' 매칭 안 해서 SC2CA 카드가 default 'entered' 로 빠지던 버그. 이제 그 셋도 'ready' 컬럼으로 매칭됨. 이게 사용자가 본 SC→CA 카드 PO Entered 컬럼 잘못 표시 문제의 진짜 원인 -->
+<!-- BUILD: 20260504_133000 — AP Invoice 상세 PDF 미리보기 fix: 인보이스 자체 PDF 가 없어도 첨부 파일 중 PDF 가 있으면 그걸 우측 미리보기에 표시. 첨부 업로드 시에도 자동으로 우측에 PDF 표시됨 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -51004,6 +51004,26 @@ async function loadAPAttachmentsForInvoice(invoiceId) {
   }
 
   if (countEl) countEl.textContent = (data||[]).length;
+  
+  // 🆕 첨부 파일 중 첫 PDF 를 미리보기 후보로 저장
+  window._apAttachmentPdfUrl = null;
+  const firstPdf = (data||[]).find(f => 
+    (f.mime_type === 'application/pdf') || 
+    (f.file_name||'').toLowerCase().endsWith('.pdf')
+  );
+  if (firstPdf) {
+    try {
+      const { data: signedData } = await db.storage.from('ap-invoices').createSignedUrl(firstPdf.file_path, 3600);
+      if (signedData?.signedUrl) {
+        window._apAttachmentPdfUrl = signedData.signedUrl;
+        // PDF 뷰어 영역이 비어있으면 (= 인보이스 자체 PDF 없음) 첨부 PDF 표시
+        const pdfPane = document.getElementById('ap-inv-pdf-pane');
+        if (pdfPane && pdfPane.querySelector('.empty-pdf-msg, [data-empty-pdf]')) {
+          pdfPane.innerHTML = `<iframe src="${signedData.signedUrl}" style="width:100%;height:100%;border:none;border-radius:0 0 12px 0;"></iframe>`;
+        }
+      }
+    } catch(e) { console.warn('[loadAPAttachments] failed to get signed URL:', e); }
+  }
 
   if (!data || data.length === 0) {
     listEl.innerHTML = '<div style="color:#9ca3af;text-align:center;padding:12px;font-size:11px;">첨부 파일 없음</div>';
@@ -53060,16 +53080,18 @@ async function viewAPInvoice(invoiceId) {
     console.warn('[viewAPInvoice] Failed to load attachments:', e);
   }
 
-  // PDF 뷰어
+  // PDF 뷰어 — invoice 자체 PDF 우선, 없으면 첨부 PDF, 그것도 없으면 placeholder
   const pdfPane = document.getElementById('ap-inv-pdf-pane');
   if (pdfPane) {
     if (pdfUrl) {
       pdfPane.innerHTML = `<iframe src="${pdfUrl}" style="width:100%;height:100%;border:none;border-radius:0 0 12px 0;"></iframe>`;
+    } else if (window._apAttachmentPdfUrl) {
+      pdfPane.innerHTML = `<iframe src="${window._apAttachmentPdfUrl}" style="width:100%;height:100%;border:none;border-radius:0 0 12px 0;"></iframe>`;
     } else {
-      pdfPane.innerHTML = `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#9ca3af;gap:8px;padding:40px;">
+      pdfPane.innerHTML = `<div data-empty-pdf="1" class="empty-pdf-msg" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#9ca3af;gap:8px;padding:40px;">
         <div style="font-size:48px;">📄</div>
         <div style="font-size:14px;font-weight:600;color:#d1d5db;">PDF 없음</div>
-        <div style="font-size:11px;color:#9ca3af;">PDF 파싱으로 등록된 인보이스만 표시됩니다</div>
+        <div style="font-size:11px;color:#9ca3af;">PDF 파싱으로 등록되었거나 PDF 가 첨부된 인보이스만 표시됩니다</div>
       </div>`;
     }
   }
