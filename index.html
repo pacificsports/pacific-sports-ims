@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260503_213500 — hasSc2caLine 체크 fix: 이전 BUILD 에선 stage_for_ca_truck/qty_sc2ca 속성을 체크했는데 poLines 의 라인 객체엔 그 속성이 없었음. 실제로는 allocSC2CA 객체에 값 있는지 체크해야 함 — fix 됨 -->
+<!-- BUILD: 20260503_215000 — submitWhComplete 가 SC2CA 분기 처리 안 해서 SC2CA 카드의 Warehouse Preparing Complete 눌러도 다음 단계로 안 가던 버그 fix. whPre 가 'SC2CA' 면 'sc2ca_' 사용 + sc2ca_status='preparing' 자동 업데이트. SC2CA 컬럼 없을 때 fallback 처리도 추가 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -23561,7 +23561,8 @@ async function submitWhComplete() {
     document.getElementById('wh-complete-pin')?.focus();
     return;
   }
-  const whPre = _whCompleteWh === 'CA' ? 'ca_' : 'sc_';
+  const isSc2ca = (_whCompleteWh === 'SC2CA');
+  const whPre = _whCompleteWh === 'CA' ? 'ca_' : (isSc2ca ? 'sc2ca_' : 'sc_');
   const empName = _whCompleteEmp.name;
 
   // 준비 수량 수집
@@ -23570,11 +23571,25 @@ async function submitWhComplete() {
   }));
 
   // orders 테이블에 완료 기록
-  await db.from('orders').update({
+  const updateData = {
     [whPre+'wh_complete_at']: new Date().toISOString(),
     [whPre+'wh_complete_by']: empName,
     [whPre+'wh_prepared_lines']: JSON.stringify(preparedLines)
-  }).eq('id', _whCompleteOrderId);
+  };
+  // SC2CA 는 status 도 같이 업데이트 (preparing → 다음 단계)
+  if (isSc2ca) {
+    updateData.sc2ca_status = 'preparing';  // 본격적으로 준비 시작
+  }
+  
+  const { error: updateErr } = await db.from('orders').update(updateData).eq('id', _whCompleteOrderId);
+  if (updateErr) {
+    console.error('[submitWhComplete] update error:', updateErr);
+    showToast('❌ 저장 실패: ' + updateErr.message);
+    // SC2CA 컬럼이 없을 수도 있어서, status 만 업데이트 재시도
+    if (isSc2ca && updateErr.message?.includes('column')) {
+      await db.from('orders').update({ sc2ca_status: 'preparing' }).eq('id', _whCompleteOrderId);
+    }
+  }
 
   document.getElementById('wh-complete-modal').style.display = 'none';
   showToast('✅ WH Ready to Ship — ' + empName);
