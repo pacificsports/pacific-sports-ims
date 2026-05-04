@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260504_150000 — AP Invoice 일괄 파싱 리뷰의 Account 검색 dropdown 에서 모든 type 의 account 가 검색되게 fix (이전엔 expense/liability 만). 일괄 적용 input 도 동일하게 풀어줌 -->
+<!-- BUILD: 20260504_155000 — SC→CA Internal Transfer Packing List 미리보기에 Box 수량 칼럼 추가: 상단 요약에 Total Boxes, 각 Pallet 헤더에 박스 수, 라인 테이블에 pcs/box + 박스 칼럼 표시 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -40752,14 +40752,16 @@ function generatePackingList() {
   const totalPallets = _shipmentPallets.length;
   const totalLines = _shipmentPallets.reduce((s, p) => s + p.lines.length, 0);
   const totalPcs = _shipmentPallets.reduce((s, p) => s + p.lines.reduce((ss, l) => ss + (l.qty_pcs || 0), 0), 0);
+  const totalBoxes = _shipmentPallets.reduce((s, p) => s + p.lines.reduce((ss, l) => ss + (l.boxes || 0), 0), 0);
   
   const palletsHtml = _shipmentPallets.map(p => {
     if (p.lines.length === 0) return '';
     const palletPcs = p.lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
+    const palletBoxes = p.lines.reduce((s, l) => s + (l.boxes || 0), 0);
     return `
       <div style="margin-bottom:18px;page-break-inside:avoid;">
         <div style="background:#f3e8ff;padding:8px 12px;border:1px solid #d8b4fe;border-radius:4px;margin-bottom:6px;font-weight:700;color:#7b1fa2;font-size:14px;">
-          📦 ${p.label} — ${p.lines.length} 라인 · ${palletPcs.toLocaleString()} pcs
+          📦 ${p.label} — ${p.lines.length} 라인 · ${palletPcs.toLocaleString()} pcs · ${palletBoxes.toLocaleString()} 박스
         </div>
         <table style="width:100%;border-collapse:collapse;font-size:11px;">
           <thead>
@@ -40769,6 +40771,8 @@ function generatePackingList() {
               <th style="padding:6px 8px;text-align:center;border:1px solid #ccc;">Size</th>
               <th style="padding:6px 8px;text-align:left;border:1px solid #ccc;">SKU</th>
               <th style="padding:6px 8px;text-align:right;border:1px solid #ccc;">Qty (pcs)</th>
+              <th style="padding:6px 8px;text-align:right;border:1px solid #ccc;">pcs/box</th>
+              <th style="padding:6px 8px;text-align:right;border:1px solid #ccc;">박스</th>
             </tr>
           </thead>
           <tbody>
@@ -40779,6 +40783,8 @@ function generatePackingList() {
                 <td style="padding:5px 8px;border:1px solid #ccc;text-align:center;">${l.size||''}</td>
                 <td style="padding:5px 8px;border:1px solid #ccc;font-family:'IBM Plex Mono',monospace;font-size:10px;">${l.sku||''}</td>
                 <td style="padding:5px 8px;border:1px solid #ccc;text-align:right;font-weight:700;">${(l.qty_pcs||0).toLocaleString()}</td>
+                <td style="padding:5px 8px;border:1px solid #ccc;text-align:right;color:#6b7280;">${l.pcs_per_box||l.box_qty||''}</td>
+                <td style="padding:5px 8px;border:1px solid #ccc;text-align:right;font-weight:700;">${(l.boxes||0).toLocaleString()}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -40815,6 +40821,7 @@ function generatePackingList() {
         <div><b>Pallets:</b> ${totalPallets}</div>
         <div><b>Lines:</b> ${totalLines}</div>
         <div><b>Total Pcs:</b> ${totalPcs.toLocaleString()}</div>
+        <div><b>Total Boxes:</b> ${totalBoxes.toLocaleString()}</div>
       </div>
       
       ${_shipmentInfo.notes ? `<div style="background:#fffde7;border:1px solid #fbc02d;padding:6px 10px;font-size:11px;margin-bottom:14px;"><b>Notes:</b> ${_shipmentInfo.notes}</div>` : ''}
