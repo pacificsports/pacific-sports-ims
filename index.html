@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260503_215000 — submitWhComplete 가 SC2CA 분기 처리 안 해서 SC2CA 카드의 Warehouse Preparing Complete 눌러도 다음 단계로 안 가던 버그 fix. whPre 가 'SC2CA' 면 'sc2ca_' 사용 + sc2ca_status='preparing' 자동 업데이트. SC2CA 컬럼 없을 때 fallback 처리도 추가 -->
+<!-- BUILD: 20260504_054000 — Pallet 삭제 시 confirm 팝업 완전히 제거. 빈 pallet 이든 라인 있든 ✕ 누르면 바로 삭제 (라인 있으면 자동으로 SC 재고 복원) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -40096,14 +40096,11 @@ async function deletePallet(palletId) {
   const pallet = _shipmentPallets.find(p => p.id === palletId);
   if (!pallet) return;
   
+  // 라인 있으면 reverse (SC 재고 복원), 빈 pallet 이면 그냥 삭제
   if (pallet.lines.length > 0) {
-    if (!confirm(`이 Pallet 안의 ${pallet.lines.length}개 라인을 모두 삭제하고 SC 재고를 복원하시겠습니까?`)) return;
-    // 각 라인 reverse (역순)
     for (let li = pallet.lines.length - 1; li >= 0; li--) {
       await _removeLineFromDraft(palletId, li);
     }
-  } else {
-    if (!confirm('이 Pallet 을 삭제하시겠습니까?')) return;
   }
   
   _shipmentPallets = _shipmentPallets.filter(p => p.id !== palletId);
