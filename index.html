@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_080500 — Mark as Shipped 흐름의 invoice 합산 fix: 옛 SC2CA 따로 출고 작업의 잔재 플래그 (_sc2caOnlyShipMode) 가 남아있어서 이번 정상 출고에 invoice 가 SC2CA portion 만 만들어진 버그. 두 가지 보호: (1) doShipped 입구에서 bypass 안 켜진 정상 흐름이면 _sc2caOnlyShipMode 강제 리셋 (2) _doShippedCore 끝나면 두 플래그 다 finally 로 리셋 -->
+<!-- BUILD: 20260505_084500 — Shipping Confirmation 이멜의 SC2CA 합쳐진 케이스 fix: (1) sc2ca_status='ca_received'/'invoiced' 면 sc2ca_qty 를 ca_qty 로 합쳐서 한 출고 처리. (2) 같은 style/color/size 라인 (CA + SC2CA 따로 저장된 거) 한 줄로 dedupe + 합산. 이제 1180 WHITE S 432 pcs 한 줄로 깔끔히 표시 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -27562,7 +27562,15 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
 
     let scQty = getActualQty(allocSC, 'sc_pcr_prepared_lines');
     let caQty = getActualQty(allocCA, 'ca_pcr_prepared_lines');
-    const sc2caQty = l.qty_sc2ca || 0;
+    let sc2caQty = l.qty_sc2ca || 0;
+    
+    // SC2CA 가 CA 에 합쳐진 케이스 (sc2ca_status='ca_received'/'invoiced'):
+    // → sc2ca_qty 를 ca_qty 로 합쳐서 한 출고 처럼 처리
+    const sc2caMergedToCa = ['ca_received','invoiced'].includes(order.sc2ca_status);
+    if (sc2caMergedToCa && sc2caQty > 0 && l.stage_for_ca_truck === true) {
+      caQty += sc2caQty;
+      sc2caQty = 0; // CA 로 합쳤으니 별도 표시 안 함
+    }
 
     // back qty: 총 주문 - SC alloc - CA alloc - SC2CA alloc
     // (SC2CA 도 출고 예정이므로 back_qty 에서 제외)
@@ -27614,6 +27622,31 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     if (sa !== sb) return (sa===-1?99:sa)-(sb===-1?99:sb);
     return (a.is_side_seam?1:0)-(b.is_side_seam?1:0);
   });
+  
+  // 같은 style/color/size/side_seam 라인 합치기 (CA + SC2CA 가 같은 1180 WHITE S 인 경우 등)
+  const merged = {};
+  for (const l of lineItems) {
+    const key = `${l.style_number}|${l.color}|${l.size}|${l.is_side_seam?1:0}`;
+    if (!merged[key]) {
+      merged[key] = { ...l };
+    } else {
+      // 합산
+      merged[key].qty = (merged[key].qty || 0) + (l.qty || 0);
+      merged[key].sc_qty = (merged[key].sc_qty || 0) + (l.sc_qty || 0);
+      merged[key].ca_qty = (merged[key].ca_qty || 0) + (l.ca_qty || 0);
+      merged[key].sc2ca_qty = (merged[key].sc2ca_qty || 0) + (l.sc2ca_qty || 0);
+      merged[key].back_qty = (merged[key].back_qty || 0) + (l.back_qty || 0);
+      // 이미 출고 상태 중 어느 한쪽이라도 출고됐으면 출고로 표시
+      merged[key].sc_shipped = merged[key].sc_shipped || l.sc_shipped;
+      merged[key].ca_shipped = merged[key].ca_shipped || l.ca_shipped;
+      merged[key].sc_prev_shipped = merged[key].sc_prev_shipped || l.sc_prev_shipped;
+      merged[key].ca_prev_shipped = merged[key].ca_prev_shipped || l.ca_prev_shipped;
+    }
+  }
+  const lineItemsMerged = Object.values(merged);
+  // 합쳐진 결과를 lineItems 에 다시 할당
+  lineItems.length = 0;
+  lineItems.push(...lineItemsMerged);
 
   // BOL 멀티 파일 배열 구성 (_bolFilesData 우선, 없으면 단일 bolData)
   // _bolFilesDataSingle(단일 모달) 또는 _bolFilesData(배치) 또는 단일 bolData
