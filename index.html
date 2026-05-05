@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260504_222500 — CA 도착 처리 모달의 거래처 오더 섹션: 두 옵션 항상 같이 표시. (1) [Received & Combine] 초록 — CA 카드에 합쳐서 같이 출고 (CA 미출고일 때만 가능, 이미 출고됐으면 회색 비활성화). (2) [Received & Ship] 자주색 — SC→CA portion 따로 별도 출고 + 별도 invoice. 사용자가 케이스마다 자유롭게 선택 가능 -->
+<!-- BUILD: 20260505_072500 — Packing List 가 CA portion 만 표시되던 버그 fix: sc2ca_status='ca_received'/'invoiced' 면 SC2CA 라인도 CA portion 에 합쳐서 출력. SC2CA 라인의 alloc_sc2ca_detail 을 alloc_ca_detail 로 변환해서 박스 계산 정상화 (288 + 144 = 432 pcs / 4 + 2 = 6 boxes) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -28077,7 +28077,11 @@ async function printPackingListFromCard(orderId, whFilter) {
     });
     useSplit = false;
   } else if (whFilter === 'CA') {
+    // SC2CA 가 CA 에 합쳐진 케이스 (sc2ca_status='ca_received' 또는 'invoiced') 면 SC2CA 라인도 CA portion 으로 포함
+    const sc2caMergedToCa = ['ca_received','invoiced'].includes(order.sc2ca_status);
     filteredLines = nonZeroLines.filter(l => {
+      // SC2CA 라인 (stage_for_ca_truck=true) — 합쳐진 케이스만 포함, 아니면 제외
+      if (l.stage_for_ca_truck === true) return sc2caMergedToCa;
       if (l.wh === 'SC' || !l.wh || l.wh === '') return false;
       if (l.wh === 'SC&CA') {
         const allocCA = l.alloc_ca_detail || {};
@@ -30807,6 +30811,23 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       alloc_ca_detail: {}, // SC2CA 는 CA alloc 안 봄
     }));
     whFilter = 'SC'; // 내부 로직은 SC 분기로
+  }
+  
+  // CA 출력 시 SC2CA 라인 (stage_for_ca_truck=true) 은 CA alloc 으로 변환해서 추가
+  // (sc2ca 가 ca_received 되어 CA 카드에 합쳐진 케이스)
+  if (whFilter === 'CA' && Array.isArray(lines)) {
+    lines = lines.map(l => {
+      if (l.stage_for_ca_truck === true) {
+        // SC2CA 라인을 CA alloc 으로 변환 (CA 도착 후 합쳐졌으니 CA bin 처럼 표시)
+        return {
+          ...l,
+          qty_pieces: l.qty_sc2ca || l.qty_pieces || 0,
+          alloc_ca_detail: l.alloc_sc2ca_detail || l.alloc_ca_detail || {},
+          alloc_detail: {} // SC alloc 안 봄
+        };
+      }
+      return l;
+    });
   }
 
   // 수량 0인 라인 제외
