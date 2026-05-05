@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_075000 — Mark as Shipped 모달의 박스 수 계산 fix: SC2CA 가 CA 에 합쳐진 케이스 (ca_received/invoiced) 에서 stage_for_ca_truck=true 라인은 alloc_sc2ca_detail 을 봐야 하는데 alloc_ca_detail (빈) 만 봐서 SC2CA portion 박스가 누락됐음. 이제 4 + 2 = 6 박스 정상 표시 -->
+<!-- BUILD: 20260505_080000 — BOL (Bill of Lading) 의 TOTAL PIECES 와 라인 수량이 CA portion 만 표시되던 버그 fix: SC2CA 가 합쳐진 케이스에서 stage_for_ca_truck=true 라인은 alloc_sc2ca_detail 을 사용하게 buildBolHtml 수정. 이제 432 pcs 정상 표시 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -31248,13 +31248,23 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
   const bolWh = shipInfo?.wh || 'SC';
   // PCR 박스 수: 픽티켓에서 계산된 _pcrBoxes가 있으면 그 수 사용
   const pcrBoxCount = (window._pcrBoxes && window._pcrBoxes.length > 0) ? window._pcrBoxes.length : null;
+  // SC2CA 가 CA 에 합쳐진 케이스 (sc2ca_status='ca_received'/'invoiced')
+  const sc2caMergedToCa = ['ca_received','invoiced'].includes(order.sc2ca_status);
 
   let totalPcs = 0, totalBoxes = 0;
   // 전체 PCR pcs 합산 (박스 수 계산용)
   let totalPcrPcs = 0;
   const rows = sorted.map(l => {
     const isCA = bolWh === 'CA';
-    const alloc = isCA ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
+    // CA BOL + SC2CA 라인 + 합쳐진 케이스 → alloc_sc2ca_detail 사용
+    let alloc;
+    if (isCA && l.stage_for_ca_truck === true && sc2caMergedToCa) {
+      alloc = l.alloc_sc2ca_detail || {};
+    } else if (isCA) {
+      alloc = l.alloc_ca_detail || {};
+    } else {
+      alloc = l.alloc_detail || {};
+    }
     const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
     console.log('BOL line:', l.color, l.size, 'alloc:', JSON.stringify(alloc), 'ppb:', ppb);
 
