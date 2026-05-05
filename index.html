@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_141000 — 새 구조 Step 2C: orders.ca_total_amount/pcs 계산이 옛날엔 SC→CA 도 SC amount 에 잡혔는데 이제 CA invoice 한 번에 발송하므로 CA amount 에 합산. caTotalPcs += sc2caQty, caTotalAmt += sc2caQty * price. sc_total_amount/pcs 는 SC 직접 출고만 (sc2ca 제외) -->
+<!-- BUILD: 20260505_142000 — 새 구조 핵심 fix: Bin 배분 모달에서 [✓ 적용] 누를 때 라인의 wh 자동 결정. SC alloc 만 있음 → wh='SC', CA 또는 SC→CA alloc 있음 → wh='CA' (SC→CA 는 CA 으로 invoice), 둘 다 있음 → wh='SC&CA'. 이게 안 되면 wh='SC' default 인 채로 saveInvoice 가 SC line 으로 처리해서 amount 라벨 뒤바뀜 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38457,6 +38457,21 @@ function applyAllocBoth() {
   poLines[lineIdx].pcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC');
   poLines[lineIdx].caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'CA');
   poLines[lineIdx].sc2caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC2CA');
+  // 라인의 wh 자동 결정 (alloc 기준)
+  // — SC 직접만 있음 → wh='SC'
+  // — CA 직접만 (또는 CA + SC→CA) 있음 → wh='CA' (SC→CA 는 결국 CA invoice 으로 가니까)
+  // — SC + CA 둘 다 있음 → wh='SC&CA' (분리 출고)
+  const _hasSC = Object.keys(scAlloc).length > 0;
+  const _hasCA = Object.keys(caAlloc).length > 0;
+  const _hasSC2CA = Object.keys(sc2caAlloc).length > 0;
+  if (_hasSC && (_hasCA || _hasSC2CA)) {
+    poLines[lineIdx].wh = 'SC&CA';
+  } else if (_hasCA || _hasSC2CA) {
+    poLines[lineIdx].wh = 'CA';
+  } else if (_hasSC) {
+    poLines[lineIdx].wh = 'SC';
+  }
+  // alloc 다 비어있으면 wh 그대로 유지
   _pcrTransfers = [];
   _allocState = null;
   closeModal('modal-alloc-both');
