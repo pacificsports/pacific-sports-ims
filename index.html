@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_113000 — Edit Invoice 누르면 144 라인 사라지던 진짜 진짜 원인 fix: applyInvoiceShipping() 의 fallback 분기 (data-field 없을 때) 가 옛날 filter 로 SC2CA 라인 (stage_for_ca_truck=true, wh='SC') 을 무조건 제외했음. SC2CA 합쳐진 케이스 (sc2ca_status='ca_received'/'invoiced') 면 CA invoice 에 포함하도록 fix -->
+<!-- BUILD: 20260505_120000 — Invoice 이메일 STATUS UPDATE 섹션 fix: (1) hasSc2caInOrder 체크가 order.order_lines (없을 수도 있음) 대신 lines 파라미터 사용. (2) SC2CA 가 합쳐서 출고 완료 (sc2ca_status='invoiced') 면 SC 라벨 "Shipped via CA ✓" 으로 정확히 표시 (이전엔 "Preparing for Shipment" 잘못 표시). (3) 100% CA 단독 오더 면 SC 줄 자체를 숨김 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -31530,7 +31530,11 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   const paymentLines = (paymentInfo||'').replace(/\\n/g,'<br>').replace(/\n/g,'<br>');
 
   // STATUS UPDATE 섹션
-  const hasSc2caInOrder = (order.order_lines || []).some(l => l.stage_for_ca_truck === true);
+  // lines 파라미터 우선 (order.order_lines 가 없을 수 있음 — fetch 시 안 가져온 경우)
+  const _allLines = (lines && lines.length) ? lines : (order.order_lines || []);
+  const hasSc2caInOrder = _allLines.some(l => l.stage_for_ca_truck === true);
+  // SC2CA 가 합쳐서 출고 완료 (sc2ca_status='invoiced') 면 SC 도 사실상 출고 완료된 거나 마찬가지
+  const _sc2caCompleted = order.sc2ca_status === 'invoiced';
   const getWhStatusLabel = (wh) => {
     const st = wh === 'CA' ? order.ca_status : order.sc_status;
     const shippedAt = wh === 'CA' ? order.ca_shipped_at : order.sc_shipped_at;
@@ -31541,10 +31545,14 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
     // shipped면 Shipped
     if (shippedAt || st === 'shipped') return { label: 'Shipped ✓', color: '#16a34a' };
     if (st === 'ready_to_ship') return { label: 'Ready to Ship', color: '#0891b2' };
-    // SC: SC 직접 출고 없고 SC2CA 만 있으면 Pending Transfer to CA
+    // SC: SC 직접 출고 없고 SC2CA 만 있을 때
     if (wh === 'SC' && hasSc2caInOrder) {
-      const hasScDirect = (order.order_lines || []).some(l => l.stage_for_ca_truck !== true && (l.qty_sc||0) > 0);
-      if (!hasScDirect) return { label: 'Pending Transfer to CA', color: '#92400e' };
+      const hasScDirect = _allLines.some(l => l.stage_for_ca_truck !== true && (l.wh === 'SC' || l.wh === 'SC&CA'));
+      if (!hasScDirect) {
+        // SC2CA 가 이미 합쳐서 출고 완료 (invoiced) 면 → "Shipped via CA" (CA 와 같이 출고됐음)
+        if (_sc2caCompleted) return { label: 'Shipped via CA ✓', color: '#16a34a' };
+        return { label: 'Pending Transfer to CA', color: '#92400e' };
+      }
     }
     if (st === 'preparing' || st === 'po_entered') return { label: 'Preparing for Shipment', color: '#d97706' };
     return { label: 'Pending', color: '#6b7280' };
@@ -31554,15 +31562,20 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   if (isSplit) {
     const scSt = getWhStatusLabel('SC');
     const caSt = getWhStatusLabel('CA');
+    // SC 활동 (직접 출고 또는 SC2CA) 이 있는지 — 없으면 SC 줄 숨김
+    const _hasScActivity = _allLines.some(l => 
+      (l.wh === 'SC' || l.wh === 'SC&CA') || l.stage_for_ca_truck === true ||
+      order.sc_shipped_at || ['shipped','invoiced','ready_to_ship','preparing','completed'].includes(order.sc_status)
+    );
     statusSection = `
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:14px;">
       <tr><td style="padding:10px 16px;">
         <div style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Status Update</div>
         <table cellpadding="0" cellspacing="0" style="font-size:13px;width:100%;">
-          <tr>
+          ${_hasScActivity ? `<tr>
             <td style="padding:3px 0;color:#6b7280;width:130px;">SC Warehouse</td>
             <td style="font-weight:700;color:${scSt.color};">${scSt.label}</td>
-          </tr>
+          </tr>` : ''}
           <tr>
             <td style="padding:3px 0;color:#6b7280;">CA Warehouse</td>
             <td style="font-weight:700;color:${caSt.color};">${caSt.label}</td>
