@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_142000 — 새 구조 핵심 fix: Bin 배분 모달에서 [✓ 적용] 누를 때 라인의 wh 자동 결정. SC alloc 만 있음 → wh='SC', CA 또는 SC→CA alloc 있음 → wh='CA' (SC→CA 는 CA 으로 invoice), 둘 다 있음 → wh='SC&CA'. 이게 안 되면 wh='SC' default 인 채로 saveInvoice 가 SC line 으로 처리해서 amount 라벨 뒤바뀜 -->
+<!-- BUILD: 20260505_143000 — Customer POs 화면에서 SC 활동 없는 오더는 SC 줄 숨김. 옛날: scPcs = sc_total_pcs || Math.round(total*0.5) 인데 0 이 falsy 라 fallback 발동해서 216 표시. fix: nullish 체크 + SC 활동 있을 때만 SC 줄 표시 (CA 단독 + SC→CA 합쳐 출고 케이스에서 SC 줄 숨김) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -10858,10 +10858,13 @@ function renderCustomerPOTable() {
         ? ' <span style="display:inline-flex;align-items:center;background:#92400e;color:#fff;border:1px solid #92400e;padding:2px 8px;border-radius:4px;font-size:10px;font-family:\'IBM Plex Mono\',monospace;font-weight:800;letter-spacing:0.5px;">🚚SC→CA</span>'
         : '';
 
-      const scPcs = o.sc_total_pcs || Math.round((o.total_pcs||0) * 0.5);
-      const caPcs = o.ca_total_pcs || ((o.total_pcs||0) - scPcs);
-      const scAmt = o.sc_total_amount || 0;
-      const caAmt = o.ca_total_amount || 0;
+      const scPcs = (o.sc_total_pcs ?? null) !== null ? o.sc_total_pcs : Math.round((o.total_pcs||0) * 0.5);
+      const caPcs = (o.ca_total_pcs ?? null) !== null ? o.ca_total_pcs : ((o.total_pcs||0) - scPcs);
+      const scAmt = parseFloat(o.sc_total_amount) || 0;
+      const caAmt = parseFloat(o.ca_total_amount) || 0;
+      // SC 활동 있는지 (직접 출고 — pcs 또는 amount 또는 status 가 있으면)
+      const _scActivity = (scPcs > 0) || (scAmt > 0) || ['shipped','invoiced','completed','ready_to_ship','preparing'].includes(o.sc_status);
+      const _caActivity = (caPcs > 0) || (caAmt > 0) || ['shipped','invoiced','completed','ready_to_ship','preparing'].includes(o.ca_status);
 
       // SC 액션 버튼
       const mkDocBtn = (label, bg, color, border, oid2, wh2, docType) =>
@@ -10924,7 +10927,7 @@ function renderCustomerPOTable() {
         + '<td style="white-space:nowrap;">' + caBtns + '</td>'
         + '<td style="white-space:nowrap;text-align:center;">' + (['shipped','invoiced','completed'].includes(caStatusKey) ? makeReturnBtn(oid) : '') + '</td>'
         + '</tr>';
-      return [scRow, caRow];
+      return [_scActivity ? scRow : '', _caActivity ? caRow : ''].filter(Boolean);
     }).join('');
 
     document.getElementById('customerpo-table-wrap').innerHTML =
