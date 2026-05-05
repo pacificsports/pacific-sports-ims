@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_120000 — Invoice 이메일 STATUS UPDATE 섹션 fix: (1) hasSc2caInOrder 체크가 order.order_lines (없을 수도 있음) 대신 lines 파라미터 사용. (2) SC2CA 가 합쳐서 출고 완료 (sc2ca_status='invoiced') 면 SC 라벨 "Shipped via CA ✓" 으로 정확히 표시 (이전엔 "Preparing for Shipment" 잘못 표시). (3) 100% CA 단독 오더 면 SC 줄 자체를 숨김 -->
+<!-- BUILD: 20260505_140000 — 새 구조 Step 2B: PO 입력 시 CA + SC2CA 를 한 라인으로 합쳐 insert (qty_local + qty_from_other_wh). insertOneLineNew 함수 추가. SC 단독 라인은 그대로 별도. 케이스 1/2/3/4 다 대응. 옛날 컬럼 (qty_ca, qty_sc2ca, alloc_ca_detail, alloc_sc2ca_detail) 도 호환용으로 같이 채움 — 다른 화면 코드가 아직 보고 있을 수 있어서 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8390,7 +8390,14 @@ async function _doSaveInvoice() {
         qty_ca: areaCode === 'CA' ? qty : 0,
         qty_sc2ca: areaCode === 'SC2CA' ? qty : 0,
         unit_price: l.price || 0,
-        is_side_seam: !!l.isSideSeam
+        is_side_seam: !!l.isSideSeam,
+        // 새 구조 컬럼 (호환용 — 점진적 전환)
+        qty_total: qty,
+        qty_local: areaCode === 'SC2CA' ? 0 : qty,    // SC2CA 라인은 local 0 (CA wh 입장에서)
+        qty_from_other_wh: areaCode === 'SC2CA' ? qty : 0,
+        qty_received_from_other_wh: 0,
+        alloc_local: areaCode === 'CA' ? (allocCaDetail || {}) : (areaCode === 'SC' ? (allocDetail || {}) : {}),
+        alloc_from_other_wh: areaCode === 'SC2CA' ? (allocSc2caDetail || {}) : {}
       };
       const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
       if (lineErr) console.error('[order_lines ERROR]', areaCode, lineErr.message, lineErr.details, lineErr.hint);
@@ -8427,22 +8434,105 @@ async function _doSaveInvoice() {
       if (toCommit > 0) console.warn(`[reserve ${areaCode}] uncommitted: ${toCommit} pcs (no available stock)`);
     };
     
-    // SC 영역
+    // ════════════════════════════════════════════════════════════════
+    // 새 구조: CA + SC2CA 한 라인으로 (1 row 구조)
+    // qtyLocal: CA 에 이미 있는 수량 (CA bin 에서 픽)
+    // qtyFromOther: SC 에서 옮겨와야 하는 수량 (SC bin 에서 옮긴 후 CA 출고)
+    // ════════════════════════════════════════════════════════════════
+    const insertOneLineNew = async (wh, qtyLocal, qtyFromOther, allocLocal, allocFromOther) => {
+      const realWhId = wh === 'CA' ? (caWhId || whId) : (scWhId || whId);
+      const total = qtyLocal + qtyFromOther;
+      // 표시용 메인 bin (alloc_local 의 bin)
+      const _mainBins = Object.keys(allocLocal || {}).filter(k => !k.includes('PCR') && !k.includes('TRANSFER|'));
+      
+      const insertPayload = {
+        order_id: order.id,
+        style_id: s?.id || null,
+        warehouse_id: realWhId,
+        wh: wh,
+        stage_for_ca_truck: false,  // 옛날 컬럼 — 새 구조에선 안 쓰지만 일단 false
+        color: l.color, size: l.size,
+        qty_pieces: total,
+        qty_filled: 0,
+        qty_backordered: 0,
+        is_backordered: false,
+        pcs_per_box: ppb,
+        qty_boxes: Math.floor(total / ppb),
+        qty_loose: total % ppb,
+        location: _mainBins.length > 0 ? _mainBins.join(', ') : (l.location || null),
+        // 옛날 컬럼 — 호환용 (다른 코드가 아직 보고 있을 수 있음)
+        alloc_detail: null,
+        alloc_ca_detail: allocLocal && Object.keys(allocLocal).length > 0 ? allocLocal : null,
+        alloc_sc2ca_detail: allocFromOther && Object.keys(allocFromOther).length > 0 ? allocFromOther : null,
+        qty_sc: 0,
+        qty_ca: qtyLocal,
+        qty_sc2ca: qtyFromOther,
+        unit_price: l.price || 0,
+        is_side_seam: !!l.isSideSeam,
+        // 새 구조 컬럼 (이게 진짜)
+        qty_total: total,
+        qty_local: qtyLocal,
+        qty_from_other_wh: qtyFromOther,
+        qty_received_from_other_wh: 0,
+        alloc_local: allocLocal && Object.keys(allocLocal).length > 0 ? allocLocal : {},
+        alloc_from_other_wh: allocFromOther && Object.keys(allocFromOther).length > 0 ? allocFromOther : {}
+      };
+      const { error: lineErr } = await db.from('order_lines').insert(insertPayload);
+      if (lineErr) console.error('[order_lines NEW ERROR]', wh, lineErr.message, lineErr.details, lineErr.hint);
+      
+      // 재고 reserve — qty_local 은 CA inventory 에서, qty_from_other_wh 는 SC inventory 에서
+      const reserveCommit = async (reserveQty, reserveWhId, label) => {
+        if (reserveQty <= 0) return;
+        let toCommit = reserveQty;
+        const styleId = s?.id || null;
+        const reserveQuery = db.from('inventory')
+          .select('id, qty_on_hand, qty_committed')
+          .eq('color', (l.color||'').toUpperCase())
+          .eq('size', (l.size||'').toUpperCase())
+          .eq('warehouse_id', reserveWhId);
+        if (styleId) reserveQuery.eq('style_id', styleId);
+        const { data: invRows, error: invErr } = await reserveQuery.order('qty_on_hand', { ascending: false });
+        if (invErr) { console.error(`[reserve NEW ${label}] error:`, invErr.message); return; }
+        for (const inv of (invRows || [])) {
+          if (toCommit <= 0) break;
+          const avail = Math.max(0, (inv.qty_on_hand||0) - (inv.qty_committed||0));
+          const commit = Math.min(toCommit, avail);
+          if (commit > 0) {
+            const newCommit = (inv.qty_committed||0) + commit;
+            const { error: updErr } = await db.from('inventory').update({ qty_committed: newCommit }).eq('id', inv.id);
+            if (updErr) console.error(`[reserve NEW ${label}] update error:`, updErr.message);
+            else {
+              await logInventoryChange(inv.id, inv.qty_committed||0, newCommit, 'commit', _currentEmployee?.name||'system', order?.id, 'order', `PO Save (${label}) - ${l.styleNum||''} ${l.color||''} ${l.size||''}`);
+              toCommit -= commit;
+            }
+          }
+        }
+        if (toCommit > 0) console.warn(`[reserve NEW ${label}] uncommitted: ${toCommit} pcs`);
+      };
+      
+      // CA local 은 CA wh 에서 reserve
+      if (qtyLocal > 0) await reserveCommit(qtyLocal, caWhId || whId, 'CA-local');
+      // qty_from_other_wh 는 SC wh 에서 reserve (옮겨와야 함)
+      if (qtyFromOther > 0) await reserveCommit(qtyFromOther, scWhId || whId, 'SC→CA');
+    };
+    
+    // ════════════════════════════════════════════════════════════════
+    // 새 구조 (2026-05): CA + SC2CA 를 한 라인으로 합침 (qty_local + qty_from_other_wh)
+    // SC 단독 라인은 그대로 별도
+    // ════════════════════════════════════════════════════════════════
+    
+    // SC 영역 — 직접 SC 출고 (변경 없음)
     if (scTotal > 0) {
       const scDetail = buildAllocDetail(l.allocSC, l.pcrTransfersPending, 'SC-TRANSFER');
       await insertOneLine('SC', scTotal, scDetail, null, null, false);
     }
     
-    // CA 영역
-    if (caTotal > 0) {
-      const caDetail = buildAllocDetail(l.allocCA, l.caPcrTransfersPending, 'CA-TRANSFER');
-      await insertOneLine('CA', caTotal, null, caDetail, null, false);
-    }
-    
-    // SC2CA 영역 (stage_for_ca_truck=true)
-    if (sc2caTotal > 0) {
-      const sc2caDetail = buildAllocDetail(l.allocSC2CA, l.sc2caPcrTransfersPending, 'SC2CA-TRANSFER');
-      await insertOneLine('SC2CA', sc2caTotal, null, null, sc2caDetail, true);
+    // CA + SC2CA 합쳐서 한 라인으로 (CA 받는 라인)
+    if (caTotal > 0 || sc2caTotal > 0) {
+      const caDetail = caTotal > 0 ? buildAllocDetail(l.allocCA, l.caPcrTransfersPending, 'CA-TRANSFER') : null;
+      const sc2caDetail = sc2caTotal > 0 ? buildAllocDetail(l.allocSC2CA, l.sc2caPcrTransfersPending, 'SC2CA-TRANSFER') : null;
+      // 새 구조: 한 라인. qty_local=caTotal, qty_from_other_wh=sc2caTotal
+      await insertOneLineNew('CA', caTotal, sc2caTotal, caDetail, sc2caDetail);
     }
     
     // BO 처리는 기존 로직에 맡김 (lineChecks 의 backQty 가 있으면 그대로 작동)
