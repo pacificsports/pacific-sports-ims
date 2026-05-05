@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_110000 — Edit Invoice 시 (또는 freight Apply 시) 144 라인 사라지던 진짜 원인 fix: updateInvoiceFreight() 가 buildInvoiceHtml 호출 시 isSplit=false 로 호출했음. 다른 곳들은 모두 true. false 면 SC/CA 분리 안 해서 SC2CA 라인 처리 분기 안 탐. true 로 변경 → SC2CA 라인 정상 표시 -->
+<!-- BUILD: 20260505_113000 — Edit Invoice 누르면 144 라인 사라지던 진짜 진짜 원인 fix: applyInvoiceShipping() 의 fallback 분기 (data-field 없을 때) 가 옛날 filter 로 SC2CA 라인 (stage_for_ca_truck=true, wh='SC') 을 무조건 제외했음. SC2CA 합쳐진 케이스 (sc2ca_status='ca_received'/'invoiced') 면 CA invoice 에 포함하도록 fix -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -32236,8 +32236,19 @@ function applyInvoiceShipping() {
       db.from('order_lines').select('*, styles(style_number,description,box_qty)').eq('order_id', _invoiceOrderId).then(({data: lines}) => {
         if (!lines) return;
         const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
+        // SC2CA 가 CA 에 합쳐진 케이스 (sc2ca_status='ca_received'/'invoiced') 면 CA invoice 에 SC2CA 라인 포함
+        const _scR2 = ['invoiced','ca_received'].includes(order.sc2ca_status);
         const filteredLines = isSplit && _invoiceWh
-          ? lines.filter(l => _invoiceWh === 'CA' ? (l.wh === 'CA') : (l.wh === 'SC' || !l.wh))
+          ? lines.filter(l => {
+              const isSc2ca = l.stage_for_ca_truck === true;
+              if (_invoiceWh === 'CA') {
+                if (isSc2ca) return _scR2 && (l.qty_sc2ca || 0) > 0;
+                return l.wh === 'CA' || l.wh === 'SC&CA';
+              } else {
+                if (isSc2ca) return false;
+                return l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh;
+              }
+            })
           : lines;
         const invWhPfx = (_invoiceWh || order.wh_code || 'SC') === 'CA' ? 'CA' : 'SC';
         const displayNum = (order.invoice_number ? invWhPfx + order.invoice_number : '—');
