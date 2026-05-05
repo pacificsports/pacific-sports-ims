@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_080000 — BOL (Bill of Lading) 의 TOTAL PIECES 와 라인 수량이 CA portion 만 표시되던 버그 fix: SC2CA 가 합쳐진 케이스에서 stage_for_ca_truck=true 라인은 alloc_sc2ca_detail 을 사용하게 buildBolHtml 수정. 이제 432 pcs 정상 표시 -->
+<!-- BUILD: 20260505_080500 — Mark as Shipped 흐름의 invoice 합산 fix: 옛 SC2CA 따로 출고 작업의 잔재 플래그 (_sc2caOnlyShipMode) 가 남아있어서 이번 정상 출고에 invoice 가 SC2CA portion 만 만들어진 버그. 두 가지 보호: (1) doShipped 입구에서 bypass 안 켜진 정상 흐름이면 _sc2caOnlyShipMode 강제 리셋 (2) _doShippedCore 끝나면 두 플래그 다 finally 로 리셋 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -28442,6 +28442,10 @@ async function sendToZebraBrowserPrint(zplData, labelCount) {
 async function doShipped(orderId, wh) {
   // 🚚 Option 3: CA 출고 시 SC2CA 라인 있고 미도착이면 보류 (기본 동작)
   // 단, _sc2caBypassWait=true 면 우회 (예외 — 따로 출고)
+  // 정상 흐름 (bypass 안 켜진 상태) 에선 옛날 잔재 플래그 _sc2caOnlyShipMode 리셋
+  if (!window._sc2caBypassWait) {
+    window._sc2caOnlyShipMode = false;
+  }
   if (wh === 'CA' && !window._sc2caBypassWait) {
     const { data: o } = await db.from('orders').select('sc2ca_status, order_lines!inner(stage_for_ca_truck)').eq('id', orderId).single();
     const hasSc2ca = (o?.order_lines || []).some(ol => ol.stage_for_ca_truck === true);
@@ -29173,6 +29177,10 @@ async function _doShippedCore(emp) {
   } catch(err) {
     console.error('[_doShippedCore] FATAL ERROR:', err);
     showToast('❌ Shipped 처리 오류: ' + err.message);
+  } finally {
+    // SC2CA 잔재 플래그 정리 (다음 출고에 영향 안 가도록)
+    window._sc2caOnlyShipMode = false;
+    window._sc2caBypassWait = false;
   }
 }
 
