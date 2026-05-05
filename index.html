@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260504_213000 — Packing List 의 박스 수가 0 으로 표시되던 버그 fix: 라인 객체 속성이 'qty_boxes' 인데 'boxes' 로 잘못 참조했음 -->
+<!-- BUILD: 20260504_215500 — Packing List 박스 수 fallback: qty_boxes 가 undefined 이면 qty_pcs / pcs_per_box 로 계산 (반올림 올림). 라인 객체에 박스 수가 직접 저장 안 되어있어서 0 으로 나오던 문제 해결 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -40752,12 +40752,18 @@ function generatePackingList() {
   const totalPallets = _shipmentPallets.length;
   const totalLines = _shipmentPallets.reduce((s, p) => s + p.lines.length, 0);
   const totalPcs = _shipmentPallets.reduce((s, p) => s + p.lines.reduce((ss, l) => ss + (l.qty_pcs || 0), 0), 0);
-  const totalBoxes = _shipmentPallets.reduce((s, p) => s + p.lines.reduce((ss, l) => ss + (l.qty_boxes || 0), 0), 0);
+  // 박스 수: qty_boxes 우선, 없으면 qty_pcs / pcs_per_box 로 계산
+  const calcBoxes = (l) => {
+    if (l.qty_boxes) return l.qty_boxes;
+    if (l.qty_pcs && l.pcs_per_box) return Math.ceil(l.qty_pcs / l.pcs_per_box);
+    return 0;
+  };
+  const totalBoxes = _shipmentPallets.reduce((s, p) => s + p.lines.reduce((ss, l) => ss + calcBoxes(l), 0), 0);
   
   const palletsHtml = _shipmentPallets.map(p => {
     if (p.lines.length === 0) return '';
     const palletPcs = p.lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
-    const palletBoxes = p.lines.reduce((s, l) => s + (l.qty_boxes || 0), 0);
+    const palletBoxes = p.lines.reduce((s, l) => s + calcBoxes(l), 0);
     return `
       <div style="margin-bottom:18px;page-break-inside:avoid;">
         <div style="background:#f3e8ff;padding:8px 12px;border:1px solid #d8b4fe;border-radius:4px;margin-bottom:6px;font-weight:700;color:#7b1fa2;font-size:14px;">
@@ -40784,7 +40790,7 @@ function generatePackingList() {
                 <td style="padding:5px 8px;border:1px solid #ccc;font-family:'IBM Plex Mono',monospace;font-size:10px;">${l.sku||''}</td>
                 <td style="padding:5px 8px;border:1px solid #ccc;text-align:right;font-weight:700;">${(l.qty_pcs||0).toLocaleString()}</td>
                 <td style="padding:5px 8px;border:1px solid #ccc;text-align:right;color:#6b7280;">${l.pcs_per_box||l.box_qty||''}</td>
-                <td style="padding:5px 8px;border:1px solid #ccc;text-align:right;font-weight:700;">${(l.qty_boxes||0).toLocaleString()}</td>
+                <td style="padding:5px 8px;border:1px solid #ccc;text-align:right;font-weight:700;">${calcBoxes(l).toLocaleString()}</td>
               </tr>
             `).join('')}
           </tbody>
