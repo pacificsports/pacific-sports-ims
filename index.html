@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_143500 — Customer POs SC 줄 숨김 시 caRow 에 customer/po 셀 채우기 (caRow 는 옛날엔 SC 줄에 묶이는 두번째 줄이라 customer/po 빈 칸이었음) -->
+<!-- BUILD: 20260505_144000 — Pick Ticket 에 SC→CA TRANSFER 섹션 추가. CA 라인의 alloc_from_other_wh (또는 옛날 alloc_sc2ca_detail) 안의 SC bin 들을 별도 노란 섹션으로 표시. 워하우스 직원이 SC bin 에서 픽해서 다음 CA 트럭에 실음 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -30942,6 +30942,48 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
     const caLines = lines.filter(l => l.wh === 'CA' || l.wh === 'SC&CA');
     body = renderPickTicket(scLines, 'SC WAREHOUSE', '#14532d')
          + renderPickTicket(caLines, 'CA WAREHOUSE', '#1e3a8a');
+    // SC → CA 부분 (alloc_from_other_wh / alloc_sc2ca_detail) 추가 표시
+    // CA 라인의 SC→CA 부분 = SC bin 에서 픽해서 CA 트럭에 실어야 함
+    const sc2caBins = caLines.flatMap(l => {
+      const a = l.alloc_from_other_wh || l.alloc_sc2ca_detail || {};
+      const ppb = l.pcs_per_box || l.styles?.box_qty || 72;
+      return Object.entries(a)
+        .filter(([k]) => !k.includes('TRANSFER|') && !k.toUpperCase().includes('PCR'))
+        .map(([bin, det]) => {
+          const pcs = typeof det === 'object' ? (det.pcs||0) : (det||0);
+          const fullBoxes = Math.floor(pcs / ppb);
+          const partialPcs = pcs % ppb;
+          const qtyDisplay = fullBoxes > 0
+            ? (partialPcs > 0 ? `${fullBoxes} boxes + ${partialPcs} pcs` : `${fullBoxes}`)
+            : `${partialPcs} pcs`;
+          return { bin, style: l.styles?.style_number||'', color: l.color||'', size: l.size||'', pcs, qtyDisplay, fullBoxes, partialPcs };
+        });
+    });
+    if (sc2caBins.length > 0) {
+      body += `<div style="margin-bottom:20px;">
+        <div style="background:#92400e;color:#fff;padding:7px 12px;border-radius:6px 6px 0 0;font-size:11px;font-weight:800;letter-spacing:1px;">
+          🚚 SC → CA TRANSFER (다음 CA 트럭에 실음)
+        </div>
+        <table style="width:100%;border-collapse:collapse;border:1px solid #fbbf24;border-top:none;">
+          <thead><tr style="background:#fffbeb;">
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#92400e;text-transform:uppercase;border-bottom:1px solid #fbbf24;">Location Bin (SC)</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#92400e;text-transform:uppercase;border-bottom:1px solid #fbbf24;">Style</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10px;color:#92400e;text-transform:uppercase;border-bottom:1px solid #fbbf24;">Color</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#92400e;text-transform:uppercase;border-bottom:1px solid #fbbf24;">Size</th>
+            <th style="padding:6px 8px;text-align:center;font-size:10px;color:#92400e;text-transform:uppercase;border-bottom:1px solid #fbbf24;">QTY</th>
+          </tr></thead>
+          <tbody>
+            ${sc2caBins.map(b => `<tr style="border-bottom:1px solid #fef3c7;">
+              <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:700;">${b.bin}</td>
+              <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;">${b.style}</td>
+              <td style="padding:6px 8px;font-size:11px;">${b.color}</td>
+              <td style="padding:6px 8px;font-size:11px;text-align:center;">${b.size}</td>
+              <td style="padding:6px 8px;font-size:11px;text-align:center;font-weight:700;">${b.qtyDisplay}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    }
   } else {
     const whLabel = whOverride === 'CA' ? 'CA WAREHOUSE' : 'SC WAREHOUSE';
     const whColor = whOverride === 'CA' ? '#1e3a8a' : '#14532d';
