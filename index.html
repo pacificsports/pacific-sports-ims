@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_072500 — Packing List 가 CA portion 만 표시되던 버그 fix: sc2ca_status='ca_received'/'invoiced' 면 SC2CA 라인도 CA portion 에 합쳐서 출력. SC2CA 라인의 alloc_sc2ca_detail 을 alloc_ca_detail 로 변환해서 박스 계산 정상화 (288 + 144 = 432 pcs / 4 + 2 = 6 boxes) -->
+<!-- BUILD: 20260505_075000 — Mark as Shipped 모달의 박스 수 계산 fix: SC2CA 가 CA 에 합쳐진 케이스 (ca_received/invoiced) 에서 stage_for_ca_truck=true 라인은 alloc_sc2ca_detail 을 봐야 하는데 alloc_ca_detail (빈) 만 봐서 SC2CA portion 박스가 누락됐음. 이제 4 + 2 = 6 박스 정상 표시 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -28516,14 +28516,25 @@ async function doShipped(orderId, wh) {
   // 실제 박스 수 계산 (order_lines alloc_detail 기반)
   try {
     const { data: lines } = await db.from('order_lines')
-      .select('alloc_detail, alloc_ca_detail, pcs_per_box, styles(box_qty)')
+      .select('alloc_detail, alloc_ca_detail, alloc_sc2ca_detail, stage_for_ca_truck, pcs_per_box, styles(box_qty)')
       .eq('order_id', orderId);
+    // SC2CA 가 CA 에 합쳐진 케이스 (sc2ca_status='ca_received'/'invoiced') 면 SC2CA portion 도 CA 박스에 합산
+    const { data: orderForBox } = await db.from('orders').select('sc2ca_status').eq('id', orderId).single();
+    const sc2caMergedToCa = ['ca_received','invoiced'].includes(orderForBox?.sc2ca_status);
     if (lines && lines.length > 0) {
       const isCA = wh === 'CA';
       let totalFullBoxes = 0;
       let totalPcrPcs = 0;
       lines.forEach(l => {
-        const alloc = isCA ? (l.alloc_ca_detail || {}) : (l.alloc_detail || {});
+        // CA 출고 + SC2CA 라인 + 합쳐진 케이스 → alloc_sc2ca_detail 사용
+        let alloc;
+        if (isCA && l.stage_for_ca_truck === true && sc2caMergedToCa) {
+          alloc = l.alloc_sc2ca_detail || {};
+        } else if (isCA) {
+          alloc = l.alloc_ca_detail || {};
+        } else {
+          alloc = l.alloc_detail || {};
+        }
         const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
         Object.entries(alloc).forEach(([k, v]) => {
           if (k.includes('TRANSFER|')) return;
