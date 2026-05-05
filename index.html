@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_144000 — Pick Ticket 에 SC→CA TRANSFER 섹션 추가. CA 라인의 alloc_from_other_wh (또는 옛날 alloc_sc2ca_detail) 안의 SC bin 들을 별도 노란 섹션으로 표시. 워하우스 직원이 SC bin 에서 픽해서 다음 CA 트럭에 실음 -->
+<!-- BUILD: 20260505_150000 — 영구 해결: 자동 버전 감지. 페이지 로드 5초 후 + 5분마다 서버 BUILD 와 현재 BUILD 비교. 다르면 confirm 띄워서 자동 새로고침. 이제 새 BUILD push 되면 사용자에게 자동 알림 — 캐시 문제 영구 종료. + 이전 BUILD `20260505_144000` 의 Pick Ticket SC→CA TRANSFER 섹션 추가도 포함 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5499,6 +5499,43 @@ if (document.readyState === 'loading') {
 } else {
   setTimeout(updateTestModeUI, 100);
 }
+
+// ════════════════════════════════════════════════════════════════
+// 자동 버전 감지 — 새 BUILD push 되면 자동으로 강제 새로고침
+// ════════════════════════════════════════════════════════════════
+const _CURRENT_BUILD = (document.documentElement.outerHTML.match(/<!-- BUILD: (\S+)/) || [])[1] || '';
+console.log('[Version Check] Current BUILD:', _CURRENT_BUILD);
+
+async function _checkForNewBuild() {
+  try {
+    const res = await fetch('/?_v=' + Date.now(), { cache: 'no-store' });
+    const text = await res.text();
+    const serverBuild = (text.match(/<!-- BUILD: (\S+)/) || [])[1] || '';
+    if (serverBuild && _CURRENT_BUILD && serverBuild !== _CURRENT_BUILD) {
+      console.log('[Version Check] 🚨 새 BUILD 감지!', _CURRENT_BUILD, '→', serverBuild);
+      // 사용자에게 알림 + 자동 새로고침
+      if (confirm(`🆕 새 버전이 배포됐습니다!\n\n현재: ${_CURRENT_BUILD}\n신규: ${serverBuild}\n\n자동으로 새로고침 합니다 (취소하면 수동으로 새로고침 필요).`)) {
+        // 강제 새로고침 — 모든 캐시 무시
+        window.location.reload(true);
+      } else {
+        // 취소해도 페이지 상단에 알림 배지 표시
+        const banner = document.createElement('div');
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#dc2626;color:#fff;padding:8px 16px;text-align:center;z-index:999999;font-weight:600;cursor:pointer;';
+        banner.textContent = '🆕 새 버전 사용 가능 — 클릭해서 새로고침';
+        banner.onclick = () => window.location.reload(true);
+        document.body.appendChild(banner);
+      }
+    } else {
+      console.log('[Version Check] ✅ 최신 버전');
+    }
+  } catch(e) {
+    console.warn('[Version Check] error:', e);
+  }
+}
+// 페이지 로드 후 5초 뒤 한번 체크 + 그 후 5분마다 체크
+setTimeout(_checkForNewBuild, 5000);
+setInterval(_checkForNewBuild, 5 * 60 * 1000);
+
 
 // CSS for pulse animation
 if (!document.getElementById('test-mode-style')) {
