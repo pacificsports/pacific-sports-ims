@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_092000 — Invoice 가 SC2CA portion (144) 만 표시되던 진짜 원인 fix: sc2caOnlyMode 의 두 번째 조건 (caAlreadyInvoiced) 가 ca_shipped_at + invoice_number 만 보고 true 가 되는데, CA + SC2CA 합쳐서 출고한 케이스에서도 둘 다 채워지니 true. 그래서 sc2caOnlyMode=true → 144 만 표시. fix: sc2ca_status='invoiced' (이미 합쳐 완료) 면 sc2caOnlyMode 강제 false. 두 군데 적용 (reviewAndSendInvoice + getInvoiceFilteredLines) -->
+<!-- BUILD: 20260505_103000 — Invoice 발송 전 메모 입력 기능 추가: Review & Send Invoice 모달 푸터에 📝 메모 textarea 추가, 입력한 메모는 이메일 본문 상단 (Greeting 다음, status 위) 에 노란 박스로 표시되어 고객에게 전달됨. 모달 열때마다 자동 초기화 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -29999,6 +29999,9 @@ async function reviewAndSendInvoice(orderId, wh) {
   if (pinInline) pinInline.value = '';
   const pinStatus = document.getElementById('invoice-pin-inline-status');
   if (pinStatus) pinStatus.textContent = '';
+  // 메모 input 초기화 (이전 invoice 의 메모 남지 않도록)
+  const memoInput = document.getElementById('invoice-memo');
+  if (memoInput) memoInput.value = '';
   window._invoiceApprovedEmp = null;
   const sendBtn = document.getElementById('invoice-review-send-btn');
   if (sendBtn) {
@@ -30352,7 +30355,8 @@ async function sendInvoiceEmail() {
       // 이메일 body HTML 빌드 (cs가 outer scope에 있으므로 안전)
       let invEmailBodyHtml = '';
       try {
-        invEmailBodyHtml = buildInvoiceEmailBodyHtml(order, lines, displayInvNum, invShipInfo2, cs, freightAmt);
+        const _invoiceMemo = document.getElementById('invoice-memo')?.value || '';
+        invEmailBodyHtml = buildInvoiceEmailBodyHtml(order, lines, displayInvNum, invShipInfo2, cs, freightAmt, _invoiceMemo);
       } catch(e) { console.warn('Invoice email body error:', e); }
 
       // Signed BOL — DB 저장본 + 메모리 수동첨부 파일 모두
@@ -31485,7 +31489,7 @@ function buildBolHtml(order, lines, shipInfo, signatureData) {
 // ═══════════════════════════════════════════════════════
 // Invoice 이메일 body HTML — shipped qty(qty_filled) 기준, 이메일 최적화 포맷
 // ═══════════════════════════════════════════════════════
-function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySettings, freightAmt) {
+function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySettings, freightAmt, memo) {
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL','5XL'].indexOf((s||'').toUpperCase()) + 1) || 99;
   const fmtDate = d => {
     if (!d) return null;
@@ -31663,6 +31667,11 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
         <p style="margin:0 0 4px;font-size:14px;">Dear <strong>${order.customer_name||''}</strong>,</p>
         <p style="margin:0 0 4px;font-size:13px;color:#374151;">Please find your invoice details below.</p>
         <p style="margin:0 0 16px;font-size:13px;color:#374151;">Your invoice, packing list, and purchase order are attached to this email.</p>
+
+        ${(memo||'').trim() ? `<div style="background:#fffbeb;border-left:4px solid #f59e0b;padding:10px 14px;border-radius:4px;margin-bottom:14px;">
+          <div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">📝 Note</div>
+          <div style="font-size:13px;color:#374151;white-space:pre-wrap;">${(memo||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+        </div>` : ''}
 
         ${statusSection}
 
@@ -42673,6 +42682,10 @@ function showCreditHoldFlash(overAmt) {
         <div style="display:flex;align-items:center;gap:12px;flex:1;flex-wrap:wrap;">
           <div id="invoice-review-email-row" style="font-size:12px;color:#6b7280;">이메일 수신: <span id="invoice-review-email" style="font-weight:600;color:#111;"></span></div>
           <div id="invoice-attachments-row" style="font-size:12px;color:#6b7280;margin-top:4px;">📎 첨부: <span id="invoice-attachments-list" style="font-weight:600;color:#1e40af;"></span></div>
+          <div style="display:flex;align-items:flex-start;gap:6px;font-size:12px;">
+            <label style="color:#6b7280;white-space:nowrap;padding-top:4px;">📝 메모</label>
+            <textarea id="invoice-memo" class="fi" rows="2" placeholder="고객에게 전달할 메모 (선택사항)" style="flex:1;font-size:12px;padding:4px 8px;resize:vertical;min-height:32px;max-height:80px;"></textarea>
+          </div>
           <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
             <label style="color:#6b7280;white-space:nowrap;">Freight $</label>
             <input id="invoice-freight-amt" type="number" min="0" step="0.01" value="0" class="fi" style="width:80px;font-size:12px;padding:4px 8px;">
