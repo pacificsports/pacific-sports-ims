@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260504_221500 — autoResumeRecvDraft fix: SC2CA 라인 (sc_ca / sc_ca_order) 은 별도 새 모달 사용하므로 옛날 transit-receive-modal 자동 복원 skip + draft 무효화. 페이지 새로고침 시 잘못된 모달 떴던 문제 해결 -->
+<!-- BUILD: 20260504_222500 — CA 도착 처리 모달의 거래처 오더 섹션: 두 옵션 항상 같이 표시. (1) [Received & Combine] 초록 — CA 카드에 합쳐서 같이 출고 (CA 미출고일 때만 가능, 이미 출고됐으면 회색 비활성화). (2) [Received & Ship] 자주색 — SC→CA portion 따로 별도 출고 + 별도 invoice. 사용자가 케이스마다 자유롭게 선택 가능 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -41129,14 +41129,17 @@ function renderScCaRecvPallets() {
       };
       const totalBoxes = ord.lines.reduce((s, l) => s + calcBoxesOrd(l), 0);
       const isCaAlreadyShipped = ord.caAlreadyShipped;
-      // CA 가 이미 출고된 경우 → [Receive & Invoice] 버튼 (SC2CA portion 별도 invoice)
-      // CA 가 아직 출고 안 됨 → [Received] 버튼 (CA 카드에 합쳐짐)
-      const recvBtn = isCaAlreadyShipped
-        ? `<button class="btn btn-sm" style="background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="sc2caRecvOrderInvoice('${ord.order_id}')" title="CA 가 이미 따로 출고됨 — SC→CA portion 별도 invoice 발송">📋 Receive & Invoice</button>`
-        : `<button class="btn btn-sm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="sc2caRecvOrderShipped('${ord.order_id}')" title="CA 카드에 합쳐져서 한 번에 출고">📦 Received</button>`;
+      // 두 가지 옵션 항상 제공:
+      // 1. Received & Combine — CA 카드에 합쳐서 같이 출고 (CA 가 아직 출고 안 됐을 때만 가능)
+      // 2. Received & Ship — SC→CA portion 따로 별도 출고/invoice
+      const combineDisabled = isCaAlreadyShipped;
+      const combineBtn = combineDisabled
+        ? `<button class="btn btn-sm" disabled style="background:#e5e7eb;color:#9ca3af;cursor:not-allowed;border-color:#d1d5db;font-weight:700;" title="CA 가 이미 따로 출고됨 — 합치기 불가">📦 Received & Combine (불가)</button>`
+        : `<button class="btn btn-sm" style="background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;" onclick="sc2caRecvOrderShipped('${ord.order_id}')" title="CA 카드에 수량 합쳐서 한 번에 출고">📦 Received & Combine</button>`;
+      const shipBtn = `<button class="btn btn-sm" style="background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="sc2caRecvOrderInvoice('${ord.order_id}')" title="SC→CA portion 만 따로 별도 출고 + 별도 invoice">🚚 Received & Ship (따로)</button>`;
       const recvHelp = isCaAlreadyShipped
-        ? `<div style="margin-top:8px;font-size:10px;color:#7c3aed;background:#faf5ff;padding:6px 10px;border-radius:4px;border-left:3px solid #c084fc;">⚠️ CA 가 이미 별도 출고됨 → <b>Receive & Invoice</b> 누르면 SC→CA portion 만 별도 invoice 발송됩니다.</div>`
-        : `<div style="margin-top:8px;font-size:10px;color:#15803d;background:#f0fdf4;padding:6px 10px;border-radius:4px;border-left:3px solid #86efac;">💡 <b>Received</b> 누르면 → CA 카드에 수량이 합쳐지고 Mark as Shipped 가 활성화됩니다 (한 번에 출고).</div>`;
+        ? `<div style="margin-top:8px;font-size:10px;color:#7c3aed;background:#faf5ff;padding:6px 10px;border-radius:4px;border-left:3px solid #c084fc;">⚠️ CA 가 이미 따로 출고됨 — Combine 옵션 사용 불가. <b>Received & Ship</b> 누르면 SC→CA portion 별도 invoice 발송됩니다.</div>`
+        : `<div style="margin-top:8px;font-size:10px;color:#374151;background:#fafaf9;padding:6px 10px;border-radius:4px;border-left:3px solid #d1d5db;">💡 <b>Received & Combine</b>: CA 카드에 수량 합쳐서 한 번에 출고 (invoice 1장)<br>💡 <b>Received & Ship</b>: SC→CA portion 만 따로 별도 출고 + 별도 invoice (CA 는 별도 처리)</div>`;
       
       return `
         <div style="border:2px solid #c084fc;border-radius:8px;background:#fff;margin-top:14px;">
@@ -41145,8 +41148,9 @@ function renderScCaRecvPallets() {
             <span style="background:#fff;padding:2px 8px;border-radius:10px;border:1px solid #c084fc;font-size:11px;color:#7c3aed;font-weight:700;">PO# ${ord.customer_po||'—'}</span>
             <span style="color:var(--text2);font-size:11px;">${ord.lines.length} 라인 · <b>${totalPcs.toLocaleString()}</b> pcs · <b>${totalBoxes.toLocaleString()}</b> 박스 · $${(ord.total_amount||0).toLocaleString()}</span>
             ${isCaAlreadyShipped ? '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;">CA 이미 출고됨</span>' : ''}
-            <div style="margin-left:auto;display:flex;gap:6px;">
-              ${recvBtn}
+            <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;">
+              ${combineBtn}
+              ${shipBtn}
               <button class="btn btn-sm" style="background:#dc2626;color:#fff;border-color:#dc2626;font-weight:700;" onclick="sc2caRecvOrderCancelled('${ord.order_id}', ${oi})">❌ Cancelled</button>
             </div>
           </div>
