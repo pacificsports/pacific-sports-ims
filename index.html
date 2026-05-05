@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_084500 — Shipping Confirmation 이멜의 SC2CA 합쳐진 케이스 fix: (1) sc2ca_status='ca_received'/'invoiced' 면 sc2ca_qty 를 ca_qty 로 합쳐서 한 출고 처리. (2) 같은 style/color/size 라인 (CA + SC2CA 따로 저장된 거) 한 줄로 dedupe + 합산. 이제 1180 WHITE S 432 pcs 한 줄로 깔끔히 표시 -->
+<!-- BUILD: 20260505_092000 — Invoice 가 SC2CA portion (144) 만 표시되던 진짜 원인 fix: sc2caOnlyMode 의 두 번째 조건 (caAlreadyInvoiced) 가 ca_shipped_at + invoice_number 만 보고 true 가 되는데, CA + SC2CA 합쳐서 출고한 케이스에서도 둘 다 채워지니 true. 그래서 sc2caOnlyMode=true → 144 만 표시. fix: sc2ca_status='invoiced' (이미 합쳐 완료) 면 sc2caOnlyMode 강제 false. 두 군데 적용 (reviewAndSendInvoice + getInvoiceFilteredLines) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -29818,7 +29818,12 @@ async function reviewAndSendInvoice(orderId, wh) {
   const caAlreadyInvoiced = !!(order.ca_invoice_sent_at || (order.ca_shipped_at && order.invoice_number));
   // SC2CA-only invoice 모드: SC2CA 가 received 됐고, CA 는 이미 따로 invoice 발송됐음
   // 또는 명시적으로 _sc2caOnlyShipMode 플래그 (sc2caMarkShipped 에서 켬)
-  const sc2caOnlyMode = window._sc2caOnlyShipMode === true || (sc2caReceived && caAlreadyInvoiced && !window._sc2caResendingCa);
+  // SC2CA-only invoice 모드 — 이미 sc2ca_status='invoiced' 면 합쳐서 출고 완료된 거니까 절대 only mode 아님
+  // (이전엔 ca_shipped_at + invoice_number 만 보고 onlyMode true 됐는데, 합쳐 출고 케이스에서도 true 라서 144 만 보였음)
+  const _alreadyCombinedInvoiced = (order.sc2ca_status === 'invoiced');
+  const sc2caOnlyMode = _alreadyCombinedInvoiced 
+    ? false 
+    : (window._sc2caOnlyShipMode === true || (sc2caReceived && caAlreadyInvoiced && !window._sc2caResendingCa));
   
   const filteredLines = isSplit && wh
     ? lines.filter(l => {
@@ -32036,7 +32041,12 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     // CA 가 이미 invoice 발송됐으면 → 이번 CA invoice 는 SC2CA 만
     const sc2caReceived = ['invoiced','ca_received'].includes(order.sc2ca_status);
     const caAlreadyInvoiced = !!(order.ca_invoice_sent_at || (order.ca_shipped_at && order.invoice_number));
-    const sc2caOnlyMode = window._sc2caOnlyShipMode === true || (sc2caReceived && caAlreadyInvoiced && !window._sc2caResendingCa);
+    // SC2CA-only invoice 모드 — 이미 sc2ca_status='invoiced' 면 합쳐서 출고 완료된 거니까 절대 only mode 아님
+  // (이전엔 ca_shipped_at + invoice_number 만 보고 onlyMode true 됐는데, 합쳐 출고 케이스에서도 true 라서 144 만 보였음)
+  const _alreadyCombinedInvoiced = (order.sc2ca_status === 'invoiced');
+  const sc2caOnlyMode = _alreadyCombinedInvoiced 
+    ? false 
+    : (window._sc2caOnlyShipMode === true || (sc2caReceived && caAlreadyInvoiced && !window._sc2caResendingCa));
     
     const scLines = lines.filter(l => l.stage_for_ca_truck !== true && (!l.wh || l.wh === 'SC' || l.wh === 'SC&CA'));
     const caLines = sc2caOnlyMode
