@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_143000 — Customer POs 화면에서 SC 활동 없는 오더는 SC 줄 숨김. 옛날: scPcs = sc_total_pcs || Math.round(total*0.5) 인데 0 이 falsy 라 fallback 발동해서 216 표시. fix: nullish 체크 + SC 활동 있을 때만 SC 줄 표시 (CA 단독 + SC→CA 합쳐 출고 케이스에서 SC 줄 숨김) -->
+<!-- BUILD: 20260505_143500 — Customer POs SC 줄 숨김 시 caRow 에 customer/po 셀 채우기 (caRow 는 옛날엔 SC 줄에 묶이는 두번째 줄이라 customer/po 빈 칸이었음) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -10927,7 +10927,23 @@ function renderCustomerPOTable() {
         + '<td style="white-space:nowrap;">' + caBtns + '</td>'
         + '<td style="white-space:nowrap;text-align:center;">' + (['shipped','invoiced','completed'].includes(caStatusKey) ? makeReturnBtn(oid) : '') + '</td>'
         + '</tr>';
-      return [_scActivity ? scRow : '', _caActivity ? caRow : ''].filter(Boolean);
+      // SC 줄 숨길 때 — caRow 의 첫 두 셀에 customer/po 채우기 (caRow 가 첫 줄이 됨)
+      const caRowFinal = !_scActivity 
+        ? '<tr style="cursor:pointer;' + rowBg + 'background:#fffbf5;" onclick="openPODetail(\'' + oid + '\'">'
+          + '<td style="font-weight:700;color:#111827;">' + o.customer_name + '</td>'
+          + '<td class="mono" style="font-weight:700;">' + (o.customer_po||'—') + (!['shipped','invoiced','cancelled','completed'].includes(o.status) ? ' <button class="btn btn-sm" style="background:#fef2f2;color:#dc2626;border-color:#fca5a5;font-size:9px;padding:1px 5px;" onclick="event.stopPropagation();deleteOrderConfirm(\'' + oid + '\',\'' + onum + '\',\'' + ocust + '\')">🗑 전체삭제</button>' : '') + '</td>'
+          + '<td><span class="loc-ca">CA</span></td>'
+          + '<td style="text-align:center;">' + caPcs.toLocaleString() + '</td>'
+          + '<td style="font-weight:700;color:var(--ca);">' + (caAmt > 0 ? '$' + caAmt.toLocaleString() : '—') + '</td>'
+          + '<td>' + (o.ship_date||'—') + '</td>'
+          + '<td>' + priBadge + '</td>'
+          + '<td>' + getWhStatusBadge(caSt.label, caSt.color, caSt.bg) + '</td>'
+          + '<td style="font-size:11px;color:var(--text3);">' + (o.created_at||'').slice(0,10) + '</td>'
+          + '<td style="white-space:nowrap;">' + caBtns + '</td>'
+          + '<td style="white-space:nowrap;text-align:center;">' + (['shipped','invoiced','completed'].includes(caStatusKey) ? makeReturnBtn(oid) : '') + '</td>'
+          + '</tr>'
+        : caRow;
+      return [_scActivity ? scRow : '', _caActivity ? caRowFinal : ''].filter(Boolean);
     }).join('');
 
     document.getElementById('customerpo-table-wrap').innerHTML =
