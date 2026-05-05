@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_150500 — 버전 감지 regex fix: 코드 안에 BUILD 문자열이 있어서 정규식이 잘못 매칭됨 → 날짜 형식 (\d{8}_\d{6}) 으로 명확하게 변경. 이제 자동 새 버전 감지 정상 작동 -->
+<!-- BUILD: 20260505_151000 — 새 버전 알림을 confirm 창 → 우측 하단 작은 배너로 변경. 작업 흐름 방해 안 하고, 사용자가 편할 때 클릭해서 새로고침 가능 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5511,7 +5511,9 @@ const _CURRENT_BUILD = (() => {
 console.log('[Version Check] Current BUILD:', _CURRENT_BUILD);
 
 async function _checkForNewBuild() {
-  if (!_CURRENT_BUILD) return; // 현재 BUILD 못 찾으면 스킵
+  if (!_CURRENT_BUILD) return;
+  // 이미 배너 떠있으면 또 안 뜨게
+  if (document.getElementById('_new-build-banner')) return;
   try {
     const res = await fetch('/?_v=' + Date.now(), { cache: 'no-store' });
     const text = await res.text();
@@ -5519,15 +5521,12 @@ async function _checkForNewBuild() {
     const serverBuild = m ? m[1] : '';
     if (serverBuild && serverBuild !== _CURRENT_BUILD) {
       console.log('[Version Check] 🚨 새 BUILD 감지!', _CURRENT_BUILD, '→', serverBuild);
-      if (confirm('🆕 새 버전이 배포됐습니다!\n\n현재: ' + _CURRENT_BUILD + '\n신규: ' + serverBuild + '\n\n자동으로 새로고침 합니다 (취소하면 수동으로 새로고침 필요).')) {
-        window.location.reload(true);
-      } else {
-        const banner = document.createElement('div');
-        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#dc2626;color:#fff;padding:8px 16px;text-align:center;z-index:999999;font-weight:600;cursor:pointer;';
-        banner.textContent = '🆕 새 버전 사용 가능 — 클릭해서 새로고침';
-        banner.onclick = () => window.location.reload(true);
-        document.body.appendChild(banner);
-      }
+      const banner = document.createElement('div');
+      banner.id = '_new-build-banner';
+      banner.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#16a34a;color:#fff;padding:12px 18px;border-radius:8px;z-index:999999;font-weight:600;font-size:13px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.2);display:flex;align-items:center;gap:10px;';
+      banner.innerHTML = '🆕 새 버전 (' + serverBuild + ') &nbsp;<span style="background:rgba(255,255,255,0.25);padding:4px 10px;border-radius:4px;">새로고침 →</span>';
+      banner.onclick = () => window.location.reload(true);
+      document.body.appendChild(banner);
     } else {
       console.log('[Version Check] ✅ 최신 버전');
     }
