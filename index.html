@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260505_140000 — 새 구조 Step 2B: PO 입력 시 CA + SC2CA 를 한 라인으로 합쳐 insert (qty_local + qty_from_other_wh). insertOneLineNew 함수 추가. SC 단독 라인은 그대로 별도. 케이스 1/2/3/4 다 대응. 옛날 컬럼 (qty_ca, qty_sc2ca, alloc_ca_detail, alloc_sc2ca_detail) 도 호환용으로 같이 채움 — 다른 화면 코드가 아직 보고 있을 수 있어서 -->
+<!-- BUILD: 20260505_141000 — 새 구조 Step 2C: orders.ca_total_amount/pcs 계산이 옛날엔 SC→CA 도 SC amount 에 잡혔는데 이제 CA invoice 한 번에 발송하므로 CA amount 에 합산. caTotalPcs += sc2caQty, caTotalAmt += sc2caQty * price. sc_total_amount/pcs 는 SC 직접 출고만 (sc2ca 제외) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8209,19 +8209,26 @@ async function _doSaveInvoice() {
   }, 0);
   const caTotalPcs = lineChecks.reduce((s, l) => {
     const allocCA = l.allocCA || {};
+    const allocSC2CA = l.allocSC2CA || {};
     const caQty = Object.values(allocCA).reduce((a,v)=>a+(v||0),0);
-    return s + caQty;
+    const sc2caQty = Object.values(allocSC2CA).reduce((a,v)=>a+(v||0),0);
+    // 새 구조: CA 직접 + SC→CA 둘 다 CA pcs
+    return s + caQty + sc2caQty;
   }, 0);
   const scTotalAmt = lineChecks.reduce((s, l) => {
     const allocSC = l.allocSC || {};
     const scQty = Object.values(allocSC).reduce((a,v)=>a+(v||0),0);
+    // 새 구조: SC 직접 출고만 SC amount. SC→CA 는 CA invoice 으로 가니 CA amount.
     const qty = l.wh === 'CA' ? 0 : l.wh === 'SC&CA' ? scQty : l.qty;
     return s + qty * (l.price || 0);
   }, 0);
   const caTotalAmt = lineChecks.reduce((s, l) => {
     const allocCA = l.allocCA || {};
+    const allocSC2CA = l.allocSC2CA || {};
     const caQty = Object.values(allocCA).reduce((a,v)=>a+(v||0),0);
-    const qty = l.wh === 'SC' ? 0 : l.wh === 'SC&CA' ? caQty : l.qty;
+    const sc2caQty = Object.values(allocSC2CA).reduce((a,v)=>a+(v||0),0);
+    // 새 구조: CA 직접 + SC→CA 둘 다 CA invoice
+    const qty = l.wh === 'SC' ? 0 : l.wh === 'SC&CA' ? (caQty + sc2caQty) : l.qty;
     return s + qty * (l.price || 0);
   }, 0);
 
