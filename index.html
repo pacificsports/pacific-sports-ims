@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_062500 — 캐시 강제 갱신용 새 push. 코드 변경 없음, BUILD timestamp 만 변경. Cloudflare 가 새 deployment 인식해서 edge cache 자동 무효화 시도 -->
+<!-- BUILD: 20260506_103500 — Pick Ticket SC→CA TRANSFER 섹션 fix (printPickTicket 이 buildPickTicketHtml 에 isSplit 항상 false 로 넘기던 버그) + 자동 버전 알림 배너 제거 (작업 흐름 방해) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5500,42 +5500,9 @@ if (document.readyState === 'loading') {
   setTimeout(updateTestModeUI, 100);
 }
 
-// ════════════════════════════════════════════════════════════════
-// 자동 버전 감지 — 새 BUILD push 되면 자동으로 강제 새로고침
-// ════════════════════════════════════════════════════════════════
-// HTML 첫 줄의 BUILD 주석 추출 (코드 안의 regex 패턴 문자열과 충돌 방지)
-const _CURRENT_BUILD = (() => {
-  const m = document.documentElement.outerHTML.match(/<!--\s*BUILD:\s*(\d{8}_\d{6})/);
-  return m ? m[1] : '';
-})();
-console.log('[Version Check] Current BUILD:', _CURRENT_BUILD);
 
-async function _checkForNewBuild() {
-  if (!_CURRENT_BUILD) return;
-  // 이미 배너 떠있으면 또 안 뜨게
-  if (document.getElementById('_new-build-banner')) return;
-  try {
-    const res = await fetch('/?_v=' + Date.now(), { cache: 'no-store' });
-    const text = await res.text();
-    const m = text.match(/<!--\s*BUILD:\s*(\d{8}_\d{6})/);
-    const serverBuild = m ? m[1] : '';
-    if (serverBuild && serverBuild !== _CURRENT_BUILD) {
-      console.log('[Version Check] 🚨 새 BUILD 감지!', _CURRENT_BUILD, '→', serverBuild);
-      const banner = document.createElement('div');
-      banner.id = '_new-build-banner';
-      banner.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#16a34a;color:#fff;padding:12px 18px;border-radius:8px;z-index:999999;font-weight:600;font-size:13px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.2);display:flex;align-items:center;gap:10px;';
-      banner.innerHTML = '🆕 새 버전 (' + serverBuild + ') &nbsp;<span style="background:rgba(255,255,255,0.25);padding:4px 10px;border-radius:4px;">새로고침 →</span>';
-      banner.onclick = () => window.location.reload(true);
-      document.body.appendChild(banner);
-    } else {
-      console.log('[Version Check] ✅ 최신 버전');
-    }
-  } catch(e) {
-    console.warn('[Version Check] error:', e);
-  }
-}
-setTimeout(_checkForNewBuild, 5000);
-setInterval(_checkForNewBuild, 5 * 60 * 1000);
+
+
 
 
 // CSS for pulse animation
@@ -23552,7 +23519,7 @@ async function printPickTicket(orderId, wh, ticketType) {
   // 전체 PCR Transfer 목록 (모든 라인 합산)
   const allPcrTransfers = enrichedLines.flatMap(l => (l._pcrTransfers||[]).map(t => ({ ...t, color: l.color, size: l.size, styleNum: l.styles?.style_number||'' })));
 
-  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, ticketType);
+  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, isSplit, wh, allPcrTransfers, ticketType);
 
   // enrichedLines에서 alloc_detail이 이미 WH별로 올바르게 설정됨
   // WH Labels Only 버튼 - full case 있을 때만
@@ -33383,7 +33350,7 @@ async function viewPickTicket(orderId, orderNum) {
   });
 
   const allPcrTransfers = [];
-  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, false, wh, allPcrTransfers, 'warehouse');
+  document.getElementById('pt-preview-content').innerHTML = buildPickTicketHtml(order, enrichedLines, isSplit, wh, allPcrTransfers, 'warehouse');
 
   const whLabelsBtn2 = document.getElementById('btn-wh-labels-only');
   const partialLabelsBtn2 = document.getElementById('btn-partial-labels-only');
