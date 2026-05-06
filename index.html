@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_103500 — Pick Ticket SC→CA TRANSFER 섹션 fix (printPickTicket 이 buildPickTicketHtml 에 isSplit 항상 false 로 넘기던 버그) + 자동 버전 알림 배너 제거 (작업 흐름 방해) -->
+<!-- BUILD: 20260506_120000 — Phase 2: SC&CA 오더 저장 시 sub-order (SC→CA Transfer) 자동 생성. 메인 order 는 그대로 (전체 432). Sub-order: parent_order_id=메인 id, wh_code='SC2CA', order_number='2026XXXX-T', SC→CA 라인만 (wh='SC', alloc_local = SC bin들). 회계는 메인 오더만, sub-order 는 내부 이동 추적용 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8548,6 +8548,90 @@ async function _doSaveInvoice() {
     }
     
     // BO 처리는 기존 로직에 맡김 (lineChecks 의 backQty 가 있으면 그대로 작동)
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // 새 구조: SC&CA 오더면 sub-order (SC→CA Transfer) 자동 생성
+  // ════════════════════════════════════════════════════════════════
+  // 메인 order 는 그대로 (qty_total, qty_local, qty_from_other_wh)
+  // Sub-order: parent_order_id = 메인 id, wh_code='SC2CA', SC→CA 라인만
+  if (!isEditMode && hasSc2caLine && order && order.id) {
+    try {
+      console.log('[Sub-order] SC→CA Transfer sub-order 생성 시작');
+      // 메인 order 의 라인 중 qty_from_other_wh > 0 인 라인들 fetch
+      const { data: mainLines } = await db.from('order_lines')
+        .select('*')
+        .eq('order_id', order.id);
+      const sc2caLines = (mainLines || []).filter(l => (l.qty_from_other_wh || 0) > 0);
+      
+      if (sc2caLines.length > 0) {
+        const sc2caTotalPcs = sc2caLines.reduce((s, l) => s + (l.qty_from_other_wh || 0), 0);
+        const sc2caTotalAmt = sc2caLines.reduce((s, l) => s + (l.qty_from_other_wh || 0) * (l.unit_price || 0), 0);
+        
+        // SC warehouse id 찾기
+        const scWh = (warehouses || []).find(w => w.code === 'SC');
+        const scWhId = scWh?.id || null;
+        
+        // Sub-order 생성
+        const { data: subOrder, error: subErr } = await db.from('orders').insert({
+          customer_name: order.customer_name,
+          customer_po: order.customer_po,
+          customer_id: order.customer_id,
+          warehouse_id: scWhId,
+          wh_code: 'SC2CA',  // 새 wh_code
+          is_split_warehouse: false,
+          ship_date: order.ship_date,
+          total_pcs: sc2caTotalPcs,
+          total_amount: sc2caTotalAmt,
+          sc_total_pcs: sc2caTotalPcs,  // SC 가 픽하니까 sc_total
+          ca_total_pcs: 0,
+          sc_total_amount: 0,  // 내부 이동 — 회계는 메인 오더에서
+          ca_total_amount: 0,
+          status: 'po_entered',
+          parent_order_id: order.id,
+          order_number: order.order_number + '-T'  // T = Transfer
+        }).select().single();
+        
+        if (subErr) {
+          console.error('[Sub-order] 생성 실패:', subErr);
+        } else {
+          console.log('[Sub-order] 생성됨:', subOrder.id, subOrder.order_number);
+          
+          // Sub-order 의 라인들 생성 (SC bin 픽 정보)
+          const subLineRows = sc2caLines.map(l => ({
+            order_id: subOrder.id,
+            style_id: l.style_id,
+            color: l.color,
+            size: l.size,
+            sku: l.sku,
+            qty_pieces: l.qty_from_other_wh,  // sub-order 입장에서 전체
+            qty_total: l.qty_from_other_wh,
+            qty_local: l.qty_from_other_wh,  // sub-order 의 local = SC 픽
+            qty_from_other_wh: 0,
+            unit_price: l.unit_price,
+            discount_pct: 0,
+            tax_pct: 0,
+            wh: 'SC',  // SC bin 에서 픽
+            alloc_local: l.alloc_from_other_wh || l.alloc_sc2ca_detail || {},
+            alloc_detail: l.alloc_from_other_wh || l.alloc_sc2ca_detail || {},
+            qty_boxes: 0,
+            qty_loose: l.qty_from_other_wh,
+            pcs_per_box: l.pcs_per_box
+          }));
+          
+          const { error: subLinesErr } = await db.from('order_lines').insert(subLineRows);
+          if (subLinesErr) {
+            console.error('[Sub-order] 라인 생성 실패:', subLinesErr);
+          } else {
+            console.log('[Sub-order] 라인 생성됨:', subLineRows.length, '개');
+          }
+        }
+      } else {
+        console.log('[Sub-order] qty_from_other_wh > 0 라인 없음 — sub-order 생성 스킵');
+      }
+    } catch (e) {
+      console.error('[Sub-order] error:', e);
+    }
   }
 
   // ── Pick Ticket 레코드 생성 (Edit 모드면 이미 있으므로 스킵)
