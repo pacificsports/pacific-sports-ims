@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_120000 — Phase 2: SC&CA 오더 저장 시 sub-order (SC→CA Transfer) 자동 생성. 메인 order 는 그대로 (전체 432). Sub-order: parent_order_id=메인 id, wh_code='SC2CA', order_number='2026XXXX-T', SC→CA 라인만 (wh='SC', alloc_local = SC bin들). 회계는 메인 오더만, sub-order 는 내부 이동 추적용 -->
+<!-- BUILD: 20260506_121000 — Phase 2 fix: (1) Customer POs 에서 sub-order 숨김 (parent_order_id 있는 거 제외) (2) Order Status 에서도 sub-order 일단 숨김 (Phase 3 에서 별도 카드 표시 예정) (3) Realtime INSERT 시 sub-order 면 알림 chime 안 울림 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5816,10 +5816,11 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
     window._osRealtimeChannel = db.channel('orders-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         console.log('[Realtime] orders changed:', payload);
-        // INSERT 이벤트 = 새 오더 → 소리 재생 (자기 자신이 저장한 오더 제외, BO 제외)
+        // INSERT 이벤트 = 새 오더 → 소리 재생 (자기 자신이 저장한 오더 제외, BO 제외, sub-order(SC2CA Transfer) 제외)
         if (payload.eventType === 'INSERT' && payload.new?.id) {
           const isBO = payload.new?.status === 'backordered' || (payload.new?.order_number||'').includes('-BO');
-          if (!isBO && (!_knownOrderIds || !_knownOrderIds.has(payload.new.id))) {
+          const isSubOrder = !!payload.new?.parent_order_id;  // SC→CA Transfer sub-order
+          if (!isBO && !isSubOrder && (!_knownOrderIds || !_knownOrderIds.has(payload.new.id))) {
             playNewOrderChime();
           }
         }
@@ -9857,8 +9858,11 @@ async function loadCustomerPOs(subview = null) {
     .select('*, warehouses(code,name), order_lines(stage_for_ca_truck, qty_sc2ca, qty_sc, qty_ca)')
     .order('created_at', { ascending: false })
     .limit(5000);
-  // BO 오더는 Back Orders 탭에서만 관리 — Customer POs에서 제외
-  allCustomerPOs = (data || []).filter(o => !((o.order_number||'').endsWith('-BO') || (o.customer_po||'').endsWith('-BO')));
+  // BO 오더 + sub-order(SC→CA Transfer) 제외 — 이건 메인 카드만 표시
+  allCustomerPOs = (data || []).filter(o => 
+    !((o.order_number||'').endsWith('-BO') || (o.customer_po||'').endsWith('-BO')) &&
+    !o.parent_order_id  // sub-order 제외
+  );
   // 현재 뷰 버튼 상태 갱신
   _updatePoViewButtons();
 
@@ -11104,6 +11108,8 @@ async function loadOrderStatus() {
   else if (newDefectCount > prevDefectCount) playDefectAlert();
 
   let orders = data || [];
+  // Phase 2: sub-order(SC→CA Transfer) 는 일단 숨김 (Phase 3 에서 별도 카드 표시 예정)
+  orders = orders.filter(o => !o.parent_order_id);
   if (whFilter) orders = orders.filter(o => o.warehouses?.code === whFilter || (o.is_split_warehouse && whFilter === 'SC'));
 
   // 새 오더 감지 — 최초 로드 이후부터 체크
