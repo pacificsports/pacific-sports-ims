@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_121000 — Phase 2 fix: (1) Customer POs 에서 sub-order 숨김 (parent_order_id 있는 거 제외) (2) Order Status 에서도 sub-order 일단 숨김 (Phase 3 에서 별도 카드 표시 예정) (3) Realtime INSERT 시 sub-order 면 알림 chime 안 울림 -->
+<!-- BUILD: 20260506_140000 — Phase 3: Order Status 두 카드 표시 시작. (1) loadOrderStatus 가 sub-order 도 fetch (parent_order_id 있는 거 포함). order_lines 쿼리에 새 컬럼 (qty_total, qty_local, qty_from_other_wh, alloc_local, alloc_from_other_wh) 추가. (2) makeCards: parent_order_id 있는 row 는 자동으로 SC2CA 카드. 옛날 구조 (stage_for_ca_truck) 호환 유지. (3) sub-order 카드의 pcs 표시 fix (total_pcs = 144) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11076,7 +11076,7 @@ async function loadOrderStatus() {
   );
 
   const { data } = await db.from('orders')
-    .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail, stage_for_ca_truck, qty_sc2ca, alloc_sc2ca_detail, qty_pieces)')
+    .select('*, warehouses(code,name), order_lines(qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail, stage_for_ca_truck, qty_sc2ca, alloc_sc2ca_detail, qty_pieces, qty_total, qty_local, qty_from_other_wh, qty_received_from_other_wh, alloc_local, alloc_from_other_wh)')
     .not('status', 'in', '(cancelled,completed)')
     .order('created_at', { ascending: false })
     .limit(5000);
@@ -11108,9 +11108,8 @@ async function loadOrderStatus() {
   else if (newDefectCount > prevDefectCount) playDefectAlert();
 
   let orders = data || [];
-  // Phase 2: sub-order(SC→CA Transfer) 는 일단 숨김 (Phase 3 에서 별도 카드 표시 예정)
-  orders = orders.filter(o => !o.parent_order_id);
-  if (whFilter) orders = orders.filter(o => o.warehouses?.code === whFilter || (o.is_split_warehouse && whFilter === 'SC'));
+  // Phase 3: sub-order(SC→CA Transfer) 도 카드로 표시 (별도 행)
+  if (whFilter) orders = orders.filter(o => o.warehouses?.code === whFilter || (o.is_split_warehouse && whFilter === 'SC') || o.wh_code === whFilter);
 
   // 새 오더 감지 — 최초 로드 이후부터 체크
   const currentIds = new Set(orders.map(o => o.id));
@@ -11151,8 +11150,8 @@ async function loadOrderStatus() {
   });
 
   // SC&CA 오더는 SC 블록 + CA 블록 두 개로 분리
-  // SC2CA 라인이 있으면 SC→CA 카드도 별도로 (재고는 SC 에 있고 다음 트럭에 실어 CA 도착해서 출고)
-  // 각 "가상 카드"를 만들어서 col별로 분류
+  // 새 구조 (2026-05): sub-order(parent_order_id) 가 따로 row 로 있음 → SC→CA 카드는 sub-order
+  // 옛날 구조: stage_for_ca_truck=true 라인이 있으면 SC2CA 가상 카드 (이건 BO 등 옛날 데이터에 남아있음)
   const makeCards = (orders) => {
     const cards = [];
     orders.forEach(o => {
@@ -11162,29 +11161,35 @@ async function loadOrderStatus() {
         cards.push({ ...o, _wh: wh, _status: o.status });
         return;
       }
-      // SC2CA 라인 있는지 체크 (stage_for_ca_truck=true 인 line)
+      
+      // 새 구조: sub-order 인 경우 (parent_order_id 있음) → SC→CA 카드
+      if (o.parent_order_id) {
+        cards.push({ ...o, _wh: 'SC2CA', _status: o.status });
+        return;
+      }
+      
+      // 메인 오더 처리
       const ols = o.order_lines || [];
-      const hasSc2caLine = ols.some(ol => ol.stage_for_ca_truck === true);
-      const hasScLine = ols.some(ol => ol.stage_for_ca_truck !== true && (ol.wh === 'SC' || ol.wh === 'SC&CA'));
+      // 옛날 구조 호환: stage_for_ca_truck 라인 (남아있는 옛날 데이터용)
+      const hasSc2caLineOld = ols.some(ol => ol.stage_for_ca_truck === true);
+      const hasScLine = ols.some(ol => ol.stage_for_ca_truck !== true && (ol.wh === 'SC' || ol.wh === 'SC&CA' || !ol.wh));
       const hasCaLine = ols.some(ol => ol.wh === 'CA' || ol.wh === 'SC&CA');
       const isSplit = o.wh_code === 'SC&CA' || o.is_split_warehouse;
       
-      // SC2CA 카드를 보여줄지 결정
-      // - sc2ca_status='ca_received' (CA 도착 완료) 이면서 CA 가 아직 출고 안 됨 → 숨김 (CA 카드에 합쳐졌으니까)
-      // - 그 외엔 표시
+      // 옛날 구조 SC2CA 가상 카드 보일지
       const caAlreadyShipped = !!o.ca_shipped_at || ['shipped','invoiced'].includes(o.ca_status);
       const sc2caMergedHidden = (o.sc2ca_status === 'ca_received' && !caAlreadyShipped);
-      const showSc2caCard = hasSc2caLine && !sc2caMergedHidden;
+      const showSc2caCardOld = hasSc2caLineOld && !sc2caMergedHidden;
       
       if (isSplit) {
         if (hasScLine) cards.push({ ...o, _wh: 'SC', _status: o.sc_status || o.status });
         if (hasCaLine) cards.push({ ...o, _wh: 'CA', _status: o.ca_status || o.status });
-        if (showSc2caCard) cards.push({ ...o, _wh: 'SC2CA', _status: o.sc2ca_status || o.status });
+        if (showSc2caCardOld) cards.push({ ...o, _wh: 'SC2CA', _status: o.sc2ca_status || o.status });
       } else {
         const wh = o.wh_code || o.warehouses?.code || 'SC';
-        if (hasSc2caLine) {
+        if (hasSc2caLineOld) {
           if (hasScLine || hasCaLine) cards.push({ ...o, _wh: wh, _status: o.status });
-          if (showSc2caCard) cards.push({ ...o, _wh: 'SC2CA', _status: o.sc2ca_status || o.status });
+          if (showSc2caCardOld) cards.push({ ...o, _wh: 'SC2CA', _status: o.sc2ca_status || o.status });
         } else {
           cards.push({ ...o, _wh: wh, _status: o.status });
         }
@@ -11274,16 +11279,19 @@ async function loadOrderStatus() {
     const whBadge = isSc2ca 
       ? '<span style="display:inline-flex;align-items:center;background:#92400e;color:#fff;border:1px solid #92400e;padding:2px 8px;border-radius:4px;font-size:10px;font-family:\'IBM Plex Mono\',monospace;font-weight:800;letter-spacing:0.5px;">🚚 SC→CA</span>'
       : (wh === 'CA' ? '<span class="loc-ca">CA</span>' : '<span class="loc-sc">SC</span>');
-    // SC2CA 카드의 displayPcs — qty_sc2ca 합계
+    // SC2CA 카드의 displayPcs
     const ols = o.order_lines || [];
-    const sc2caTotalPcs = ols.filter(ol => ol.stage_for_ca_truck === true).reduce((s,ol) => s + (ol.qty_sc2ca || ol.qty_pieces || 0), 0);
-    // CA 카드의 displayPcs — CA portion 만. 단 sc2ca_status='ca_received' 이면 SC2CA 합쳐짐 (도착 후 같이 출고 케이스)
+    const isNewSubOrder = !!o.parent_order_id;  // 새 구조: 진짜 sub-order row
+    // 옛날 구조: stage_for_ca_truck=true 라인에서 합계
+    const sc2caTotalPcs = isNewSubOrder 
+      ? (o.total_pcs || 0)  // sub-order 자체의 total_pcs (144)
+      : ols.filter(ol => ol.stage_for_ca_truck === true).reduce((s,ol) => s + (ol.qty_sc2ca || ol.qty_pieces || 0), 0);
+    // CA 카드의 displayPcs — CA portion 만. 단 sc2ca_status='ca_received' 이면 SC2CA 합쳐짐
     const sc2caMergedToCa = (o.sc2ca_status === 'ca_received' || o.sc2ca_status === 'invoiced');
     let displayPcs;
     if (isSc2ca) {
       displayPcs = sc2caTotalPcs;
     } else if (wh === 'CA' && isSplit) {
-      // CA 카드: CA portion + (도착 합쳐졌으면 SC2CA 도)
       displayPcs = (o.ca_total_pcs || 0) + (sc2caMergedToCa ? sc2caTotalPcs : 0);
     } else {
       displayPcs = o.total_pcs || 0;
