@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_140000 — Phase 3: Order Status 두 카드 표시 시작. (1) loadOrderStatus 가 sub-order 도 fetch (parent_order_id 있는 거 포함). order_lines 쿼리에 새 컬럼 (qty_total, qty_local, qty_from_other_wh, alloc_local, alloc_from_other_wh) 추가. (2) makeCards: parent_order_id 있는 row 는 자동으로 SC2CA 카드. 옛날 구조 (stage_for_ca_truck) 호환 유지. (3) sub-order 카드의 pcs 표시 fix (total_pcs = 144) -->
+<!-- BUILD: 20260506_140500 — Phase 3 + chime fix: 새 오더 감지에서 sub-order(parent_order_id) 제외 → PO save 시 chime 한 번만 울림 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11111,12 +11111,13 @@ async function loadOrderStatus() {
   // Phase 3: sub-order(SC→CA Transfer) 도 카드로 표시 (별도 행)
   if (whFilter) orders = orders.filter(o => o.warehouses?.code === whFilter || (o.is_split_warehouse && whFilter === 'SC') || o.wh_code === whFilter);
 
-  // 새 오더 감지 — 최초 로드 이후부터 체크
+  // 새 오더 감지 — 최초 로드 이후부터 체크 (sub-order 는 chime 안 울림)
   const currentIds = new Set(orders.map(o => o.id));
   if (_knownOrderIds !== null) {
     const newOrders = orders.filter(o => !_knownOrderIds.has(o.id)
       && o.status !== 'backordered'
-      && !(o.order_number||'').includes('-BO'));
+      && !(o.order_number||'').includes('-BO')
+      && !o.parent_order_id);  // sub-order 제외
     if (newOrders.length > 0) {
       playNewOrderChime();
     }
