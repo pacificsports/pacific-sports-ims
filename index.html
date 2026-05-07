@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_134000 — 🎯 CHECK constraint 발견: orders.status 가 'in_transit' 안 받음. (1) postShipment 의 sub-order status update: 'in_transit' → 'ready_to_ship' (DB 호환). (2) Ready 카드 분기: status 가 아니라 sc2ca_status 로 분기 (sub-order 단계는 sc2ca_status 가 진실). (3) 'shipped' 분기는 별도 (Received & Shipped 케이스). + sku 컬럼 제거 fix. -->
+<!-- BUILD: 20260507_140000 — SC→CA Next Truck bin 입력 시 SC PCR Transfer 섹션 자동 갱신: (1) onSc2CaBinChange 가 refreshPcrTransferSection 호출. (2) refreshPcrTransferFor 의 liveAlloc 계산에서 SC bin 사용량 = allocSC + allocSC2CA 합산 → SC PCR transfer 가능 박스 정확히 계산. + CHECK constraint 우회 + sku 제거. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -37643,6 +37643,9 @@ function onSc2CaBinChange(lineIdx, bin, value, max) {
     poLines[lineIdx].allocSC2CA[bin] = n;
   }
   updateAllocSum();
+  // ── 새 (2026-05-07): SC2CA 도 SC bin 사용하므로 SC PCR transfer 섹션도 다시 계산
+  //    (SC bin 의 남은 박스 = qty - allocSC - allocSC2CA → 변하면 PCR transfer 가능 박스도 변함)
+  if (typeof refreshPcrTransferSection === 'function') refreshPcrTransferSection();
 }
 
 
@@ -37784,6 +37787,11 @@ function refreshPcrTransferFor(whGroup, l) {
       ? allocWrap.querySelector(`[id="alloc-box-${binId}"]`)
       : document.getElementById(`alloc-box-${binId}`);
     liveAlloc[b.bin] = inputEl ? (parseInt(inputEl.value)||0) : 0;
+    // ── 새 (2026-05-07): SC bin 은 SC2CA 도 사용하므로 합산 (SC PCR transfer 가능 박스 정확히 계산)
+    if (isSC) {
+      const sc2caQty = (l.allocSC2CA || {})[b.bin] || 0;
+      liveAlloc[b.bin] += sc2caQty;
+    }
   });
 
   const pcrBinData = mainBins
