@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_105000 — Warehouse Preparing 모달 (openWhComplete) sub-order 처리: filteredLines 새 구조면 lines 전체, pickAlloc 도 alloc_local 우선, lineQty 도 qty_pieces 우선. submitWhComplete 도 status (새 구조) vs sc2ca_status (옛날) 분기. + checkAndMoveToPreparing fix + Phase 3.4 시작. -->
+<!-- BUILD: 20260507_111000 — Sub-order PL 단계 스킵: Preparing 컬럼에서 PIN+Complete 후 바로 "Add to CA Truck" 버튼 표시 (옵션 2 — Ready 단계 스킵). isSubOrderCard 분기 추가. + sc2caAutoAddLines 도 새 구조 (alloc_local) 처리. + Warehouse Preparing 모달 sub-order fix. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11551,7 +11551,15 @@ async function loadOrderStatus() {
         const whOk2  = !prepNeedsWh  || !!whDone;
         const pcrOk2 = !prepNeedsPcr || !!pcrDone;
         const allDone = whOk2 && pcrOk2;
-        const plReadyBtn = allDone ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>` : '';
+        // ── 새 구조 (2026-05-07): sub-order 의 경우 PL 단계 스킵 — 바로 Add to CA Truck
+        //    SC2CA 는 내부 운반이라 거래처용 PL 불필요 (회계 결정과 일치)
+        //    Sub-order 인 경우: parent_order_id 있고 wh='SC2CA'
+        const isSubOrderCard = !!o.parent_order_id && wh === 'SC2CA';
+        const plReadyBtn = allDone
+          ? (isSubOrderCard
+              ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c2d12;color:#fff;border-color:#7c2d12;font-weight:700;" onclick="event.stopPropagation();sc2caAddToCaTruck('${o.id}')">🚚 Add to CA Truck</button>`
+              : `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>`)
+          : '';
 
         const reprintBtn = (prepNeedsWh || prepNeedsPcr)
           ? `<button class="btn btn-sm" style="width:100%;font-size:9px;background:#f8fafc;color:#64748b;border-color:#cbd5e1;" onclick="event.stopPropagation();reprintPickTicketAll('${o.id}','${wh}')">🖨️ Reprint Pick Ticket & Labels</button>`
@@ -23174,10 +23182,23 @@ async function sc2caJoinExistingShipment(orderId, shipmentId) {
 // SC2CA 라인을 자동으로 Shipment Builder 의 새 pallet 에 추가
 async function sc2caAutoAddLines(orderId) {
   const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
-  const { data: lines } = await db.from('order_lines')
-    .select('*, styles(style_number)')
-    .eq('order_id', orderId)
-    .eq('stage_for_ca_truck', true);
+  if (!order) return;
+  
+  // ── 새 구조 (2026-05): sub-order 면 모든 라인 / 옛날은 stage_for_ca_truck=true 만
+  const isNewSubOrder = !!order.parent_order_id;
+  let lines;
+  if (isNewSubOrder) {
+    const { data: ls } = await db.from('order_lines')
+      .select('*, styles(style_number)')
+      .eq('order_id', orderId);
+    lines = ls;
+  } else {
+    const { data: ls } = await db.from('order_lines')
+      .select('*, styles(style_number)')
+      .eq('order_id', orderId)
+      .eq('stage_for_ca_truck', true);
+    lines = ls;
+  }
   
   if (!lines || lines.length === 0) return;
   
@@ -23190,9 +23211,13 @@ async function sc2caAutoAddLines(orderId) {
   
   let okCount = 0, errors = [];
   
-  // 각 라인의 alloc_sc2ca_detail 기준으로 bin 별 라인 만들어서 _addLineToDraft 호출
+  // 각 라인의 alloc 기준으로 bin 별 라인 만들어서 _addLineToDraft 호출
+  // 새 구조: alloc_local 사용 (SC bin 들 H2025, H2128)
+  // 옛날: alloc_sc2ca_detail
   for (const l of lines) {
-    const allocSc2ca = l.alloc_sc2ca_detail || {};
+    const allocSc2ca = isNewSubOrder
+      ? (l.alloc_local || l.alloc_detail || {})
+      : (l.alloc_sc2ca_detail || {});
     
     for (const [allocKey, val] of Object.entries(allocSc2ca)) {
       const ppb = l.pcs_per_box || 72;
