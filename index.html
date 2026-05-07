@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_154500 — Invoice 새 구조 처리: getWhShippedQty 가 stage_for_ca_truck=true (옛날) 만 봤음. 새 구조 (qty_from_other_wh > 0) + CA invoice + sc2caMergedToCa 면 qty_local + qty_from_other_wh 합산 (288+144=432). Invoice 의 SHIPPED, AMOUNT, INVOICE TOTAL 모두 432 로 정확. + 출고 이메일 fix. -->
+<!-- BUILD: 20260507_162000 — Invoice 이메일 본문 새 구조 처리: buildInvoiceEmailBodyHtml 의 getPreparedQty 도 alloc_ca_detail 만 봤음. 새 구조 (qty_from_other_wh > 0) + CA invoice + sc2caMergedToCa 면 qty_local + qty_from_other_wh 합산 (288+144=432) → 이메일 Shipped/Net Invoice/Total 모두 432, $432, $532 정확. (Invoice PDF 와 동일한 fix 패턴) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -10864,8 +10864,8 @@ function renderCustomerPOTable() {
   const statusFilter = document.getElementById('po-filter-status')?.value || '';
   const view = _poCurrentView || 'active';
 
-  const ACTIVE_STATUSES = ['po_entered','credit_hold','preparing','ready_to_ship','shipped','invoiced','backordered','partial','open','rejected'];
-  const COMPLETED_STATUSES = ['completed','cancelled'];
+  const ACTIVE_STATUSES = ['po_entered','credit_hold','preparing','ready_to_ship','shipped','backordered','partial','open','rejected'];
+  const COMPLETED_STATUSES = ['invoiced','completed','cancelled'];
 
   let filtered = allCustomerPOs.filter(o => {
     // 뷰 필터 (status 드롭다운 선택 없을 때)
@@ -32345,6 +32345,19 @@ function buildInvoiceEmailBodyHtml(order, lines, invoiceNum, shipInfo, companySe
   // 라인 필터 (WH별 shipped qty > 0)
   // 실제 출고 수량 헬퍼
   const getPreparedQty = (l, wh) => {
+    // ── 새 구조 (2026-05): 메인 라인은 qty_local + qty_from_other_wh 형태
+    //    sc2caMergedToCa 면 두 가지 합쳐서 CA invoice 에 표시
+    const isNewStructure = (l.qty_from_other_wh || 0) > 0;
+    const sc2caMergedToCaInv = ['ca_received','invoiced'].includes(order.sc2ca_status);
+    if (isNewStructure) {
+      if (wh !== 'CA') return 0;  // 새 구조는 CA invoice 에서만
+      if (sc2caMergedToCaInv) {
+        return (l.qty_local || 0) + (l.qty_from_other_wh || 0);  // 432
+      } else {
+        return l.qty_local || 0;  // sub-order 따로 invoice 케이스
+      }
+    }
+    
     const baseAlloc = wh === 'CA' ? (l.alloc_ca_detail||{}) : (l.alloc_detail||{});
     let base = allocPcs(baseAlloc);
     // pcr_prepared_lines 오버라이드 — PCR 키 있을 때만 적용
