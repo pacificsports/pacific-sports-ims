@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_230000 — Order Confirm 메일 정리: (1) Shipping From 박스 — Pending Transfer 줄 → 작은 info note 로 변경 (거래처는 내부 이동 디테일 숨김). (2) Detail 테이블 — Pending Transfer to CA 컬럼 제거, CA 칼럼에 ca_qty + sc2ca_qty 합산 표시 (거래처 받는 CA total). (3) SC = 0 일 때도 SC 줄 항상 표시 (정렬 일관성). + Sub-order 라인 INSERT fix (warehouse_id 등) + Phase 3.3 (메인 ship 차단) + Phase A (PL 합산). -->
+<!-- BUILD: 20260506_233000 — Inventory stale fix: scInventory/caInventory 의 qty 계산을 inventory.qty_committed (stale) 대신 trueBinCommitted (alloc_detail 기반 fresh) 으로 변경. PO 입력 화면의 SC/CA/SC→CA/Full Boxes 컬럼이 0 으로 나오는 문제 해결. + Order Confirm 메일 정리 + Sub-order 라인 INSERT fix + Phase 3.3 + Phase A. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5968,11 +5968,29 @@ async function loadScInventory() {
       ? `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}|SS`
       : `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
     const totalQty = row.qty_on_hand || 0;
-    const committed = row.qty_committed || 0;
+    // ── FIX (2026-05-07): inventory.qty_committed 가 stale 한 케이스가 있어서 (옛날 PO 가 풀리지 않고 남아있음)
+    //    같은 inventory row 의 모든 bin 의 trueBinCommitted (active order 의 alloc_detail 기반) 합산으로 정확하게 계산
+    //    이렇게 하면 메인 라인 표시도 배분 모달과 일관됨
+    const wh = row.warehouses.code;
+    const _binsForRow = binsByInvId[row.id] || [];
+    let _trueCommittedForRow = 0;
+    if (_binsForRow.length > 0) {
+      _binsForRow.forEach(b => {
+        if (!b.bin_code) return;
+        const lookupKey = `${b.bin_code}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+        _trueCommittedForRow += trueBinCommitted[wh]?.[lookupKey] || 0;
+      });
+    } else if (row.location) {
+      // bin 데이터 없으면 location 기준
+      const lookupKey = `${row.location}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
+      _trueCommittedForRow = trueBinCommitted[wh]?.[lookupKey] || 0;
+    }
+    // trueBinCommitted 가 0 인데 qty_committed > 0 이면 stale 일 가능성 높음 → trueBinCommitted 우선
+    // 단, 안전하게 qty_committed 가 더 큰 경우는 그래도 trueBinCommitted 사용 (stale 가정)
+    const committed = _trueCommittedForRow;
     const availQty = Math.max(0, totalQty - committed);
     const rcvDate = row.received_date || (row.created_at ? row.created_at.slice(0,10) : null);
     const entry = { qty: availQty, location: row.location || '—' };
-    const wh = row.warehouses.code;
 
     // 창고별 총합 맵
     if (wh === 'SC') {
