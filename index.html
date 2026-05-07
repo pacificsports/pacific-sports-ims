@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_202000 — Sub-order (SC→CA) Pick Ticket fix: parent_order_id 있는 order 는 모든 라인의 alloc_local 사용 (SC bin: H2025, H2128). buildPickTicketHtml 의 sub-order 섹션 라벨 = "🚚 SC → CA TRANSFER" (갈색). + 메인 카드의 "SC→CA 144 도착 대기" 노란 배지 -->
+<!-- BUILD: 20260506_215000 — Phase 3.3: 메인 카드 Mark as Shipped 차단 강화 (새 구조 sub-order 기반). makeCards 의 sc2caWaiting + doShipped 백엔드 체크 둘 다 새 구조 (parent_order_id) 우선, 옛날 구조 (stage_for_ca_truck) 호환 유지. Sub-order 가 received/complete/shipped/invoiced 가 아니면 차단 + "Ship CA Portion First" 우회 버튼 유지 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11564,18 +11564,35 @@ async function loadOrderStatus() {
           `;
         }
         // 일반 카드 (SC / CA) — 기존 그대로
-        // CA 카드에 SC2CA 대기 표시 — SC→CA 라인이 있고 아직 거래처 도달 안 했으면 무조건 대기
+        // CA 카드에 SC2CA 대기 표시 — SC→CA 가 있고 아직 거래처 도달 안 했으면 무조건 대기
         // (po_entered 포함 — 사용자 흐름 = "CA 가 SC→CA 물건을 기다림")
-        const hasSc2ca = (o.order_lines || []).some(ol => ol.stage_for_ca_truck === true);
-        const sc2caWaiting = (wh === 'CA' && hasSc2ca && 
-          !['invoiced','ca_received','cancelled'].includes(o.sc2ca_status));
+        // 
+        // ── Phase 3.3 (2026-05-06): 새 구조 (parent_order_id) 기반 sub-order 체크
+        //    sub-order 가 received/complete/shipped/invoiced 상태가 아니면 메인 ship 차단
+        const subOrder = orders.find(so => so.parent_order_id === o.id);
+        const hasSc2caSubOrder = !!subOrder;
+        const subOrderStatus = subOrder?.status || null;
+        const subOrderReceived = subOrder && ['received','complete','shipped','invoiced'].includes(subOrderStatus);
+        // 옛날 구조 호환 (BO 등 기존 데이터)
+        const hasSc2caOld = (o.order_lines || []).some(ol => ol.stage_for_ca_truck === true);
+        const hasSc2ca = hasSc2caSubOrder || hasSc2caOld;
+        // 새 구조 우선: sub-order 가 있고 아직 received 안됐으면 대기
+        // 옛날 구조: sc2ca_status 로 체크
+        const sc2caWaiting = (wh === 'CA' && (
+          (hasSc2caSubOrder && !subOrderReceived) ||
+          (hasSc2caOld && !hasSc2caSubOrder && !['invoiced','ca_received','cancelled'].includes(o.sc2ca_status))
+        ));
+        // 라벨 — 새 구조 우선 (subOrder.status), 없으면 옛날 sc2ca_status
+        const sc2caStatusForLabel = hasSc2caSubOrder ? subOrderStatus : o.sc2ca_status;
         const sc2caWaitLabel = {
           'po_entered': 'PO Entered',
           'preparing': '준비 중',
           'ready_to_ship': 'Ready to Ship',
           'staged_for_truck': '트럭 빌더 등록',
-          'in_transit': '🚚 In Transit'
-        }[o.sc2ca_status] || '진행 전';
+          'in_transit': '🚚 In Transit',
+          'received': '도착 완료',
+          'complete': '완료'
+        }[sc2caStatusForLabel] || '진행 전';
         const sc2caBadge = sc2caWaiting ? `
           <div style="margin-top:8px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:6px;padding:6px 10px;font-size:10px;font-weight:600;text-align:center;">
             ⏳ SC→CA 도착 대기 (${sc2caWaitLabel})
@@ -28717,20 +28734,50 @@ async function doShipped(orderId, wh) {
     window._sc2caOnlyShipMode = false;
   }
   if (wh === 'CA' && !window._sc2caBypassWait) {
-    const { data: o } = await db.from('orders').select('sc2ca_status, order_lines!inner(stage_for_ca_truck)').eq('id', orderId).single();
-    const hasSc2ca = (o?.order_lines || []).some(ol => ol.stage_for_ca_truck === true);
-    if (hasSc2ca && !['invoiced','ca_received','cancelled'].includes(o.sc2ca_status)) {
-      // SC2CA 가 있고 아직 거래처에 도착(invoiced) 안 됨
+    // ── Phase 3.3 (2026-05-06): 새 구조 (parent_order_id) 기반 sub-order 체크
+    //    sub-order 가 received/complete/shipped/invoiced 가 아니면 차단
+    const { data: subOrder } = await db.from('orders')
+      .select('id, status')
+      .eq('parent_order_id', orderId)
+      .maybeSingle();
+    
+    let hasSc2ca = false;
+    let waitStatus = null;
+    let isNewStructure = false;
+    
+    if (subOrder) {
+      // 새 구조: sub-order row 가 있음
+      isNewStructure = true;
+      const subStatus = subOrder.status;
+      const subReceived = ['received','complete','shipped','invoiced'].includes(subStatus);
+      if (!subReceived) {
+        hasSc2ca = true;
+        waitStatus = subStatus;
+      }
+    } else {
+      // 옛날 구조 호환 — stage_for_ca_truck 라인 + sc2ca_status 체크
+      const { data: o } = await db.from('orders').select('sc2ca_status, order_lines!inner(stage_for_ca_truck)').eq('id', orderId).single();
+      const hasOld = (o?.order_lines || []).some(ol => ol.stage_for_ca_truck === true);
+      if (hasOld && !['invoiced','ca_received','cancelled'].includes(o.sc2ca_status)) {
+        hasSc2ca = true;
+        waitStatus = o.sc2ca_status;
+      }
+    }
+    
+    if (hasSc2ca) {
+      // SC2CA 가 있고 아직 거래처에 도착(received/invoiced) 안 됨
       const statusLabel = {
         'po_entered': 'PO Entered (아직 작업 시작 전)',
         'preparing': '준비 중',
         'ready_to_ship': 'Ready to Ship',
         'staged_for_truck': '트럭 빌더에 등록됨',
-        'in_transit': 'In Transit to CA'
-      }[o.sc2ca_status] || (o.sc2ca_status || '진행 전');
+        'in_transit': 'In Transit to CA',
+        'received': '도착 완료',
+        'complete': '완료'
+      }[waitStatus] || (waitStatus || '진행 전');
       
       const goAhead = confirm(
-        `⏳ SC→CA 라인이 아직 거래처에 도착 안 했어요 (현재: ${statusLabel}).\n\n` +
+        `⏳ SC→CA ${isNewStructure ? 'sub-order' : '라인'}이 아직 거래처에 도착 안 했어요 (현재: ${statusLabel}).\n\n` +
         `보통 거래처는 한 번에 받기를 원해요. 어떻게 할까요?\n\n` +
         `[취소] = 기다림 (CA 출고 보류, SC→CA 도착 후 같이 출고 — 권장)\n` +
         `[확인] = 따로 출고 (CA 만 먼저 출고, SC→CA 는 나중에 별도 invoice)`
