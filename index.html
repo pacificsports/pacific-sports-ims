@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_223500 — Sub-order 라인 INSERT fix — warehouse_id 등 NOT NULL 컬럼 누락 해결. discount_pct/tax_pct 같은 schema 에 없는 컬럼 제거. insertOneLineNew 와 동일한 payload 구조로 통일. console 에 subLineRows + INSERT 결과 로그 추가. + Phase 3.3 (메인 카드 ship 차단) + Phase A (PL 합산). -->
+<!-- BUILD: 20260506_230000 — Order Confirm 메일 정리: (1) Shipping From 박스 — Pending Transfer 줄 → 작은 info note 로 변경 (거래처는 내부 이동 디테일 숨김). (2) Detail 테이블 — Pending Transfer to CA 컬럼 제거, CA 칼럼에 ca_qty + sc2ca_qty 합산 표시 (거래처 받는 CA total). (3) SC = 0 일 때도 SC 줄 항상 표시 (정렬 일관성). + Sub-order 라인 INSERT fix (warehouse_id 등) + Phase 3.3 (메인 ship 차단) + Phase A (PL 합산). -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -27359,6 +27359,9 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const totalBack = backLines.reduce((s,l) => s+(l.back_qty||0), 0);
   const sc2caTotalPcs = emailLines.reduce((s,l) => s+(l.sc2ca_qty||0), 0);
   const hasSc2ca = sc2caTotalPcs > 0;
+  // ── 거래처 메일 (2026-05-06): 거래처는 결국 CA 에서 432 받음 (CA local 288 + SC→CA transfer 144)
+  //    SC→CA transfer 는 내부 이동이므로 거래처 표시는 CA = local + transfer 합산
+  const caDisplayPcs = (caTotalPcs || 0) + (sc2caTotalPcs || 0);
 
   const fmtAmt = n => '$' + (n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 
@@ -27391,16 +27394,16 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const colHeaders = isSplit
     ? `<th style="padding:6px 10px;text-align:center;color:#1e40af;">SC</th>
        <th style="padding:6px 10px;text-align:center;color:#ea580c;">CA</th>
-       ${hasSc2ca ? `<th style="padding:6px 10px;text-align:center;color:#92400e;white-space:nowrap;">🚚 Pending Transfer to CA</th>` : ''}
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`
     : `<th style="padding:6px 10px;text-align:center;">Qty</th>
        <th style="padding:6px 10px;text-align:center;color:#dc2626;">Backorder</th>`;
 
   const lineRows = emailLines.map(l => {
+    // 옵션 나 (2026-05-06): CA 칼럼에 ca_qty + sc2ca_qty 합쳐서 표시 (거래처 받는 CA total)
+    const caLineDisplay = (l.ca_qty || 0) + (l.sc2ca_qty || 0);
     const colCells = isSplit
       ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#1e40af;">${(l.sc_qty||0)>0?(l.sc_qty||0).toLocaleString():'—'}</td>
-         <td style="padding:6px 10px;text-align:center;font-weight:700;color:#ea580c;">${(l.ca_qty||0)>0?(l.ca_qty||0).toLocaleString():'—'}</td>
-         ${hasSc2ca ? `<td style="padding:6px 10px;text-align:center;font-weight:700;color:#92400e;">${(l.sc2ca_qty||0)>0?(l.sc2ca_qty||0).toLocaleString():'—'}</td>` : ''}
+         <td style="padding:6px 10px;text-align:center;font-weight:700;color:#ea580c;">${caLineDisplay>0?caLineDisplay.toLocaleString():'—'}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`
       : `<td style="padding:6px 10px;text-align:center;font-weight:700;">${(l.fill_qty||0).toLocaleString()}</td>
          <td style="padding:6px 10px;text-align:center;font-weight:700;color:#dc2626;">${(l.back_qty||0)>0?(l.back_qty||0).toLocaleString():'—'}</td>`;
@@ -27415,9 +27418,13 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
     </tr>`;
   }).join('');
 
-  const scRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#1e40af;font-weight:700;">SC Warehouse (Sumter, SC): ${(scTotalPcs||0).toLocaleString()} pcs</span></li>` : '';
-  const caRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#ea580c;font-weight:700;">CA Warehouse (Eastvale, CA): ${(caTotalPcs||0).toLocaleString()} pcs</span></li>` : `<li style="margin:2px 0;">${whName}: <strong>${totalPcs.toLocaleString()} pcs</strong></li>`;
-  const sc2caShipRow = hasSc2ca ? `<li style="margin:2px 0;"><span style="color:#92400e;font-weight:700;">🚚 Pending Transfer to CA: ${sc2caTotalPcs.toLocaleString()} pcs</span></li>` : '';
+  // ── 거래처 메일 (2026-05-06): 
+  //    옵션 C — Pending Transfer 줄을 작은 info note 로 (거래처는 내부 이동 디테일 알 필요 X)
+  //    옵션 B — isSplit 일 때 SC/CA 둘 다 항상 표시 (정렬 일관성)
+  const scRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#1e40af;font-weight:700;">SC Warehouse (Sumter, SC):</span> <strong>${(scTotalPcs||0).toLocaleString()} pcs</strong></li>` : '';
+  const caRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#ea580c;font-weight:700;">CA Warehouse (Eastvale, CA):</span> <strong>${caDisplayPcs.toLocaleString()} pcs</strong></li>` : `<li style="margin:2px 0;">${whName}: <strong>${totalPcs.toLocaleString()} pcs</strong></li>`;
+  // Pending Transfer 안내문 — 거래처에게는 "내부적으로 일부 SC 에서 옮겨오지만 결국 다 한 번에 보냄" 만 알리는 정도
+  const sc2caShipNote = hasSc2ca ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #bfdbfe;font-size:11px;color:#6b7280;font-style:italic;">ℹ️ ${sc2caTotalPcs.toLocaleString()} pcs included in CA total will be transferred from SC warehouse to CA before shipping. All items ship together from CA.</div>` : '';
 
   return `<div style="font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#111;font-size:13px;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f2744;border-radius:6px 6px 0 0;">
@@ -27438,7 +27445,8 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
       </table>
       <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 16px;margin-bottom:16px;">
         <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px;">📦 Shipping From</div>
-        <ul style="margin:0;padding-left:16px;font-size:13px;">${scRow}${caRow}${sc2caShipRow}</ul>
+        <ul style="margin:0;padding-left:16px;font-size:13px;">${scRow}${caRow}</ul>
+        ${sc2caShipNote}
       </div>
       ${backSection}
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:12px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
@@ -27457,8 +27465,7 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
           <td style="padding:8px 10px;text-align:center;white-space:nowrap;">${totalPcs.toLocaleString()} pcs</td>
           ${isSplit
             ? `<td style="padding:8px 10px;text-align:center;color:#1e40af;white-space:nowrap;">${(scTotalPcs||0).toLocaleString()} pcs</td>
-               <td style="padding:8px 10px;text-align:center;color:#ea580c;white-space:nowrap;">${(caTotalPcs||0).toLocaleString()} pcs</td>
-               ${hasSc2ca ? `<td style="padding:8px 10px;text-align:center;color:#92400e;white-space:nowrap;">${sc2caTotalPcs.toLocaleString()} pcs</td>` : ''}
+               <td style="padding:8px 10px;text-align:center;color:#ea580c;white-space:nowrap;">${caDisplayPcs.toLocaleString()} pcs</td>
                <td style="padding:8px 10px;text-align:center;color:#dc2626;white-space:nowrap;">${(totalBack||0).toLocaleString()} pcs</td>`
             : `<td style="padding:8px 10px;text-align:center;white-space:nowrap;">${totalPcs.toLocaleString()} pcs</td>
                <td style="padding:8px 10px;text-align:center;color:#dc2626;white-space:nowrap;">${(totalBack||0).toLocaleString()} pcs</td>`}
