@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_111000 — Sub-order PL 단계 스킵: Preparing 컬럼에서 PIN+Complete 후 바로 "Add to CA Truck" 버튼 표시 (옵션 2 — Ready 단계 스킵). isSubOrderCard 분기 추가. + sc2caAutoAddLines 도 새 구조 (alloc_local) 처리. + Warehouse Preparing 모달 sub-order fix. -->
+<!-- BUILD: 20260507_113000 — Sub-order workflow Received & Combined fix: (1) sc2caRecvOrderShipped 새 구조 처리 — sub.status='complete', 메인 order 의 sc2ca_status='ca_received' 도 같이 업데이트, in_transit status 조건 제거 (모든 row 처리). (2) makeCards: sub-order 가 complete/shipped/invoiced 면 카드 안 만듦. (3) Add to CA Truck 버튼: sub-order 면 whDone 필수 (PIN+Complete 안 누르면 비활성화). + sc2caAutoAddLines 새 구조 처리. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11208,6 +11208,9 @@ async function loadOrderStatus() {
       
       // 새 구조: sub-order 인 경우 (parent_order_id 있음) → SC→CA 카드
       if (o.parent_order_id) {
+        // ── 새 구조 (2026-05-07): sub-order 가 complete/shipped/invoiced 면 카드 안 만듦 (사라지게)
+        //    Received & Combined 후 sub-order 의 status='complete' → 카드 표시 안 함
+        if (['complete','shipped','invoiced','cancelled'].includes(o.status)) return;
         cards.push({ ...o, _wh: 'SC2CA', _status: o.status });
         return;
       }
@@ -11555,11 +11558,15 @@ async function loadOrderStatus() {
         //    SC2CA 는 내부 운반이라 거래처용 PL 불필요 (회계 결정과 일치)
         //    Sub-order 인 경우: parent_order_id 있고 wh='SC2CA'
         const isSubOrderCard = !!o.parent_order_id && wh === 'SC2CA';
-        const plReadyBtn = allDone
-          ? (isSubOrderCard
+        // Sub-order 의 Add to CA Truck 버튼: WH Complete (PIN+Complete) 후에만 활성화
+        const subOrderReady = isSubOrderCard && !!whDone;
+        const plReadyBtn = isSubOrderCard
+          ? (subOrderReady
               ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c2d12;color:#fff;border-color:#7c2d12;font-weight:700;" onclick="event.stopPropagation();sc2caAddToCaTruck('${o.id}')">🚚 Add to CA Truck</button>`
-              : `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>`)
-          : '';
+              : `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb;cursor:not-allowed;" disabled>🔒 Warehouse Preparing 완료 후 활성화</button>`)
+          : (allDone
+              ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>`
+              : '');
 
         const reprintBtn = (prepNeedsWh || prepNeedsPcr)
           ? `<button class="btn btn-sm" style="width:100%;font-size:9px;background:#f8fafc;color:#64748b;border-color:#cbd5e1;" onclick="event.stopPropagation();reprintPickTicketAll('${o.id}','${wh}')">🖨️ Reprint Pick Ticket & Labels</button>`
@@ -42015,17 +42022,40 @@ async function sc2caRecvOrderShipped(orderId) {
   showToast('⏳ 처리 중...');
   
   try {
-    // 1. in_transit 의 이 오더 라인들 status='received'
+    // ── 새 구조 (2026-05): orderId 가 sub-order id 인지 확인
+    const { data: orderRow } = await db.from('orders').select('id, parent_order_id, status').eq('id', orderId).single();
+    const isNewSubOrder = !!orderRow?.parent_order_id;
+    const mainOrderId = isNewSubOrder ? orderRow.parent_order_id : orderId;
+    
+    // 1. in_transit 의 이 오더 라인들 status='received' (status 조건 제거 — 모든 row 처리)
     await db.from('in_transit')
       .update({ status: 'received', received_at: new Date().toISOString() })
       .eq('source_order_id', orderId)
-      .in('status', ['preparing', 'in_transit']);
+      .neq('status', 'received');
     
-    // 2. sc2ca_status='ca_received' (CA 카드의 출고 대기 풀림 + SC2CA 카드 자동 숨김)
-    await db.from('orders').update({
-      sc2ca_status: 'ca_received',
-      sc2ca_received_at: new Date().toISOString()
-    }).eq('id', orderId);
+    // 2. Sub-order 의 status='complete' (카드 사라지게)
+    //    + sc2ca_status='ca_received' (옛날 컬럼도 호환)
+    //    + sc2ca_received_at 시간 기록
+    if (isNewSubOrder) {
+      await db.from('orders').update({
+        status: 'complete',
+        sc2ca_status: 'ca_received',
+        sc2ca_received_at: new Date().toISOString()
+      }).eq('id', orderId);
+      
+      // 3. 메인 order 의 sc2ca_status='ca_received' 도 업데이트 (옛날 코드 호환)
+      //    이렇게 하면 메인 카드의 sc2caMergedToCa 체크가 작동
+      await db.from('orders').update({
+        sc2ca_status: 'ca_received',
+        sc2ca_received_at: new Date().toISOString()
+      }).eq('id', mainOrderId);
+    } else {
+      // 옛날 구조: 메인 order 의 sc2ca_status 만 업데이트
+      await db.from('orders').update({
+        sc2ca_status: 'ca_received',
+        sc2ca_received_at: new Date().toISOString()
+      }).eq('id', orderId);
+    }
     
     showToast('✅ CA 도착 — 수량이 CA 카드에 합쳐졌습니다');
     
