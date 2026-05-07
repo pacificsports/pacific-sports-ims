@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_162000 — Invoice 이메일 본문 새 구조 처리: buildInvoiceEmailBodyHtml 의 getPreparedQty 도 alloc_ca_detail 만 봤음. 새 구조 (qty_from_other_wh > 0) + CA invoice + sc2caMergedToCa 면 qty_local + qty_from_other_wh 합산 (288+144=432) → 이메일 Shipped/Net Invoice/Total 모두 432, $432, $532 정확. (Invoice PDF 와 동일한 fix 패턴) -->
+<!-- BUILD: 20260507_163500 — Packing List 새 구조 처리: buildPackingListHtml 의 CA 출력 분기에서 stage_for_ca_truck=true (옛날) 만 처리. 새 구조 (qty_from_other_wh > 0) + sc2caMergedToCa 면 alloc_local + alloc_from_other_wh 합쳐 alloc_ca_detail 에 넣음 → CA 섹션에 432 pcs / 6 boxes 정확히 표시 (288+144 / 4+1+1). qty_pieces 도 합산. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -31583,14 +31583,41 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
   // CA 출력 시 SC2CA 라인 (stage_for_ca_truck=true) 은 CA alloc 으로 변환해서 추가
   // (sc2ca 가 ca_received 되어 CA 카드에 합쳐진 케이스)
   if (whFilter === 'CA' && Array.isArray(lines)) {
+    // ── 새 구조 (2026-05): 메인 라인의 qty_local + qty_from_other_wh + alloc_local + alloc_from_other_wh
+    //    sc2caMergedToCa 면 둘 다 합쳐 CA packing list 에 표시
+    const sc2caMergedToCaPL = ['ca_received','invoiced'].includes(order.sc2ca_status);
     lines = lines.map(l => {
+      // 새 구조 메인 라인 (qty_from_other_wh > 0) + 합쳐진 케이스
+      if ((l.qty_from_other_wh || 0) > 0 && sc2caMergedToCaPL) {
+        // alloc_local + alloc_from_other_wh 합쳐 CA alloc 으로 표시
+        const mergedAlloc = { ...(l.alloc_local || {}) };
+        Object.entries(l.alloc_from_other_wh || {}).forEach(([k, v]) => {
+          // 같은 bin 이 양쪽에 있으면 합산 (드물지만 대비)
+          if (mergedAlloc[k]) {
+            const existing = typeof mergedAlloc[k] === 'object' ? mergedAlloc[k] : { pcs: mergedAlloc[k]||0 };
+            const incoming = typeof v === 'object' ? v : { pcs: v||0 };
+            mergedAlloc[k] = {
+              pcs: (existing.pcs||0) + (incoming.pcs||0),
+              boxes: (existing.boxes||0) + (incoming.boxes||0)
+            };
+          } else {
+            mergedAlloc[k] = v;
+          }
+        });
+        return {
+          ...l,
+          qty_pieces: (l.qty_local || 0) + (l.qty_from_other_wh || 0),  // 432
+          alloc_ca_detail: mergedAlloc,
+          alloc_detail: {}
+        };
+      }
+      // 옛날 구조: stage_for_ca_truck=true 라인을 CA alloc 으로 변환
       if (l.stage_for_ca_truck === true) {
-        // SC2CA 라인을 CA alloc 으로 변환 (CA 도착 후 합쳐졌으니 CA bin 처럼 표시)
         return {
           ...l,
           qty_pieces: l.qty_sc2ca || l.qty_pieces || 0,
           alloc_ca_detail: l.alloc_sc2ca_detail || l.alloc_ca_detail || {},
-          alloc_detail: {} // SC alloc 안 봄
+          alloc_detail: {}
         };
       }
       return l;
