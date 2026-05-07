@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_115000 — CA Receive 모달의 Bin 입력 → Combobox (datalist) 로 변경. CA 창고의 모든 bin 자동 dropdown + 직접 입력 모두 가능. window.binInventory['CA'] 에서 unique bin 목록 추출. + 통째로 모드 placeholder 'X1100' → 'bin code (CA)'. + 해체 모드 input 너비 조정. + Phase 3.4 sub-order workflow. -->
+<!-- BUILD: 20260507_120000 — Sub-order workflow 완성: (1) postShipment: 새 구조 sub-order 면 status='in_transit' 도 업데이트 → 카드 Ready to Ship 으로 이동. (2) Preparing 컬럼 sub-order: staged_for_truck 시 빌더 이동 + 제거 버튼. (3) Ready 컬럼 sub-order: in_transit 비활성 (Mark as Shipped 잠김), shipped 활성화 (Received & Shipped 케이스). (4) sc2caRecvOrderInvoice 새 구조: status='shipped' 만 set, 자동 Mark as Shipped 호출 안 함 (사용자가 직접 누르도록). (5) makeCards: shipped 카드는 표시 (Mark as Shipped 누르려면). -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11208,9 +11208,11 @@ async function loadOrderStatus() {
       
       // 새 구조: sub-order 인 경우 (parent_order_id 있음) → SC→CA 카드
       if (o.parent_order_id) {
-        // ── 새 구조 (2026-05-07): sub-order 가 complete/shipped/invoiced 면 카드 안 만듦 (사라지게)
-        //    Received & Combined 후 sub-order 의 status='complete' → 카드 표시 안 함
-        if (['complete','shipped','invoiced','cancelled'].includes(o.status)) return;
+        // ── 새 구조 (2026-05-07): sub-order 가 complete/invoiced/cancelled 면 카드 안 만듦 (사라지게)
+        //    Received & Combined 후 sub.status='complete' → 카드 사라짐
+        //    Received & Shipped 후 sub.status='shipped' → 카드 표시 (사용자가 Mark as Shipped 누르려면 보여야 함)
+        //    그 후 사용자가 Mark as Shipped 누르면 sc2caMarkShipped 가 status='invoiced' 로 → 사라짐
+        if (['complete','invoiced','cancelled'].includes(o.status)) return;
         cards.push({ ...o, _wh: 'SC2CA', _status: o.status });
         return;
       }
@@ -11558,15 +11560,28 @@ async function loadOrderStatus() {
         //    SC2CA 는 내부 운반이라 거래처용 PL 불필요 (회계 결정과 일치)
         //    Sub-order 인 경우: parent_order_id 있고 wh='SC2CA'
         const isSubOrderCard = !!o.parent_order_id && wh === 'SC2CA';
+        // Sub-order 의 sc2ca_status 체크 (staged_for_truck 인지)
+        const subOrderStaged = isSubOrderCard && o.sc2ca_status === 'staged_for_truck';
         // Sub-order 의 Add to CA Truck 버튼: WH Complete (PIN+Complete) 후에만 활성화
         const subOrderReady = isSubOrderCard && !!whDone;
-        const plReadyBtn = isSubOrderCard
-          ? (subOrderReady
-              ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c2d12;color:#fff;border-color:#7c2d12;font-weight:700;" onclick="event.stopPropagation();sc2caAddToCaTruck('${o.id}')">🚚 Add to CA Truck</button>`
-              : `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb;cursor:not-allowed;" disabled>🔒 Warehouse Preparing 완료 후 활성화</button>`)
-          : (allDone
-              ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>`
-              : '');
+        let plReadyBtn;
+        if (isSubOrderCard) {
+          if (subOrderStaged) {
+            // 이미 트럭 빌더에 등록됨 — 빌더로 이동 버튼 + 제거 버튼
+            plReadyBtn = `
+              <div style="font-size:10px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:6px;padding:6px 10px;text-align:center;font-weight:600;">📦 트럭 빌더에 등록됨</div>
+              <button class="btn btn-sm" style="width:100%;font-size:10px;background:#1e40af;color:#fff;border-color:#1e40af;" onclick="event.stopPropagation();sc2caOpenStagedShipment('${o.id}')">📂 트럭 빌더로 이동</button>
+              <button class="btn btn-sm" style="width:100%;font-size:10px;background:#fef2f2;color:#b91c1c;border-color:#fca5a5;" onclick="event.stopPropagation();sc2caRemoveFromStaging('${o.id}')">✕ 트럭 빌더에서 제거</button>`;
+          } else if (subOrderReady) {
+            plReadyBtn = `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c2d12;color:#fff;border-color:#7c2d12;font-weight:700;" onclick="event.stopPropagation();sc2caAddToCaTruck('${o.id}')">🚚 Add to CA Truck</button>`;
+          } else {
+            plReadyBtn = `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb;cursor:not-allowed;" disabled>🔒 Warehouse Preparing 완료 후 활성화</button>`;
+          }
+        } else {
+          plReadyBtn = allDone
+            ? `<button class="btn btn-sm" style="width:100%;font-size:10px;background:#7c3aed;color:#fff;border-color:#7c3aed;font-weight:700;" onclick="event.stopPropagation();preparationComplete('${o.id}','${wh}')">📋 Packing List Ready</button>`
+            : '';
+        }
 
         const reprintBtn = (prepNeedsWh || prepNeedsPcr)
           ? `<button class="btn btn-sm" style="width:100%;font-size:9px;background:#f8fafc;color:#64748b;border-color:#cbd5e1;" onclick="event.stopPropagation();reprintPickTicketAll('${o.id}','${wh}')">🖨️ Reprint Pick Ticket & Labels</button>`
@@ -11612,11 +11627,20 @@ async function loadOrderStatus() {
             `;
           }
           if (sc2caStatus === 'in_transit') {
-            // 트럭에 실린 상태 — CA 도착 안내 (Received 는 CA 도착 모달에서)
+            // 트럭에 실린 상태 — In Transit 표시 (비활성, 도착 처리는 Inventory 모듈에서)
             return `
               <div style="margin-top:8px;font-size:10px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:6px;padding:6px 10px;text-align:center;font-weight:600;">🚚 In Transit to CA</div>
+              <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb;cursor:not-allowed;" disabled>🔒 Mark as Shipped (CA 도착 후 활성화)</button>
               <div style="margin-top:6px;font-size:9px;color:#6b7280;text-align:center;font-style:italic;">📦 CA 도착 시 Inventory → SC→CA → CA 도착 처리 에서 Received</div>
               <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#f9fafb;color:#6b7280;border-color:#d1d5db;" onclick="event.stopPropagation();sc2caRevertTruck('${o.id}')">↩ Cancel Truck Load</button>
+            `;
+          }
+          // 새 구조: status='shipped' 인 경우 (Received & Shipped 케이스 — sub-order 만 따로 출고 가능 상태)
+          if (isNewSubOrderCard && sc2caStatus === 'shipped') {
+            return `
+              <div style="margin-top:8px;font-size:10px;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:6px 10px;text-align:center;font-weight:600;">✅ CA 도착 완료 (따로 출고)</div>
+              <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','${wh}')">📋 Print Packing List</button>
+              <button class="btn btn-sm btn-green" style="width:100%;margin-top:4px;font-size:10px;" onclick="event.stopPropagation();sc2caMarkShipped('${o.id}')">🚚 Mark as Shipped</button>
             `;
           }
           if (sc2caStatus === 'staged_for_truck') {
@@ -41732,7 +41756,7 @@ async function postShipment() {
     
     // 🚚 SC2CA: 이 shipment 에 등록된 거래처 오더들도 sc2ca_status='in_transit' 로
     const { data: stagedOrders } = await db.from('orders')
-      .select('id')
+      .select('id, parent_order_id')
       .eq('sc2ca_shipment_id', _shipmentDbId)
       .eq('sc2ca_status', 'staged_for_truck');
     if (stagedOrders && stagedOrders.length > 0) {
@@ -41741,6 +41765,15 @@ async function postShipment() {
         sc2ca_status: 'in_transit',
         sc2ca_truck_loaded_at: new Date().toISOString()
       }).in('id', orderIds);
+      
+      // ── 새 구조 (2026-05-07): sub-order (parent_order_id 있음) 의 경우 status='in_transit' 도 업데이트
+      //    → 카드가 Preparing 컬럼에서 Ready to Ship 컬럼으로 이동
+      const subOrderIds = stagedOrders.filter(o => o.parent_order_id).map(o => o.id);
+      if (subOrderIds.length > 0) {
+        await db.from('orders').update({ status: 'in_transit' }).in('id', subOrderIds);
+        console.log(`[Shipment depart] ${subOrderIds.length} new-structure sub-orders → status='in_transit'`);
+      }
+      
       console.log(`[Shipment depart] ${orderIds.length} SC2CA orders → in_transit`);
     }
     
@@ -42095,22 +42128,35 @@ async function sc2caRecvOrderShipped(orderId) {
 // 🚚 거래처 오더 Receive & Invoice — 따로 출고 케이스 (CA 가 이미 출고됨)
 // SC2CA portion 만 별도 invoice 발송 흐름 자동 시작
 async function sc2caRecvOrderInvoice(orderId) {
-  if (!confirm('📋 Receive & Invoice 처리하시겠습니까?\n\nCA 가 이미 따로 출고됐으므로:\n→ SC→CA 도착 완료 처리\n→ 자동으로 SC→CA portion invoice 발송 화면으로 이동\n→ 사용자가 invoice 리뷰 후 거래처에 발송')) return;
+  if (!confirm('📋 Received & Shipped 처리하시겠습니까?\n\nCA 가 이미 따로 출고된 케이스:\n→ SC→CA 도착 완료 처리\n→ Mark as Shipped 버튼이 활성화됩니다 (별도 출고)')) return;
   
   showToast('⏳ Receive 처리 중...');
   
   try {
+    // ── 새 구조 (2026-05): orderId 가 sub-order id 인지 확인
+    const { data: orderRow } = await db.from('orders').select('id, parent_order_id, status').eq('id', orderId).single();
+    const isNewSubOrder = !!orderRow?.parent_order_id;
+    
     // 1. in_transit → received
     await db.from('in_transit')
       .update({ status: 'received', received_at: new Date().toISOString() })
       .eq('source_order_id', orderId)
-      .in('status', ['preparing', 'in_transit']);
+      .neq('status', 'received');
     
-    // 2. sc2ca_status='ca_received' (CA 도착 완료 단계)
-    await db.from('orders').update({
-      sc2ca_status: 'ca_received',
-      sc2ca_received_at: new Date().toISOString()
-    }).eq('id', orderId);
+    // 2. Sub-order 의 경우 status='shipped' (별도 출고 대기 — 사용자가 직접 Mark as Shipped 누르도록)
+    //    옛날 구조: sc2ca_status='ca_received'
+    if (isNewSubOrder) {
+      await db.from('orders').update({
+        status: 'shipped',  // Ready to Ship 컬럼에 머무름, 'shipped' 분기 발동 → Mark as Shipped 활성화
+        sc2ca_status: 'ca_received',  // 옛날 호환
+        sc2ca_received_at: new Date().toISOString()
+      }).eq('id', orderId);
+    } else {
+      await db.from('orders').update({
+        sc2ca_status: 'ca_received',
+        sc2ca_received_at: new Date().toISOString()
+      }).eq('id', orderId);
+    }
     
     // 3. 모달 새로고침 + 닫기
     _scCaRecvOrders = _scCaRecvOrders.filter(o => o.order_id !== orderId);
@@ -42121,12 +42167,15 @@ async function sc2caRecvOrderInvoice(orderId) {
     
     if (typeof loadOrderStatus === 'function') await loadOrderStatus();
     
-    showToast('✅ Receive 완료 — Invoice 화면으로 이동합니다');
+    showToast('✅ CA 도착 — Mark as Shipped 버튼이 활성화되었습니다');
     
-    // 4. 자동으로 SC2CA Mark as Shipped 흐름 시작 — invoice 발송까지
-    setTimeout(() => {
-      sc2caMarkShipped(orderId);
-    }, 800);
+    // ── 새 구조: 자동으로 sc2caMarkShipped 호출하지 않음 (사용자가 직접 카드의 Mark as Shipped 클릭)
+    // ── 옛날 구조 호환: sc2caMarkShipped 자동 시작
+    if (!isNewSubOrder) {
+      setTimeout(() => {
+        sc2caMarkShipped(orderId);
+      }, 800);
+    }
   } catch(e) {
     console.error('[sc2caRecvOrderInvoice]', e);
     showToast('❌ 처리 실패: ' + e.message);
