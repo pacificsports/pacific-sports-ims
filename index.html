@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_094500 — Sub-order 생성 흐름에 진단 로그 추가 (mainLines fetch 결과, sc2caLines 필터링 결과 등). 다음 PO 저장 시 어느 단계에서 sub-order 라인 INSERT 가 건너뛰어지는지 정확히 알 수 있게. + 이전: Inventory stale fix + Order Confirm 메일 정리 + Sub-order 라인 INSERT fix + Phase 3.3 + Phase A. -->
+<!-- BUILD: 20260507_101500 — Order Confirm 메일 fix: (1) caDisplayPcs 중복 더하기 제거 — caTotalPcs 가 호출하는 쪽에서 이미 caQty+sc2caQty 합산값이라 또 더하면 576 같은 중복. 그대로 사용. (2) sc2caShipNote 가시성 개선 — 노란 배경 + 진한 텍스트. (3) "All items ship together from CA" 문구 삭제. + Sub-order Pick Ticket fix + PL 그룹화 + 진단 로그. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -23678,14 +23678,17 @@ async function printPickTicket(orderId, wh, ticketType) {
       : [];
 
     // pick ticket용으로 올바른 alloc_detail 설정
+    // 새 구조 sub-order: alloc_local 우선 (SC bin 들 H2025, H2128)
     // CA pick ticket이면 alloc_ca_detail을 alloc_detail로, alloc_ca_detail은 null로
-    // SC2CA pick ticket이면 alloc_sc2ca_detail을 alloc_detail로
-    const _effectiveAllocDetail = isSc2ca
-      ? (l.alloc_sc2ca_detail || {})
-      : wh === 'CA'
-        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
-    const _effectiveAllocCaDetail = (isSc2ca || wh === 'CA') ? null : l.alloc_ca_detail;
+    // SC2CA pick ticket(옛날): alloc_sc2ca_detail을 alloc_detail로
+    const _effectiveAllocDetail = isNewSubOrder
+      ? (l.alloc_local || l.alloc_detail || {})
+      : isSc2ca
+        ? (l.alloc_sc2ca_detail || {})
+        : wh === 'CA'
+          ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+          : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const _effectiveAllocCaDetail = (isSc2ca || wh === 'CA' || isNewSubOrder) ? null : l.alloc_ca_detail;
 
     return { ...l, location: mainLoc, _pcrQty: pcrQty, _pcrTransfers: transfers,
       alloc_detail: _effectiveAllocDetail,
@@ -27382,9 +27385,10 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   const totalBack = backLines.reduce((s,l) => s+(l.back_qty||0), 0);
   const sc2caTotalPcs = emailLines.reduce((s,l) => s+(l.sc2ca_qty||0), 0);
   const hasSc2ca = sc2caTotalPcs > 0;
-  // ── 거래처 메일 (2026-05-06): 거래처는 결국 CA 에서 432 받음 (CA local 288 + SC→CA transfer 144)
-  //    SC→CA transfer 는 내부 이동이므로 거래처 표시는 CA = local + transfer 합산
-  const caDisplayPcs = (caTotalPcs || 0) + (sc2caTotalPcs || 0);
+  // ── 거래처 메일 (2026-05-06): 거래처는 결국 CA 에서 전체 받음
+  //    호출하는 쪽 (Customer PO 저장 시) 의 caTotalPcs 는 이미 CA local + SC→CA transfer 합산값
+  //    → 메일에서는 그대로 표시 (또 더하지 않음)
+  const caDisplayPcs = caTotalPcs || 0;
 
   const fmtAmt = n => '$' + (n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 
@@ -27446,8 +27450,8 @@ function buildOrderConfirmEmailHtml({ orderNum, cust, po, shipDate, whName, tota
   //    옵션 B — isSplit 일 때 SC/CA 둘 다 항상 표시 (정렬 일관성)
   const scRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#1e40af;font-weight:700;">SC Warehouse (Sumter, SC):</span> <strong>${(scTotalPcs||0).toLocaleString()} pcs</strong></li>` : '';
   const caRow = isSplit ? `<li style="margin:2px 0;"><span style="color:#ea580c;font-weight:700;">CA Warehouse (Eastvale, CA):</span> <strong>${caDisplayPcs.toLocaleString()} pcs</strong></li>` : `<li style="margin:2px 0;">${whName}: <strong>${totalPcs.toLocaleString()} pcs</strong></li>`;
-  // Pending Transfer 안내문 — 거래처에게는 "내부적으로 일부 SC 에서 옮겨오지만 결국 다 한 번에 보냄" 만 알리는 정도
-  const sc2caShipNote = hasSc2ca ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed #bfdbfe;font-size:11px;color:#6b7280;font-style:italic;">ℹ️ ${sc2caTotalPcs.toLocaleString()} pcs included in CA total will be transferred from SC warehouse to CA before shipping. All items ship together from CA.</div>` : '';
+  // Pending Transfer 안내문 — 거래처에게 "내부적으로 일부 SC 에서 옮겨오는 분이 있다" 정도만 안내
+  const sc2caShipNote = hasSc2ca ? `<div style="margin-top:8px;padding:6px 10px;background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;font-size:12px;color:#92400e;font-weight:600;">ℹ️ ${sc2caTotalPcs.toLocaleString()} pcs included in CA total will be transferred from SC warehouse to CA before shipping.</div>` : '';
 
   return `<div style="font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#111;font-size:13px;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f2744;border-radius:6px 6px 0 0;">
@@ -31478,7 +31482,54 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
 
   const renderPlSection = (sectionLines, whLabel, whColor, sectionWh) => {
     if (!sectionLines.length) return '';
-    const sorted = [...sectionLines].filter(l => (l.qty_pieces||0) > 0).sort((a,b) => {
+    // ── Phase A 추가 (2026-05-07): 같은 style+color+size 라인 그룹화 (메인 + sub-order 합쳐진 경우)
+    //    alloc 정보들도 합쳐서 한 줄로 표시
+    const grouped = {};
+    sectionLines.forEach(l => {
+      if ((l.qty_pieces || 0) <= 0) return;
+      const k = `${l.styles?.style_number||''}|${(l.color||'').toUpperCase()}|${(l.size||'').toUpperCase()}`;
+      if (!grouped[k]) {
+        grouped[k] = {
+          ...l,
+          alloc_detail: { ...(l.alloc_detail || {}) },
+          alloc_ca_detail: { ...(l.alloc_ca_detail || {}) },
+          qty_pieces: l.qty_pieces || 0
+        };
+      } else {
+        // 합치기: alloc detail 들 합산, qty_pieces 합산
+        const g = grouped[k];
+        g.qty_pieces = (g.qty_pieces || 0) + (l.qty_pieces || 0);
+        // alloc_detail 합산
+        Object.entries(l.alloc_detail || {}).forEach(([bin, val]) => {
+          if (g.alloc_detail[bin]) {
+            // 둘 다 있으면 합산
+            const a = g.alloc_detail[bin];
+            const b = val;
+            const aPcs = typeof a === 'object' ? (a.pcs || 0) : (parseInt(a) || 0);
+            const aBox = typeof a === 'object' ? (a.boxes || 0) : 0;
+            const bPcs = typeof b === 'object' ? (b.pcs || 0) : (parseInt(b) || 0);
+            const bBox = typeof b === 'object' ? (b.boxes || 0) : 0;
+            g.alloc_detail[bin] = { pcs: aPcs + bPcs, boxes: aBox + bBox };
+          } else {
+            g.alloc_detail[bin] = val;
+          }
+        });
+        Object.entries(l.alloc_ca_detail || {}).forEach(([bin, val]) => {
+          if (g.alloc_ca_detail[bin]) {
+            const a = g.alloc_ca_detail[bin];
+            const b = val;
+            const aPcs = typeof a === 'object' ? (a.pcs || 0) : (parseInt(a) || 0);
+            const aBox = typeof a === 'object' ? (a.boxes || 0) : 0;
+            const bPcs = typeof b === 'object' ? (b.pcs || 0) : (parseInt(b) || 0);
+            const bBox = typeof b === 'object' ? (b.boxes || 0) : 0;
+            g.alloc_ca_detail[bin] = { pcs: aPcs + bPcs, boxes: aBox + bBox };
+          } else {
+            g.alloc_ca_detail[bin] = val;
+          }
+        });
+      }
+    });
+    const sorted = Object.values(grouped).sort((a,b) => {
       const ca = (a.color||'').localeCompare(b.color||'');
       return ca !== 0 ? ca : sizeOrd(a.size) - sizeOrd(b.size);
     });
