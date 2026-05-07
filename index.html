@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_125000 — postShipment fix: stagedOrders 쿼리에서 sc2ca_status='staged_for_truck' 조건 제거 → sc2ca_shipment_id 만으로 매칭 (status 가 이미 변경된 경우도 처리). + 진단 로그 추가. -->
+<!-- BUILD: 20260507_130000 — localStorage 영구 디버그 로그 (dlog/dlogShow/dlogClear) 추가. Sub-order 흐름 모든 단계에 dlog 박음 — START/mainLines_fetch/filtered/create_OK/create_FAIL/lines_PREPARE/lines_OK/lines_FAIL/EXCEPTION/skip_no_qty. PO 저장 후 페이지 리로드돼도 dlogShow() 로 모든 흐름 추적 가능. + 이전: postShipment fix. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5887,6 +5887,34 @@ async function loadScInventory() {
   scInventory = {};
   caInventory = {};
   caPcrInventory = {};
+  // ── 영구 디버그 로그 (localStorage 기반) — 페이지 리로드 후에도 살아있음
+  // 사용: dlog('어떤 일이 일어남', { 데이터: ... })
+  // 보기: dlogShow()  /  지우기: dlogClear()
+  window.dlog = function(label, data) {
+    try {
+      const arr = JSON.parse(localStorage.getItem('_dlog') || '[]');
+      const entry = {
+        t: new Date().toISOString().slice(11,23),
+        label,
+        data: data !== undefined ? JSON.parse(JSON.stringify(data, (k,v) => {
+          if (v instanceof Error) return { error: v.message, stack: v.stack };
+          return v;
+        })) : null
+      };
+      arr.push(entry);
+      if (arr.length > 200) arr.shift();
+      localStorage.setItem('_dlog', JSON.stringify(arr));
+      console.log('[DLOG]', label, data || '');
+    } catch (e) { console.warn('dlog fail:', e); }
+  };
+  window.dlogShow = function() {
+    const arr = JSON.parse(localStorage.getItem('_dlog') || '[]');
+    console.log('=== DLOG (' + arr.length + '개) ===');
+    arr.forEach(e => console.log(`[${e.t}] ${e.label}`, e.data || ''));
+    return arr;
+  };
+  window.dlogClear = function() { localStorage.removeItem('_dlog'); console.log('dlog cleared'); };
+  
   window.binInventory = { 'SC':{}, 'SC-PCR':{}, 'CA':{}, 'CA-PCR':{} };
 
   // 1. inventory 테이블 (qty 합산 정보) — qty>0만 로드해서 성능 개선
@@ -8575,17 +8603,20 @@ async function _doSaveInvoice() {
   // 메인 order 는 그대로 (qty_total, qty_local, qty_from_other_wh)
   // Sub-order: parent_order_id = 메인 id, wh_code='SC2CA', SC→CA 라인만
   if (!isEditMode && hasSc2caLine && order && order.id) {
+    dlog('SUB_ORDER_START', { orderId: order.id, hasSc2caLine });
     try {
       console.log('[Sub-order] SC→CA Transfer sub-order 생성 시작 — order.id:', order.id);
       // 메인 order 의 라인 중 qty_from_other_wh > 0 인 라인들 fetch
       const { data: mainLines, error: mainLinesErr } = await db.from('order_lines')
         .select('*')
         .eq('order_id', order.id);
+      dlog('SUB_ORDER_mainLines_fetch', { count: mainLines?.length, error: mainLinesErr?.message, qty_from_other_wh_list: mainLines?.map(l => l.qty_from_other_wh) });
       console.log('[Sub-order] mainLines fetch 결과:', mainLines?.length, '개', mainLinesErr ? '에러:' + mainLinesErr.message : '');
       if (mainLines?.length > 0) {
         console.log('[Sub-order] mainLines qty_from_other_wh 들:', mainLines.map(l => l.qty_from_other_wh));
       }
       const sc2caLines = (mainLines || []).filter(l => (l.qty_from_other_wh || 0) > 0);
+      dlog('SUB_ORDER_filtered', { sc2caLines_count: sc2caLines.length });
       console.log('[Sub-order] sc2caLines 필터링 결과:', sc2caLines.length, '개');
       
       if (sc2caLines.length > 0) {
@@ -8617,8 +8648,10 @@ async function _doSaveInvoice() {
         }).select().single();
         
         if (subErr) {
+          dlog('SUB_ORDER_create_FAIL', { error: subErr.message, code: subErr.code, details: subErr.details });
           console.error('[Sub-order] 생성 실패:', subErr);
         } else {
+          dlog('SUB_ORDER_create_OK', { subOrderId: subOrder.id, orderNumber: subOrder.order_number });
           console.log('[Sub-order] 생성됨:', subOrder.id, subOrder.order_number);
           
           // Sub-order 의 라인들 생성 (SC bin 픽 정보)
@@ -8662,18 +8695,23 @@ async function _doSaveInvoice() {
             };
           });
           
+          dlog('SUB_ORDER_lines_PREPARE', { count: subLineRows.length, firstRow: subLineRows[0] });
           console.log('[Sub-order] subLineRows 준비:', subLineRows);
           const { data: subLinesInserted, error: subLinesErr } = await db.from('order_lines').insert(subLineRows).select();
           if (subLinesErr) {
+            dlog('SUB_ORDER_lines_FAIL', { error: subLinesErr.message, code: subLinesErr.code, details: subLinesErr.details, hint: subLinesErr.hint });
             console.error('[Sub-order] 라인 생성 실패:', subLinesErr.message, subLinesErr.details, subLinesErr.hint);
           } else {
+            dlog('SUB_ORDER_lines_OK', { count: subLinesInserted?.length, firstId: subLinesInserted?.[0]?.id });
             console.log('[Sub-order] 라인 생성됨:', (subLinesInserted||[]).length, '개');
           }
         }
       } else {
+        dlog('SUB_ORDER_skip_no_qty', { sc2caLines_count: 0 });
         console.log('[Sub-order] qty_from_other_wh > 0 라인 없음 — sub-order 생성 스킵');
       }
     } catch (e) {
+      dlog('SUB_ORDER_EXCEPTION', { message: e.message, stack: e.stack });
       console.error('[Sub-order] error:', e);
     }
   }
