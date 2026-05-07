@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_215000 — Phase 3.3: 메인 카드 Mark as Shipped 차단 강화 (새 구조 sub-order 기반). makeCards 의 sc2caWaiting + doShipped 백엔드 체크 둘 다 새 구조 (parent_order_id) 우선, 옛날 구조 (stage_for_ca_truck) 호환 유지. Sub-order 가 received/complete/shipped/invoiced 가 아니면 차단 + "Ship CA Portion First" 우회 버튼 유지 -->
+<!-- BUILD: 20260506_220500 — Phase 3.3 + A: (1) 메인 카드 Mark as Shipped 차단 강화 — 새 구조 sub-order 기반. (2) Packing List 합산 — preparationComplete 와 printPackingListFromCard 둘 다 sub-order 라인 합쳐서 6 boxes/432 pcs 표시 (모드 A). 모드 B (Ship CA Portion First) 발동 시 메인 PL 은 4 boxes 만 + "Shipment 1 of 2" 라벨. buildPackingListHtml 시그니처에 shipmentInfo 추가. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -25287,17 +25287,58 @@ async function preparationComplete(orderId, wh) {
   _plWh = wh || 'SC';
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
 
+  // ── Phase A (2026-05-06): 거래처 PL 합산 — CA 카드 PL 에 sub-order 라인 합치기
+  //    조건: wh='CA' && sub-order 존재 && 모드 B 미발동
+  let subOrder = null;
+  let subLines = [];
+  let isPartialMode = false;
+  let totalShipments = 1;
+  let currentShipmentNum = 1;
+
+  if (wh === 'CA' && !order.parent_order_id) {
+    const { data: subOrderData } = await db.from('orders')
+      .select('*')
+      .eq('parent_order_id', orderId)
+      .maybeSingle();
+    
+    if (subOrderData) {
+      subOrder = subOrderData;
+      const subReceived = ['received','complete','shipped','invoiced'].includes(subOrder.status);
+      isPartialMode = (order.status === 'shipped' || order.status === 'invoiced') && !subReceived;
+      totalShipments = 2;
+      currentShipmentNum = 1;
+      
+      if (!isPartialMode) {
+        // 모드 A — sub-order 라인을 메인 PL 에 합침
+        const { data: subLinesData } = await db.from('order_lines')
+          .select('*, styles(style_number,description,box_qty)')
+          .eq('order_id', subOrder.id);
+        subLines = (subLinesData || []).map(l => ({
+          ...l,
+          wh: 'CA',
+          alloc_ca_detail: l.alloc_local || l.alloc_detail || {},
+          alloc_detail: {},
+          stage_for_ca_truck: false,
+          _from_sub_order: true
+        }));
+      }
+    }
+  }
+  const allLines = [...lines, ...subLines];
+
   // whFilter에 따라 해당 창고 배분이 있는 라인만 필터링 + 수량 0 제외
   const isSc2ca = (wh === 'SC2CA');
   // SC2CA 카드는 qty_sc2ca > 0 인 라인만 (qty_pieces 가 아니라!)
   const nonZeroLines = isSc2ca
-    ? lines.filter(l => l.stage_for_ca_truck === true && (l.qty_sc2ca || 0) > 0)
-    : lines.filter(l => (l.qty_pieces || 0) > 0 && l.stage_for_ca_truck !== true);
+    ? allLines.filter(l => l.stage_for_ca_truck === true && (l.qty_sc2ca || 0) > 0)
+    : allLines.filter(l => (l.qty_pieces || 0) > 0 && l.stage_for_ca_truck !== true);
   let filteredLines = nonZeroLines;
   if (!isSc2ca && (isSplit || wh)) {
     const whFilter = wh || 'SC';
     filteredLines = nonZeroLines.filter(l => {
       if (whFilter === 'CA') {
+        // 새 구조 sub-order 에서 합쳐진 라인 (_from_sub_order=true) 은 무조건 포함
+        if (l._from_sub_order) return true;
         if (l.wh === 'SC' || !l.wh || l.wh === '') return false;
         if (l.wh === 'SC&CA') {
           const allocCA = l.alloc_ca_detail || {};
@@ -25324,7 +25365,11 @@ async function preparationComplete(orderId, wh) {
     shipDate: document.getElementById('ship-date-inp')?.value || ''  // 실제 출고일
   };
   if (plShipInfo.pro) plShipInfo.tracking = plShipInfo.pro;
-  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC', plShipInfo, document.getElementById('ship-note')?.value || '');
+  // shipmentInfo — 모드 B 발동 시에만 "Shipment X of Y" 표시
+  const shipmentInfo = (totalShipments > 1 && isPartialMode) 
+    ? { current: currentShipmentNum, total: totalShipments }
+    : null;
+  document.getElementById('pl-preview-content').innerHTML = buildPackingListHtml(order, filteredLines, false, wh || 'SC', plShipInfo, document.getElementById('ship-note')?.value || '', shipmentInfo);
   // 인라인 PIN 초기화
   const plPinInline = document.getElementById('pl-pin-inline');
   if (plPinInline) plPinInline.value = '';
@@ -28347,9 +28392,53 @@ async function printPackingListFromCard(orderId, whFilter) {
     .eq('order_id', orderId);
   if (!lines || !lines.length) { showToast('❌ 라인 데이터 없음'); return; }
 
+  // ── Phase A (2026-05-06): 거래처 PL 합산 — 메인 카드 CA PL 에 sub-order 라인 합치기
+  //    조건: whFilter='CA' && sub-order 존재 && (모드 A 또는 모드 B 의 sub-order 출고 시점 아님)
+  //    모드 B 판정: 메인이 이미 shipped 됐고 sub 는 아직 received 안 됨 → 메인은 CA portion 만
+  let subOrder = null;
+  let subLines = [];
+  let isPartialMode = false;  // 모드 B 발동 여부
+  let totalShipments = 1;     // "Shipment X of Y" 표시용
+  let currentShipmentNum = 1;
+
+  if (whFilter === 'CA' && !order.parent_order_id) {
+    const { data: subOrderData } = await db.from('orders')
+      .select('*')
+      .eq('parent_order_id', orderId)
+      .maybeSingle();
+    
+    if (subOrderData) {
+      subOrder = subOrderData;
+      const subReceived = ['received','complete','shipped','invoiced'].includes(subOrder.status);
+      // 모드 B 판정 — 메인이 이미 ship 됐는데 sub 가 아직 받아지지 않은 케이스 → CA portion 만 ship
+      isPartialMode = (order.status === 'shipped' || order.status === 'invoiced') && !subReceived;
+      totalShipments = 2;
+      currentShipmentNum = 1;  // 메인 카드 PL = 첫 출고분
+      
+      if (!isPartialMode) {
+        // 모드 A — sub-order 라인을 메인 PL 에 합침
+        const { data: subLinesData } = await db.from('order_lines')
+          .select('*, styles(*)')
+          .eq('order_id', subOrder.id);
+        subLines = (subLinesData || []).map(l => ({
+          ...l,
+          // sub-order 라인은 "wh: SC" 로 저장되지만, 거래처 PL 에서는 CA 출고처럼 합치기
+          // → wh='CA' 로 변환하고, alloc_local → alloc_ca_detail 로 매핑
+          wh: 'CA',
+          alloc_ca_detail: l.alloc_local || l.alloc_detail || {},
+          alloc_detail: {},  // CA filter 가 SC alloc 안 보게
+          stage_for_ca_truck: false,  // 옛날 컬럼 — 새 구조에선 의미 없음
+          _from_sub_order: true  // 디버그용 플래그
+        }));
+      }
+    }
+  }
+  // 합쳐진 sub 라인을 메인 lines 에 추가
+  const allLines = [...lines, ...subLines];
+
   // whFilter가 있으면 해당 창고 라인만 필터링해서 단일 섹션으로 출력
   const isSplit = order.is_split_warehouse || order.wh_code === 'SC&CA';
-  const nonZeroLines = lines.filter(l => (l.qty_pieces || 0) > 0); // 수량 0 제외
+  const nonZeroLines = allLines.filter(l => (l.qty_pieces || 0) > 0); // 수량 0 제외
   let filteredLines = nonZeroLines;
   let useSplit = isSplit && !whFilter;
 
@@ -28367,6 +28456,8 @@ async function printPackingListFromCard(orderId, whFilter) {
     // SC2CA 가 CA 에 합쳐진 케이스 (sc2ca_status='ca_received' 또는 'invoiced') 면 SC2CA 라인도 CA portion 으로 포함
     const sc2caMergedToCa = ['ca_received','invoiced'].includes(order.sc2ca_status);
     filteredLines = nonZeroLines.filter(l => {
+      // 새 구조 sub-order 에서 합쳐진 라인 (_from_sub_order=true) 은 무조건 포함
+      if (l._from_sub_order) return true;
       // SC2CA 라인 (stage_for_ca_truck=true) — 합쳐진 케이스만 포함, 아니면 제외
       if (l.stage_for_ca_truck === true) return sc2caMergedToCa;
       if (l.wh === 'SC' || !l.wh || l.wh === '') return false;
@@ -28379,7 +28470,12 @@ async function printPackingListFromCard(orderId, whFilter) {
     useSplit = false;
   }
 
-  const html = buildPackingListHtml(order, filteredLines, useSplit, whFilter);
+  // shipmentInfo — 모드 B 일 때만 "Shipment X of Y" 표시
+  const shipmentInfo = (totalShipments > 1 && isPartialMode) 
+    ? { current: currentShipmentNum, total: totalShipments }
+    : null;
+  
+  const html = buildPackingListHtml(order, filteredLines, useSplit, whFilter, null, '', shipmentInfo);
   printInNewWindow(html);
 }
 
@@ -31195,7 +31291,7 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
 // ═══════════════════════════════════════════════════════
 // Packing List HTML 빌더
 // ═══════════════════════════════════════════════════════
-function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, note) {
+function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, note, shipmentInfo) {
   const dateStr = new Date().toLocaleDateString();
   // colorLabel은 전역 함수 사용
   const sizeOrd = s => (['XS','S','M','L','XL','2XL','3XL','4XL'].indexOf(s) + 1) || 99;
@@ -31569,6 +31665,7 @@ function buildPackingListHtml(order, lines, isSplit, whFilter, shippingInfo, not
       </div>
       <div style="text-align:right;">
         <div style="font-size:22px;font-weight:800;color:#0891b2;">PACKING LIST</div>
+        ${shipmentInfo ? `<div style="display:inline-block;margin-top:4px;padding:2px 8px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:4px;font-size:11px;font-weight:700;">📦 Shipment ${shipmentInfo.current} of ${shipmentInfo.total}</div>` : ''}
         <div style="font-size:11px;color:#555;">PO#: <strong>${order.customer_po||'—'}</strong></div>
         <div style="font-size:11px;color:#555;">Date: ${dateStr}</div>
       </div>
