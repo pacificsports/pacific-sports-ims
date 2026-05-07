@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_233000 — Inventory stale fix: scInventory/caInventory 의 qty 계산을 inventory.qty_committed (stale) 대신 trueBinCommitted (alloc_detail 기반 fresh) 으로 변경. PO 입력 화면의 SC/CA/SC→CA/Full Boxes 컬럼이 0 으로 나오는 문제 해결. + Order Confirm 메일 정리 + Sub-order 라인 INSERT fix + Phase 3.3 + Phase A. -->
+<!-- BUILD: 20260507_094500 — Sub-order 생성 흐름에 진단 로그 추가 (mainLines fetch 결과, sc2caLines 필터링 결과 등). 다음 PO 저장 시 어느 단계에서 sub-order 라인 INSERT 가 건너뛰어지는지 정확히 알 수 있게. + 이전: Inventory stale fix + Order Confirm 메일 정리 + Sub-order 라인 INSERT fix + Phase 3.3 + Phase A. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8576,12 +8576,17 @@ async function _doSaveInvoice() {
   // Sub-order: parent_order_id = 메인 id, wh_code='SC2CA', SC→CA 라인만
   if (!isEditMode && hasSc2caLine && order && order.id) {
     try {
-      console.log('[Sub-order] SC→CA Transfer sub-order 생성 시작');
+      console.log('[Sub-order] SC→CA Transfer sub-order 생성 시작 — order.id:', order.id);
       // 메인 order 의 라인 중 qty_from_other_wh > 0 인 라인들 fetch
-      const { data: mainLines } = await db.from('order_lines')
+      const { data: mainLines, error: mainLinesErr } = await db.from('order_lines')
         .select('*')
         .eq('order_id', order.id);
+      console.log('[Sub-order] mainLines fetch 결과:', mainLines?.length, '개', mainLinesErr ? '에러:' + mainLinesErr.message : '');
+      if (mainLines?.length > 0) {
+        console.log('[Sub-order] mainLines qty_from_other_wh 들:', mainLines.map(l => l.qty_from_other_wh));
+      }
       const sc2caLines = (mainLines || []).filter(l => (l.qty_from_other_wh || 0) > 0);
+      console.log('[Sub-order] sc2caLines 필터링 결과:', sc2caLines.length, '개');
       
       if (sc2caLines.length > 0) {
         const sc2caTotalPcs = sc2caLines.reduce((s, l) => s + (l.qty_from_other_wh || 0), 0);
