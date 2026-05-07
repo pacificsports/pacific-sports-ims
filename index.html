@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_145000 — 🎯 또 CHECK constraint! orders.status 가 'complete' 도 거부 (허용: po_entered, preparing, ready_to_ship, shipped, invoiced, cancelled). sc2caRecvOrderShipped 의 sub.status='complete' → 'invoiced' 로 변경. makeCards 의 sub-order hide 필터에 'invoiced' 이미 포함되어 있어 자동 사라짐. -->
+<!-- BUILD: 20260507_150000 — Two fixes for sub-order 메인 출고 단계: (1) sc2caRecvOrderShipped 가 메인 라인의 qty_received_from_other_wh 도 업데이트 → "⏳ SC→CA 144 도착 대기" 표시 사라짐. (2) Mark as Shipped 모달의 박스 계산: 새 구조 메인 라인 (alloc_local + alloc_from_other_wh) 둘 다 합산 → CA(288=4박스) + SC2CA(144=2박스) = 6박스. 'complete' 안 받음 → 'invoiced' 사용. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -29163,7 +29163,7 @@ async function doShipped(orderId, wh) {
   // 실제 박스 수 계산 (order_lines alloc_detail 기반)
   try {
     const { data: lines } = await db.from('order_lines')
-      .select('alloc_detail, alloc_ca_detail, alloc_sc2ca_detail, stage_for_ca_truck, pcs_per_box, styles(box_qty)')
+      .select('alloc_detail, alloc_ca_detail, alloc_sc2ca_detail, alloc_local, alloc_from_other_wh, stage_for_ca_truck, pcs_per_box, qty_local, qty_from_other_wh, styles(box_qty)')
       .eq('order_id', orderId);
     // SC2CA 가 CA 에 합쳐진 케이스 (sc2ca_status='ca_received'/'invoiced') 면 SC2CA portion 도 CA 박스에 합산
     const { data: orderForBox } = await db.from('orders').select('sc2ca_status').eq('id', orderId).single();
@@ -29173,24 +29173,52 @@ async function doShipped(orderId, wh) {
       let totalFullBoxes = 0;
       let totalPcrPcs = 0;
       lines.forEach(l => {
-        // CA 출고 + SC2CA 라인 + 합쳐진 케이스 → alloc_sc2ca_detail 사용
-        let alloc;
-        if (isCA && l.stage_for_ca_truck === true && sc2caMergedToCa) {
-          alloc = l.alloc_sc2ca_detail || {};
-        } else if (isCA) {
-          alloc = l.alloc_ca_detail || {};
-        } else {
-          alloc = l.alloc_detail || {};
-        }
         const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
-        Object.entries(alloc).forEach(([k, v]) => {
-          if (k.includes('TRANSFER|')) return;
-          if (k.toUpperCase().includes('PCR')) {
-            totalPcrPcs += typeof v === 'object' ? (v.pcs || 0) : (v || 0);
-          } else {
-            totalFullBoxes += typeof v === 'object' ? (v.boxes || 0) : Math.floor((v || 0) / ppb);
+        // ── 새 구조 (2026-05): 메인 라인은 alloc_local (CA 직접) + alloc_from_other_wh (SC2CA) 둘 다 가짐
+        //    sc2caMergedToCa 일 때 alloc_from_other_wh 도 박스에 합산 (CA 가 다 받았으므로)
+        const isNewStructure = l.alloc_local !== null && l.alloc_local !== undefined;
+        if (isNewStructure && isCA) {
+          // 새 구조 + CA 출고: alloc_local 사용 (메인 CA bin 픽)
+          const allocLocal = l.alloc_local || {};
+          Object.entries(allocLocal).forEach(([k, v]) => {
+            if (k.includes('TRANSFER|')) return;
+            if (k.toUpperCase().includes('PCR')) {
+              totalPcrPcs += typeof v === 'object' ? (v.pcs || 0) : (v || 0);
+            } else {
+              totalFullBoxes += typeof v === 'object' ? (v.boxes || 0) : Math.floor((v || 0) / ppb);
+            }
+          });
+          // SC2CA portion 도 합산 (sc2caMergedToCa 면)
+          if (sc2caMergedToCa) {
+            const allocFromOther = l.alloc_from_other_wh || {};
+            Object.entries(allocFromOther).forEach(([k, v]) => {
+              if (k.includes('TRANSFER|')) return;
+              if (k.toUpperCase().includes('PCR')) {
+                totalPcrPcs += typeof v === 'object' ? (v.pcs || 0) : (v || 0);
+              } else {
+                totalFullBoxes += typeof v === 'object' ? (v.boxes || 0) : Math.floor((v || 0) / ppb);
+              }
+            });
           }
-        });
+        } else {
+          // 옛날 구조
+          let alloc;
+          if (isCA && l.stage_for_ca_truck === true && sc2caMergedToCa) {
+            alloc = l.alloc_sc2ca_detail || {};
+          } else if (isCA) {
+            alloc = l.alloc_ca_detail || {};
+          } else {
+            alloc = l.alloc_detail || {};
+          }
+          Object.entries(alloc).forEach(([k, v]) => {
+            if (k.includes('TRANSFER|')) return;
+            if (k.toUpperCase().includes('PCR')) {
+              totalPcrPcs += typeof v === 'object' ? (v.pcs || 0) : (v || 0);
+            } else {
+              totalFullBoxes += typeof v === 'object' ? (v.boxes || 0) : Math.floor((v || 0) / ppb);
+            }
+          });
+        }
       });
       const ppbFirst = lines[0]?.pcs_per_box || lines[0]?.styles?.box_qty || 60;
       const pcrBoxes = totalPcrPcs > 0 ? Math.ceil(totalPcrPcs / ppbFirst) : 0;
@@ -42178,6 +42206,19 @@ async function sc2caRecvOrderShipped(orderId) {
         sc2ca_status: 'ca_received',
         sc2ca_received_at: new Date().toISOString()
       }).eq('id', mainOrderId);
+      
+      // 4. 메인 order 의 라인들 qty_received_from_other_wh = qty_from_other_wh 업데이트
+      //    → 카드의 "⏳ SC→CA 144 도착 대기" 표시 사라짐
+      //    → Mark as Shipped 모달의 박스 합산도 정확 (288 + 144 = 432 = 6박스)
+      const { data: mainLines } = await db.from('order_lines').select('id, qty_from_other_wh').eq('order_id', mainOrderId);
+      for (const ml of (mainLines || [])) {
+        if ((ml.qty_from_other_wh || 0) > 0) {
+          await db.from('order_lines').update({
+            qty_received_from_other_wh: ml.qty_from_other_wh
+          }).eq('id', ml.id);
+        }
+      }
+      console.log('[sc2caRecvOrderShipped] 메인 라인 qty_received_from_other_wh 업데이트 완료');
     } else {
       // 옛날 구조: 메인 order 의 sc2ca_status 만 업데이트
       await db.from('orders').update({
