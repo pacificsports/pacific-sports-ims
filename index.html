@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_133000 — 🎯 Sub-order 라인 INSERT 실패 원인 발견! "Could not find the 'sku' column of 'order_lines' in the schema cache". order_lines 테이블에 sku 컬럼 없음 → INSERT payload 에서 sku 제거. (콘솔 직접 INSERT 는 우연히 성공했지만 자동 흐름은 schema 검증으로 거부됨) + dlog 시스템 + postShipment fix. -->
+<!-- BUILD: 20260507_134000 — 🎯 CHECK constraint 발견: orders.status 가 'in_transit' 안 받음. (1) postShipment 의 sub-order status update: 'in_transit' → 'ready_to_ship' (DB 호환). (2) Ready 카드 분기: status 가 아니라 sc2ca_status 로 분기 (sub-order 단계는 sc2ca_status 가 진실). (3) 'shipped' 분기는 별도 (Received & Shipped 케이스). + sku 컬럼 제거 fix. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11642,14 +11642,15 @@ async function loadOrderStatus() {
           // ── 새 구조 (2026-05): sub-order 는 자기 status 컬럼 사용
           //    옛날 구조: 메인 order 의 sc2ca_status 컬럼 사용
           const isNewSubOrderCard = !!o.parent_order_id;
-          const sc2caStatus = isNewSubOrderCard
-            ? (o.status || 'preparing')
-            : (o.sc2ca_status || 'preparing');
+          // 새 구조 sub-order 도 sc2ca_status 로 분기 (orders.status 는 CHECK constraint 때문에 ready_to_ship 만 가능)
+          // 진짜 sub-order 단계는 sc2ca_status 에 저장됨: staged_for_truck → in_transit → ca_received
+          // 단, sub-order.status='shipped' 인 경우 (Received & Shipped 케이스) 는 별도 분기
+          const sc2caStatus = (o.sc2ca_status || 'preparing');
           
-          // 새 구조: status 가 'received' 인 경우는 거래처 출고 가능 (sub-order 가 CA 받았음)
-          if (isNewSubOrderCard && sc2caStatus === 'received') {
+          // 새 구조: status 가 'shipped' 인 경우 (Received & Shipped 케이스 — sub-order 만 따로 출고 가능 상태)
+          if (isNewSubOrderCard && o.status === 'shipped') {
             return `
-              <div style="margin-top:8px;font-size:10px;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:6px 10px;text-align:center;font-weight:600;">✅ CA 도착 완료 — 거래처 출고 가능</div>
+              <div style="margin-top:8px;font-size:10px;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:6px 10px;text-align:center;font-weight:600;">✅ CA 도착 완료 (따로 출고)</div>
               <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','${wh}')">📋 Print Packing List</button>
               <button class="btn btn-sm btn-green" style="width:100%;margin-top:4px;font-size:10px;" onclick="event.stopPropagation();sc2caMarkShipped('${o.id}')">🚚 Mark as Shipped</button>
             `;
@@ -41807,13 +41808,15 @@ async function postShipment() {
         sc2ca_truck_loaded_at: new Date().toISOString()
       }).in('id', orderIds);
       
-      // ── 새 구조 (2026-05-07): sub-order (parent_order_id 있음) 의 경우 status='in_transit' 도 업데이트
+      // ── 새 구조 (2026-05-07): sub-order (parent_order_id 있음) 의 경우 status='ready_to_ship' 으로 업데이트
       //    → 카드가 Preparing 컬럼에서 Ready to Ship 컬럼으로 이동
+      //    NOTE: orders.status CHECK constraint 가 'in_transit' 안 받으므로 'ready_to_ship' 사용.
+      //    카드의 "🚚 In Transit to CA" 표시는 sc2ca_status='in_transit' 으로 판단 (이미 작동)
       const subOrderIds = stagedOrders.filter(o => o.parent_order_id).map(o => o.id);
       if (subOrderIds.length > 0) {
-        const { error: subUpdErr } = await db.from('orders').update({ status: 'in_transit' }).in('id', subOrderIds);
+        const { error: subUpdErr } = await db.from('orders').update({ status: 'ready_to_ship' }).in('id', subOrderIds);
         if (subUpdErr) console.error('[Shipment depart] sub status update error:', subUpdErr);
-        else console.log(`[Shipment depart] ${subOrderIds.length} new-structure sub-orders → status='in_transit'`);
+        else console.log(`[Shipment depart] ${subOrderIds.length} new-structure sub-orders → status='ready_to_ship' (sc2ca_status='in_transit' 별도)`);
       }
       
       console.log(`[Shipment depart] ${orderIds.length} SC2CA orders → in_transit`);
