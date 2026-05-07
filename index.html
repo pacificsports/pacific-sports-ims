@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_104500 — checkAndMoveToPreparing 에 진단 로그 추가 (sub-order print 후 preparing 으로 안 가는 문제 디버깅용). + Phase 3.4 sub-order workflow 처리. -->
+<!-- BUILD: 20260507_105000 — Warehouse Preparing 모달 (openWhComplete) sub-order 처리: filteredLines 새 구조면 lines 전체, pickAlloc 도 alloc_local 우선, lineQty 도 qty_pieces 우선. submitWhComplete 도 status (새 구조) vs sc2ca_status (옛날) 분기. + checkAndMoveToPreparing fix + Phase 3.4 시작. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -23581,18 +23581,12 @@ async function checkAndMoveToPreparing() {
   const orderId = _ptOrderId;
   const wh = _ptWh;
   const ticketType = _ptTicketType;
-  console.log('[checkAndMoveToPreparing] 시작', { orderId, wh, ticketType });
-  if (!orderId || !wh) {
-    console.warn('[checkAndMoveToPreparing] orderId or wh 없음 — 종료');
-    return;
-  }
+  if (!orderId || !wh) return;
 
   // 실제로 프린트했을 때 printed_at 기록
   const whPre = wh === 'CA' ? 'ca_' : (wh === 'SC2CA' ? 'sc2ca_' : 'sc_');
   const field = whPre + (ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at');
-  console.log('[checkAndMoveToPreparing] printed_at 기록 시도:', field);
-  const { error: updErr } = await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
-  if (updErr) console.error('[checkAndMoveToPreparing] printed_at 업데이트 에러:', updErr.message);
+  await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
 
   // Urgent 알람 ack
   if (ticketType === 'warehouse') await markWhTicketPrinted(orderId);
@@ -23660,20 +23654,14 @@ async function checkAndMoveToPreparing() {
   const whStatus = isNewSubOrder
     ? updated.status
     : wh === 'CA' ? (updated.ca_status || updated.status) : (wh === 'SC2CA' ? (updated.sc2ca_status || updated.status) : (updated.sc_status || updated.status));
-  console.log('[checkAndMoveToPreparing] 판단', { isNewSubOrder, whStatus, needsWh, needsWhFinal, needsPcr, whOk, pcrOk, whLinesCount: whLines.length });
   if (whOk && pcrOk && ['po_entered','open','credit_hold','preparing'].includes(whStatus)) {
-    console.log('[checkAndMoveToPreparing] preparing 으로 이동 시도');
     await updateWhStatus(orderId, wh, 'preparing');
     showToast(`📦 ${wh} 프린트 완료 — Preparing으로 이동!`);
     loadOrderStatus();
   } else if (!whOk) {
-    console.warn('[checkAndMoveToPreparing] !whOk — preparing 안 감');
     showToast('⚠️ WH Pick Ticket도 프린트해야 Preparing으로 이동합니다.');
   } else if (!pcrOk) {
-    console.warn('[checkAndMoveToPreparing] !pcrOk — preparing 안 감');
     showToast('⚠️ Partial Pick Ticket도 프린트해야 Preparing으로 이동합니다.');
-  } else {
-    console.warn('[checkAndMoveToPreparing] whStatus 가 preparing 가능 범위 밖:', whStatus);
   }
 }
 
@@ -23828,21 +23816,28 @@ async function openWhComplete(orderId, wh) {
 
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const isSc2ca = (wh === 'SC2CA');
-  // SC2CA: stage_for_ca_truck=true 라인만
+  // ── 새 구조 (2026-05): sub-order (parent_order_id 있음) 의 라인은 모두 SC pick 라인
+  const isNewSubOrder = !!order.parent_order_id;
+  // SC2CA: stage_for_ca_truck=true 라인만 (옛날) 또는 모든 라인 (새 구조)
   // SC/CA split: stage_for_ca_truck!=true && wh 일치
   // 싱글: stage_for_ca_truck!=true 만
-  const filteredLines = isSc2ca
-    ? lines.filter(l => l.stage_for_ca_truck === true)
-    : isSplit
-      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
-      : lines.filter(l => l.stage_for_ca_truck !== true);
+  const filteredLines = isNewSubOrder
+    ? lines  // 새 구조 sub-order: 모든 라인이 SC pick
+    : isSc2ca
+      ? lines.filter(l => l.stage_for_ca_truck === true)
+      : isSplit
+        ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
+        : lines.filter(l => l.stage_for_ca_truck !== true);
 
   // 라인의 alloc 선택 헬퍼
-  const pickAlloc = (l) => isSc2ca
-    ? (l.alloc_sc2ca_detail || {})
-    : wh === 'CA'
-      ? (l.alloc_ca_detail || l.alloc_detail || {})
-      : (l.alloc_detail || l.alloc_ca_detail || {});
+  // 새 구조 sub-order: alloc_local 우선 (SC bin 들 H2025, H2128)
+  const pickAlloc = (l) => isNewSubOrder
+    ? (l.alloc_local || l.alloc_detail || {})
+    : isSc2ca
+      ? (l.alloc_sc2ca_detail || {})
+      : wh === 'CA'
+        ? (l.alloc_ca_detail || l.alloc_detail || {})
+        : (l.alloc_detail || l.alloc_ca_detail || {});
 
   // Full Box가 있는 라인만 (alloc의 non-PCR, non-TRANSFER boxes 합산)
   const whLines = filteredLines.filter(l => {
@@ -23874,8 +23869,12 @@ async function openWhComplete(orderId, wh) {
     const pcrPcs = Object.entries(alloc)
       .filter(([k]) => k.includes('PCR|PCR'))
       .reduce((s,[,v]) => s + (typeof v==='object' ? (v.pcs||0) : (v||0)), 0);
-    // SC2CA 카드의 orderQty 는 qty_sc2ca, 그 외는 qty_pieces
-    const lineQty = isSc2ca ? (l.qty_sc2ca || 0) : (l.qty_pieces || 0);
+    // SC2CA 카드의 orderQty: 새 구조 sub-order 면 qty_pieces, 옛날 SC2CA 는 qty_sc2ca, 그 외는 qty_pieces
+    const lineQty = isNewSubOrder
+      ? (l.qty_pieces || l.qty_local || 0)
+      : isSc2ca
+        ? (l.qty_sc2ca || 0)
+        : (l.qty_pieces || 0);
     const totalBoxes = Math.floor(lineQty / ppb);
     const partialPcs = lineQty % ppb;
     return { idx: i, lineId: l.id, styleNum: l.styles?.style_number||'', color: l.color||'', size: l.size||'', orderQty: lineQty, fullBoxes, ppb, totalBoxes, partialPcs, pcrPcs };
@@ -23948,9 +23947,18 @@ async function submitWhComplete() {
     [whPre+'wh_complete_by']: empName,
     [whPre+'wh_prepared_lines']: JSON.stringify(preparedLines)
   };
+  // ── 새 구조 (2026-05): sub-order 면 status 업데이트, 옛날은 sc2ca_status
+  // 메인 order 가 sub-order 인지 확인
+  const { data: orderForCheck } = await db.from('orders').select('parent_order_id').eq('id', _whCompleteOrderId).single();
+  const isNewSubOrder = !!orderForCheck?.parent_order_id;
+  
   // SC2CA 는 status 도 같이 업데이트 (preparing → 다음 단계)
   if (isSc2ca) {
-    updateData.sc2ca_status = 'preparing';  // 본격적으로 준비 시작
+    if (isNewSubOrder) {
+      updateData.status = 'preparing';
+    } else {
+      updateData.sc2ca_status = 'preparing';  // 옛날 구조
+    }
   }
   
   const { error: updateErr } = await db.from('orders').update(updateData).eq('id', _whCompleteOrderId);
@@ -23959,7 +23967,8 @@ async function submitWhComplete() {
     showToast('❌ 저장 실패: ' + updateErr.message);
     // SC2CA 컬럼이 없을 수도 있어서, status 만 업데이트 재시도
     if (isSc2ca && updateErr.message?.includes('column')) {
-      await db.from('orders').update({ sc2ca_status: 'preparing' }).eq('id', _whCompleteOrderId);
+      const fallbackKey = isNewSubOrder ? 'status' : 'sc2ca_status';
+      await db.from('orders').update({ [fallbackKey]: 'preparing' }).eq('id', _whCompleteOrderId);
     }
   }
 
