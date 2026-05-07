@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_140000 — SC→CA Next Truck bin 입력 시 SC PCR Transfer 섹션 자동 갱신: (1) onSc2CaBinChange 가 refreshPcrTransferSection 호출. (2) refreshPcrTransferFor 의 liveAlloc 계산에서 SC bin 사용량 = allocSC + allocSC2CA 합산 → SC PCR transfer 가능 박스 정확히 계산. + CHECK constraint 우회 + sku 제거. -->
+<!-- BUILD: 20260507_141500 — SC→CA Next Truck 영역의 PCR Transfer 섹션 수정: (1) 라벨 "CA → CA-PCR 이동" → "SC → SC-PCR 이동" (SC2CA 도 SC bin 사용). (2) PCR ID 충돌 fix: pcr-transfer-wrap-SC2CA 별도 ID. (3) refreshPcrTransferSection 이 SC2CA 도 갱신. (4) refreshPcrTransferFor 가 SC2CA 받으면 SC bin 사용 + 색/라벨 SC 와 동일. (5) liveAlloc 계산: SC bin 사용량 = allocSC + allocSC2CA 합산 (양쪽 모두 SC bin 영향). -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -37337,10 +37337,13 @@ function buildAllocHtml(lineIdx, whGroup) {
   }
 
   // ── PCR Bins (partial pcs 단위)
-  const pcrColor  = isSC ? '#a84212' : '#5b21b6';
-  const pcrBg     = isSC ? '#fff7ed' : '#f5f3ff';
-  const pcrBorder = isSC ? '#fdba74' : '#c4b5fd';
-  const pcrLabel  = isSC ? '🟠 SC-PCR — Pcs Room (Partial Pcs)' : '🟣 CA-PCR — Pcs Room (Partial Pcs)';
+  // SC2CA 도 SC 의 PCR 사용 (재고가 SC 에 있으니까) — 색/라벨 SC 와 동일
+  const pcrColor  = usingScBins ? '#a84212' : '#5b21b6';
+  const pcrBg     = usingScBins ? '#fff7ed' : '#f5f3ff';
+  const pcrBorder = usingScBins ? '#fdba74' : '#c4b5fd';
+  const pcrLabel  = usingScBins ? '🟠 SC-PCR — Pcs Room (Partial Pcs)' : '🟣 CA-PCR — Pcs Room (Partial Pcs)';
+  // PCR transfer 섹션 ID 는 wh group 별로 별도 (SC, CA, SC2CA — ID 충돌 방지)
+  const pcrIdSuffix = whGroup;
 
   // PCR 섹션 항상 표시 (재고 없으면 0pcs로)
   html += `<div style="font-size:11px;font-weight:700;color:${pcrColor};text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px;">${pcrLabel}</div>`;
@@ -37455,22 +37458,22 @@ function buildAllocHtml(lineIdx, whGroup) {
 
       html += `<div style="margin-top:10px;border:1px solid ${_sectionDisabled?'#ccc':pcrBorder};border-radius:8px;overflow:hidden;${_sectionDisabled?'opacity:0.55;':''}">
         <div style="padding:8px 12px;background:${_sectionDisabled?'#aaa':pcrColor};display:flex;align-items:center;justify-content:space-between;">
-          <span style="font-size:11px;font-weight:700;color:#fff;">${isSC ? '✂️ SC → SC-PCR 이동' : '✂️ CA → CA-PCR 이동'} (배분 후 남은 수량 기준)</span>
+          <span style="font-size:11px;font-weight:700;color:#fff;">${usingScBins ? '✂️ SC → SC-PCR 이동' : '✂️ CA → CA-PCR 이동'} (배분 후 남은 수량 기준)</span>
           ${_sectionDisabled ? '<span style="font-size:10px;color:rgba(255,255,255,0.8);">✅ PCR 재고 충분</span>' : ''}
         </div>
-        <div id="pcr-transfer-wrap-${isSC?'SC':'CA'}" style="background:#fff;border-bottom:1px solid ${pcrBorder};${_sectionDisabled?'pointer-events:none;':''}">
+        <div id="pcr-transfer-wrap-${pcrIdSuffix}" style="background:#fff;border-bottom:1px solid ${pcrBorder};${_sectionDisabled?'pointer-events:none;':''}">
           ${binItemsHtml}
         </div>
         <div style="padding:10px 12px;background:${pcrBg};display:flex;align-items:center;gap:8px;">
-          <div id="pcr-selected-bin-label-${isSC?'SC':'CA'}" style="flex:1;font-size:12px;color:#888;font-style:italic;">← Bin 선택</div>
+          <div id="pcr-selected-bin-label-${pcrIdSuffix}" style="flex:1;font-size:12px;color:#888;font-style:italic;">← Bin 선택</div>
           <div style="display:flex;align-items:center;gap:5px;">
-            <input type="number" id="pcr-transfer-boxes-${isSC?'SC':'CA'}" min="1" value="1"
+            <input type="number" id="pcr-transfer-boxes-${pcrIdSuffix}" min="1" value="1"
               style="width:46px;height:30px;border:1px solid ${pcrBorder};border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;"
-              oninput="updatePcrTransferLabel('${isSC?'SC':'CA'}', ${l.ppb||72})"/>
+              oninput="updatePcrTransferLabel('${pcrIdSuffix}', ${l.ppb||72})"/>
             <span style="font-size:11px;color:var(--text3);">박스</span>
-            <span id="pcr-transfer-pcs-label-${isSC?'SC':'CA'}" style="font-size:10px;color:${pcrColor};font-weight:700;white-space:nowrap;">(${l.ppb||72} pcs)</span>
+            <span id="pcr-transfer-pcs-label-${pcrIdSuffix}" style="font-size:10px;color:${pcrColor};font-weight:700;white-space:nowrap;">(${l.ppb||72} pcs)</span>
           </div>
-          <button id="pcr-transfer-btn-${isSC?'SC':'CA'}" onclick="execPcrTransfer('${isSC?'SC':'CA'}', ${l.ppb||72})" disabled
+          <button id="pcr-transfer-btn-${pcrIdSuffix}" onclick="execPcrTransfer('${pcrIdSuffix}', ${l.ppb||72})" disabled
             style="height:30px;padding:0 14px;border-radius:4px;border:none;background:#ccc;color:#fff;font-size:11px;font-weight:700;cursor:not-allowed;white-space:nowrap;">
             ✂️ Transfer
           </button>
@@ -37761,10 +37764,11 @@ function refreshPcrTransferSection() {
   const l = poLines[_allocState.lineIdx];
   if (!l) return;
 
-  // SC&CA 통합 모달일 때 양쪽 모두 갱신
+  // SC&CA 통합 모달일 때 SC, CA, SC2CA 모두 갱신
   if (_allocState.whGroup === 'SC&CA') {
     refreshPcrTransferFor('SC', l);
     refreshPcrTransferFor('CA', l);
+    refreshPcrTransferFor('SC2CA', l);
     return;
   }
   refreshPcrTransferFor(_allocState.whGroup, l);
@@ -37772,10 +37776,14 @@ function refreshPcrTransferSection() {
 
 function refreshPcrTransferFor(whGroup, l) {
   const isSC = whGroup === 'SC';
+  const isSC2CA = whGroup === 'SC2CA';
+  const usingScBins = isSC || isSC2CA;
   const ppb = l.ppb || 72;
-  const pcrColor = isSC ? '#a84212' : '#5b21b6';
+  const pcrColor = usingScBins ? '#a84212' : '#5b21b6';
   const k = `${l.styleNum}|${l.color.toUpperCase()}|${l.size.toUpperCase()}`;
-  const mainBins = (window.binInventory?.[whGroup]?.[k]) || [];
+  // SC2CA 도 SC bin 사용
+  const binWh = isSC2CA ? 'SC' : whGroup;
+  const mainBins = (window.binInventory?.[binWh]?.[k]) || [];
   // 현재 입력창 실시간 값 읽기 (SC&CA 통합 모달 시 해당 wrap에서만 검색)
   const liveAlloc = {};
   const allocWrap = _allocState?.whGroup === 'SC&CA'
@@ -37787,10 +37795,18 @@ function refreshPcrTransferFor(whGroup, l) {
       ? allocWrap.querySelector(`[id="alloc-box-${binId}"]`)
       : document.getElementById(`alloc-box-${binId}`);
     liveAlloc[b.bin] = inputEl ? (parseInt(inputEl.value)||0) : 0;
-    // ── 새 (2026-05-07): SC bin 은 SC2CA 도 사용하므로 합산 (SC PCR transfer 가능 박스 정확히 계산)
-    if (isSC) {
+    // SC bin 의 진짜 사용량 = SC alloc + SC2CA alloc 합산
+    // refreshPcrTransferFor('SC') 일 때: SC + SC2CA 합산 → SC PCR 가능 박스 정확
+    // refreshPcrTransferFor('SC2CA') 일 때: SC + SC2CA 합산 → SC2CA PCR 가능 박스 정확 (같은 SC bin 이니까)
+    if (usingScBins) {
+      const scQty = (l.allocSC || {})[b.bin] || 0;
       const sc2caQty = (l.allocSC2CA || {})[b.bin] || 0;
-      liveAlloc[b.bin] += sc2caQty;
+      // 자기 자신은 이미 input 으로 읽었으니 빼기
+      if (isSC) {
+        liveAlloc[b.bin] = scQty + sc2caQty;
+      } else if (isSC2CA) {
+        liveAlloc[b.bin] = scQty + sc2caQty;
+      }
     }
   });
 
