@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_122000 — Order Confirm 메일 sc2caShipNote 더 눈에 띄게: 노랑 → 빨강 (배경 #fee2e2, 테두리 2px #dc2626, 텍스트 #991b1b bold), 폰트 12→13, ℹ️ → ⚠️ 아이콘 변경. + Sub-order workflow Phase 3.4 완성. -->
+<!-- BUILD: 20260507_125000 — postShipment fix: stagedOrders 쿼리에서 sc2ca_status='staged_for_truck' 조건 제거 → sc2ca_shipment_id 만으로 매칭 (status 가 이미 변경된 경우도 처리). + 진단 로그 추가. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -23313,10 +23313,13 @@ async function sc2caAutoAddLines(orderId) {
   
   // 오더에 표시 — 이 오더는 이 shipment 에 등록됨
   if (okCount > 0 && _shipmentDbId) {
+    // ── 새 구조 (2026-05-07): sub-order 면 status 도 업데이트 (status='staged_for_truck' 은 카드 컬럼 매핑에 없으므로 'preparing' 그대로 유지하되 sc2ca_status 만 변경)
+    //    실은 카드는 status='preparing' 일 때 Preparing 컬럼에 있고, sc2ca_status='staged_for_truck' 이면 분기로 "📦 트럭 빌더에 등록됨" 표시 — 우리 코드대로 동작하면 OK
     await db.from('orders').update({
       sc2ca_shipment_id: _shipmentDbId,
       sc2ca_status: 'staged_for_truck'  // 트럭 빌더에 등록됨, 출발 전
     }).eq('id', orderId);
+    console.log('[sc2caAutoAddLines] order', orderId, '→ sc2ca_status=staged_for_truck');
   }
   
   // UI 새로고침
@@ -41754,11 +41757,11 @@ async function postShipment() {
       notes: _shipmentInfo.notes || null
     }).eq('id', _shipmentDbId);
     
-    // 🚚 SC2CA: 이 shipment 에 등록된 거래처 오더들도 sc2ca_status='in_transit' 로
+    // 🚚 SC2CA: 이 shipment 에 등록된 거래처 오더들 (status 조건 없이 — shipment_id 만으로 매칭, 더 견고)
     const { data: stagedOrders } = await db.from('orders')
-      .select('id, parent_order_id')
-      .eq('sc2ca_shipment_id', _shipmentDbId)
-      .eq('sc2ca_status', 'staged_for_truck');
+      .select('id, parent_order_id, status, sc2ca_status')
+      .eq('sc2ca_shipment_id', _shipmentDbId);
+    console.log('[Shipment depart] stagedOrders fetch:', stagedOrders?.length, '개', stagedOrders?.map(o => ({id: o.id.slice(0,8), status: o.status, sc2ca_status: o.sc2ca_status, parent: !!o.parent_order_id})));
     if (stagedOrders && stagedOrders.length > 0) {
       const orderIds = stagedOrders.map(o => o.id);
       await db.from('orders').update({
@@ -41770,11 +41773,14 @@ async function postShipment() {
       //    → 카드가 Preparing 컬럼에서 Ready to Ship 컬럼으로 이동
       const subOrderIds = stagedOrders.filter(o => o.parent_order_id).map(o => o.id);
       if (subOrderIds.length > 0) {
-        await db.from('orders').update({ status: 'in_transit' }).in('id', subOrderIds);
-        console.log(`[Shipment depart] ${subOrderIds.length} new-structure sub-orders → status='in_transit'`);
+        const { error: subUpdErr } = await db.from('orders').update({ status: 'in_transit' }).in('id', subOrderIds);
+        if (subUpdErr) console.error('[Shipment depart] sub status update error:', subUpdErr);
+        else console.log(`[Shipment depart] ${subOrderIds.length} new-structure sub-orders → status='in_transit'`);
       }
       
       console.log(`[Shipment depart] ${orderIds.length} SC2CA orders → in_transit`);
+    } else {
+      console.warn('[Shipment depart] stagedOrders 0 개 — sc2ca_shipment_id 매칭 안 됨!');
     }
     
     const totalLines = _shipmentPallets.reduce((s,p) => s + p.lines.length, 0);
