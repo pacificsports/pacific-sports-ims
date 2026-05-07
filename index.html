@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_142500 — DOM ID 충돌 fix: id="alloc-box-H2025" 가 SC 영역과 SC2CA 영역 양쪽에 존재 → document.getElementById 가 항상 첫 번째만 반환. refreshPcrTransferFor 가 항상 wrap.querySelector 로 검색하도록 변경 (각 wrap 안에서만 검색). 통합 모달이면 SC bin 사용량 = SC wrap input + SC2CA wrap input. -->
+<!-- BUILD: 20260507_145000 — 🎯 또 CHECK constraint! orders.status 가 'complete' 도 거부 (허용: po_entered, preparing, ready_to_ship, shipped, invoiced, cancelled). sc2caRecvOrderShipped 의 sub.status='complete' → 'invoiced' 로 변경. makeCards 의 sub-order hide 필터에 'invoiced' 이미 포함되어 있어 자동 사라짐. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -42161,12 +42161,13 @@ async function sc2caRecvOrderShipped(orderId) {
       .eq('source_order_id', orderId)
       .neq('status', 'received');
     
-    // 2. Sub-order 의 status='complete' (카드 사라지게)
+    // 2. Sub-order 의 status='invoiced' (카드 사라지게)
+    //    NOTE: orders.status CHECK constraint 가 'complete' 안 받음 → 'invoiced' 사용
     //    + sc2ca_status='ca_received' (옛날 컬럼도 호환)
     //    + sc2ca_received_at 시간 기록
     if (isNewSubOrder) {
       await db.from('orders').update({
-        status: 'complete',
+        status: 'invoiced',
         sc2ca_status: 'ca_received',
         sc2ca_received_at: new Date().toISOString()
       }).eq('id', orderId);
