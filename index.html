@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_113000 — Sub-order workflow Received & Combined fix: (1) sc2caRecvOrderShipped 새 구조 처리 — sub.status='complete', 메인 order 의 sc2ca_status='ca_received' 도 같이 업데이트, in_transit status 조건 제거 (모든 row 처리). (2) makeCards: sub-order 가 complete/shipped/invoiced 면 카드 안 만듦. (3) Add to CA Truck 버튼: sub-order 면 whDone 필수 (PIN+Complete 안 누르면 비활성화). + sc2caAutoAddLines 새 구조 처리. -->
+<!-- BUILD: 20260507_115000 — CA Receive 모달의 Bin 입력 → Combobox (datalist) 로 변경. CA 창고의 모든 bin 자동 dropdown + 직접 입력 모두 가능. window.binInventory['CA'] 에서 unique bin 목록 추출. + 통째로 모드 placeholder 'X1100' → 'bin code (CA)'. + 해체 모드 input 너비 조정. + Phase 3.4 sub-order workflow. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -41858,20 +41858,36 @@ async function openScCaReceive(shipmentId) {
 function renderScCaRecvPallets() {
   const container = document.getElementById('sc-ca-recv-pallets');
   
-  container.innerHTML = _scCaRecvPallets.map((p, pi) => {
+  // ── 새 (2026-05-07): CA 창고의 모든 bin 목록 (combobox 용)
+  //    window.binInventory['CA'] = { "style|color|size": [{bin, qty,...}, ...], ... }
+  //    모든 bin 코드 추출 → unique → 정렬
+  const caBinSet = new Set();
+  if (window.binInventory && window.binInventory['CA']) {
+    Object.values(window.binInventory['CA']).forEach(binArr => {
+      (binArr || []).forEach(b => {
+        if (b.bin) caBinSet.add(b.bin);
+      });
+    });
+  }
+  const caBinList = Array.from(caBinSet).sort();
+  // datalist HTML — 한 번 만들어서 재사용
+  const caBinDatalistHtml = `<datalist id="ca-bin-list">${caBinList.map(b => `<option value="${b}">`).join('')}</datalist>`;
+  
+  container.innerHTML = caBinDatalistHtml + _scCaRecvPallets.map((p, pi) => {
     const totalPcs = p.lines.reduce((s, l) => s + (l.qty_pcs || 0), 0);
     const isWhole = p.lines[0]?.mode === 'whole';
     
     let linesHtml;
     if (isWhole) {
-      // 통째로 모드 — 단일 bin 입력
+      // 통째로 모드 — 단일 bin 입력 (combobox)
       const binVal = p.lines[0]?.target_bin || '';
       linesHtml = `
         <div style="padding:12px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:6px;display:flex;align-items:center;gap:12px;">
           <span style="color:#047857;font-weight:700;">📍 통째로 입고할 bin:</span>
-          <input value="${binVal}" placeholder="X1100" onchange="updatePalletWholeBin(${pi}, this.value)" 
-            style="width:160px;height:32px;border:1px solid #6ee7b7;border-radius:4px;padding:0 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;">
+          <input list="ca-bin-list" value="${binVal}" placeholder="bin code (CA)" onchange="updatePalletWholeBin(${pi}, this.value)" 
+            style="width:180px;height:32px;border:1px solid #6ee7b7;border-radius:4px;padding:0 10px;font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;text-transform:uppercase;">
           <span style="color:var(--text3);font-size:11px;">${p.lines.length} 라인 · ${totalPcs.toLocaleString()} pcs 가 한 bin 으로</span>
+          <span style="margin-left:auto;color:var(--text3);font-size:10px;">📋 CA bins: ${caBinList.length}</span>
         </div>
         <div style="padding:8px 0;">
           <div style="font-size:11px;color:var(--text3);margin-bottom:4px;">📋 포함 라인:</div>
@@ -41884,7 +41900,7 @@ function renderScCaRecvPallets() {
         </div>
       `;
     } else {
-      // 해체 모드 — 각 라인마다 bin 입력
+      // 해체 모드 — 각 라인마다 bin 입력 (combobox)
       linesHtml = `
         <div style="padding:8px 0;">
           <div style="background:#fef3c7;border:1px solid #fbbf24;padding:6px 10px;border-radius:4px;font-size:11px;color:#92400e;margin-bottom:8px;">
@@ -41901,8 +41917,8 @@ function renderScCaRecvPallets() {
                   <td style="padding:5px;border:1px solid #e5e7eb;font-family:'IBM Plex Mono',monospace;font-size:10px;">${l.sku||''}</td>
                   <td style="padding:5px;border:1px solid #e5e7eb;text-align:right;font-weight:700;">${(l.qty_pcs||0).toLocaleString()}</td>
                   <td style="padding:3px 5px;border:1px solid #e5e7eb;background:#fffde7;">
-                    <input value="${l.line_bins[l.id]||''}" placeholder="bin" onchange="updatePalletLineBin(${pi}, ${li}, this.value)" 
-                      style="width:100px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 6px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;">
+                    <input list="ca-bin-list" value="${l.line_bins[l.id]||''}" placeholder="bin" onchange="updatePalletLineBin(${pi}, ${li}, this.value)" 
+                      style="width:120px;height:24px;border:1px solid #fbc02d;border-radius:3px;padding:0 6px;font-size:11px;font-family:'IBM Plex Mono',monospace;font-weight:700;text-transform:uppercase;">
                   </td>
                 </tr>
               `).join('')}
