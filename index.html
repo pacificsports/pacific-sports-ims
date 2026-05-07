@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_150000 — Two fixes for sub-order 메인 출고 단계: (1) sc2caRecvOrderShipped 가 메인 라인의 qty_received_from_other_wh 도 업데이트 → "⏳ SC→CA 144 도착 대기" 표시 사라짐. (2) Mark as Shipped 모달의 박스 계산: 새 구조 메인 라인 (alloc_local + alloc_from_other_wh) 둘 다 합산 → CA(288=4박스) + SC2CA(144=2박스) = 6박스. 'complete' 안 받음 → 'invoiced' 사용. -->
+<!-- BUILD: 20260507_154500 — Invoice 새 구조 처리: getWhShippedQty 가 stage_for_ca_truck=true (옛날) 만 봤음. 새 구조 (qty_from_other_wh > 0) + CA invoice + sc2caMergedToCa 면 qty_local + qty_from_other_wh 합산 (288+144=432). Invoice 의 SHIPPED, AMOUNT, INVOICE TOTAL 모두 432 로 정확. + 출고 이메일 fix. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -28093,10 +28093,24 @@ async function sendShippedEmail(order, shippingInfo, plHtml, bolData) {
     let caQty = getActualQty(allocCA, 'ca_pcr_prepared_lines');
     let sc2caQty = l.qty_sc2ca || 0;
     
+    // ── 새 구조 (2026-05): sc2caQty 가 비어있고 qty_from_other_wh 있으면 새 구조
+    //    새 구조 메인 라인은 qty_local (CA 직접) + qty_from_other_wh (SC2CA portion) 형태
+    //    alloc_local 은 caQty (위에서 alloc_ca_detail 안 잡혔을 수 있음)
+    //    alloc_from_other_wh 는 sc2caQty
+    if (sc2caQty === 0 && (l.qty_from_other_wh || 0) > 0) {
+      sc2caQty = l.qty_from_other_wh || 0;
+      // 새 구조면 caQty 도 새 컬럼 사용 (alloc_local)
+      if ((l.qty_local || 0) > 0 && caQty === 0) {
+        caQty = l.qty_local || 0;
+      }
+    }
+    
     // SC2CA 가 CA 에 합쳐진 케이스 (sc2ca_status='ca_received'/'invoiced'):
     // → sc2ca_qty 를 ca_qty 로 합쳐서 한 출고 처럼 처리
     const sc2caMergedToCa = ['ca_received','invoiced'].includes(order.sc2ca_status);
-    if (sc2caMergedToCa && sc2caQty > 0 && l.stage_for_ca_truck === true) {
+    // 새 구조: stage_for_ca_truck 조건 제거 (메인 라인은 false)
+    const isNewStructure = (l.qty_from_other_wh || 0) > 0;
+    if (sc2caMergedToCa && sc2caQty > 0 && (l.stage_for_ca_truck === true || isNewStructure)) {
       caQty += sc2caQty;
       sc2caQty = 0; // CA 로 합쳤으니 별도 표시 안 함
     }
@@ -32715,7 +32729,22 @@ function buildInvoiceHtml(order, lines, isSplit, invoiceNum, shipInfo, companySe
     const getWhShippedQty = (l) => {
       const ppb = l.pcs_per_box || 72;
       
-      // SC2CA 라인 — CA invoice 에서만 표시, qty_sc2ca + alloc_sc2ca_detail 사용
+      // ── 새 구조 (2026-05): 메인 라인은 qty_local + qty_from_other_wh 형태
+      //    sc2caMergedToCa 면 두 가지 합쳐서 CA invoice 에 표시
+      const isNewStructure = (l.qty_from_other_wh || 0) > 0;
+      const sc2caMergedToCaInv = ['ca_received','invoiced'].includes(order.sc2ca_status);
+      if (isNewStructure) {
+        if (sectionWh !== 'CA') return 0;  // 새 구조는 CA invoice 에서만
+        if (sc2caMergedToCaInv) {
+          // 합쳐진 케이스: qty_local + qty_from_other_wh = 432
+          return (l.qty_local || 0) + (l.qty_from_other_wh || 0);
+        } else {
+          // 따로 출고 케이스 (sub-order 가 따로 invoice): qty_local 만
+          return l.qty_local || 0;
+        }
+      }
+      
+      // 옛날 구조: SC2CA 라인 — CA invoice 에서만 표시, qty_sc2ca + alloc_sc2ca_detail 사용
       if (l.stage_for_ca_truck === true) {
         if (sectionWh !== 'CA') return 0;
         return l.qty_sc2ca || 0;
