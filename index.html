@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_141500 — SC→CA Next Truck 영역의 PCR Transfer 섹션 수정: (1) 라벨 "CA → CA-PCR 이동" → "SC → SC-PCR 이동" (SC2CA 도 SC bin 사용). (2) PCR ID 충돌 fix: pcr-transfer-wrap-SC2CA 별도 ID. (3) refreshPcrTransferSection 이 SC2CA 도 갱신. (4) refreshPcrTransferFor 가 SC2CA 받으면 SC bin 사용 + 색/라벨 SC 와 동일. (5) liveAlloc 계산: SC bin 사용량 = allocSC + allocSC2CA 합산 (양쪽 모두 SC bin 영향). -->
+<!-- BUILD: 20260507_142500 — DOM ID 충돌 fix: id="alloc-box-H2025" 가 SC 영역과 SC2CA 영역 양쪽에 존재 → document.getElementById 가 항상 첫 번째만 반환. refreshPcrTransferFor 가 항상 wrap.querySelector 로 검색하도록 변경 (각 wrap 안에서만 검색). 통합 모달이면 SC bin 사용량 = SC wrap input + SC2CA wrap input. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -37784,29 +37784,37 @@ function refreshPcrTransferFor(whGroup, l) {
   // SC2CA 도 SC bin 사용
   const binWh = isSC2CA ? 'SC' : whGroup;
   const mainBins = (window.binInventory?.[binWh]?.[k]) || [];
-  // 현재 입력창 실시간 값 읽기 (SC&CA 통합 모달 시 해당 wrap에서만 검색)
+  
+  // 모달 wrap 결정 (통합 모달 vs 단일 모달)
+  const isBothModal = _allocState?.whGroup === 'SC&CA';
+  const scWrapEl  = document.getElementById('alloc-both-sc-wrap');
+  const caWrapEl  = document.getElementById('alloc-both-ca-wrap');
+  const sc2caWrapEl = document.getElementById('alloc-both-sc2ca-wrap');
+  const singleWrapEl = document.getElementById('alloc-bins-wrap');  // 단일 모달
+  
+  // 한 wrap 안에서 input 값 읽기 (DOM ID 충돌 우회 — wrap 안에서만 검색)
+  const readFromWrap = (wrap, binCode) => {
+    if (!wrap) return 0;
+    const binId = binCode.replace(/[^a-zA-Z0-9]/g,'_');
+    const el = wrap.querySelector(`[id="alloc-box-${binId}"]`);
+    return el ? (parseInt(el.value)||0) : 0;
+  };
+  
   const liveAlloc = {};
-  const allocWrap = _allocState?.whGroup === 'SC&CA'
-    ? document.getElementById(`alloc-both-${whGroup.toLowerCase()}-wrap`)
-    : null;
   mainBins.forEach(b => {
-    const binId = b.bin.replace(/[^a-zA-Z0-9]/g,'_');
-    const inputEl = allocWrap
-      ? allocWrap.querySelector(`[id="alloc-box-${binId}"]`)
-      : document.getElementById(`alloc-box-${binId}`);
-    liveAlloc[b.bin] = inputEl ? (parseInt(inputEl.value)||0) : 0;
-    // SC bin 의 진짜 사용량 = SC alloc + SC2CA alloc 합산
-    // refreshPcrTransferFor('SC') 일 때: SC + SC2CA 합산 → SC PCR 가능 박스 정확
-    // refreshPcrTransferFor('SC2CA') 일 때: SC + SC2CA 합산 → SC2CA PCR 가능 박스 정확 (같은 SC bin 이니까)
-    if (usingScBins) {
-      const scQty = (l.allocSC || {})[b.bin] || 0;
-      const sc2caQty = (l.allocSC2CA || {})[b.bin] || 0;
-      // 자기 자신은 이미 input 으로 읽었으니 빼기
-      if (isSC) {
+    if (isBothModal) {
+      // 통합 모달: SC bin 사용량 = SC wrap input + SC2CA wrap input (둘 다 같은 SC bin 영향)
+      if (usingScBins) {
+        const scQty = readFromWrap(scWrapEl, b.bin);
+        const sc2caQty = readFromWrap(sc2caWrapEl, b.bin);
         liveAlloc[b.bin] = scQty + sc2caQty;
-      } else if (isSC2CA) {
-        liveAlloc[b.bin] = scQty + sc2caQty;
+      } else {
+        // CA bin: 자기 wrap 의 input 만 읽음
+        liveAlloc[b.bin] = readFromWrap(caWrapEl, b.bin);
       }
+    } else {
+      // 단일 모달: alloc-bins-wrap 안에서 검색
+      liveAlloc[b.bin] = readFromWrap(singleWrapEl, b.bin);
     }
   });
 
