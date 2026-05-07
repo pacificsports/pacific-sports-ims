@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_101500 — Order Confirm 메일 fix: (1) caDisplayPcs 중복 더하기 제거 — caTotalPcs 가 호출하는 쪽에서 이미 caQty+sc2caQty 합산값이라 또 더하면 576 같은 중복. 그대로 사용. (2) sc2caShipNote 가시성 개선 — 노란 배경 + 진한 텍스트. (3) "All items ship together from CA" 문구 삭제. + Sub-order Pick Ticket fix + PL 그룹화 + 진단 로그. -->
+<!-- BUILD: 20260507_104500 — checkAndMoveToPreparing 에 진단 로그 추가 (sub-order print 후 preparing 으로 안 가는 문제 디버깅용). + Phase 3.4 sub-order workflow 처리. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11571,8 +11571,21 @@ async function loadOrderStatus() {
       ${col==='ready'?(()=>{
         const isSc2caCard = (wh === 'SC2CA');
         if (isSc2caCard) {
-          // SC2CA 카드 — sc2ca_status 기반으로 버튼 다르게
-          const sc2caStatus = o.sc2ca_status || 'preparing';
+          // ── 새 구조 (2026-05): sub-order 는 자기 status 컬럼 사용
+          //    옛날 구조: 메인 order 의 sc2ca_status 컬럼 사용
+          const isNewSubOrderCard = !!o.parent_order_id;
+          const sc2caStatus = isNewSubOrderCard
+            ? (o.status || 'preparing')
+            : (o.sc2ca_status || 'preparing');
+          
+          // 새 구조: status 가 'received' 인 경우는 거래처 출고 가능 (sub-order 가 CA 받았음)
+          if (isNewSubOrderCard && sc2caStatus === 'received') {
+            return `
+              <div style="margin-top:8px;font-size:10px;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:6px 10px;text-align:center;font-weight:600;">✅ CA 도착 완료 — 거래처 출고 가능</div>
+              <button class="btn btn-sm" style="width:100%;margin-top:6px;font-size:10px;background:#f5f3ff;color:#6d28d9;border-color:#c4b5fd;" onclick="event.stopPropagation();printPackingListFromCard('${o.id}','${wh}')">📋 Print Packing List</button>
+              <button class="btn btn-sm btn-green" style="width:100%;margin-top:4px;font-size:10px;" onclick="event.stopPropagation();sc2caMarkShipped('${o.id}')">🚚 Mark as Shipped</button>
+            `;
+          }
           
           if (sc2caStatus === 'ca_received') {
             // CA 도착 완료. CA 가 이미 출고됐으면 [Mark as Shipped] 활성화 (따로 출고 케이스)
@@ -23067,17 +23080,36 @@ async function resubmitCreditHold(orderId, orderNumber, customerName, customerPo
 async function sc2caAddToCaTruck(orderId) {
   // 1. 오더 + SC2CA 라인 가져오기
   const { data: order } = await db.from('orders').select('*').eq('id', orderId).single();
-  const { data: lines } = await db.from('order_lines')
-    .select('*, styles(style_number)')
-    .eq('order_id', orderId)
-    .eq('stage_for_ca_truck', true);
+  if (!order) { showToast('❌ 오더를 찾을 수 없습니다.'); return; }
   
-  if (!order || !lines || lines.length === 0) {
+  // ── 새 구조 (2026-05): sub-order (parent_order_id 있음) 의 모든 라인이 SC pick 라인
+  //    옛날 구조: stage_for_ca_truck=true 인 라인만
+  const isNewSubOrder = !!order.parent_order_id;
+  let lines;
+  if (isNewSubOrder) {
+    // 새 구조: sub-order 의 모든 라인 (자기 라인이 다 SC pick)
+    const { data: ls } = await db.from('order_lines')
+      .select('*, styles(style_number)')
+      .eq('order_id', orderId);
+    lines = ls;
+  } else {
+    // 옛날 구조: stage_for_ca_truck 라인만
+    const { data: ls } = await db.from('order_lines')
+      .select('*, styles(style_number)')
+      .eq('order_id', orderId)
+      .eq('stage_for_ca_truck', true);
+    lines = ls;
+  }
+  
+  if (!lines || lines.length === 0) {
     showToast('❌ SC2CA 라인이 없습니다.');
     return;
   }
   
-  const totalPcs = lines.reduce((s, l) => s + (l.qty_sc2ca || 0), 0);
+  // 새 구조: qty_pieces (또는 qty_local) 사용 / 옛날: qty_sc2ca
+  const totalPcs = lines.reduce((s, l) => s + (
+    isNewSubOrder ? (l.qty_pieces || l.qty_local || 0) : (l.qty_sc2ca || 0)
+  ), 0);
   if (totalPcs <= 0) {
     showToast('❌ SC2CA 수량이 0입니다.');
     return;
@@ -23502,12 +23534,18 @@ async function rollbackStatus(orderId, wh, fromStatus, toStatus) {
   loadOrderStatus();
 }
 async function updateWhStatus(orderId, wh, newStatus) {
-  const { data: o } = await db.from('orders').select('sc_status,ca_status,sc2ca_status,status,is_split_warehouse,wh_code').eq('id', orderId).single();
+  const { data: o } = await db.from('orders').select('sc_status,ca_status,sc2ca_status,status,is_split_warehouse,wh_code,parent_order_id').eq('id', orderId).single();
   const isSplit = o?.is_split_warehouse || o?.wh_code === 'SC&CA';
 
-  // SC2CA 카드 — 진짜 sc2ca_status 만 업데이트 (메인 status 안 건드림)
+  // SC2CA 카드 — 새 구조 vs 옛날 구조 분기
   if (wh === 'SC2CA') {
-    await db.from('orders').update({ sc2ca_status: newStatus }).eq('id', orderId);
+    if (o?.parent_order_id) {
+      // 새 구조: 자기 자신이 sub-order row → status 컬럼 업데이트
+      await db.from('orders').update({ status: newStatus }).eq('id', orderId);
+    } else {
+      // 옛날 구조: 메인 order 의 sc2ca_status 만 업데이트
+      await db.from('orders').update({ sc2ca_status: newStatus }).eq('id', orderId);
+    }
     return;
   }
 
@@ -23543,12 +23581,18 @@ async function checkAndMoveToPreparing() {
   const orderId = _ptOrderId;
   const wh = _ptWh;
   const ticketType = _ptTicketType;
-  if (!orderId || !wh) return;
+  console.log('[checkAndMoveToPreparing] 시작', { orderId, wh, ticketType });
+  if (!orderId || !wh) {
+    console.warn('[checkAndMoveToPreparing] orderId or wh 없음 — 종료');
+    return;
+  }
 
   // 실제로 프린트했을 때 printed_at 기록
   const whPre = wh === 'CA' ? 'ca_' : (wh === 'SC2CA' ? 'sc2ca_' : 'sc_');
   const field = whPre + (ticketType === 'warehouse' ? 'warehouse_printed_at' : 'pcroom_printed_at');
-  await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
+  console.log('[checkAndMoveToPreparing] printed_at 기록 시도:', field);
+  const { error: updErr } = await db.from('orders').update({ [field]: new Date().toISOString() }).eq('id', orderId);
+  if (updErr) console.error('[checkAndMoveToPreparing] printed_at 업데이트 에러:', updErr.message);
 
   // Urgent 알람 ack
   if (ticketType === 'warehouse') await markWhTicketPrinted(orderId);
@@ -23560,51 +23604,76 @@ async function checkAndMoveToPreparing() {
   if (!updated) return;
 
   const { data: allLines } = await db.from('order_lines')
-    .select('qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail, alloc_sc2ca_detail, stage_for_ca_truck')
+    .select('qty_boxes, qty_loose, wh, alloc_detail, alloc_ca_detail, alloc_sc2ca_detail, alloc_local, alloc_from_other_wh, stage_for_ca_truck, qty_pieces, qty_local, qty_from_other_wh')
     .eq('order_id', orderId);
   const lines = allLines || [];
   const isOrderSplit = updated.wh_code === 'SC&CA' || updated.is_split_warehouse;
   const isSc2caCard = (wh === 'SC2CA');
-  const whLines = isSc2caCard
-    ? lines.filter(l => l.stage_for_ca_truck === true)
-    : isOrderSplit
-      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
-      : lines.filter(l => l.stage_for_ca_truck !== true);
+  // ── 새 구조 (2026-05): sub-order (parent_order_id 있음) 의 라인은 모두 SC pick 라인
+  //    별도 fetch — 위 select 에 parent_order_id 없으니 order 에서 가져와야
+  const { data: orderForCheck } = await db.from('orders').select('parent_order_id').eq('id', orderId).single();
+  const isNewSubOrder = !!orderForCheck?.parent_order_id;
+  const whLines = isNewSubOrder
+    ? lines  // 새 구조 sub-order: 모든 라인이 SC pick 라인
+    : isSc2caCard
+      ? lines.filter(l => l.stage_for_ca_truck === true)
+      : isOrderSplit
+        ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
+        : lines.filter(l => l.stage_for_ca_truck !== true);
 
   const needsWh = whLines.some(l => {
     if ((l.qty_boxes || 0) > 0) return true;
     // PCR TRANSFER (warehouse bin → PC Room) 있으면 WH 티켓 필요
-    const allocObj = isSc2caCard
-      ? (l.alloc_sc2ca_detail || {})
-      : wh === 'CA'
-        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const allocObj = isNewSubOrder
+      ? (l.alloc_local || l.alloc_detail || {})
+      : isSc2caCard
+        ? (l.alloc_sc2ca_detail || {})
+        : wh === 'CA'
+          ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+          : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
     return Object.keys(allocObj).some(k => k.includes('TRANSFER|'));
   });
   const needsPcr = whLines.some(l => {
-    const allocObj = isSc2caCard
-      ? (l.alloc_sc2ca_detail || {})
-      : wh === 'CA'
-        ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
-        : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
+    const allocObj = isNewSubOrder
+      ? (l.alloc_local || l.alloc_detail || {})
+      : isSc2caCard
+        ? (l.alloc_sc2ca_detail || {})
+        : wh === 'CA'
+          ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
+          : (l.wh !== 'CA' ? l.alloc_detail : null) || {};
     const hasPcrAlloc = Object.entries(allocObj).some(([k,v]) => k.includes('PCR|PCR') && ((typeof v==='object'?v.pcs:v)||0) > 0);
     return hasPcrAlloc || (l.qty_loose || 0) > 0;
   });
 
+  // 새 구조 sub-order: qty_pieces > 0 라인이 있으면 needsWh = true (full box pick)
+  const needsWhFinal = isNewSubOrder
+    ? (needsWh || whLines.some(l => (l.qty_pieces || 0) > 0))
+    : needsWh;
+
   const whPrinted  = wh === 'CA' ? updated.ca_warehouse_printed_at : (wh === 'SC2CA' ? updated.sc2ca_warehouse_printed_at : updated.sc_warehouse_printed_at);
   const pcrPrinted = wh === 'CA' ? updated.ca_pcroom_printed_at    : (wh === 'SC2CA' ? updated.sc2ca_pcroom_printed_at    : updated.sc_pcroom_printed_at);
-  const whOk  = !needsWh  || !!whPrinted;
+  const whOk  = !needsWhFinal  || !!whPrinted;
   const pcrOk = !needsPcr || !!pcrPrinted;
 
-  const whStatus = wh === 'CA' ? (updated.ca_status || updated.status) : (wh === 'SC2CA' ? (updated.sc2ca_status || updated.status) : (updated.sc_status || updated.status));
+  // 새 구조 sub-order: order.status 사용 (sc2ca_status 컬럼 안 씀)
+  // 옛날 구조: sc_status / ca_status / sc2ca_status 사용
+  const whStatus = isNewSubOrder
+    ? updated.status
+    : wh === 'CA' ? (updated.ca_status || updated.status) : (wh === 'SC2CA' ? (updated.sc2ca_status || updated.status) : (updated.sc_status || updated.status));
+  console.log('[checkAndMoveToPreparing] 판단', { isNewSubOrder, whStatus, needsWh, needsWhFinal, needsPcr, whOk, pcrOk, whLinesCount: whLines.length });
   if (whOk && pcrOk && ['po_entered','open','credit_hold','preparing'].includes(whStatus)) {
+    console.log('[checkAndMoveToPreparing] preparing 으로 이동 시도');
     await updateWhStatus(orderId, wh, 'preparing');
     showToast(`📦 ${wh} 프린트 완료 — Preparing으로 이동!`);
     loadOrderStatus();
   } else if (!whOk) {
+    console.warn('[checkAndMoveToPreparing] !whOk — preparing 안 감');
     showToast('⚠️ WH Pick Ticket도 프린트해야 Preparing으로 이동합니다.');
   } else if (!pcrOk) {
+    console.warn('[checkAndMoveToPreparing] !pcrOk — preparing 안 감');
     showToast('⚠️ Partial Pick Ticket도 프린트해야 Preparing으로 이동합니다.');
+  } else {
+    console.warn('[checkAndMoveToPreparing] whStatus 가 preparing 가능 범위 밖:', whStatus);
   }
 }
 
