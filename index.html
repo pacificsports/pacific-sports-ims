@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260506_140500 — Phase 3 + chime fix: 새 오더 감지에서 sub-order(parent_order_id) 제외 → PO save 시 chime 한 번만 울림 -->
+<!-- BUILD: 20260506_202000 — Sub-order (SC→CA) Pick Ticket fix: parent_order_id 있는 order 는 모든 라인의 alloc_local 사용 (SC bin: H2025, H2128). buildPickTicketHtml 의 sub-order 섹션 라벨 = "🚚 SC → CA TRANSFER" (갈색). + 메인 카드의 "SC→CA 144 도착 대기" 노란 배지 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11305,7 +11305,12 @@ async function loadOrderStatus() {
     if (isSc2ca) {
       pcsLabel = `${displayPcs.toLocaleString()} pcs <span style="font-size:9px;color:#92400e;">(CA 트럭으로 옮긴 후 CA 에서 출고)</span>`;
     } else if (isSplit) {
-      // CA 카드면 CA portion (또는 합산), SC 카드면 SC portion 만
+      // 새 구조: 라인의 qty_from_other_wh / qty_received_from_other_wh 합계로 대기 표시
+      const totalFromOther = ols.reduce((s, l) => s + (l.qty_from_other_wh || 0), 0);
+      const totalReceived = ols.reduce((s, l) => s + (l.qty_received_from_other_wh || 0), 0);
+      const totalPending = totalFromOther - totalReceived;
+      
+      // 옛날 구조 호환
       const myPcs = wh === 'CA' ? caPcs : scPcs;
       const sc2caExtra = (wh === 'CA' && sc2caMergedToCa && sc2caTotalPcs > 0) 
         ? ` <span style="font-size:9px;color:#16a34a;font-weight:700;">+ SC→CA ${sc2caTotalPcs.toLocaleString()} 합쳐짐</span>` 
@@ -11313,7 +11318,11 @@ async function loadOrderStatus() {
       const sc2caWaitingExtra = (wh === 'CA' && !sc2caMergedToCa && sc2caTotalPcs > 0)
         ? ` <span style="font-size:9px;color:#92400e;">(⏳ SC→CA ${sc2caTotalPcs.toLocaleString()} 대기)</span>`
         : '';
-      pcsLabel = `${displayPcs.toLocaleString()} pcs${sc2caExtra}${sc2caWaitingExtra}`;
+      // 새 구조: 메인 카드 (wh='CA' 또는 wh_code='SC&CA') 에서 qty_from_other_wh > received 면 대기 표시
+      const newWaitingExtra = (totalPending > 0 && !sc2caExtra && !sc2caWaitingExtra)
+        ? ` <span style="font-size:10px;color:#92400e;font-weight:700;background:#fef3c7;padding:1px 6px;border-radius:4px;">⏳ SC→CA ${totalPending.toLocaleString()} 도착 대기</span>`
+        : '';
+      pcsLabel = `${displayPcs.toLocaleString()} pcs${sc2caExtra}${sc2caWaitingExtra}${newWaitingExtra}`;
     } else {
       pcsLabel = `${displayPcs.toLocaleString()} pcs`;
     }
@@ -23564,21 +23573,29 @@ async function printPickTicket(orderId, wh, ticketType) {
     : (ticketType === 'pcroom' ? '💻 Partial Pick Ticket' : '🏭 Warehouse Pick Ticket');
   const isSplit = order.wh_code === 'SC&CA' || order.is_split_warehouse;
   const isSc2ca = (wh === 'SC2CA');
+  // 새 구조: sub-order (parent_order_id 있음) — 자기 라인이 SC bin 픽 정보 들고있음
+  const isNewSubOrder = !!order.parent_order_id;
 
   // wh에 해당하는 라인 필터
-  // SC2CA: stage_for_ca_truck=true 라인만
+  // 새 구조 sub-order: 모든 라인 사용 (자기 라인이 다 SC pick 라인)
+  // 옛날 SC2CA: stage_for_ca_truck=true 라인만
   // SC: stage_for_ca_truck!=true && (wh=SC or SC&CA)
   // CA: stage_for_ca_truck!=true && (wh=CA or SC&CA)
-  const filteredLines = isSc2ca
-    ? lines.filter(l => l.stage_for_ca_truck === true)
-    : isSplit
-      ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
-      : lines.filter(l => l.stage_for_ca_truck !== true);
+  const filteredLines = isNewSubOrder
+    ? lines  // sub-order 의 모든 라인
+    : isSc2ca
+      ? lines.filter(l => l.stage_for_ca_truck === true)
+      : isSplit
+        ? lines.filter(l => l.stage_for_ca_truck !== true && (wh === 'CA' ? (l.wh === 'CA' || l.wh === 'SC&CA') : (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh)))
+        : lines.filter(l => l.stage_for_ca_truck !== true);
 
   // alloc_detail에서 직접 bin location + PCR 수량 보강
   const enrichedLines = filteredLines.map(l => {
-    // DB의 alloc_detail 사용 (Order Status 프린트 시 poLines 없으므로)
-    const allocObj = isSc2ca
+    // 새 구조 sub-order: alloc_local 이 SC bin 들 (H2025, H2128)
+    // 옛날 SC2CA: alloc_sc2ca_detail
+    const allocObj = isNewSubOrder
+      ? (l.alloc_local || l.alloc_detail || {})
+      : isSc2ca
       ? (l.alloc_sc2ca_detail || {})
       : wh === 'CA'
         ? (l.alloc_ca_detail || (l.wh === 'CA' ? l.alloc_detail : null) || {})
@@ -31089,8 +31106,18 @@ function buildPickTicketHtml(order, lines, isSplit, whOverride, pcrTransfers, ti
       </div>`;
     }
   } else {
-    const whLabel = whOverride === 'CA' ? 'CA WAREHOUSE' : 'SC WAREHOUSE';
-    const whColor = whOverride === 'CA' ? '#1e3a8a' : '#14532d';
+    let whLabel, whColor;
+    if (whOverride === 'CA') {
+      whLabel = 'CA WAREHOUSE';
+      whColor = '#1e3a8a';
+    } else if (whOverride === 'SC2CA') {
+      // sub-order (SC→CA Transfer): SC bin 픽 → 다음 CA 트럭에 실음
+      whLabel = '🚚 SC → CA TRANSFER (SC bin 에서 픽 → CA 트럭에 실음)';
+      whColor = '#92400e';
+    } else {
+      whLabel = 'SC WAREHOUSE';
+      whColor = '#14532d';
+    }
     body = renderPickTicket(lines, whLabel, whColor);
   }
 
