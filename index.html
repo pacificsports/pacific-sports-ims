@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_031000 — SC→CA 체크박스 단순화 디자인 (한 bin = 한 방향): 모달 그리드 3컬럼 → 2컬럼 (SC + CA). SC main bin 카드에 "→ CA 트럭" 체크박스 추가 — 체크하면 그 bin 의 alloc 이 CA 트럭으로 감. SC2CA 영역 자체 제거 (display:none). DOM ID 충돌 영구 제거 (SC bin 의 input ID 가 한 곳만 존재). 데이터 모델: allocSC + allocSCViaCA (이 bin 이 CA 트럭으로 가는지). 옛날 allocSC2CA 자동 마이그레이션 + applyAllocBoth 가 viaCA 체크 시 allocSC2CA 로 변환해서 저장 (다른 화면 호환). -->
+<!-- BUILD: 20260508_032000 — Defect 리포트 confirm 모달 fix: (1) 옛날 inventory 테이블 + location='PCR' lookup → 새 inventory_bins 시스템 사용. (2) 잘못된 창고 (SC-PCR) 보던 거 → defect 발생한 정확한 창고 (d.wh = SC or CA) 사용. (3) raw qty 사용 (committed 차감 X) — 사용자 의도: "현재 재고" = 50 (10 committed 포함), "차감 후" = 50-10(불량) = 40. d.bin 있으면 그 bin 만, 없으면 SKU 의 창고 전체 합산. + SC→CA 체크박스 단순화 디자인 (BUILD 031000). -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -26438,25 +26438,41 @@ async function openDefectConfirmModal(defectId) {
   // 불량 정보 표시
   const { data: d } = await db.from('defects').select('*').eq('id', defectId).single();
   if (!d) return;
-  // 현재 PCR 재고 조회 — warehouse 테이블에서 직접 code로 조회
+  
+  // 현재 재고 조회 — 새 시스템 (inventory_bins) 사용
+  // d.wh = 'SC' or 'CA' (defect 가 발생한 창고). PCR 이 아닌 main 창고
+  // d.bin 이 있으면 그 bin 의 재고, 없으면 같은 SKU 의 wh 전체 합산
   let currentInvQty = '?';
   try {
-    const pcrWhCode = (d.wh || 'SC') + '-PCR';
-    const { data: whRow } = await db.from('warehouses').select('id').eq('code', pcrWhCode).single();
+    const whCode = d.wh || 'SC';  // SC 또는 CA — defect 발생한 main 창고
+    const { data: whRow } = await db.from('warehouses').select('id').eq('code', whCode).single();
     if (whRow) {
-      const { data: invCheckRows } = await db.from('inventory')
-        .select('qty_on_hand')
-        .eq('warehouse_id', whRow.id)
+      // SKU 찾기: style + color + size 로
+      const { data: skuRows } = await db.from('skus')
+        .select('sku_id')
+        .eq('style_number', d.style_number)
         .eq('color', (d.color||'').toUpperCase())
-        .eq('size', (d.size||'').toUpperCase())
-        .eq('location', 'PCR');
-      if (invCheckRows && invCheckRows.length > 0) {
-        currentInvQty = invCheckRows.reduce((s, r) => s + (r.qty_on_hand || 0), 0);
+        .eq('size', (d.size||'').toUpperCase());
+      const skuIds = (skuRows || []).map(s => s.sku_id);
+      if (skuIds.length > 0) {
+        let q = db.from('inventory_bins')
+          .select('qty')
+          .eq('warehouse_id', whRow.id)
+          .in('sku_id', skuIds);
+        // d.bin 있으면 그 bin 만
+        if (d.bin) q = q.eq('bin_code', d.bin);
+        const { data: binRows } = await q;
+        if (binRows && binRows.length > 0) {
+          // raw qty 합 (committed 안 뺌 — 사용자 의도)
+          currentInvQty = binRows.reduce((s, r) => s + (r.qty || 0), 0);
+        } else {
+          currentInvQty = 0;
+        }
       } else {
         currentInvQty = 0;
       }
     }
-  } catch(e) { currentInvQty = '?'; }
+  } catch(e) { console.error('[defect modal stock]', e); currentInvQty = '?'; }
   const newInvQty = typeof currentInvQty === 'number' ? Math.max(0, currentInvQty - d.total_qty) : '?';
 
   document.getElementById('defect-confirm-info').innerHTML =
