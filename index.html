@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_024000 — SC→CA Next Truck 영역 포맷 통일: 좌측 SC 영역과 동일한 풍부한 표시 (FIFO 라벨, 박스+loose 표시, 입고일, "= X박스" 계산 등). onSc2CaBoxInput 헬퍼 추가 — syncAllocBox 와 동일한 동작. + +ss 룰 정확. + Inventory 화면 마이그레이션. -->
+<!-- BUILD: 20260508_025000 — SC→CA Next Truck 영역 redraw 시 풀세트 유지 fix: syncAllocBox 가 SC 입력 변경 시 SC2CA 영역을 buildAllocHtmlSc2Ca (단순 버전 — SC main bins 만) 으로 다시 그렸는데, 이로 인해 SC→SC-PCR Transfer 섹션이 사라짐. → buildAllocHtml(lineIdx, 'SC2CA') (풀세트 — main + PCR + Transfer 섹션) 사용으로 변경. _allocState 임시 변경 후 복원. + 이전 BUILD: SC→CA 포맷 통일, +ss 룰. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38340,18 +38340,16 @@ function syncAllocBox(inp) {
   // ── 통합 모달 (SC&CA) 일 때 SC 영역 변경되면 SC2CA 영역도 다시 그림 ──
   // (SC2CA 의 realAvail 이 SC 사용량에 따라 변하기 때문)
   if (_allocState?.whGroup === 'SC&CA') {
-    // 이 input 이 SC wrap 안에 있을 때만 SC2CA redraw (CA 변경 시는 영향 없음)
     const inSc = inp.closest('#alloc-both-sc-wrap');
-    const inSc2ca = inp.closest('#alloc-both-sc2ca-wrap');
-    if (inSc || inSc2ca) {
-      // SC2CA 도 SC bin 사용 → 양쪽 영역의 realAvail 모두 재계산 필요
+    if (inSc) {
+      // SC 변경 시: SC2CA 영역 다시 그림 — 풀세트 (main + PCR + Transfer 섹션) 그대로 유지
       const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap');
-      if (sc2caWrap && inSc) {
-        // SC 변경 시: SC2CA 다시 그림
-        sc2caWrap.innerHTML = buildAllocHtmlSc2Ca(_allocState.lineIdx);
+      if (sc2caWrap) {
+        const _savedState = _allocState;
+        _allocState = { lineIdx: _savedState.lineIdx, whGroup: 'SC2CA' };
+        sc2caWrap.innerHTML = buildAllocHtml(_savedState.lineIdx, 'SC2CA');
+        _allocState = _savedState;  // SC&CA 로 복원
       }
-      // SC2CA 변경 시: SC 영역의 PCR transfer 섹션은 이미 refreshPcrTransferSection 으로 갱신됨
-      // 하지만 SC 영역 input 의 max 가 SC2CA 사용량 반영해야 진짜 정확함 (현재는 안 함 — 추후 확장 가능)
     }
   }
 }
