@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_021000 — Phase 4 Step 2: loadScInventory 마이그레이션. inventory_bins 만 보고 scInventory/caInventory/binInventory 캐시 만듦. 옛날 inventory 테이블 의존성 제거. variant 는 skus 테이블에서 가져옴 (Side Seam vs Tubular 정확). 결과 캐시 형식은 그대로 유지 — 옛날 코드 (renderPoLines 등) 100% 호환. + Inventory 화면 (loadInventory) 마이그레이션. + Phase 3 헬퍼. -->
+<!-- BUILD: 20260508_023000 — Phase 4 fix 2: 캐시 키 룰 단순화. SKU ID 끝이 '+ss' 인지로만 판단 (variantCount 같은 복잡 로직 제거). 사용자 SKU 명명 룰: 두 variant 다 있을 때만 +ss 붙임, 한 variant 만 있으면 +ss 없는 SKU 그대로. 1248blacks (Side Seam 만 있는데 +ss 없음) → baseKey "1248|BLACK|S" 로 PO 라인에서 찾음. + Inventory 화면 마이그레이션. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5995,9 +5995,12 @@ async function loadScInventory() {
   console.log('[loadScInventory] true bin-level committed:', trueBinCommitted);
   
   // 5) inventory_bins → 캐시 객체 형식으로 변환
+  // 캐시 키 룰: SKU 끝이 '+ss' 면 |SS 키, 아니면 baseKey
+  // (사용자 SKU 명명 룰: 두 variant 다 있을 때만 +ss 붙임. 한 variant 만 있으면 +ss 없음)
+  
   for (const r of allBinRows) {
     const sku = skuMap[r.sku_id];
-    if (!sku) continue;  // skus 에 없는 row 는 skip (해야 함)
+    if (!sku) continue;
     
     const wh = whMap[r.warehouse_id];
     if (!wh) continue;
@@ -6005,10 +6008,11 @@ async function loadScInventory() {
     const styleNum = sku.style_number || '';
     const colorU = (sku.color || '').toUpperCase();
     const sizeU = (sku.size || '').toUpperCase();
-    const isSS = sku.variant === 'Side Seam';
-    const key = isSS
-      ? `${styleNum}|${colorU}|${sizeU}|SS`
-      : `${styleNum}|${colorU}|${sizeU}`;
+    const baseKey = `${styleNum}|${colorU}|${sizeU}`;
+    
+    // SKU 끝이 +ss 인 경우만 |SS 키, 그 외엔 baseKey
+    const isSsSku = (r.sku_id || '').toLowerCase().endsWith('+ss');
+    const key = isSsSku ? `${baseKey}|SS` : baseKey;
     
     // 이 bin 의 committed: alloc_detail 에서 lookup
     const lookupKey = `${r.bin_code}|${colorU}|${sizeU}`;
@@ -6044,7 +6048,7 @@ async function loadScInventory() {
         bin: r.bin_code,
         qty: binAvail,
         committed: binCommitted,
-        inv_id: r.inventory_id,  // 옛날 inventory id (legacy)
+        inv_id: r.inventory_id,
         bin_id: r.id,
         received_date: r.received_date
       });
