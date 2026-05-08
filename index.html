@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_033000 — Defect 리포트 모달: PCR 재고만 보여줌. 사용자 의도: 불량은 거의 항상 PCR 에서 발견되므로 그 창고의 PCR 재고만 차감. d.wh='SC' → SC-PCR 재고. 라벨에 "{wh}-PCR 현재 재고" 명시. 새 inventory_bins 시스템 사용. + SC→CA 체크박스 단순화 디자인. -->
+<!-- BUILD: 20260508_040000 — confirmDefect 마이그레이션: inventory.update 제거, invApi.adjustStock (RPC) 만 사용. order_lines 에서 sku_id 정확히 매핑. inventory_bins 가 단일 진실. (32곳 중 1곳 완료) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -26517,39 +26517,53 @@ async function confirmDefect() {
   const pin = document.getElementById('defect-confirm-pin')?.value || '';
   const errEl = document.getElementById('defect-confirm-error');
 
-  // PIN이 현재 입력칸에 있고 검증된 emp가 있어야만 진행
+  // 1. PIN 인증
   if (pin.length < 4 || !window._defectConfirmEmp) {
     if (errEl) { errEl.textContent = 'PIN 4자리를 입력하세요.'; errEl.style.color = '#dc2626'; }
     document.getElementById('defect-confirm-pin')?.focus();
     return;
   }
-  // 한 번 더 검증 (PIN이 변경됐을 경우 대비)
   if (_pinEmployees.length === 0) await loadPinEmployees();
   const emp = _pinEmployees.find(e => e.pin === pin && ['manager','supervisor','admin'].includes(e.role));
   if (!emp) { if (errEl) { errEl.textContent = '❌ PIN이 올바르지 않습니다.'; errEl.style.color = '#dc2626'; } window._defectConfirmEmp = null; return; }
 
-  // defect 정보 조회
+  // 2. defect 정보 조회
   const { data: d } = await db.from('defects').select('*').eq('id', _defectConfirmId).single();
   if (!d) { errEl.textContent = '불량 정보를 찾을 수 없습니다.'; return; }
 
-  // PCR 재고에서 불량 수량 차감
+  // 3. 그 오더의 라인에서 sku_id 찾기 (style+color+size 매칭)
+  const { data: lines } = await db.from('order_lines')
+    .select('sku_id, style_number, color, size')
+    .eq('order_id', d.order_id);
+  const matchLine = (lines || []).find(l =>
+    String(l.style_number) === String(d.style_number) &&
+    String(l.color || '').toUpperCase() === String(d.color || '').toUpperCase() &&
+    String(l.size || '').toUpperCase() === String(d.size || '').toUpperCase()
+  );
+  if (!matchLine || !matchLine.sku_id) {
+    if (errEl) { errEl.textContent = '❌ SKU 매핑 실패 — 오더 라인에서 SKU 찾을 수 없음'; errEl.style.color = '#dc2626'; }
+    return;
+  }
+  const skuId = matchLine.sku_id;
+
+  // 4. invApi.adjustStock 으로 PCR 재고 차감 (inventory_bins 만 통과 — 단일 진실)
   const pcrWhCode = d.wh + '-PCR';
-  const pcrWhObj = warehouses.find(w => w.code === pcrWhCode);
-  if (pcrWhObj) {
-    const { data: invRows } = await db.from('inventory')
-      .select('id,qty_on_hand')
-      .eq('warehouse_id', pcrWhObj.id)
-      .eq('color', (d.color||'').toUpperCase())
-      .eq('size', (d.size||'').toUpperCase())
-      .eq('location', 'PCR');
-    if (invRows && invRows.length > 0) {
-      await db.from('inventory').update({
-        qty_on_hand: Math.max(0, (invRows[0].qty_on_hand||0) - d.total_qty)
-      }).eq('id', invRows[0].id);
-    }
+  const cur = await invApi.getStockBins(skuId, pcrWhCode);
+  const pcrRow = (cur || []).find(b => b.bin_code === 'PCR');
+  if (!pcrRow) {
+    if (errEl) { errEl.textContent = `❌ ${pcrWhCode} 의 PCR bin 없음 (sku=${skuId})`; errEl.style.color = '#dc2626'; }
+    return;
+  }
+  const newQty = Math.max(0, (pcrRow.qty || 0) - d.total_qty);
+  // committed_qty 보다 작아지면 RPC 가 거부함 — 그 때는 별도 처리 필요 (back order)
+  // 일단 단순하게: qty 만 차감 시도, 실패하면 사용자한테 알림
+  const r = await invApi.adjustStock(skuId, pcrWhCode, 'PCR', newQty, `defect confirmed (id=${d.id}, by=${emp.name})`);
+  if (!r.success) {
+    if (errEl) { errEl.textContent = `❌ 재고 차감 실패: ${r.error}`; errEl.style.color = '#dc2626'; }
+    return;
   }
 
-  // defect 상태 confirmed로 업데이트
+  // 5. defect 상태 confirmed로 업데이트
   await db.from('defects').update({
     status: 'confirmed',
     confirmed_by: emp.name,
