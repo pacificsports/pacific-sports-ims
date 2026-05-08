@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_020000 — Phase 4 Step 1: Inventory 화면 마이그레이션. loadInventory 가 inventory_bins 를 진실의 원천으로 사용. inventory_bins 전체 로드 → skus + warehouses 매핑 → 옛날 inventory 형식으로 변환 (renderInventoryTable 호환). 같은 SKU + 같은 창고 = 한 group, bins 배열에 bin 별 디테일. 옛날 inventory 테이블 의존성 제거. + Phase 3 헬퍼 함수 + 옵션 A 아키텍처. -->
+<!-- BUILD: 20260508_021000 — Phase 4 Step 2: loadScInventory 마이그레이션. inventory_bins 만 보고 scInventory/caInventory/binInventory 캐시 만듦. 옛날 inventory 테이블 의존성 제거. variant 는 skus 테이블에서 가져옴 (Side Seam vs Tubular 정확). 결과 캐시 형식은 그대로 유지 — 옛날 코드 (renderPoLines 등) 100% 호환. + Inventory 화면 (loadInventory) 마이그레이션. + Phase 3 헬퍼. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -5918,35 +5918,48 @@ async function loadScInventory() {
   
   window.binInventory = { 'SC':{}, 'SC-PCR':{}, 'CA':{}, 'CA-PCR':{} };
 
-  // 1. inventory 테이블 (qty 합산 정보) — qty>0만 로드해서 성능 개선
-  const { data: allInv } = await db.from('inventory')
-    .select('id, qty_on_hand, qty_committed, sku, style_number, color, size, location, received_date, created_at, warehouses(code), styles(style_number,description)')
-    .gt('qty_on_hand', 0);
+  // ═══════════════════════════════════════════════════════════════════
+  // 🆕 NEW SYSTEM: inventory_bins 가 진실의 원천
+  // 옛날 inventory 테이블 안 봄. 모든 데이터는 inventory_bins + skus + warehouses
+  // ═══════════════════════════════════════════════════════════════════
   
-  // 2. inventory_bins 테이블 (각 bin별 상세) — 로드된 inventory 의 bins만
-  const loadedInvIds = (allInv || []).map(r => r.id);
-  let allBins = [];
-  if (loadedInvIds.length > 0) {
-    // 1000개씩 chunk로 IN 쿼리 (Supabase 제한 대비)
-    for (let i = 0; i < loadedInvIds.length; i += 500) {
-      const chunk = loadedInvIds.slice(i, i + 500);
-      const { data: binChunk } = await db.from('inventory_bins')
-        .select('id, inventory_id, bin_code, qty, received_date')
-        .in('inventory_id', chunk);
-      if (binChunk) allBins = allBins.concat(binChunk);
+  // 1) 모든 inventory_bins 로드 (qty>0 만)
+  let allBinRows = [];
+  let _from = 0;
+  while (true) {
+    const { data: chunk, error } = await db.from('inventory_bins')
+      .select('id, sku_id, warehouse_id, bin_code, qty, committed_qty, received_date, inventory_id')
+      .gt('qty', 0)
+      .order('id', {ascending: true})
+      .range(_from, _from + 999);
+    if (error) { console.error('[loadScInventory bins]', error); break; }
+    if (!chunk || chunk.length === 0) break;
+    allBinRows = allBinRows.concat(chunk);
+    if (chunk.length < 1000) break;
+    _from += 1000;
+  }
+  console.log(`[loadScInventory] ${allBinRows.length} inventory_bins rows`);
+  
+  // 2) 사용된 sku_id 의 skus 정보 로드 (style_number, color, size, variant)
+  const skuIds = [...new Set(allBinRows.map(r => r.sku_id).filter(Boolean))];
+  const skuMap = {};
+  if (skuIds.length) {
+    // chunked load
+    for (let i = 0; i < skuIds.length; i += 500) {
+      const chunk = skuIds.slice(i, i + 500);
+      const { data: skuChunk } = await db.from('skus')
+        .select('sku_id, style_number, color, size, variant')
+        .in('sku_id', chunk);
+      (skuChunk || []).forEach(s => { skuMap[s.sku_id] = s; });
     }
   }
   
-  // inv_id → bins[] 맵
-  const binsByInvId = {};
-  (allBins || []).forEach(b => {
-    if (!binsByInvId[b.inventory_id]) binsByInvId[b.inventory_id] = [];
-    binsByInvId[b.inventory_id].push(b);
-  });
-
-  // 3. ★ 진짜 bin별 committed: active order_lines의 alloc_detail/alloc_ca_detail 에서 build
-  //   inventory.qty_committed 는 row 단위라 bin 정보 없음 → 기존 비례분배는 추정일 뿐 (틀림)
-  //   order_lines.alloc_detail = { 'H1130': { pcs: 72 }, ... } 가 진짜 source of truth
+  // 3) warehouse 매핑
+  const whMap = {};
+  (warehouses || []).forEach(w => { whMap[w.id] = w.code; });
+  
+  // 4) committed: active order_lines 의 alloc_detail 기반 (옛날 로직 그대로)
+  //    inventory_bins.committed_qty 도 있지만 옛날 시스템과 호환 위해 alloc_detail 사용
   const ACTIVE_COMMIT_STATUSES = ['po_entered','credit_hold','preparing','ready_to_ship','reserved','reserved_partial','backordered','partial','open'];
   const { data: commitLines } = await db.from('order_lines')
     .select('color, size, alloc_detail, alloc_ca_detail, qty_pieces, qty_filled, warehouses!order_lines_warehouse_id_fkey(code), orders!inner(status, order_number)')
@@ -5957,7 +5970,7 @@ async function loadScInventory() {
   (commitLines || []).forEach(ol => {
     const colorU = (ol.color || '').toUpperCase();
     const sizeU = (ol.size || '').toUpperCase();
-    const lineWh = ol.warehouses?.code; // SC or CA
+    const lineWh = ol.warehouses?.code;
     if (!lineWh || !colorU || !sizeU) return;
     
     const processAlloc = (allocObj, baseWh) => {
@@ -5965,9 +5978,7 @@ async function loadScInventory() {
       Object.entries(allocObj).forEach(([binKey, val]) => {
         const pcs = (typeof val === 'object' && val !== null) ? (val.pcs || 0) : (parseInt(val) || 0);
         if (!pcs || pcs <= 0) return;
-        // PCR transfer 항목 skip (실제 bin 점유 아님)
         if (binKey.includes('TRANSFER|')) return;
-        // PCR bin 패턴: 'SC-PCR|binCode' 또는 'CA-PCR|binCode'
         let targetWh = baseWh;
         let actualBin = binKey;
         if (binKey.startsWith('SC-PCR|')) { targetWh = 'SC-PCR'; actualBin = binKey.slice(7); }
@@ -5977,141 +5988,86 @@ async function loadScInventory() {
         trueBinCommitted[targetWh][k] = (trueBinCommitted[targetWh][k] || 0) + pcs;
       });
     };
-    if (lineWh === 'SC') {
-      processAlloc(ol.alloc_detail, 'SC');
-    } else if (lineWh === 'CA') {
-      // wh=CA 라인은 alloc_ca_detail 우선, 없으면 alloc_detail
-      processAlloc(ol.alloc_ca_detail || ol.alloc_detail, 'CA');
-    }
+    if (lineWh === 'SC') processAlloc(ol.alloc_detail, 'SC');
+    else if (lineWh === 'CA') processAlloc(ol.alloc_ca_detail || ol.alloc_detail, 'CA');
   });
-  // 진단용 전역 노출
   window.__trueBinCommitted = trueBinCommitted;
-  console.log('[loadScInventory] true bin-level committed map:', trueBinCommitted);
+  console.log('[loadScInventory] true bin-level committed:', trueBinCommitted);
   
-  allInv.forEach(row => {
-    if (!row.warehouses) return;
-    const normColor = (row.color||'').replace(/\bHeathered\b/gi,'Htr').replace(/\bHeather\b/gi,'Htr').replace(/\bHthr\b/gi,'Htr').trim();
-    const styleNum = row.styles?.style_number || row.style_number || '';
-    const isSS = (row.sku||'').toLowerCase().endsWith('+ss');
+  // 5) inventory_bins → 캐시 객체 형식으로 변환
+  for (const r of allBinRows) {
+    const sku = skuMap[r.sku_id];
+    if (!sku) continue;  // skus 에 없는 row 는 skip (해야 함)
+    
+    const wh = whMap[r.warehouse_id];
+    if (!wh) continue;
+    
+    const styleNum = sku.style_number || '';
+    const colorU = (sku.color || '').toUpperCase();
+    const sizeU = (sku.size || '').toUpperCase();
+    const isSS = sku.variant === 'Side Seam';
     const key = isSS
-      ? `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}|SS`
-      : `${styleNum}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-    const totalQty = row.qty_on_hand || 0;
-    // ── FIX (2026-05-07): inventory.qty_committed 가 stale 한 케이스가 있어서 (옛날 PO 가 풀리지 않고 남아있음)
-    //    같은 inventory row 의 모든 bin 의 trueBinCommitted (active order 의 alloc_detail 기반) 합산으로 정확하게 계산
-    //    이렇게 하면 메인 라인 표시도 배분 모달과 일관됨
-    const wh = row.warehouses.code;
-    const _binsForRow = binsByInvId[row.id] || [];
-    let _trueCommittedForRow = 0;
-    if (_binsForRow.length > 0) {
-      _binsForRow.forEach(b => {
-        if (!b.bin_code) return;
-        const lookupKey = `${b.bin_code}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-        _trueCommittedForRow += trueBinCommitted[wh]?.[lookupKey] || 0;
-      });
-    } else if (row.location) {
-      // bin 데이터 없으면 location 기준
-      const lookupKey = `${row.location}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-      _trueCommittedForRow = trueBinCommitted[wh]?.[lookupKey] || 0;
-    }
-    // trueBinCommitted 가 0 인데 qty_committed > 0 이면 stale 일 가능성 높음 → trueBinCommitted 우선
-    // 단, 안전하게 qty_committed 가 더 큰 경우는 그래도 trueBinCommitted 사용 (stale 가정)
-    const committed = _trueCommittedForRow;
-    const availQty = Math.max(0, totalQty - committed);
-    const rcvDate = row.received_date || (row.created_at ? row.created_at.slice(0,10) : null);
-    const entry = { qty: availQty, location: row.location || '—' };
-
-    // 창고별 총합 맵
-    if (wh === 'SC') {
-      if (!scInventory[key]) scInventory[key] = entry; else scInventory[key].qty += availQty;
-    } else if (wh === 'SC-PCR') {
-      if (!pcrInventory[key]) pcrInventory[key] = entry; else pcrInventory[key].qty += availQty;
-    } else if (wh === 'CA') {
-      if (!caInventory[key]) caInventory[key] = entry; else caInventory[key].qty += availQty;
-    } else if (wh === 'CA-PCR') {
-      if (!caPcrInventory[key]) caPcrInventory[key] = entry; else caPcrInventory[key].qty += availQty;
-      const colorSizeKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-      if (colorSizeKey !== key) {
-        if (!caPcrInventory[colorSizeKey]) caPcrInventory[colorSizeKey] = {qty: availQty, location: row.location||'—'};
-        else caPcrInventory[colorSizeKey].qty += availQty;
-      }
-    }
-
-    // bin별 상세 — inventory_bins 테이블 우선, 없으면 location fallback
-    if (window.binInventory[wh] !== undefined) {
-      const bins = binsByInvId[row.id] || [];
+      ? `${styleNum}|${colorU}|${sizeU}|SS`
+      : `${styleNum}|${colorU}|${sizeU}`;
+    
+    // 이 bin 의 committed: alloc_detail 에서 lookup
+    const lookupKey = `${r.bin_code}|${colorU}|${sizeU}`;
+    const binCommitted = trueBinCommitted[wh]?.[lookupKey] || 0;
+    const binAvail = Math.max(0, (r.qty || 0) - binCommitted);
+    
+    // 창고별 캐시 (qty 합산)
+    const cacheTarget = {
+      'SC': scInventory,
+      'SC-PCR': pcrInventory,
+      'CA': caInventory,
+      'CA-PCR': caPcrInventory
+    }[wh];
+    
+    if (cacheTarget) {
+      if (!cacheTarget[key]) cacheTarget[key] = { qty: 0, location: r.bin_code };
+      cacheTarget[key].qty += binAvail;
       
-      if (bins.length > 0) {
-        // inventory_bins에 데이터 있음 → 여러 bin 지원!
-        // ★ committed는 bin 단위로 trueBinCommitted 에서 lookup (alloc_detail 기반 진짜 값)
-        bins.forEach(b => {
-          if (!b.bin_code || !b.qty) return;
-          // 이 bin 의 진짜 committed (alloc_detail 합산 결과)
-          const lookupKey = `${b.bin_code}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-          const binCommitted = trueBinCommitted[wh]?.[lookupKey] || 0;
-          const binAvailQty = Math.max(0, b.qty - binCommitted);
-          
-          if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
-          window.binInventory[wh][key].push({ 
-            bin: b.bin_code, 
-            qty: binAvailQty, 
-            committed: binCommitted,
-            inv_id: row.id, 
-            bin_id: b.id,
-            received_date: b.received_date || rcvDate 
-          });
-          
-          // PCR fallback key
-          if (wh === 'SC-PCR' || wh === 'CA-PCR') {
-            const csKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-            if (csKey !== key) {
-              if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
-              window.binInventory[wh][csKey].push({ 
-                bin: b.bin_code, 
-                qty: binAvailQty, 
-                committed: binCommitted,
-                inv_id: row.id, 
-                bin_id: b.id,
-                received_date: b.received_date || rcvDate 
-              });
-            }
-          }
-        });
-      } else if (row.location) {
-        // Fallback: inventory_bins에 없으면 기존 location 사용 (1 bin)
-        // 단일 bin이므로 row 전체 committed = 그 bin 의 committed (안전)
-        // 단 trueBinCommitted 가 있으면 우선
-        const lookupKey = `${row.location}|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-        const trueCommitted = trueBinCommitted[wh]?.[lookupKey];
-        const useCommitted = (trueCommitted !== undefined) ? trueCommitted : committed;
-        const useAvail = Math.max(0, (row.qty_on_hand||0) - useCommitted);
-        if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
-        window.binInventory[wh][key].push({ 
-          bin: row.location, 
-          qty: useAvail, 
-          committed: useCommitted, 
-          inv_id: row.id, 
-          received_date: rcvDate 
-        });
-        
-        if (wh === 'SC-PCR' || wh === 'CA-PCR') {
-          const csKey = `|${normColor.toUpperCase()}|${(row.size||'').toUpperCase()}`;
-          if (csKey !== key) {
-            if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
-            window.binInventory[wh][csKey].push({ 
-              bin: row.location, 
-              qty: useAvail, 
-              committed: useCommitted, 
-              inv_id: row.id, 
-              received_date: rcvDate 
-            });
-          }
+      // CA-PCR 의 fallback key (color|size)
+      if (wh === 'CA-PCR') {
+        const csKey = `|${colorU}|${sizeU}`;
+        if (csKey !== key) {
+          if (!caPcrInventory[csKey]) caPcrInventory[csKey] = { qty: 0, location: r.bin_code };
+          caPcrInventory[csKey].qty += binAvail;
         }
       }
     }
-  });
+    
+    // bin 별 디테일
+    if (window.binInventory[wh] !== undefined) {
+      if (!window.binInventory[wh][key]) window.binInventory[wh][key] = [];
+      window.binInventory[wh][key].push({
+        bin: r.bin_code,
+        qty: binAvail,
+        committed: binCommitted,
+        inv_id: r.inventory_id,  // 옛날 inventory id (legacy)
+        bin_id: r.id,
+        received_date: r.received_date
+      });
+      
+      // PCR 의 fallback key
+      if (wh === 'SC-PCR' || wh === 'CA-PCR') {
+        const csKey = `|${colorU}|${sizeU}`;
+        if (csKey !== key) {
+          if (!window.binInventory[wh][csKey]) window.binInventory[wh][csKey] = [];
+          window.binInventory[wh][csKey].push({
+            bin: r.bin_code,
+            qty: binAvail,
+            committed: binCommitted,
+            inv_id: r.inventory_id,
+            bin_id: r.id,
+            received_date: r.received_date
+          });
+        }
+      }
+    }
+  }
 
-  // FIFO: 입고일 오름차순 정렬, 날짜 같으면 location 이름순
+  // FIFO: 입고일 오름차순 정렬
   Object.keys(window.binInventory).forEach(wh => {
     Object.keys(window.binInventory[wh]).forEach(key => {
       window.binInventory[wh][key].sort((a, b) => {
@@ -6124,6 +6080,8 @@ async function loadScInventory() {
       });
     });
   });
+  
+  console.log(`[loadScInventory] cache built — SC:${Object.keys(scInventory).length}, CA:${Object.keys(caInventory).length}, SC-PCR:${Object.keys(pcrInventory).length}, CA-PCR:${Object.keys(caPcrInventory).length}`);
 }
 
 
