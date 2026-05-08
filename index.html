@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_195000 — 통합 모달 (SC&CA) SC ↔ SC2CA 영역 양방향 실시간 동기화: SC 영역에 H776 240 입력 → SC2CA 영역의 H776 realAvail 자동 0 으로 갱신. (1) buildAllocHtmlSc2Ca: l.allocSC (저장된) + SC wrap 의 input 라이브 값 둘 다 차감. (2) syncAllocBox: SC 입력 변경 시 SC2CA wrap 다시 그림 (innerHTML 재생성). 사용자가 SC 에 240 잡으면 SC2CA 에서 H776 사용 가능 0 으로 즉시 표시. + 박스당 pcs 라인 ppb 사용. + PCR 자동 생성 차단. -->
+<!-- BUILD: 20260508_010000 — Phase 3: 새 inventory_bins 기반 헬퍼 함수 추가 (window.invApi). DB 마이그레이션 완료 후 단계 — getStockBins, getStockTotal, getStockAllWarehouses, getStockBatch, transferStock, commitStock, releaseStock, fulfillStock, adjustStock, validateInventoryConsistency. 모두 RPC 사용 (트랜잭션 안전). 기존 코드 안 건드림 — 다음 세션에서 화면별 마이그레이션. + 옵션 A 아키텍처: inventory_bins 가 진실의 원천 (sku_id, warehouse_id 직접 컬럼, UNIQUE 제약, CHECK 제약). 16,200 PCR row 추가 완료. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7977,6 +7977,312 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
 // ══════════════════════════════════════════════
 // INVENTORY LOGGING SYSTEM
 // ══════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 📦 NEW INVENTORY API (BUILD 20260508 — 옵션 A 아키텍처)
+// ═══════════════════════════════════════════════════════════════════════════
+// 모든 재고는 inventory_bins 테이블이 진실의 원천 (single source of truth)
+// 새 코드는 이 함수들만 사용. 직접 db.from('inventory_bins').update() 금지.
+// 이 함수들은 DB 의 RPC + 제약 제어를 사용해 트랜잭션 안전성 보장.
+// 옛날 캐시 (scInventory, caInventory, binInventory) 는 단계별 마이그레이션 후 제거.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 한 SKU 의 한 창고의 모든 bin 조회 (FIFO 정렬)
+ * @param {string} skuId - 'lib1248blacks' 형식
+ * @param {string} whCode - 'SC', 'SC-PCR', 'CA', 'CA-PCR'
+ * @returns {Promise<Array<{bin_code, qty, committed_qty, available, received_date}>>}
+ */
+async function getStockBins(skuId, whCode) {
+  const wh = warehouses?.find(w => w.code === whCode);
+  if (!wh) return [];
+  const { data, error } = await db.from('inventory_bins')
+    .select('id, bin_code, qty, committed_qty, received_date, pcs_per_box')
+    .eq('sku_id', skuId)
+    .eq('warehouse_id', wh.id)
+    .order('received_date', { ascending: true, nullsFirst: false })
+    .order('bin_code');
+  if (error) { console.error('[getStockBins]', error); return []; }
+  return (data || []).map(r => ({
+    ...r,
+    available: Math.max(0, (r.qty || 0) - (r.committed_qty || 0))
+  }));
+}
+
+/**
+ * 한 SKU 의 한 창고의 합계
+ * @returns {Promise<{qty, committed, available}>}
+ */
+async function getStockTotal(skuId, whCode) {
+  const bins = await getStockBins(skuId, whCode);
+  return bins.reduce((acc, b) => ({
+    qty: acc.qty + (b.qty || 0),
+    committed: acc.committed + (b.committed_qty || 0),
+    available: acc.available + (b.available || 0)
+  }), { qty: 0, committed: 0, available: 0 });
+}
+
+/**
+ * 한 SKU 의 모든 창고 (SC, SC-PCR, CA, CA-PCR) 한 번에
+ * @returns {Promise<{SC, SC-PCR, CA, CA-PCR}>} 각각 {qty, committed, available, bins:[]}
+ */
+async function getStockAllWarehouses(skuId) {
+  const { data, error } = await db.from('inventory_bins')
+    .select('bin_code, qty, committed_qty, received_date, warehouse_id, warehouses(code)')
+    .eq('sku_id', skuId);
+  if (error) { console.error('[getStockAllWarehouses]', error); return {}; }
+  
+  const result = {
+    'SC': { qty: 0, committed: 0, available: 0, bins: [] },
+    'SC-PCR': { qty: 0, committed: 0, available: 0, bins: [] },
+    'CA': { qty: 0, committed: 0, available: 0, bins: [] },
+    'CA-PCR': { qty: 0, committed: 0, available: 0, bins: [] }
+  };
+  for (const r of data || []) {
+    const code = r.warehouses?.code;
+    if (!result[code]) continue;
+    const available = Math.max(0, (r.qty || 0) - (r.committed_qty || 0));
+    result[code].qty += r.qty || 0;
+    result[code].committed += r.committed_qty || 0;
+    result[code].available += available;
+    result[code].bins.push({
+      bin_code: r.bin_code,
+      qty: r.qty || 0,
+      committed_qty: r.committed_qty || 0,
+      available,
+      received_date: r.received_date
+    });
+  }
+  // FIFO 정렬
+  Object.values(result).forEach(w => {
+    w.bins.sort((a, b) => {
+      if (a.received_date !== b.received_date) {
+        return (a.received_date || '9999') < (b.received_date || '9999') ? -1 : 1;
+      }
+      return a.bin_code.localeCompare(b.bin_code);
+    });
+  });
+  return result;
+}
+
+/**
+ * 여러 SKU 의 한 창고 합계 한 번에 (PO 라인 그리드용)
+ * @param {string[]} skuIds
+ * @param {string} whCode
+ * @returns {Promise<Map<skuId, {qty, committed, available, bins}>>}
+ */
+async function getStockBatch(skuIds, whCode) {
+  const wh = warehouses?.find(w => w.code === whCode);
+  const result = new Map();
+  if (!wh || !skuIds?.length) return result;
+  
+  const { data, error } = await db.from('inventory_bins')
+    .select('sku_id, bin_code, qty, committed_qty, received_date')
+    .eq('warehouse_id', wh.id)
+    .in('sku_id', skuIds);
+  if (error) { console.error('[getStockBatch]', error); return result; }
+  
+  for (const r of data || []) {
+    if (!result.has(r.sku_id)) {
+      result.set(r.sku_id, { qty: 0, committed: 0, available: 0, bins: [] });
+    }
+    const slot = result.get(r.sku_id);
+    const available = Math.max(0, (r.qty || 0) - (r.committed_qty || 0));
+    slot.qty += r.qty || 0;
+    slot.committed += r.committed_qty || 0;
+    slot.available += available;
+    slot.bins.push({
+      bin_code: r.bin_code,
+      qty: r.qty || 0,
+      committed_qty: r.committed_qty || 0,
+      available,
+      received_date: r.received_date
+    });
+  }
+  return result;
+}
+
+/**
+ * 재고 이동 (트랜잭션 안전 — DB RPC 사용)
+ * src bin 차감 + dst bin 증가가 한 트랜잭션
+ * @returns {Promise<{success, error?}>}
+ */
+async function transferStock(skuId, fromWhCode, fromBin, toWhCode, toBin, qty, opts = {}) {
+  const fromWh = warehouses?.find(w => w.code === fromWhCode);
+  const toWh = warehouses?.find(w => w.code === toWhCode);
+  if (!fromWh || !toWh) return { success: false, error: 'Warehouse not found' };
+  
+  const { data, error } = await db.rpc('transfer_stock', {
+    p_sku_id: skuId,
+    p_from_wh: fromWh.id, p_from_bin: fromBin,
+    p_to_wh: toWh.id, p_to_bin: toBin,
+    p_qty: qty
+  });
+  
+  if (error) {
+    console.error('[transferStock]', error);
+    if (!opts.silent && typeof showToast === 'function') {
+      showToast('❌ 재고 이동 실패: ' + (error.message || error.hint || 'unknown'));
+    }
+    return { success: false, error: error.message || error.hint };
+  }
+  return { success: true, data };
+}
+
+/**
+ * 주문 잡기 — committed_qty += qty
+ */
+async function commitStock(skuId, whCode, binCode, qty, opts = {}) {
+  const wh = warehouses?.find(w => w.code === whCode);
+  if (!wh) return { success: false, error: 'Warehouse not found' };
+  const { error } = await db.rpc('commit_stock', {
+    p_sku_id: skuId, p_wh: wh.id, p_bin: binCode, p_qty: qty
+  });
+  if (error) {
+    console.error('[commitStock]', error);
+    if (!opts.silent && typeof showToast === 'function') {
+      showToast('❌ 주문 잡기 실패: ' + (error.message || error.hint));
+    }
+    return { success: false, error: error.message || error.hint };
+  }
+  return { success: true };
+}
+
+/**
+ * 주문 풀기 — committed_qty -= qty (취소 등)
+ */
+async function releaseStock(skuId, whCode, binCode, qty, opts = {}) {
+  const wh = warehouses?.find(w => w.code === whCode);
+  if (!wh) return { success: false, error: 'Warehouse not found' };
+  const { error } = await db.rpc('release_stock', {
+    p_sku_id: skuId, p_wh: wh.id, p_bin: binCode, p_qty: qty
+  });
+  if (error) {
+    console.error('[releaseStock]', error);
+    return { success: false, error: error.message || error.hint };
+  }
+  return { success: true };
+}
+
+/**
+ * 출고 확정 — qty + committed_qty 둘 다 -= qty
+ */
+async function fulfillStock(skuId, whCode, binCode, qty, opts = {}) {
+  const wh = warehouses?.find(w => w.code === whCode);
+  if (!wh) return { success: false, error: 'Warehouse not found' };
+  const { error } = await db.rpc('fulfill_stock', {
+    p_sku_id: skuId, p_wh: wh.id, p_bin: binCode, p_qty: qty
+  });
+  if (error) {
+    console.error('[fulfillStock]', error);
+    if (!opts.silent && typeof showToast === 'function') {
+      showToast('❌ 출고 처리 실패: ' + (error.message || error.hint));
+    }
+    return { success: false, error: error.message || error.hint };
+  }
+  return { success: true };
+}
+
+/**
+ * 직접 조정 (재고조사) — qty 를 newQty 로 설정
+ */
+async function adjustStock(skuId, whCode, binCode, newQty, reason, opts = {}) {
+  const wh = warehouses?.find(w => w.code === whCode);
+  if (!wh) return { success: false, error: 'Warehouse not found' };
+  const { error } = await db.rpc('adjust_stock', {
+    p_sku_id: skuId, p_wh: wh.id, p_bin: binCode, p_new_qty: newQty
+  });
+  if (error) {
+    console.error('[adjustStock]', error);
+    if (!opts.silent && typeof showToast === 'function') {
+      showToast('❌ 재고 조정 실패: ' + (error.message || error.hint));
+    }
+    return { success: false, error: error.message || error.hint };
+  }
+  // 로그 기록 (옵션)
+  if (reason) {
+    try {
+      await db.from('inventory_logs').insert({
+        change_type: 'adjustment',
+        changed_by: _currentEmployee?.name || 'system',
+        notes: `${skuId} @ ${whCode}/${binCode} → ${newQty} (${reason})`
+      });
+    } catch(e) { /* 로그 실패 무시 */ }
+  }
+  return { success: true };
+}
+
+/**
+ * 일관성 검증 — 깨진 데이터 찾기
+ * @returns {Promise<{valid, issues:[], stats}>}
+ */
+async function validateInventoryConsistency() {
+  const issues = [];
+  const stats = {};
+  
+  // 1) committed_qty > qty 인 row
+  const { data: badCommit } = await db.from('inventory_bins')
+    .select('id, sku_id, bin_code, qty, committed_qty')
+    .gt('committed_qty', 'qty');  // 이건 사실 CHECK 제약으로 막혀야 하는데 검증
+  if (badCommit?.length) {
+    issues.push(`${badCommit.length} row 에서 committed > qty (CHECK 제약 우회됨!)`);
+  }
+  
+  // 2) qty 마이너스
+  const { count: negQty } = await db.from('inventory_bins')
+    .select('*', { count: 'exact', head: true }).lt('qty', 0);
+  if (negQty > 0) issues.push(`${negQty} row 에 qty < 0`);
+  stats.negative_qty = negQty || 0;
+  
+  // 3) sku_id 가 skus 테이블에 없는 row (orphan)
+  const { data: allSkus } = await db.from('skus').select('sku_id');
+  const skuSet = new Set(allSkus?.map(s => s.sku_id));
+  const { data: allBinSkus } = await db.from('inventory_bins').select('sku_id');
+  const orphans = (allBinSkus || []).filter(r => !skuSet.has(r.sku_id));
+  if (orphans.length) issues.push(`${orphans.length} row 의 sku_id 가 skus 에 없음`);
+  stats.orphan_skus = orphans.length;
+  
+  // 4) 활성 SKU 가 SC-PCR / CA-PCR row 누락
+  const { data: activeSkus } = await db.from('skus').select('sku_id').eq('is_active', true);
+  const { data: scPcrWh } = await db.from('warehouses').select('id').eq('code', 'SC-PCR').maybeSingle();
+  const { data: caPcrWh } = await db.from('warehouses').select('id').eq('code', 'CA-PCR').maybeSingle();
+  if (scPcrWh && caPcrWh) {
+    const { data: scPcrRows } = await db.from('inventory_bins').select('sku_id').eq('warehouse_id', scPcrWh.id).eq('bin_code', 'PCR');
+    const { data: caPcrRows } = await db.from('inventory_bins').select('sku_id').eq('warehouse_id', caPcrWh.id).eq('bin_code', 'PCR');
+    const scPcrSet = new Set(scPcrRows?.map(r => r.sku_id));
+    const caPcrSet = new Set(caPcrRows?.map(r => r.sku_id));
+    const missingSc = (activeSkus || []).filter(s => !scPcrSet.has(s.sku_id));
+    const missingCa = (activeSkus || []).filter(s => !caPcrSet.has(s.sku_id));
+    if (missingSc.length) issues.push(`${missingSc.length} 활성 SKU 가 SC-PCR row 누락`);
+    if (missingCa.length) issues.push(`${missingCa.length} 활성 SKU 가 CA-PCR row 누락`);
+    stats.missing_sc_pcr = missingSc.length;
+    stats.missing_ca_pcr = missingCa.length;
+  }
+  
+  // 5) 통계
+  const { count: totalRows } = await db.from('inventory_bins').select('*', { count: 'exact', head: true });
+  const { count: nonZero } = await db.from('inventory_bins').select('*', { count: 'exact', head: true }).gt('qty', 0);
+  stats.total_rows = totalRows;
+  stats.non_zero_rows = nonZero;
+  
+  return {
+    valid: issues.length === 0,
+    issues,
+    stats
+  };
+}
+
+// 디버깅 편의: window 에 expose
+window.invApi = {
+  getStockBins, getStockTotal, getStockAllWarehouses, getStockBatch,
+  transferStock, commitStock, releaseStock, fulfillStock, adjustStock,
+  validateInventoryConsistency
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// END NEW INVENTORY API
+// ═══════════════════════════════════════════════════════════════════════════
+
 
 /**
  * inventory.insert 헬퍼 — sku_id 자동 매핑 + 검증
