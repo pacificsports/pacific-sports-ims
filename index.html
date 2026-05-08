@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_182000 — quickAddLine: 잘못된 SKU 입력 시 alert popup 대신 inline 에러 메시지 표시. "+ Add Line", "📦 Allocate Bins" 옆에 빨간색 박스로 "⚠️ SKU 'xxx' 를 찾을 수 없습니다 — SKU 마스터에 등록되어 있는지 확인하세요" 표시. 5초 후 자동 사라짐. 성공 시 에러 메시지 자동 숨김. + insertInventoryWithSku 헬퍼 + 13곳 inventory.insert fix. -->
+<!-- BUILD: 20260507_185000 — PCR 자동 생성 차단 + PCR Transfer 로직 개선: (1) insertInventoryWithSku 헬퍼에 PCR 창고 보호 — SC-PCR/CA-PCR 에 새 row 만들려고 하면 거부 (allowPcrCreation=true 옵션 시만 허용). (2) PCR Transfer 시 binInventory 에 PCR row 없으면 confirm 띄우는 대신 DB 에서 직접 lookup 후 binInventory 에 추가. 이제 모든 SKU 가 PCR row 가지고 있으니 confirm 안 뜸. SKU 마스터 누락 시만 toast 로 안내. + 1단계 DB 정리 완료 (SC-PCR/CA-PCR 각 8100 row, 불완전 0). -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7990,6 +7990,26 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
  * @returns {Promise<{data, error}>}
  */
 async function insertInventoryWithSku(row, options = {}) {
+  // ── PCR 창고 보호: PCR row 는 SKU 마스터 생성 시 1번만 만들고 그 후엔 update 만 ──
+  // SC-PCR / CA-PCR 에 새 row 만들려고 하면 거부 (자동 생성 막기)
+  // 단, options.allowPcrCreation=true 일 때만 허용 (SKU 마스터 import 등 의도적 케이스)
+  if (row.warehouse_id && !options.allowPcrCreation) {
+    try {
+      const { data: whCheck } = await db.from('warehouses')
+        .select('code').eq('id', row.warehouse_id).maybeSingle();
+      if (whCheck?.code && whCheck.code.endsWith('-PCR')) {
+        const errMsg = `PCR 창고 (${whCheck.code}) 에는 새 row 자동 생성 안 됨 — 기존 row 의 qty 만 update 가능합니다`;
+        console.error(`[insertInventoryWithSku] ${errMsg}`, { sku: row.sku_id || row.style_number+'/'+row.color+'/'+row.size });
+        if (!options.silent && typeof showToast === 'function') {
+          showToast(`⚠️ ${errMsg}`);
+        }
+        return { error: { message: errMsg, code: 'PCR_INSERT_BLOCKED' }, data: null };
+      }
+    } catch(e) {
+      console.warn('[insertInventoryWithSku] PCR 창고 체크 실패:', e.message);
+    }
+  }
+  
   // sku_id 이미 있으면 그대로 insert
   if (row.sku_id) {
     return await db.from('inventory').insert(row).select();
@@ -38197,41 +38217,39 @@ async function execPcrTransfer(whGroup, ppb) {
   if (!window.binInventory[pcrWh][activePcrKey]) window.binInventory[pcrWh][activePcrKey] = [];
   let pcrB = window.binInventory[pcrWh][activePcrKey].find(b => b.bin === 'PCR');
   if (!pcrB) {
-    // PCR row가 없으면 확인 후 생성
-    const confirmCreate = confirm(
-      `PC Room에 "${l.styleNum} / ${l.color} / ${l.size}" 재고가 없습니다.\n\n` +
-      `Transfer 후 새로 생성하시겠습니까?\n` +
-      `(DB에 qty=0으로 생성 후 Transfer 수량이 추가됩니다)`
-    );
-    if (!confirmCreate) return;
-    // DB에 새 PCR row 생성
+    // binInventory 에 없으면 DB 에서 직접 lookup (모든 SKU 에 PCR row 가 있어야 정상)
     try {
       const pcrWhObj = warehouses.find(w => w.code === pcrWh);
-      const styleObj = styles ? styles.find(s => s.style_number === l.styleNum) : null;
       if (!pcrWhObj) { showToast('❌ PCR 창고를 찾을 수 없습니다.'); return; }
-      const today = new Date();
-      const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-      const { data: insertResult, error } = await insertInventoryWithSku({
-        warehouse_id: pcrWhObj.id,
-        style_id: styleObj?.id || null,
-        style_number: l.styleNum,
-        color: (l.color||'').toUpperCase(),
-        size: (l.size||'').toUpperCase(),
-        location: 'PCR',
-        qty_on_hand: 0,
-        qty_committed: 0,
-        received_date: todayStr
+      
+      // sku_id 또는 style+color+size 로 PCR row 검색
+      let q = db.from('inventory')
+        .select('id, sku_id, qty_on_hand, qty_committed, location, received_date')
+        .eq('warehouse_id', pcrWhObj.id)
+        .eq('color', (l.color||'').toUpperCase())
+        .eq('size', (l.size||'').toUpperCase());
+      if (l.styleNum) q = q.eq('style_number', l.styleNum);
+      const { data: existingPcr } = await q.maybeSingle();
+      
+      if (!existingPcr) {
+        // 진짜로 PCR row 없으면 — SKU 마스터 누락 케이스
+        showToast(`⚠️ PCR 에 "${l.styleNum} / ${l.color} / ${l.size}" row 가 없습니다 — SKU 마스터 확인 필요`);
+        console.error('[PCR Transfer] PCR row missing:', l.styleNum, l.color, l.size);
+        return;
+      }
+      
+      // binInventory 에 추가하여 다음번엔 바로 찾을 수 있게
+      window.binInventory[pcrWh][activePcrKey].push({
+        bin: 'PCR',
+        qty: existingPcr.qty_on_hand || 0,
+        committed: existingPcr.qty_committed || 0,
+        inv_id: existingPcr.id,
+        received_date: existingPcr.received_date
       });
-      if (error) throw error;
-      const newRow = insertResult?.[0];
-      if (!newRow) throw new Error('insert 결과 없음');
-      // UI binInventory에 추가 (activePcrKey에)
-      window.binInventory[pcrWh][activePcrKey].push({ bin: 'PCR', qty: 0, committed: 0, inv_id: newRow.id, received_date: todayStr });
       pcrB = window.binInventory[pcrWh][activePcrKey].find(b => b.bin === 'PCR');
-      showToast('✅ PCR 재고 row 생성됨');
     } catch(e) {
-      console.error('[PCR create error]', e);
-      showToast('❌ PCR 재고 생성 실패: ' + e.message);
+      console.error('[PCR lookup error]', e);
+      showToast('❌ PCR 재고 조회 실패: ' + e.message);
       return;
     }
   }
