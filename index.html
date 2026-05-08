@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_023000 — Phase 4 fix 2: 캐시 키 룰 단순화. SKU ID 끝이 '+ss' 인지로만 판단 (variantCount 같은 복잡 로직 제거). 사용자 SKU 명명 룰: 두 variant 다 있을 때만 +ss 붙임, 한 variant 만 있으면 +ss 없는 SKU 그대로. 1248blacks (Side Seam 만 있는데 +ss 없음) → baseKey "1248|BLACK|S" 로 PO 라인에서 찾음. + Inventory 화면 마이그레이션. -->
+<!-- BUILD: 20260508_024000 — SC→CA Next Truck 영역 포맷 통일: 좌측 SC 영역과 동일한 풍부한 표시 (FIFO 라벨, 박스+loose 표시, 입고일, "= X박스" 계산 등). onSc2CaBoxInput 헬퍼 추가 — syncAllocBox 와 동일한 동작. + +ss 룰 정확. + Inventory 화면 마이그레이션. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38103,9 +38103,7 @@ function buildAllocHtmlSc2Ca(lineIdx) {
   
   const mainBins = (window.binInventory?.['SC']?.[k]) || [];
   const prevAlloc = l.allocSC2CA || {};
-  // 같은 라인의 SC alloc 도 본다 (이미 잡혔으면 빼야 함)
-  // 1) l.allocSC (적용 후 저장된 값) 우선
-  // 2) SC wrap 의 input 라이브 값 (모달 안에서 실시간)
+  // 같은 라인의 SC alloc 도 본다 — 라이브 input 값 우선, 없으면 저장된 allocSC
   const sc1Alloc = l.allocSC || {};
   const liveSc1 = {};
   document.querySelectorAll('#alloc-both-sc-wrap input[data-bin]').forEach(inp => {
@@ -38116,47 +38114,104 @@ function buildAllocHtmlSc2Ca(lineIdx) {
   // 재고 0 인 bin 제외
   const filteredMainBins = mainBins.filter(b => (b.qty + (b.committed||0)) > 0);
   
-  let html = '';
+  // 좌측 SC 영역과 동일한 색상 변수
+  const mainColor = '#92400e';   // SC2CA 노란/주황색 계열
+  const mainBg = '#fff7ed';
+  const mainBorder = '#fdba74';
   
-  html += `<div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🟡 SC 재고 → CA Next Truck 으로</div>`;
+  let html = '';
+  html += `<div style="font-size:11px;font-weight:700;color:${mainColor};text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🟡 SC 재고 → CA Next Truck 으로</div>`;
   
   if (filteredMainBins.length === 0) {
-    html += `<div style="padding:12px;border:1px dashed #fdba74;border-radius:8px;margin-bottom:8px;background:#fff7ed;opacity:0.6;font-size:12px;color:var(--text3);text-align:center;">SC 재고 없음</div>`;
+    html += `<div style="padding:12px;border:1px dashed ${mainBorder};border-radius:8px;margin-bottom:8px;background:${mainBg};opacity:0.6;font-size:12px;color:var(--text3);text-align:center;">SC 재고 없음</div>`;
   } else {
-    filteredMainBins.forEach(b => {
-      // 라이브 input 값 우선, 없으면 저장된 allocSC
+    filteredMainBins.forEach((b, i) => {
+      // SC alloc 으로 사용된 양 차감 → 실제 사용 가능
       const usedBySc1 = (liveSc1[b.bin] !== undefined ? liveSc1[b.bin] : (sc1Alloc[b.bin] || 0));
-      const realAvail = Math.max(0, (b.qty || 0) - usedBySc1);  // 진짜 사용 가능한 양
-      const cur = prevAlloc[b.bin] || 0;
-      const fifoLabel = b.is_fifo ? `<span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px;">FIFO ↑</span>` : '';
-      const usedNote = usedBySc1 > 0 ? `<span style="font-size:10px;color:#dc2626;font-weight:600;">⚠️ 이 라인 SC: ${usedBySc1}</span>` : '';
+      const realAvail = Math.max(0, (b.qty || 0) - usedBySc1);
+      const prevVal = prevAlloc[b.bin] || 0;
+      const maxBoxes = Math.floor(realAvail / ppb);
+      const loosePcs = realAvail % ppb;
       
-      html += `
-        <div style="border:1px solid #fdba74;background:#fff7ed;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-            <div style="flex:1;min-width:0;">
-              <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:13px;color:#92400e;">${b.bin}${fifoLabel}</div>
-              <div style="font-size:10px;color:var(--text2);margin-top:3px;">
-                재고 <b>${(b.qty||0).toLocaleString()}</b> pcs · 진짜 사용 가능 <b style="color:#92400e;">${realAvail}</b> pcs
-                ${usedNote}
-                ${b.received_date ? `· <span style="color:var(--text3);">${b.received_date}</span>` : ''}
-              </div>
+      // 입고일 표시
+      let ageTxt = '입고일 미기입', ageCls = '';
+      if (b.received_date) {
+        const days = Math.floor((new Date() - new Date(b.received_date)) / (1000*60*60*24));
+        ageTxt = days === 0 ? '오늘 입고' : `${days}일 전 입고`;
+        if (days >= 30) ageCls = 'color:#dc2626;font-weight:600;';
+      }
+      
+      // SC 사용 경고
+      const usedNote = usedBySc1 > 0 
+        ? `<span style="color:#dc2626;font-weight:600;">⚠️ 이 라인 SC: ${usedBySc1}</span>` 
+        : '';
+      
+      html += `<div style="padding:10px 12px;border:1px solid ${mainBorder};border-radius:8px;margin-bottom:8px;background:${mainBg};">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <div style="flex:1;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-family:'IBM Plex Mono',monospace;font-weight:700;font-size:14px;">${b.bin}</span>
+              ${i===0?`<span style="background:${mainColor};color:#fff;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;">FIFO ↑</span>`:''}
             </div>
+            <div style="font-size:10px;color:var(--text3);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap;">
+              <span>재고 <b style="color:${mainColor}">${(b.qty||0).toLocaleString()}</b> pcs</span>
+              <span style="font-family:'IBM Plex Mono',monospace;">${maxBoxes}박스 + ${loosePcs} loose</span>
+              <span style="${ageCls}">${ageTxt}</span>
+              ${usedNote}
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
             <div style="display:flex;align-items:center;gap:6px;">
-              <span style="font-size:10px;color:#92400e;">pcs:</span>
-              <input type="number" min="0" max="${realAvail}" value="${cur}" 
-                data-bin="${b.bin}" data-type="pcs" data-ppb="${ppb}"
-                onchange="onSc2CaBinChange(${lineIdx}, '${b.bin.replace(/'/g, "\\'")}', this.value, ${realAvail})" 
-                style="width:80px;height:26px;border:1px solid #fdba74;border-radius:4px;padding:0 6px;font-size:12px;text-align:right;font-weight:700;color:#92400e;">
-              <span style="font-size:10px;color:var(--text3);">/${realAvail}</span>
+              <label style="font-size:10px;color:var(--text3);white-space:nowrap;">pcs:</label>
+              <input type="number" min="0" max="${realAvail}" value="${prevVal}"
+                id="alloc-sc2ca-box-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}"
+                data-bin="${b.bin}" data-ppb="${ppb}" data-maxqty="${realAvail}" data-type="box"
+                style="width:72px;height:30px;border:1px solid ${mainBorder};border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;"
+                oninput="onSc2CaBoxInput(this, ${lineIdx}, '${b.bin.replace(/'/g, "\\'")}')"/>
+              <span style="font-size:10px;color:var(--text3);">/ ${realAvail}</span>
+            </div>
+            <div style="font-size:10px;color:var(--text3);text-align:right;" id="alloc-sc2ca-pcs-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}">
+              = ${Math.floor(prevVal/ppb)}박스${prevVal%ppb > 0 ? ' + '+prevVal%ppb+' loose' : ''}
             </div>
           </div>
         </div>
-      `;
+      </div>`;
     });
   }
   
   return html;
+}
+
+// SC2CA box input 변경 — 좌측 SC 의 syncAllocBox 와 동일한 동작
+function onSc2CaBoxInput(inp, lineIdx, bin) {
+  const maxQty = parseInt(inp.dataset.maxqty) || Infinity;
+  let pcs = parseInt(inp.value)||0;
+  if (pcs > maxQty) {
+    pcs = maxQty;
+    inp.value = maxQty;
+    inp.style.borderColor = '#dc2626';
+    setTimeout(() => inp.style.borderColor = '#fdba74', 1000);
+  }
+  if (pcs < 0) pcs = 0;
+  
+  const ppb = parseInt(inp.dataset.ppb)||72;
+  const boxes = Math.floor(pcs / ppb);
+  const loose = pcs % ppb;
+  const binId = bin.replace(/[^a-zA-Z0-9]/g,'_');
+  const pcsEl = document.getElementById(`alloc-sc2ca-pcs-${binId}`);
+  if (pcsEl) pcsEl.textContent = `= ${boxes}박스${loose > 0 ? ` + ${loose} loose` : ''}`;
+  
+  // alloc 저장
+  if (!poLines[lineIdx].allocSC2CA) poLines[lineIdx].allocSC2CA = {};
+  if (pcs === 0) {
+    delete poLines[lineIdx].allocSC2CA[bin];
+  } else {
+    poLines[lineIdx].allocSC2CA[bin] = pcs;
+  }
+  
+  // 합계 갱신
+  if (typeof updateAllocSum === 'function') updateAllocSum();
+  if (typeof refreshPcrTransferSection === 'function') refreshPcrTransferSection();
 }
 
 // SC2CA bin 입력 변경
