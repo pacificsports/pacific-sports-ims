@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_025000 — SC→CA Next Truck 영역 redraw 시 풀세트 유지 fix: syncAllocBox 가 SC 입력 변경 시 SC2CA 영역을 buildAllocHtmlSc2Ca (단순 버전 — SC main bins 만) 으로 다시 그렸는데, 이로 인해 SC→SC-PCR Transfer 섹션이 사라짐. → buildAllocHtml(lineIdx, 'SC2CA') (풀세트 — main + PCR + Transfer 섹션) 사용으로 변경. _allocState 임시 변경 후 복원. + 이전 BUILD: SC→CA 포맷 통일, +ss 룰. -->
+<!-- BUILD: 20260508_031000 — SC→CA 체크박스 단순화 디자인 (한 bin = 한 방향): 모달 그리드 3컬럼 → 2컬럼 (SC + CA). SC main bin 카드에 "→ CA 트럭" 체크박스 추가 — 체크하면 그 bin 의 alloc 이 CA 트럭으로 감. SC2CA 영역 자체 제거 (display:none). DOM ID 충돌 영구 제거 (SC bin 의 input ID 가 한 곳만 존재). 데이터 모델: allocSC + allocSCViaCA (이 bin 이 CA 트럭으로 가는지). 옛날 allocSC2CA 자동 마이그레이션 + applyAllocBoth 가 viaCA 체크 시 allocSC2CA 로 변환해서 저장 (다른 화면 호환). -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -37802,6 +37802,16 @@ function buildAllocHtml(lineIdx, whGroup) {
       const loosePcs = b.qty % ppb;
       const prevVal  = prevAlloc[b.bin] || 0;
       const prevBoxes= Math.floor(prevVal / ppb);
+      
+      // input ID — wh group 별로 분리 (DOM 충돌 방지)
+      const inpIdSuffix = isSC ? 'SC' : 'CA';
+      const inpId = `alloc-box-${inpIdSuffix}-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}`;
+      const pcsElId = `alloc-box-pcs-${inpIdSuffix}-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}`;
+      const hintElId = `alloc-bin-hint-${inpIdSuffix}-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}`;
+      const viaCAId = `alloc-via-ca-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}`;
+      
+      // SC 모드에서만 "CA 트럭으로 보내기" 체크박스 표시
+      const viaCAChecked = isSC && (l.allocSCViaCA?.[b.bin]) ? 'checked' : '';
 
       html += `<div style="padding:10px 12px;border:1px solid ${mainBorder};border-radius:8px;margin-bottom:8px;background:${mainBg};">
         <div style="display:flex;align-items:flex-start;gap:10px;">
@@ -37821,16 +37831,23 @@ function buildAllocHtml(lineIdx, whGroup) {
             <div style="display:flex;align-items:center;gap:6px;">
               <label style="font-size:10px;color:var(--text3);white-space:nowrap;">pcs:</label>
               <input type="number" min="0" max="${b.qty}" value="${prevVal}"
-                id="alloc-box-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}"
+                id="${inpId}"
                 data-bin="${b.bin}" data-ppb="${ppb}" data-maxbox="${maxBoxes}" data-maxqty="${b.qty}" data-type="box"
                 style="width:72px;height:30px;border:1px solid ${mainBorder};border-radius:4px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:700;"
                 oninput="syncAllocBox(this)"/>
               <span style="font-size:10px;color:var(--text3);">/ ${b.qty}</span>
             </div>
-            <div style="font-size:10px;color:var(--text3);text-align:right;" id="alloc-box-pcs-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}">
+            <div style="font-size:10px;color:var(--text3);text-align:right;" id="${pcsElId}">
               = ${Math.floor(prevVal/ppb)}박스${prevVal%ppb > 0 ? ' + '+prevVal%ppb+' loose' : ''}
             </div>
-            <div style="font-size:10px;text-align:right;margin-top:1px;" id="alloc-bin-hint-${b.bin.replace(/[^a-zA-Z0-9]/g,'_')}"></div>
+            ${isSC ? `
+            <label for="${viaCAId}" style="font-size:11px;font-weight:700;color:#92400e;cursor:pointer;display:flex;align-items:center;gap:4px;background:${viaCAChecked ? '#fde68a' : '#fff7ed'};padding:3px 8px;border-radius:4px;border:1px solid #fdba74;margin-top:2px;">
+              <input type="checkbox" id="${viaCAId}" data-bin="${b.bin}" ${viaCAChecked}
+                onchange="onViaCAToggle(this, ${lineIdx}, '${b.bin.replace(/'/g, "\\'")}')"
+                style="cursor:pointer;width:14px;height:14px;accent-color:#92400e;"/>
+              🟡 → CA 트럭
+            </label>` : ''}
+            <div style="font-size:10px;text-align:right;margin-top:1px;" id="${hintElId}"></div>
           </div>
         </div>
         ${(b.committed||0)>0 ? `
@@ -37929,10 +37946,14 @@ function buildAllocHtml(lineIdx, whGroup) {
       // SC&CA 동시 모달에서는 올바른 wrap 안에서만 찾기
       const caWrap = document.getElementById('alloc-both-ca-wrap');
       const scWrap = document.getElementById('alloc-both-sc-wrap');
-      const wrap = isSC ? scWrap : caWrap;
+      const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap');
+      const wrap = isSC2CA ? sc2caWrap : (isSC ? scWrap : caWrap);
+      const inpIdSuffix = isSC ? 'SC' : (isSC2CA ? 'SC2CA' : 'CA');
+      const newInpId = `alloc-box-${inpIdSuffix}-${binId}`;
+      const oldInpId = `alloc-box-${binId}`;  // 옛날 ID (호환)
       const inputEl = wrap
-        ? wrap.querySelector(`[id="alloc-box-${binId}"]`)
-        : document.getElementById(`alloc-box-${binId}`);
+        ? (wrap.querySelector(`[id="${newInpId}"]`) || wrap.querySelector(`[id="${oldInpId}"]`))
+        : (document.getElementById(newInpId) || document.getElementById(oldInpId));
       liveAlloc[b.bin] = inputEl ? (parseInt(inputEl.value)||0) : (savedAlloc[b.bin]||0);
     });
 
@@ -38318,6 +38339,25 @@ function openAllocModal(lineIdx, whGroup) {
   }
 }
 
+// SC bin 의 [→ CA 트럭] 체크박스 토글
+function onViaCAToggle(checkbox, lineIdx, bin) {
+  const l = poLines[lineIdx];
+  if (!l) return;
+  if (!l.allocSCViaCA) l.allocSCViaCA = {};
+  if (checkbox.checked) {
+    l.allocSCViaCA[bin] = true;
+  } else {
+    delete l.allocSCViaCA[bin];
+  }
+  // 체크박스 라벨 배경 업데이트
+  const label = checkbox.closest('label');
+  if (label) {
+    label.style.background = checkbox.checked ? '#fde68a' : '#fff7ed';
+  }
+  // 합계 갱신 (직접 영향 없음 — 단지 어디로 가는지 표시만)
+  if (typeof updateAllocBothTotals === 'function') updateAllocBothTotals();
+}
+
 // pcs 입력 시 박스수 자동 계산 + PCR transfer 섹션 실시간 업데이트
 function syncAllocBox(inp) {
   const maxQty = parseInt(inp.dataset.maxqty) || Infinity;
@@ -38332,7 +38372,15 @@ function syncAllocBox(inp) {
   const boxes = Math.floor(pcs / ppb);
   const loose = pcs % ppb;
   const binId = inp.dataset.bin.replace(/[^a-zA-Z0-9]/g,'_');
-  const pcsEl = document.getElementById(`alloc-box-pcs-${binId}`);
+  
+  // wh group 판단 (input id 에서 prefix 추출)
+  let inpIdPrefix = '';
+  const inpId = inp.id || '';
+  if (inpId.startsWith('alloc-box-SC2CA-')) inpIdPrefix = 'SC2CA-';
+  else if (inpId.startsWith('alloc-box-SC-')) inpIdPrefix = 'SC-';
+  else if (inpId.startsWith('alloc-box-CA-')) inpIdPrefix = 'CA-';
+  
+  const pcsEl = document.getElementById(`alloc-box-pcs-${inpIdPrefix}${binId}`);
   if (pcsEl) pcsEl.textContent = `= ${boxes}박스${loose > 0 ? ` + ${loose} loose` : ''}`;
   updateAllocSum();
   refreshPcrTransferSection();
@@ -39593,22 +39641,32 @@ function openAllocModalBoth(lineIdx) {
 
   // 3 컬럼 grid 고정 (preference 순서 적용 안 함 — 항상 SC | CA | SC→CA)
   const bothGrid = scWrap.parentElement;
-  bothGrid.style.gridTemplateColumns = '1fr 1fr 1fr';
+  bothGrid.style.gridTemplateColumns = '1fr 1fr';
+  
+  // ─ 옛날 데이터 자동 마이그레이션: allocSC2CA → allocSC + allocSCViaCA ─
+  if (l.allocSC2CA && Object.keys(l.allocSC2CA).length > 0) {
+    if (!l.allocSC) l.allocSC = {};
+    if (!l.allocSCViaCA) l.allocSCViaCA = {};
+    Object.entries(l.allocSC2CA).forEach(([bin, qty]) => {
+      l.allocSC[bin] = (l.allocSC[bin] || 0) + qty;
+      l.allocSCViaCA[bin] = true;  // 이 bin 은 CA 트럭으로 가야 함
+    });
+    delete l.allocSC2CA;
+    console.log('[migrate] allocSC2CA → allocSC + allocSCViaCA for line', lineIdx);
+  }
   
   // CA html 먼저 빌드
   _allocState = { lineIdx, whGroup: 'CA' };
   const caHtml = buildAllocHtml(lineIdx, 'CA');
   caWrap.innerHTML = caHtml;
 
-  // SC html 빌드
+  // SC html 빌드 (SC bin 옆에 [→ CA] 체크박스 포함)
   _allocState = { lineIdx, whGroup: 'SC' };
   const scHtml = buildAllocHtml(lineIdx, 'SC');
   scWrap.innerHTML = scHtml;
   
-  // SC2CA html 빌드 — SC bin 사용 (재고는 SC 에 있음)
-  _allocState = { lineIdx, whGroup: 'SC2CA' };
-  const sc2caHtml = buildAllocHtml(lineIdx, 'SC2CA');
-  if (sc2caWrap) sc2caWrap.innerHTML = sc2caHtml;
+  // SC2CA wrap 은 hidden (옛날 코드 호환용 — 안 그림)
+  if (sc2caWrap) sc2caWrap.innerHTML = '';
 
   // _allocState를 SC&CA로 복원
   _allocState = { lineIdx, whGroup: 'SC&CA' };
@@ -39616,10 +39674,10 @@ function openAllocModalBoth(lineIdx) {
   updateAllocBothTotals();
   refreshPcrTransferFor('SC', l);
   refreshPcrTransferFor('CA', l);
-  renderPcrTransfers(); // 저장된 transfer 목록 표시
+  renderPcrTransfers();
 
   // 입력 변경 시 합계 + 박스 힌트 + PCR transfer 섹션 업데이트
-  [scWrap, caWrap, sc2caWrap].filter(Boolean).forEach(wrap => {
+  [scWrap, caWrap].filter(Boolean).forEach(wrap => {
     wrap.querySelectorAll('input').forEach(inp => {
       inp.addEventListener('input', () => {
         updateAllocBothTotals();
@@ -39675,40 +39733,46 @@ function applyAllocBoth() {
   const l = poLines[lineIdx];
   if (!l) return;
 
-  // SC 입력값 읽기 (transfer는 오더 배분 수량 아님 - 합산 안 함)
+  // SC 입력값 읽기 + viaCA 체크박스도 같이 확인
+  // viaCA 체크된 bin 의 alloc 은 allocSC2CA 로 옮김 (옛날 코드 호환)
   const scAlloc = {};
+  const sc2caAllocFromSc = {};  // SC 영역에서 viaCA 체크된 bin
   document.querySelectorAll('#alloc-both-sc-wrap input[data-bin]').forEach(inp => {
     const v = parseInt(inp.value)||0;
-    if (v > 0) scAlloc[inp.dataset.bin] = v;
+    if (v <= 0) return;
+    const bin = inp.dataset.bin;
+    // viaCA 체크박스 확인
+    const viaCAId = `alloc-via-ca-${bin.replace(/[^a-zA-Z0-9]/g,'_')}`;
+    const viaCAInp = document.getElementById(viaCAId);
+    const goesToCA = viaCAInp?.checked;
+    if (goesToCA) {
+      sc2caAllocFromSc[bin] = v;  // CA 트럭으로 보냄
+    } else {
+      scAlloc[bin] = v;  // SC 직접 출고
+    }
   });
 
-  // CA 입력값 읽기 (transfer는 오더 배분 수량 아님 - 합산 안 함)
+  // CA 입력값 읽기
   const caAlloc = {};
   document.querySelectorAll('#alloc-both-ca-wrap input[data-bin]').forEach(inp => {
     const v = parseInt(inp.value)||0;
     if (v > 0) caAlloc[inp.dataset.bin] = v;
   });
-  
-  // SC2CA 입력값 읽기
-  const sc2caAlloc = {};
-  document.querySelectorAll('#alloc-both-sc2ca-wrap input[data-bin]').forEach(inp => {
-    const v = parseInt(inp.value)||0;
-    if (v > 0) sc2caAlloc[inp.dataset.bin] = v;
-  });
 
   poLines[lineIdx].allocSC = Object.keys(scAlloc).length > 0 ? scAlloc : null;
   poLines[lineIdx].allocCA = Object.keys(caAlloc).length > 0 ? caAlloc : null;
-  poLines[lineIdx].allocSC2CA = Object.keys(sc2caAlloc).length > 0 ? sc2caAlloc : null;
+  poLines[lineIdx].allocSC2CA = Object.keys(sc2caAllocFromSc).length > 0 ? sc2caAllocFromSc : null;
+  // viaCA 체크박스 상태도 별도 저장 (재오픈 시 체크 상태 복원)
+  poLines[lineIdx].allocSCViaCA = l.allocSCViaCA;  // 기존 유지 (onViaCAToggle 가 관리)
+  
   poLines[lineIdx].pcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC');
   poLines[lineIdx].caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'CA');
   poLines[lineIdx].sc2caPcrTransfersPending = _pcrTransfers.filter(t => t.whGroup === 'SC2CA');
-  // 라인의 wh 자동 결정 (alloc 기준)
-  // — SC 직접만 있음 → wh='SC'
-  // — CA 직접만 (또는 CA + SC→CA) 있음 → wh='CA' (SC→CA 는 결국 CA invoice 으로 가니까)
-  // — SC + CA 둘 다 있음 → wh='SC&CA' (분리 출고)
+  
+  // 라인의 wh 자동 결정
   const _hasSC = Object.keys(scAlloc).length > 0;
   const _hasCA = Object.keys(caAlloc).length > 0;
-  const _hasSC2CA = Object.keys(sc2caAlloc).length > 0;
+  const _hasSC2CA = Object.keys(sc2caAllocFromSc).length > 0;
   if (_hasSC && (_hasCA || _hasSC2CA)) {
     poLines[lineIdx].wh = 'SC&CA';
   } else if (_hasCA || _hasSC2CA) {
@@ -39723,7 +39787,6 @@ function applyAllocBoth() {
   const scWrap = document.getElementById('alloc-both-sc-wrap'); if (scWrap) scWrap.innerHTML = '';
   const caWrap = document.getElementById('alloc-both-ca-wrap'); if (caWrap) caWrap.innerHTML = '';
   const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap'); if (sc2caWrap) sc2caWrap.innerHTML = '';
-  // BO 탭에서 배분 시 PO 저장/렌더링 스킵 — boRefreshCard만 호출
   if (window._boAllocCallback) {
     boRefreshCard(window._boAllocCallback);
   } else {
@@ -39732,7 +39795,7 @@ function applyAllocBoth() {
     liveRenderDocs();
   }
 
-  showToast('✅ SC + CA + SC→CA Bin 배분 저장');
+  showToast('✅ SC + CA Bin 배분 저장');
 }
 
 
@@ -44230,9 +44293,9 @@ function showCreditHoldFlash(overAmt) {
 
   <!-- modal-alloc-both -->
 <div class="modal-overlay" id="modal-alloc-both" style="display:none;z-index:99999;">
-  <div class="modal-box" style="max-width:1400px;width:98vw;max-height:92vh;display:flex;flex-direction:column;">
-    <div id="alloc-both-head" class="modal-head" style="background:linear-gradient(90deg,#064e22 33.33%,#0f2744 33.33%,#0f2744 66.66%,#92400e 66.66%);flex-shrink:0;">
-      <span style="color:#fff;font-weight:700;font-size:14px;">📍 Bin 배분 — <span style="color:#86efac;">🟢 SC</span> &nbsp;/&nbsp; <span style="color:#fdba74;">🟠 CA</span> &nbsp;/&nbsp; <span style="color:#fde68a;">🟡 SC → CA Next Truck</span></span>
+  <div class="modal-box" style="max-width:1100px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
+    <div id="alloc-both-head" class="modal-head" style="background:linear-gradient(90deg,#064e22 50%,#0f2744 50%);flex-shrink:0;">
+      <span style="color:#fff;font-weight:700;font-size:14px;">📍 Bin 배분 — <span style="color:#86efac;">🟢 SC</span> &nbsp;/&nbsp; <span style="color:#fdba74;">🟠 CA</span> <span style="color:#fde68a;font-size:11px;font-weight:500;margin-left:12px;">SC bin 옆 [→ CA] 체크 시 CA 트럭으로</span></span>
       <button class="modal-close" style="color:#fff;" onclick="cancelAllocBothModal();">×</button>
     </div>
     <div style="padding:12px 16px;background:#f8fafc;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
@@ -44241,11 +44304,12 @@ function showCreditHoldFlash(overAmt) {
       <div><div style="font-size:10px;color:var(--text3);">배분 합계</div><div style="font-weight:700;font-size:14px;" id="alloc-both-total">0 pcs</div></div>
       <div><div style="font-size:10px;color:var(--text3);">남은 수량</div><div style="font-weight:700;font-size:14px;color:var(--red);" id="alloc-both-remain"></div></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;flex:1;overflow-y:auto;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;flex:1;overflow-y:auto;">
       <div style="padding:14px;border-right:2px solid #e2e8f0;" id="alloc-both-sc-wrap"></div>
-      <div style="padding:14px;border-right:2px solid #e2e8f0;" id="alloc-both-ca-wrap"></div>
-      <div style="padding:14px;background:#fffbeb;" id="alloc-both-sc2ca-wrap"></div>
+      <div style="padding:14px;" id="alloc-both-ca-wrap"></div>
     </div>
+    <!-- 옛날 SC2CA wrap 은 hidden 으로 유지 (다른 코드 호환) -->
+    <div id="alloc-both-sc2ca-wrap" style="display:none;"></div>
     <div id="alloc-both-transfers" style="padding:0 16px;background:#fff;flex-shrink:0;"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:#fff;flex-shrink:0;">
       <button class="btn" onclick="cancelAllocBothModal();">취소</button>
