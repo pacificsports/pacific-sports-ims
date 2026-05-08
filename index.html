@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_042000 — savePcrTransferConfirm 마이그레이션: PIN 확인 시 invApi.transferStock RPC 만 사용. SC bin 차감 + SC-PCR 추가 atomic. inventory.update 제거. (32곳 중 2곳 완료) -->
+<!-- BUILD: 20260508_043000 — order_lines 에 sku_id 컬럼 없음 발견 → skus 테이블에서 style_id+color+size+is_side_seam 으로 lookup. confirmDefect + savePcrTransferConfirm 둘 다 수정. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -26533,20 +26533,33 @@ async function confirmDefect() {
   const { data: d } = await db.from('defects').select('*').eq('id', _defectConfirmId).single();
   if (!d) { errEl.textContent = '불량 정보를 찾을 수 없습니다.'; return; }
 
-  // 3. 그 오더의 라인에서 sku_id 찾기 (style+color+size 매칭)
+  // 3. 그 오더의 라인에서 sku 정보 찾기 (style+color+size 매칭)
+  // order_lines 에 sku_id 컬럼 없음 → skus 테이블에서 lookup
   const { data: lines } = await db.from('order_lines')
-    .select('sku_id, style_number, color, size')
+    .select('style_id, color, size, is_side_seam')
     .eq('order_id', d.order_id);
   const matchLine = (lines || []).find(l =>
-    String(l.style_number) === String(d.style_number) &&
     String(l.color || '').toUpperCase() === String(d.color || '').toUpperCase() &&
     String(l.size || '').toUpperCase() === String(d.size || '').toUpperCase()
   );
-  if (!matchLine || !matchLine.sku_id) {
-    if (errEl) { errEl.textContent = '❌ SKU 매핑 실패 — 오더 라인에서 SKU 찾을 수 없음'; errEl.style.color = '#dc2626'; }
+  if (!matchLine) {
+    if (errEl) { errEl.textContent = '❌ 오더 라인에서 매칭되는 항목 없음'; errEl.style.color = '#dc2626'; }
     return;
   }
-  const skuId = matchLine.sku_id;
+  
+  // skus 테이블에서 sku_id 찾기
+  const targetVariant = matchLine.is_side_seam ? 'Side Seam' : 'Tubular';
+  const { data: matchSkus } = await db.from('skus')
+    .select('sku_id, variant')
+    .eq('style_id', matchLine.style_id)
+    .eq('color', String(matchLine.color || '').toUpperCase())
+    .eq('size', String(matchLine.size || '').toUpperCase());
+  if (!matchSkus || matchSkus.length === 0) {
+    if (errEl) { errEl.textContent = '❌ SKU 매핑 실패 — skus 테이블에 없음'; errEl.style.color = '#dc2626'; }
+    return;
+  }
+  const exact = matchSkus.find(s => s.variant === targetVariant);
+  const skuId = (exact || matchSkus[0]).sku_id;
 
   // 4. invApi.adjustStock 으로 PCR 재고 차감 (inventory_bins 만 통과 — 단일 진실)
   const pcrWhCode = d.wh + '-PCR';
@@ -27116,15 +27129,30 @@ async function savePcrTransferConfirm() {
   });
 
   // 라인별 sku_id + ppb 가져오기 (RPC 호출에 필요)
+  // order_lines 에 sku_id 없으니 → style_id + color + size + is_side_seam 으로 skus 에서 lookup
   const lineIds = [...new Set(items.map(i => i.lineId))];
   const { data: lineRows } = await db.from('order_lines')
-    .select('id, sku_id, pcs_per_box').in('id', lineIds);
+    .select('id, style_id, color, size, is_side_seam, pcs_per_box').in('id', lineIds);
+  
   const skuByLine = {};
   const ppbByLine = {};
-  (lineRows || []).forEach(r => { 
-    skuByLine[r.id] = r.sku_id; 
+  for (const r of (lineRows || [])) {
     ppbByLine[r.id] = r.pcs_per_box || 72;
-  });
+    
+    // skus 테이블에서 매칭되는 SKU 찾기
+    const targetVariant = r.is_side_seam ? 'Side Seam' : 'Tubular';
+    const { data: matchSkus } = await db.from('skus')
+      .select('sku_id, variant')
+      .eq('style_id', r.style_id)
+      .eq('color', String(r.color || '').toUpperCase())
+      .eq('size', String(r.size || '').toUpperCase());
+    
+    if (matchSkus && matchSkus.length > 0) {
+      // variant 정확히 매칭 우선, 없으면 첫 번째
+      const exact = matchSkus.find(s => s.variant === targetVariant);
+      skuByLine[r.id] = (exact || matchSkus[0]).sku_id;
+    }
+  }
 
   // 각 라인에 pcr_transfer_status JSON 저장
   for (const [lineId, statusMap] of Object.entries(lineMap)) {
