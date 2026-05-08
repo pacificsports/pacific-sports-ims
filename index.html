@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_163500 — Packing List 새 구조 처리: buildPackingListHtml 의 CA 출력 분기에서 stage_for_ca_truck=true (옛날) 만 처리. 새 구조 (qty_from_other_wh > 0) + sc2caMergedToCa 면 alloc_local + alloc_from_other_wh 합쳐 alloc_ca_detail 에 넣음 → CA 섹션에 432 pcs / 6 boxes 정확히 표시 (288+144 / 4+1+1). qty_pieces 도 합산. -->
+<!-- BUILD: 20260507_180000 — Inventory SKU 강제 매핑: 새 헬퍼 insertInventoryWithSku 추가 (style+color+size 로 skus 테이블 자동 lookup, 못 찾으면 insert 거부). 11곳의 inventory.insert 호출 변경 — PCR Transfer (8182, 8214), Credit Memo PCR (10358), Customer Return PCR (26774), Receiving (34400), PCR row 신규 (38176), Order delete restore (38947), Cancellation restore (40894), SC/CA 입고 (40589, 40609, 42585+) 등. 더 이상 SKU 없는 inventory row 자동 생성 안 됨. (DB 의 기존 13개 잘못된 row 는 콘솔 명령으로 삭제 필요) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7954,6 +7954,58 @@ async function saveReservePO(cust, po, whId, shipDate, custSelId) {
 // ══════════════════════════════════════════════
 
 /**
+ * inventory.insert 헬퍼 — sku_id 자동 매핑 + 검증
+ * SKU 매핑 못 찾으면 insert 거부 (잘못된 row 생성 방지)
+ * 
+ * 사용법:
+ *   const { data, error } = await insertInventoryWithSku({ warehouse_id, style_number, color, size, location, qty_on_hand, ... });
+ * 
+ * @param {object} row - inventory insert 할 row (sku_id 없어도 됨)
+ * @param {object} options - { silent: true 면 toast 안 띄움, allowMissing: true 면 SKU 못 찾아도 진행 (호환성용) }
+ * @returns {Promise<{data, error}>}
+ */
+async function insertInventoryWithSku(row, options = {}) {
+  // sku_id 이미 있으면 그대로 insert
+  if (row.sku_id) {
+    return await db.from('inventory').insert(row).select();
+  }
+  
+  // style_number + color + size 로 lookup
+  if (row.style_number && row.color && row.size) {
+    const { data: skus } = await db.from('skus')
+      .select('id, sku_id, variant')
+      .eq('style_number', String(row.style_number))
+      .eq('color', String(row.color).toUpperCase())
+      .eq('size', String(row.size).toUpperCase())
+      .eq('is_active', true);
+    
+    if (skus?.length === 1) {
+      row.sku_id = skus[0].sku_id;
+    } else if (skus?.length > 1) {
+      const ss = skus.find(s => s.variant === 'Side Seam');
+      row.sku_id = (ss || skus[0]).sku_id;
+      console.warn(`[insertInventoryWithSku] 여러 SKU 후보 — ${ss?'Side Seam':'첫 번째'} 사용:`, row.style_number, row.color, row.size, '→', row.sku_id);
+    } else {
+      const errMsg = `SKU 없음: ${row.style_number} ${row.color} ${row.size}`;
+      console.error(`[insertInventoryWithSku] ${errMsg} — insert 거부`);
+      if (!options.silent && typeof showToast === 'function') {
+        showToast(`⚠️ ${errMsg} — SKU 마스터에 등록되어 있는지 확인하세요`);
+      }
+      if (options.allowMissing) {
+        return await db.from('inventory').insert(row).select();
+      }
+      return { error: { message: errMsg, code: 'SKU_NOT_FOUND' }, data: null };
+    }
+  } else if (!options.allowMissing) {
+    const errMsg = `inventory insert 거부 — style/color/size 누락`;
+    console.error(`[insertInventoryWithSku] ${errMsg}`, row);
+    return { error: { message: errMsg, code: 'INCOMPLETE_DATA' }, data: null };
+  }
+  
+  return await db.from('inventory').insert(row).select();
+}
+
+/**
  * 재고 변경 로그 기록
  * @param {string} invId - inventory row id
  * @param {number} qtyBefore - 변경 전 수량
@@ -8127,8 +8179,10 @@ async function _doSaveInvoice() {
       await db.from('inventory').update({ qty_on_hand: newPcrQty }).eq('id', pcrRows[0].id);
       await logInventoryChange(pcrRows[0].id, pcrRows[0].qty_on_hand, newPcrQty, 'transfer_in', _currentEmployee?.name||'system', null, null, `PCR Transfer in - ${t.qty}pcs`);
     } else {
-      await db.from('inventory').insert({
+      const styleObj = scRow.style_id ? styles.find(s => s.id === scRow.style_id) : null;
+      await insertInventoryWithSku({
         warehouse_id: pcrWhObj.id, style_id: scRow.style_id || null,
+        style_number: styleObj?.style_number || t.styleNum,
         color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
         location: 'PCR', qty_on_hand: t.qty, qty_committed: 0,
         received_date: (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() 
@@ -8159,8 +8213,9 @@ async function _doSaveInvoice() {
       await db.from('inventory').update({ qty_on_hand: scRow.qty_on_hand + t.qty }).eq('id', scRow.id);
     } else {
       const styleObj = styles.find(s => s.style_number === t.styleNum);
-      await db.from('inventory').insert({
+      await insertInventoryWithSku({
         warehouse_id: scWhObj.id, style_id: styleObj?.id || null,
+        style_number: t.styleNum,
         color: (t.color||'').toUpperCase(), size: (t.size||'').toUpperCase(),
         location: t.dest, qty_on_hand: t.qty, qty_committed: 0,
         received_date: (()=>{const _d=new Date();return `${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`;})() 
@@ -9307,7 +9362,7 @@ async function loadGridView() {
     if (!style) throw new Error(`스타일 ${_gridSelectedStyle} 없음`);
     
     const { data: inv } = await db.from('inventory')
-      .select('*, warehouses(code), skus(variant)')
+      .select('*, warehouses(code), skus!inventory_sku_id_fkey(variant)')
       .eq('style_id', style.id);
     
     _gridCurrentData = { style, inventory: inv || [] };
@@ -9526,7 +9581,7 @@ async function loadInventory(includeEmpty = false) {
   let _aFrom = 0;
   while (true) {
     let query = db.from('inventory')
-      .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box), skus(variant)')
+      .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box), skus!inventory_sku_id_fkey(variant)')
       .order('id', {ascending: true})
       .range(_aFrom, _aFrom + 999);
     if (!includeEmpty) {
@@ -10303,7 +10358,7 @@ async function submitReceive() {
           // PCR row 없으면 새로 생성
           const { data: styleRow } = await db.from('styles')
             .select('id').eq('style_number', item.style||'').limit(1);
-          await db.from('inventory').insert({
+          await insertInventoryWithSku({
             warehouse_id: pcrWhRow.id,
             style_id: styleRow?.[0]?.id || null,
             style_number: item.style||'',
@@ -26718,10 +26773,11 @@ async function savePcrTransferConfirm() {
         } else {
           // PCR row 없으면 새로 생성 (단 1개만)
           const { data: styleRow } = await db.from('order_lines')
-            .select('style_id').eq('id', ci.lineId).single();
-          await db.from('inventory').insert({
+            .select('style_id, style_number').eq('id', ci.lineId).single();
+          await insertInventoryWithSku({
             warehouse_id: pcrWhRow.id,
             style_id: styleRow?.style_id || null,
+            style_number: styleRow?.style_number || ci.style || '',
             color: (ci.color||'').toUpperCase(),
             size: (ci.size||'').toUpperCase(),
             location: 'PCR',
@@ -34345,11 +34401,20 @@ async function postReceiving() {
       await updatePOAfterReceiving(totalQty, existing.id);
     }
   } else {
-    const { data: inserted } = await db.from('inventory').insert({
-      warehouse_id: whId, style_id: styleId, color, size,
+    // style_number lookup (헬퍼가 SKU 매핑하기 위해)
+    const styleObj = styles.find(s => s.id === styleId);
+    const { data: insertResult, error: insertErr } = await insertInventoryWithSku({
+      warehouse_id: whId, style_id: styleId,
+      style_number: styleObj?.style_number || '',
+      color, size,
       location: location || '', received_date: recvDate,
       qty_on_hand: totalQty, qty_committed: 0
-    }).select('id').single();
+    });
+    if (insertErr) {
+      alert(`⚠️ 입고 실패: ${insertErr.message}\n\nSKU 가 마스터에 등록되어 있는지 확인하세요.`);
+      return;
+    }
+    const inserted = insertResult?.[0];
     // 입고 로그
     if (inserted?.id) {
       await logInventoryChange(inserted.id, 0, totalQty, 'receiving',
@@ -38121,17 +38186,20 @@ async function execPcrTransfer(whGroup, ppb) {
       if (!pcrWhObj) { showToast('❌ PCR 창고를 찾을 수 없습니다.'); return; }
       const today = new Date();
       const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-      const { data: newRow, error } = await db.from('inventory').insert({
+      const { data: insertResult, error } = await insertInventoryWithSku({
         warehouse_id: pcrWhObj.id,
         style_id: styleObj?.id || null,
+        style_number: l.styleNum,
         color: (l.color||'').toUpperCase(),
         size: (l.size||'').toUpperCase(),
         location: 'PCR',
         qty_on_hand: 0,
         qty_committed: 0,
         received_date: todayStr
-      }).select().single();
+      });
       if (error) throw error;
+      const newRow = insertResult?.[0];
+      if (!newRow) throw new Error('insert 결과 없음');
       // UI binInventory에 추가 (activePcrKey에)
       window.binInventory[pcrWh][activePcrKey].push({ bin: 'PCR', qty: 0, committed: 0, inv_id: newRow.id, received_date: todayStr });
       pcrB = window.binInventory[pcrWh][activePcrKey].find(b => b.bin === 'PCR');
@@ -38892,15 +38960,17 @@ async function deleteDraftShipmentFromList(shipmentId, shipmentNo) {
           qty_on_hand: invRows[0].qty_on_hand + l.qty_pcs
         }).eq('id', invId);
       } else {
-        const { data: newInv } = await db.from('inventory').insert({
+        const { data: insertRes } = await insertInventoryWithSku({
           warehouse_id: scWh.id,
           style_id: stRow.id,
+          style_number: l.style_number,
           color: l.color, size: l.size, sku: null,
           location: l.source_bin,
           qty_on_hand: l.qty_pcs,
           qty_committed: 0,
           pcs_per_box: l.ppb || 72
-        }).select('id').single();
+        });
+        const newInv = insertRes?.[0];
         invId = newInv?.id;
       }
       
@@ -40520,6 +40590,8 @@ async function postTransitReceiving() {
             warehouse_id: scWhObj.id,
             style_id: skuRow.style_id || null,
             sku: l.sku,
+            sku_id: l.sku,
+            style_number: l.style_number,
             color: l.color,
             size: l.size,
             location: l.bin,
@@ -40538,6 +40610,8 @@ async function postTransitReceiving() {
           warehouse_id: scWhObj.id,
           style_id: skuRow.style_id || null,
           sku: l.sku,
+          sku_id: l.sku,
+          style_number: l.style_number,
           color: l.color,
           size: l.size,
           location: l.bin,
@@ -40817,15 +40891,17 @@ async function _removeLineFromDraft(palletId, lineIdx) {
           .select('id').eq('style_number', style_number).maybeSingle();
         if (stRow) {
           const scWh = warehouses.find(w => w.code === 'SC');
-          const { data: newInv } = await db.from('inventory').insert({
+          const { data: insertRes } = await insertInventoryWithSku({
             warehouse_id: scWh.id,
             style_id: stRow.id,
+            style_number: style_number,
             color: color, size: size, sku: null,
             location: source_bin,
             qty_on_hand: qty_pcs,
             qty_committed: 0,
             pcs_per_box: line.pcs_per_box || 72
-          }).select('id').single();
+          });
+          const newInv = insertRes?.[0];
           if (newInv) line.inventory_id = newInv.id;
         }
       }
@@ -42509,7 +42585,8 @@ async function postScCaReceiving() {
             await db.from('inventory').insert({
               warehouse_id: caWh.id,
               style_id: styleObj?.id || null,
-              sku: l.sku, color: l.color, size: l.size,
+              sku: l.sku, sku_id: l.sku, style_number: l.style_number,
+              color: l.color, size: l.size,
               location: targetBin,
               qty_on_hand: l.qty_pcs, qty_committed: 0,
               pcs_per_box: l.ppb || 72,
@@ -42525,7 +42602,8 @@ async function postScCaReceiving() {
           await db.from('inventory').insert({
             warehouse_id: caWh.id,
             style_id: styleObj?.id || null,
-            sku: l.sku, color: l.color, size: l.size,
+            sku: l.sku, sku_id: l.sku, style_number: l.style_number,
+            color: l.color, size: l.size,
             location: targetBin,
             qty_on_hand: l.qty_pcs, qty_committed: 0,
             pcs_per_box: l.ppb || 72,
