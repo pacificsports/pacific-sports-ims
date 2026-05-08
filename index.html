@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_010500 — Phase 3 fix: getStockAllWarehouses 의 warehouses join 제거 (FK 명시 안 되어 있어서 PostgREST 못 찾음). 대신 warehouses 글로벌 변수로 wh_id → code 매핑. validateInventoryConsistency 의 committed_qty>qty 검사 제거 (CHECK 제약이 막음). + Phase 3: 새 inventory_bins 기반 헬퍼 함수 추가. -->
+<!-- BUILD: 20260508_020000 — Phase 4 Step 1: Inventory 화면 마이그레이션. loadInventory 가 inventory_bins 를 진실의 원천으로 사용. inventory_bins 전체 로드 → skus + warehouses 매핑 → 옛날 inventory 형식으로 변환 (renderInventoryTable 호환). 같은 SKU + 같은 창고 = 한 group, bins 배열에 bin 별 디테일. 옛날 inventory 테이블 의존성 제거. + Phase 3 헬퍼 함수 + 옵션 A 아키텍처. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7997,7 +7997,7 @@ async function getStockBins(skuId, whCode) {
   const wh = warehouses?.find(w => w.code === whCode);
   if (!wh) return [];
   const { data, error } = await db.from('inventory_bins')
-    .select('id, bin_code, qty, committed_qty, received_date, pcs_per_box')
+    .select('id, bin_code, qty, committed_qty, received_date')
     .eq('sku_id', skuId)
     .eq('warehouse_id', wh.id)
     .order('received_date', { ascending: true, nullsFirst: false })
@@ -9930,61 +9930,101 @@ function renderColorGrid(color, data, showTubular, showSs, style) {
 async function loadInventory(includeEmpty = false) {
   document.getElementById('inventory-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div> Loading...' + (includeEmpty ? ' (전체 SKU — 시간 소요)' : '') + '</div>';
   window._invLoadedWithEmpty = includeEmpty;  // 현재 로드 모드 기억
-  let allData = [];
-  let _aFrom = 0;
+  
+  // ═══════════════════════════════════════════════════════════════════
+  // 🆕 NEW SYSTEM: inventory_bins 를 진실의 원천으로 사용
+  // 옛날 inventory 테이블 join 안 하고 inventory_bins + skus + styles 만 사용
+  // renderInventoryTable 호환을 위해 옛날 형식으로 변환
+  // ═══════════════════════════════════════════════════════════════════
+  
+  // 1) inventory_bins 전체 로드 (필요 시 qty=0 제외)
+  let allBinRows = [];
+  let _from = 0;
   while (true) {
-    let query = db.from('inventory')
-      .select('*, warehouses(code,name), styles(style_number,description,category,size_range,pcs_per_box), skus!inventory_sku_id_fkey(variant)')
+    let q = db.from('inventory_bins')
+      .select('id, sku_id, warehouse_id, bin_code, qty, committed_qty, received_date, inventory_id')
       .order('id', {ascending: true})
-      .range(_aFrom, _aFrom + 999);
-    if (!includeEmpty) {
-      query = query.gt('qty_on_hand', 0);  // 🚀 성능: 재고 있는 row만
-    }
-    const { data: _aChunk, error } = await query;
-    if (error) {
-      console.error('[loadInventory] error:', error);
-      break;
-    }
-    if (!_aChunk || _aChunk.length === 0) break;
-    allData = allData.concat(_aChunk);
-    if (_aChunk.length < 1000) break;
-    _aFrom += 1000;
+      .range(_from, _from + 999);
+    if (!includeEmpty) q = q.gt('qty', 0);
+    const { data: chunk, error } = await q;
+    if (error) { console.error('[loadInventory bins]', error); break; }
+    if (!chunk || chunk.length === 0) break;
+    allBinRows = allBinRows.concat(chunk);
+    if (chunk.length < 1000) break;
+    _from += 1000;
   }
-  console.log(`[loadInventory] Loaded ${allData.length} rows`);
+  console.log(`[loadInventory] inventory_bins ${allBinRows.length} rows`);
   
-  // inventory_bins 로드 → inv_id 기준으로 맵 (로드된 inventory만)
-  const loadedInvIds = allData.map(r => r.id);
-  let allBins = [];
-  if (loadedInvIds.length > 0) {
-    for (let i = 0; i < loadedInvIds.length; i += 500) {
-      const chunk = loadedInvIds.slice(i, i + 500);
-      const { data: binChunk } = await db.from('inventory_bins')
-        .select('id, inventory_id, bin_code, qty, received_date')
-        .in('inventory_id', chunk);
-      if (binChunk) allBins = allBins.concat(binChunk);
+  // 2) skus 로드 — variant, style_id 매핑용
+  const skuIds = [...new Set(allBinRows.map(r => r.sku_id).filter(Boolean))];
+  const { data: skuRows } = skuIds.length ? await db.from('skus')
+    .select('sku_id, style_number, color, size, variant, style_id, styles(style_number, description, category, size_range, pcs_per_box)')
+    .in('sku_id', skuIds) : { data: [] };
+  const skuMap = {};
+  (skuRows || []).forEach(s => { skuMap[s.sku_id] = s; });
+  
+  // 3) warehouses 매핑 (이미 글로벌)
+  const whMap = {};
+  (warehouses || []).forEach(w => { whMap[w.id] = w; });
+  
+  // 4) inventory_bins → 옛날 inventory 형식 변환
+  // 같은 SKU + 같은 창고는 한 inventory row 로 합치고, bins 배열에 bin 별 디테일 넣기
+  const inventoryGroups = {};  // key = sku_id|warehouse_id
+  for (const r of allBinRows) {
+    const groupKey = `${r.sku_id}|${r.warehouse_id}`;
+    if (!inventoryGroups[groupKey]) {
+      const sku = skuMap[r.sku_id];
+      const wh = whMap[r.warehouse_id];
+      inventoryGroups[groupKey] = {
+        id: `synthetic-${groupKey}`,  // synthetic — DB id 가 아님
+        sku_id: r.sku_id,
+        sku: r.sku_id,  // legacy 필드
+        warehouse_id: r.warehouse_id,
+        warehouses: wh ? { code: wh.code, name: wh.name } : null,
+        styles: sku?.styles || null,
+        skus: sku ? { variant: sku.variant } : null,
+        style_number: sku?.style_number || sku?.styles?.style_number || '',
+        color: sku?.color || '',
+        size: sku?.size || '',
+        location: r.bin_code,  // legacy 필드 (첫 bin)
+        qty_on_hand: 0,        // 합계로 채워질 것
+        qty_committed: 0,      // 합계로 채워질 것
+        bins: []
+      };
     }
+    const g = inventoryGroups[groupKey];
+    g.qty_on_hand += r.qty || 0;
+    g.qty_committed += r.committed_qty || 0;
+    g.bins.push({
+      id: r.id,
+      inventory_id: r.inventory_id,
+      bin_code: r.bin_code,
+      qty: r.qty || 0,
+      committed_qty: r.committed_qty || 0,
+      received_date: r.received_date
+    });
   }
-  const binsByInvId = {};
-  allBins.forEach(b => {
-    if (!binsByInvId[b.inventory_id]) binsByInvId[b.inventory_id] = [];
-    binsByInvId[b.inventory_id].push(b);
-  });
-  // 각 row에 bins 배열 붙이기
-  allData.forEach(r => {
-    r.bins = binsByInvId[r.id] || [];
-  });
-  console.log(`[loadInventory] Loaded ${allBins?.length || 0} bins across ${Object.keys(binsByInvId).length} inventory rows`);
   
-  // 창고별 개수 확인
+  // 5) 결과 — 옛날 형식의 inventory row 배열
+  const allData = Object.values(inventoryGroups);
+  
+  // 빈 재고 필터 (includeEmpty=false 면 qty=0 그룹 제외)
+  const filtered = includeEmpty ? allData : allData.filter(r => r.qty_on_hand > 0);
+  
+  console.log(`[loadInventory] ${filtered.length} groups (${allData.length - filtered.length} empty filtered)`);
+  
+  // 창고별 개수
   const whCounts = {};
-  allData.forEach(i => {
-    const wh = i.warehouses?.code || 'UNKNOWN';
-    whCounts[wh] = (whCounts[wh] || 0) + 1;
+  filtered.forEach(i => {
+    const code = i.warehouses?.code || 'UNKNOWN';
+    whCounts[code] = (whCounts[code] || 0) + 1;
   });
   console.log('[loadInventory] By warehouse:', whCounts);
-  allInventory = allData;
+  
+  allInventory = filtered;
   renderInventoryTable(allInventory);
 }
+
 /** Status 변경 시 호출 — 전체 SKU 모드로 전환 시 loadInventory 재실행 */
 function onInvStatusChange() {
   const status = document.getElementById('inv-filter-status')?.value || '';
