@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_032000 — Defect 리포트 confirm 모달 fix: (1) 옛날 inventory 테이블 + location='PCR' lookup → 새 inventory_bins 시스템 사용. (2) 잘못된 창고 (SC-PCR) 보던 거 → defect 발생한 정확한 창고 (d.wh = SC or CA) 사용. (3) raw qty 사용 (committed 차감 X) — 사용자 의도: "현재 재고" = 50 (10 committed 포함), "차감 후" = 50-10(불량) = 40. d.bin 있으면 그 bin 만, 없으면 SKU 의 창고 전체 합산. + SC→CA 체크박스 단순화 디자인 (BUILD 031000). -->
+<!-- BUILD: 20260508_033000 — Defect 리포트 모달: PCR 재고만 보여줌. 사용자 의도: 불량은 거의 항상 PCR 에서 발견되므로 그 창고의 PCR 재고만 차감. d.wh='SC' → SC-PCR 재고. 라벨에 "{wh}-PCR 현재 재고" 명시. 새 inventory_bins 시스템 사용. + SC→CA 체크박스 단순화 디자인. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -26439,13 +26439,13 @@ async function openDefectConfirmModal(defectId) {
   const { data: d } = await db.from('defects').select('*').eq('id', defectId).single();
   if (!d) return;
   
-  // 현재 재고 조회 — 새 시스템 (inventory_bins) 사용
-  // d.wh = 'SC' or 'CA' (defect 가 발생한 창고). PCR 이 아닌 main 창고
-  // d.bin 이 있으면 그 bin 의 재고, 없으면 같은 SKU 의 wh 전체 합산
+  // 현재 재고 조회 — PCR 의 재고 (불량은 PCR 에서 발견됨)
+  // d.wh = 'SC' or 'CA' → SC-PCR 또는 CA-PCR 의 재고 봄
+  // 새 시스템 (inventory_bins) 사용
   let currentInvQty = '?';
   try {
-    const whCode = d.wh || 'SC';  // SC 또는 CA — defect 발생한 main 창고
-    const { data: whRow } = await db.from('warehouses').select('id').eq('code', whCode).single();
+    const pcrWhCode = (d.wh || 'SC') + '-PCR';
+    const { data: whRow } = await db.from('warehouses').select('id').eq('code', pcrWhCode).single();
     if (whRow) {
       // SKU 찾기: style + color + size 로
       const { data: skuRows } = await db.from('skus')
@@ -26455,15 +26455,11 @@ async function openDefectConfirmModal(defectId) {
         .eq('size', (d.size||'').toUpperCase());
       const skuIds = (skuRows || []).map(s => s.sku_id);
       if (skuIds.length > 0) {
-        let q = db.from('inventory_bins')
+        const { data: binRows } = await db.from('inventory_bins')
           .select('qty')
           .eq('warehouse_id', whRow.id)
           .in('sku_id', skuIds);
-        // d.bin 있으면 그 bin 만
-        if (d.bin) q = q.eq('bin_code', d.bin);
-        const { data: binRows } = await q;
         if (binRows && binRows.length > 0) {
-          // raw qty 합 (committed 안 뺌 — 사용자 의도)
           currentInvQty = binRows.reduce((s, r) => s + (r.qty || 0), 0);
         } else {
           currentInvQty = 0;
@@ -26481,7 +26477,7 @@ async function openDefectConfirmModal(defectId) {
      Shade:${d.shade_qty} Hole:${d.hole_qty} Stain:${d.stain_qty} Other:${d.other_qty} = <b style="color:#dc2626;">${d.total_qty} pcs</b><br>
      보고자: ${d.reported_by} · ${new Date(d.reported_at).toLocaleString('en-US',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'})}<br>
      <span style="margin-top:6px;display:inline-block;background:#f1f5f9;border-radius:4px;padding:3px 8px;font-size:11px;color:#374151;">
-       📦 현재 재고 <b>${currentInvQty}</b> pcs &nbsp;→&nbsp; 차감 후 <b style="color:#dc2626;">${newInvQty}</b> pcs
+       📦 ${d.wh}-PCR 현재 재고 <b>${currentInvQty}</b> pcs &nbsp;→&nbsp; 차감 후 <b style="color:#dc2626;">${newInvQty}</b> pcs
      </span>`;
   window._defectConfirmEmp = null;
   const pinEl = document.getElementById('defect-confirm-pin');
