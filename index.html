@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_193000 — 박스당 pcs 계산 근본 fix: 모달이든 어디든 라인 자체의 ppb (l.ppb || l.pcs_per_box) 직접 사용. updateAllocBothTotals 와 updateAllocSum 둘 다 _allocState 의 lineIdx 로 라인 받아서 라인의 진짜 ppb 사용. 더 이상 DOM 검색이나 하드코딩 안 함. 60 ppb 스타일도 정확하게 표시. + PCR 자동 생성 차단. -->
+<!-- BUILD: 20260507_195000 — 통합 모달 (SC&CA) SC ↔ SC2CA 영역 양방향 실시간 동기화: SC 영역에 H776 240 입력 → SC2CA 영역의 H776 realAvail 자동 0 으로 갱신. (1) buildAllocHtmlSc2Ca: l.allocSC (저장된) + SC wrap 의 input 라이브 값 둘 다 차감. (2) syncAllocBox: SC 입력 변경 시 SC2CA wrap 다시 그림 (innerHTML 재생성). 사용자가 SC 에 240 잡으면 SC2CA 에서 H776 사용 가능 0 으로 즉시 표시. + 박스당 pcs 라인 ppb 사용. + PCR 자동 생성 차단. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -37794,7 +37794,14 @@ function buildAllocHtmlSc2Ca(lineIdx) {
   const mainBins = (window.binInventory?.['SC']?.[k]) || [];
   const prevAlloc = l.allocSC2CA || {};
   // 같은 라인의 SC alloc 도 본다 (이미 잡혔으면 빼야 함)
+  // 1) l.allocSC (적용 후 저장된 값) 우선
+  // 2) SC wrap 의 input 라이브 값 (모달 안에서 실시간)
   const sc1Alloc = l.allocSC || {};
+  const liveSc1 = {};
+  document.querySelectorAll('#alloc-both-sc-wrap input[data-bin]').forEach(inp => {
+    const v = parseInt(inp.value)||0;
+    if (v > 0) liveSc1[inp.dataset.bin] = v;
+  });
   
   // 재고 0 인 bin 제외
   const filteredMainBins = mainBins.filter(b => (b.qty + (b.committed||0)) > 0);
@@ -37807,7 +37814,8 @@ function buildAllocHtmlSc2Ca(lineIdx) {
     html += `<div style="padding:12px;border:1px dashed #fdba74;border-radius:8px;margin-bottom:8px;background:#fff7ed;opacity:0.6;font-size:12px;color:var(--text3);text-align:center;">SC 재고 없음</div>`;
   } else {
     filteredMainBins.forEach(b => {
-      const usedBySc1 = sc1Alloc[b.bin] || 0;  // 같은 라인의 SC alloc 이 이미 잡고있는 양
+      // 라이브 input 값 우선, 없으면 저장된 allocSC
+      const usedBySc1 = (liveSc1[b.bin] !== undefined ? liveSc1[b.bin] : (sc1Alloc[b.bin] || 0));
       const realAvail = Math.max(0, (b.qty || 0) - usedBySc1);  // 진짜 사용 가능한 양
       const cur = prevAlloc[b.bin] || 0;
       const fifoLabel = b.is_fifo ? `<span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px;margin-left:4px;">FIFO ↑</span>` : '';
@@ -37963,6 +37971,24 @@ function syncAllocBox(inp) {
   if (pcsEl) pcsEl.textContent = `= ${boxes}박스${loose > 0 ? ` + ${loose} loose` : ''}`;
   updateAllocSum();
   refreshPcrTransferSection();
+  
+  // ── 통합 모달 (SC&CA) 일 때 SC 영역 변경되면 SC2CA 영역도 다시 그림 ──
+  // (SC2CA 의 realAvail 이 SC 사용량에 따라 변하기 때문)
+  if (_allocState?.whGroup === 'SC&CA') {
+    // 이 input 이 SC wrap 안에 있을 때만 SC2CA redraw (CA 변경 시는 영향 없음)
+    const inSc = inp.closest('#alloc-both-sc-wrap');
+    const inSc2ca = inp.closest('#alloc-both-sc2ca-wrap');
+    if (inSc || inSc2ca) {
+      // SC2CA 도 SC bin 사용 → 양쪽 영역의 realAvail 모두 재계산 필요
+      const sc2caWrap = document.getElementById('alloc-both-sc2ca-wrap');
+      if (sc2caWrap && inSc) {
+        // SC 변경 시: SC2CA 다시 그림
+        sc2caWrap.innerHTML = buildAllocHtmlSc2Ca(_allocState.lineIdx);
+      }
+      // SC2CA 변경 시: SC 영역의 PCR transfer 섹션은 이미 refreshPcrTransferSection 으로 갱신됨
+      // 하지만 SC 영역 input 의 max 가 SC2CA 사용량 반영해야 진짜 정확함 (현재는 안 함 — 추후 확장 가능)
+    }
+  }
 }
 
 // PCR transfer 섹션 — 현재 입력값 기준으로 남은 수량 실시간 업데이트
