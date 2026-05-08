@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260507_185000 — PCR 자동 생성 차단 + PCR Transfer 로직 개선: (1) insertInventoryWithSku 헬퍼에 PCR 창고 보호 — SC-PCR/CA-PCR 에 새 row 만들려고 하면 거부 (allowPcrCreation=true 옵션 시만 허용). (2) PCR Transfer 시 binInventory 에 PCR row 없으면 confirm 띄우는 대신 DB 에서 직접 lookup 후 binInventory 에 추가. 이제 모든 SKU 가 PCR row 가지고 있으니 confirm 안 뜸. SKU 마스터 누락 시만 toast 로 안내. + 1단계 DB 정리 완료 (SC-PCR/CA-PCR 각 8100 row, 불완전 0). -->
+<!-- BUILD: 20260507_193000 — 박스당 pcs 계산 근본 fix: 모달이든 어디든 라인 자체의 ppb (l.ppb || l.pcs_per_box) 직접 사용. updateAllocBothTotals 와 updateAllocSum 둘 다 _allocState 의 lineIdx 로 라인 받아서 라인의 진짜 ppb 사용. 더 이상 DOM 검색이나 하드코딩 안 함. 60 ppb 스타일도 정확하게 표시. + PCR 자동 생성 차단. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -38343,8 +38343,9 @@ function updateAllocSum() {
   // ── 남은 수량 힌트 (박스 + loose)
   const hintEl = document.getElementById('alloc-remain-hint');
   if (hintEl) {
-    const firstBoxInp = document.querySelector('#alloc-bins-wrap input[data-type="box"]');
-    const ppb = firstBoxInp ? (parseInt(firstBoxInp.dataset.ppb)||72) : 72;
+    // 라인의 ppb 직접 사용 (DOM 검색 불필요)
+    const _l = (typeof _allocState !== 'undefined' && _allocState && typeof poLines !== 'undefined') ? poLines[_allocState.lineIdx] : null;
+    const ppb = _l?.ppb || _l?.pcs_per_box || 72;
     if (remain > 0) {
       const remBoxes = Math.floor(remain / ppb);
       const remLoose = remain % ppb;
@@ -39262,7 +39263,7 @@ function updateAllocBothTotals() {
   document.getElementById('alloc-both-total').style.color = total >= needQty ? '#0e7c3a' : 'var(--text)';
   const remainEl2 = document.getElementById('alloc-both-remain');
   if (remain > 0) {
-    const ppb = 72;
+    const ppb = l.ppb || l.pcs_per_box || 72;
     const remBoxes = Math.floor(remain/ppb), remLoose = remain%ppb;
     let hint = remain.toLocaleString() + ' pcs 부족';
     if (remBoxes > 0 && remLoose > 0) hint += ` → ${remBoxes}박스(${(remBoxes*ppb).toLocaleString()} pcs) + ${remLoose} partial 더 필요`;
