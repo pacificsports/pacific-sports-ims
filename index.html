@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_041000 — confirmDefect 마이그레이션 (RPC 만 사용) + 오더 삭제 시 defects 도 같이 삭제 (외래키 위반 방지) -->
+<!-- BUILD: 20260508_042000 — savePcrTransferConfirm 마이그레이션: PIN 확인 시 invApi.transferStock RPC 만 사용. SC bin 차감 + SC-PCR 추가 atomic. inventory.update 제거. (32곳 중 2곳 완료) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -27108,12 +27108,22 @@ async function savePcrTransferConfirm() {
   const now = new Date().toISOString();
 
   // 라인별 {allocKey: transferred} 맵 구성
-  // e.g. { lineId123: { 'SC-TRANSFER|1J-17': true, 'CA-TRANSFER|2A-05': false } }
   const lineMap = {};
   items.forEach((item, idx) => {
     const checked = document.getElementById('pcr-tr-' + idx)?.checked ?? false;
     if (!lineMap[item.lineId]) lineMap[item.lineId] = {};
     lineMap[item.lineId][item.allocKey] = checked;
+  });
+
+  // 라인별 sku_id + ppb 가져오기 (RPC 호출에 필요)
+  const lineIds = [...new Set(items.map(i => i.lineId))];
+  const { data: lineRows } = await db.from('order_lines')
+    .select('id, sku_id, pcs_per_box').in('id', lineIds);
+  const skuByLine = {};
+  const ppbByLine = {};
+  (lineRows || []).forEach(r => { 
+    skuByLine[r.id] = r.sku_id; 
+    ppbByLine[r.id] = r.pcs_per_box || 72;
   });
 
   // 각 라인에 pcr_transfer_status JSON 저장
@@ -27123,52 +27133,31 @@ async function savePcrTransferConfirm() {
     }).eq('id', lineId);
   }
 
-  // 체크된 항목 → PCR 재고 qty_on_hand 증가
-  const pcrWhCode = (wh === 'CA' ? 'CA' : 'SC') + '-PCR';
-  const { data: pcrWhRow } = await db.from('warehouses').select('id').eq('code', pcrWhCode).single();
-  if (pcrWhRow) {
-    for (const [lineId, statusMap] of Object.entries(lineMap)) {
-      const item = items.find(i => i.lineId === lineId && statusMap[i.allocKey]);
-      if (!item) continue;
-      const checkedItems = items.filter(i => i.lineId === lineId && statusMap[i.allocKey]);
-      for (const ci of checkedItems) {
-        const pcs = ci.boxes > 0 ? ci.boxes * 60 : ci.pcs;
-        if (pcs <= 0) continue;
-        // 기존 PCR 재고 row 찾기
-        const { data: invRows } = await db.from('inventory')
-          .select('id, qty_on_hand')
-          .eq('warehouse_id', pcrWhRow.id)
-          .eq('color', (ci.color||'').toUpperCase())
-          .eq('size', (ci.size||'').toUpperCase())
-          .eq('location', 'PCR')
-          .order('qty_on_hand', { ascending: false })
-          .limit(1);
-        if (invRows && invRows.length > 0) {
-          // 첫 번째 row에만 추가 (중복 row 방지)
-          const totalExisting = invRows.reduce((s, r) => s + (r.qty_on_hand || 0), 0);
-          await db.from('inventory').update({
-            qty_on_hand: totalExisting + pcs
-          }).eq('id', invRows[0].id);
-          // 중복 row가 있으면 0으로 초기화
-          for (let ri = 1; ri < invRows.length; ri++) {
-            await db.from('inventory').update({ qty_on_hand: 0, qty_committed: 0 }).eq('id', invRows[ri].id);
-          }
-        } else {
-          // PCR row 없으면 새로 생성 (단 1개만)
-          const { data: styleRow } = await db.from('order_lines')
-            .select('style_id, style_number').eq('id', ci.lineId).single();
-          await insertInventoryWithSku({
-            warehouse_id: pcrWhRow.id,
-            style_id: styleRow?.style_id || null,
-            style_number: styleRow?.style_number || ci.style || '',
-            color: (ci.color||'').toUpperCase(),
-            size: (ci.size||'').toUpperCase(),
-            location: 'PCR',
-            qty_on_hand: pcs,
-            qty_committed: 0
-          });
-        }
-      }
+  // 체크된 항목 → 진짜 transfer 실행 (RPC 만 사용 — inventory_bins 단일 진실)
+  const fromWh = (wh === 'CA') ? 'CA' : 'SC';
+  const toWh = (wh === 'CA') ? 'CA-PCR' : 'SC-PCR';
+  
+  const failed = [];
+  const succeeded = [];
+  for (const item of items) {
+    const checked = lineMap[item.lineId]?.[item.allocKey];
+    if (!checked) continue;
+    
+    const skuId = skuByLine[item.lineId];
+    if (!skuId) {
+      failed.push(`${item.style} ${item.color} ${item.size} — SKU 매핑 실패`);
+      continue;
+    }
+    
+    const pcs = item.boxes > 0 ? item.boxes * (ppbByLine[item.lineId] || 72) : item.pcs;
+    if (pcs <= 0) continue;
+    
+    // 실제 transfer: SC bin → SC-PCR PCR (RPC 가 inventory_bins 둘 다 atomic 변경)
+    const r = await invApi.transferStock(skuId, fromWh, item.fromBin, toWh, 'PCR', pcs, { silent: true });
+    if (r.success) {
+      succeeded.push(`${skuId} ${item.fromBin} → ${toWh} ${pcs}pcs`);
+    } else {
+      failed.push(`${skuId} ${item.fromBin} → ${toWh} ${pcs}pcs: ${r.error}`);
     }
   }
 
@@ -27180,7 +27169,14 @@ async function savePcrTransferConfirm() {
   }).eq('id', orderId);
 
   document.getElementById('pcr-transfer-confirm-modal').style.display = 'none';
-  showToast('✅ PCR Transfer 확인 완료 — ' + emp.name);
+  
+  if (failed.length > 0) {
+    showToast(`⚠️ Transfer 일부 실패 (${failed.length}건) — ${succeeded.length}건 성공`);
+    console.error('[PCR Transfer 실패]', failed);
+    alert(`PCR Transfer 일부 실패:\n\n${failed.join('\n')}\n\n자세한 내용은 콘솔 확인.`);
+  } else {
+    showToast(`✅ PCR Transfer 확인 완료 — ${succeeded.length}건 이동 (${emp.name})`);
+  }
   loadOrderStatus();
 }
 
