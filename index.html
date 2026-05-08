@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_010000 — Phase 3: 새 inventory_bins 기반 헬퍼 함수 추가 (window.invApi). DB 마이그레이션 완료 후 단계 — getStockBins, getStockTotal, getStockAllWarehouses, getStockBatch, transferStock, commitStock, releaseStock, fulfillStock, adjustStock, validateInventoryConsistency. 모두 RPC 사용 (트랜잭션 안전). 기존 코드 안 건드림 — 다음 세션에서 화면별 마이그레이션. + 옵션 A 아키텍처: inventory_bins 가 진실의 원천 (sku_id, warehouse_id 직접 컬럼, UNIQUE 제약, CHECK 제약). 16,200 PCR row 추가 완료. -->
+<!-- BUILD: 20260508_010500 — Phase 3 fix: getStockAllWarehouses 의 warehouses join 제거 (FK 명시 안 되어 있어서 PostgREST 못 찾음). 대신 warehouses 글로벌 변수로 wh_id → code 매핑. validateInventoryConsistency 의 committed_qty>qty 검사 제거 (CHECK 제약이 막음). + Phase 3: 새 inventory_bins 기반 헬퍼 함수 추가. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8028,9 +8028,13 @@ async function getStockTotal(skuId, whCode) {
  */
 async function getStockAllWarehouses(skuId) {
   const { data, error } = await db.from('inventory_bins')
-    .select('bin_code, qty, committed_qty, received_date, warehouse_id, warehouses(code)')
+    .select('bin_code, qty, committed_qty, received_date, warehouse_id')
     .eq('sku_id', skuId);
   if (error) { console.error('[getStockAllWarehouses]', error); return {}; }
+  
+  // warehouses 글로벌 변수 사용해서 wh_id → code 매핑
+  const whMap = {};
+  (warehouses || []).forEach(w => { whMap[w.id] = w.code; });
   
   const result = {
     'SC': { qty: 0, committed: 0, available: 0, bins: [] },
@@ -8039,7 +8043,7 @@ async function getStockAllWarehouses(skuId) {
     'CA-PCR': { qty: 0, committed: 0, available: 0, bins: [] }
   };
   for (const r of data || []) {
-    const code = r.warehouses?.code;
+    const code = whMap[r.warehouse_id];
     if (!result[code]) continue;
     const available = Math.max(0, (r.qty || 0) - (r.committed_qty || 0));
     result[code].qty += r.qty || 0;
@@ -8220,19 +8224,17 @@ async function validateInventoryConsistency() {
   const issues = [];
   const stats = {};
   
-  // 1) committed_qty > qty 인 row
-  const { data: badCommit } = await db.from('inventory_bins')
-    .select('id, sku_id, bin_code, qty, committed_qty')
-    .gt('committed_qty', 'qty');  // 이건 사실 CHECK 제약으로 막혀야 하는데 검증
-  if (badCommit?.length) {
-    issues.push(`${badCommit.length} row 에서 committed > qty (CHECK 제약 우회됨!)`);
-  }
-  
-  // 2) qty 마이너스
+  // 1) qty 마이너스 (CHECK 제약이 막지만 이중 검증)
   const { count: negQty } = await db.from('inventory_bins')
     .select('*', { count: 'exact', head: true }).lt('qty', 0);
-  if (negQty > 0) issues.push(`${negQty} row 에 qty < 0`);
+  if (negQty > 0) issues.push(`${negQty} row 에 qty < 0 (CHECK 제약 우회됨!)`);
   stats.negative_qty = negQty || 0;
+  
+  // 2) committed_qty 마이너스
+  const { count: negCommit } = await db.from('inventory_bins')
+    .select('*', { count: 'exact', head: true }).lt('committed_qty', 0);
+  if (negCommit > 0) issues.push(`${negCommit} row 에 committed_qty < 0`);
+  stats.negative_committed = negCommit || 0;
   
   // 3) sku_id 가 skus 테이블에 없는 row (orphan)
   const { data: allSkus } = await db.from('skus').select('sku_id');
