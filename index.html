@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_043000 — order_lines 에 sku_id 컬럼 없음 발견 → skus 테이블에서 style_id+color+size+is_side_seam 으로 lookup. confirmDefect + savePcrTransferConfirm 둘 다 수정. -->
+<!-- BUILD: 20260508_045000 — Mark as Shipped 재고 차감 부분 깨끗하게 새로 작성. alloc_detail 순회 → "{WH}|{BIN}" 키 분석 → invApi.adjustStock RPC 만 사용. fallback / changeInventory / inventory.qty_committed 다 제거. 단순한 룰: TRANSFER 무시, PCR 키 → PCR 창고, 일반 → 라인 wh. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -30512,122 +30512,79 @@ async function _doShippedCoreInner(emp) {
     
     let toDeduct = filled;
     
+    // SKU 매핑 — RPC 호출에 필요 (style_id+color+size+is_side_seam → sku_id)
+    let skuIdForLine = null;
+    {
+      const targetVariant = l.is_side_seam ? 'Side Seam' : 'Tubular';
+      const { data: matchSkus } = await db.from('skus')
+        .select('sku_id, variant')
+        .eq('style_id', l.style_id)
+        .eq('color', String(l.color || '').toUpperCase())
+        .eq('size', String(l.size || '').toUpperCase());
+      if (matchSkus && matchSkus.length > 0) {
+        const exact = matchSkus.find(s => s.variant === targetVariant);
+        skuIdForLine = (exact || matchSkus[0]).sku_id;
+      }
+    }
+    
     if (allocBins.length > 0) {
-      // alloc_detail 기준 정확한 bin 차감 — changeInventory 사용
+      // ════════════════════════════════════════════════════════════
+      // 🆕 단순한 차감 룰 (BUILD 045000):
+      //   1. alloc_detail 의 각 키를 보고
+      //   2. "TRANSFER|" 키 → 무시 (이미 transfer 됨)
+      //   3. "{WH}-PCR|PCR" 키 → 그 WH 의 PCR bin 에서 차감
+      //   4. 그냥 bin 이름 (예 "H776") → 라인의 wh 의 그 bin 에서 차감
+      //   5. RPC (adjust_stock) 만 사용 — inventory_bins 가 단일 진실
+      // ════════════════════════════════════════════════════════════
+      const lineWhCode = lineWh === 'CA' ? 'CA' : 'SC';
+      
       for (const ab of allocBins) {
         if (toDeduct <= 0) break;
         const binCode = ab.bin_code;
         const deductFromBin = Math.min(toDeduct, ab.pcs);
         
-        // 이 bin_code 의 inventory_bins 찾기 (color/size 매칭)
-        const { data: binRows } = await db.from('inventory_bins')
-          .select('id, qty, inventory!inner(id, color, size)')
-          .eq('bin_code', binCode)
-          .eq('inventory.color', (l.color||'').toUpperCase())
-          .eq('inventory.size', (l.size||'').toUpperCase())
-          .gt('qty', 0);
-        
-        let stillToDeduct = deductFromBin;
-        for (const br of (binRows || [])) {
-          if (stillToDeduct <= 0) break;
-          const binDeduct = Math.min(stillToDeduct, br.qty || 0);
-          
-          // 🆕 changeInventory 호출 — 단일 진실의 원천
-          const result = await changeInventory({
-            transaction_id: shipTxnId,
-            inventory_id: br.inventory.id,
-            bin_code: binCode,
-            delta: -binDeduct,
-            action: 'order_ship',
-            detail_metadata: {
-              order_id: orderId,
-              order_line_id: l.id
-            }
-          });
-          
-          if (!result.success) {
-            shipErrors.push(`${l.color}/${l.size} bin ${binCode}: ${result.error}`);
-            console.error('[Ship] changeInventory 실패', result.error);
-            continue;
-          }
-          
-          // qty_committed 도 차감 (이건 changeInventory 가 안 함 — 별도 처리)
-          const { data: invRow } = await db.from('inventory')
-            .select('qty_committed').eq('id', br.inventory.id).single();
-          if (invRow) {
-            const commitRelease = Math.min(invRow.qty_committed || 0, binDeduct);
-            if (commitRelease > 0) {
-              await db.from('inventory').update({
-                qty_committed: Math.max(0, (invRow.qty_committed || 0) - commitRelease)
-              }).eq('id', br.inventory.id);
-            }
-          }
-          
-          stillToDeduct -= binDeduct;
-          toDeduct -= binDeduct;
-          console.log(`  bin ${binCode}: -${binDeduct}`);
+        // 키 파싱 — "{WH}|{BIN}" 형식이면 분리, 아니면 라인 wh 사용
+        let targetWh, targetBin;
+        if (binCode.includes('|')) {
+          const parts = binCode.split('|');
+          targetWh = parts[0];   // "SC-PCR", "CA-PCR" 등
+          targetBin = parts[1];  // "PCR"
+        } else {
+          targetWh = lineWhCode; // "SC" 또는 "CA"
+          targetBin = binCode;   // "H776" 등
         }
         
-        if (stillToDeduct > 0) {
-          console.warn(`  [Ship] bin ${binCode}에 ${stillToDeduct} pcs 부족`);
+        if (!skuIdForLine) {
+          shipErrors.push(`${l.color}/${l.size}: SKU 매핑 실패`);
+          continue;
+        }
+        
+        // 현재 재고 조회 → newQty 계산 → adjust_stock RPC
+        const cur = await invApi.getStockBins(skuIdForLine, targetWh);
+        const binRow = (cur || []).find(b => b.bin_code === targetBin);
+        if (!binRow) {
+          shipErrors.push(`${l.color}/${l.size}: ${targetWh} 의 ${targetBin} bin 없음`);
+          continue;
+        }
+        if ((binRow.qty || 0) < deductFromBin) {
+          shipErrors.push(`${l.color}/${l.size}: ${targetWh}/${targetBin} 재고 부족 (${binRow.qty} < ${deductFromBin})`);
+          continue;
+        }
+        const newQty = binRow.qty - deductFromBin;
+        const r = await invApi.adjustStock(skuIdForLine, targetWh, targetBin, newQty, `ship order ${orderId.slice(0,8)}`, { silent: true });
+        if (r.success) {
+          toDeduct -= deductFromBin;
+          console.log(`  ${targetWh}/${targetBin}: -${deductFromBin}`);
+        } else {
+          shipErrors.push(`${l.color}/${l.size}: ${targetWh}/${targetBin} RPC 실패: ${r.error}`);
         }
       }
     }
     
-    // alloc_detail에 안 잡혔거나 부족한 부분은 fallback (color/size 기준)
+    // 부족분이 있으면 사용자한테 알림 (fallback 없음 — 깔끔하게 실패)
     if (toDeduct > 0) {
-      console.warn(`[Ship] ${l.color}/${l.size} fallback 차감 ${toDeduct} pcs`);
-      for (const wId of allDeductWhIds) {
-        if (toDeduct <= 0) break;
-        const { data: invRows } = await db.from('inventory')
-          .select('id, qty_on_hand, qty_committed')
-          .eq('color', (l.color||'').toUpperCase())
-          .eq('size', (l.size||'').toUpperCase())
-          .eq('warehouse_id', wId)
-          .order('qty_on_hand', { ascending: false });
-        
-        for (const inv of (invRows || [])) {
-          if (toDeduct <= 0) break;
-          const deduct = Math.min(toDeduct, inv.qty_on_hand || 0);
-          
-          if (deduct > 0) {
-            // Fallback 도 changeInventory 사용 — bin 모르면 inventory.location 사용
-            const { data: invFull } = await db.from('inventory')
-              .select('location, qty_committed').eq('id', inv.id).single();
-            const fallbackBin = invFull?.location || 'FALLBACK';
-            
-            const result = await changeInventory({
-              transaction_id: shipTxnId,
-              inventory_id: inv.id,
-              bin_code: fallbackBin,
-              delta: -deduct,
-              action: 'order_ship',
-              detail_metadata: {
-                order_id: orderId,
-                order_line_id: l.id,
-                fallback: true
-              }
-            });
-            
-            if (!result.success) {
-              shipErrors.push(`${l.color}/${l.size} fallback: ${result.error}`);
-              continue;
-            }
-            
-            // qty_committed 차감
-            if (invFull) {
-              const commitRelease = Math.min(invFull.qty_committed || 0, deduct);
-              if (commitRelease > 0) {
-                await db.from('inventory').update({
-                  qty_committed: Math.max(0, (invFull.qty_committed || 0) - commitRelease)
-                }).eq('id', inv.id);
-              }
-            }
-            
-            toDeduct -= deduct;
-          }
-        }
-      }
+      shipErrors.push(`${l.color}/${l.size}: ${toDeduct} pcs 차감 못 함 (alloc_detail 부정확)`);
+      console.warn(`[Ship] ${l.color}/${l.size} 차감 부족 ${toDeduct} pcs — alloc_detail 확인 필요`);
     }
     
     // back qty 계산
