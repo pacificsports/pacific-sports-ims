@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_046000 — 불량 배지 CA 카드에 안 뜨던 버그 fix: defects.select 에서 wh 컬럼 빠져서 항상 SC 로 매핑됐음. wh 추가. + Mark as Shipped 재고 차감 깨끗하게 새로 작성 (RPC 만, fallback 없음). -->
+<!-- BUILD: 20260508_048000 — Mark as Shipped 모달의 box 수 계산 fix: 현재 출고 wh 에 해당하는 라인만 카운트 (이전엔 모든 라인 합산해서 SC 라인까지 포함됨). UPS/FedEx 의 tracking 행도 정확한 박스 수만큼 생성. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -11592,11 +11592,10 @@ async function loadOrderStatus() {
     }
   });
 
-  // 새 Emergency/불량 생기면 알림음
+  // 새 Emergency 생기면 알림음 (불량 알림음은 제거됨 - BUILD 047000)
   const newEmergencyCount = Object.keys(window._cardEmergencyMap).length;
   const newDefectCount = Object.keys(window._cardDefectMap).length;
   if (newEmergencyCount > prevEmergencyCount) playEmergencyAlert();
-  else if (newDefectCount > prevDefectCount) playDefectAlert();
 
   let orders = data || [];
   // Phase 3: sub-order(SC→CA Transfer) 도 카드로 표시 (별도 행)
@@ -29647,9 +29646,17 @@ async function doShipped(orderId, wh) {
     const sc2caMergedToCa = ['ca_received','invoiced'].includes(orderForBox?.sc2ca_status);
     if (lines && lines.length > 0) {
       const isCA = wh === 'CA';
+      const isSc2ca = wh === 'SC2CA';
+      // 현재 출고 wh 에 해당하는 라인만 필터 (다른 wh 라인 카운트하지 않음)
+      const relevantLines = lines.filter(l => {
+        if (isSc2ca) return l.stage_for_ca_truck === true;
+        if (isCA)    return l.stage_for_ca_truck !== true && (l.wh === 'CA' || l.wh === 'SC&CA');
+        // SC
+        return l.stage_for_ca_truck !== true && (l.wh === 'SC' || l.wh === 'SC&CA' || !l.wh);
+      });
       let totalFullBoxes = 0;
       let totalPcrPcs = 0;
-      lines.forEach(l => {
+      relevantLines.forEach(l => {
         const ppb = l.pcs_per_box || l.styles?.box_qty || 60;
         // ── 새 구조 (2026-05): 메인 라인은 alloc_local (CA 직접) + alloc_from_other_wh (SC2CA) 둘 다 가짐
         //    sc2caMergedToCa 일 때 alloc_from_other_wh 도 박스에 합산 (CA 가 다 받았으므로)
@@ -29697,7 +29704,7 @@ async function doShipped(orderId, wh) {
           });
         }
       });
-      const ppbFirst = lines[0]?.pcs_per_box || lines[0]?.styles?.box_qty || 60;
+      const ppbFirst = relevantLines[0]?.pcs_per_box || relevantLines[0]?.styles?.box_qty || 60;
       const pcrBoxes = totalPcrPcs > 0 ? Math.ceil(totalPcrPcs / ppbFirst) : 0;
       const calcBoxes = totalFullBoxes + pcrBoxes;
       if (calcBoxes > 0) {
