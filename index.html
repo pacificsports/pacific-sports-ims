@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_049000 — Mark as Shipped box 수 계산 진짜 fix: select 에 wh 컬럼 빠져서 relevantLines 필터가 모든 라인 떨어뜨림 → calcBoxes=0 → 화면 하드코딩 1 그대로. wh 추가. -->
+<!-- BUILD: 20260508_050000 — Mark as Shipped filled 계산 단순화: 이전엔 _trBins (TRANSFER bin 과 같은 이름의 일반 bin 제외) 버그로 A01C 가 제외됨 → fallback 으로 옛 inventory 에서 70 통째 차감. 이제 단순히 allocBins.pcs 합산. _trBins 제거, fallback 제거. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -30429,70 +30429,45 @@ async function _doShippedCoreInner(emp) {
   for (const l of lines) {
     const lineWh = l.wh || 'SC';
 
-    // ── alloc_detail 기준으로 filled 계산 (PCR 포함)
+    // ── alloc_detail 기준으로 차감할 bin 목록 만들기 ──
+    // 룰:
+    //   - "TRANSFER|" 키 → 무시 (이미 transfer 됨)
+    //   - 나머지 키 → 차감 대상 (각 키의 pcs 만큼)
+    //   - filled = 차감할 pcs 의 합
     const allocSC = l.alloc_detail || {};
     const allocCA = l.alloc_ca_detail || {};
-
-    const allocPcs = (allocObj) => {
-      const _ents = Object.entries(allocObj);
-      const _trBins = new Set(_ents.filter(([k]) => k.includes('TRANSFER|')).map(([k]) => k.split('|')[1]));
-      return _ents.filter(([k]) => !k.includes('TRANSFER|') && !_trBins.has(k))
-        .reduce((s, [, v]) => s + (typeof v === 'object' ? (v.pcs || 0) : (v || 0)), 0);
-    };
-
-    let filled = 0;
-    // pcr_prepared_lines에서 실제 준비된 수량 확인 (직원이 줄인 경우)
+    const currentAllocObj = wh === 'CA' ? allocCA : allocSC;
+    
+    const allocBins = Object.entries(currentAllocObj)
+      .filter(([k]) => !k.includes('TRANSFER|'))
+      .map(([binCode, val]) => ({
+        bin_code: binCode,
+        pcs: typeof val === 'object' ? (val.pcs || 0) : (val || 0)
+      }))
+      .filter(b => b.pcs > 0);
+    
+    // pcr_prepared_lines 오버라이드 (직원이 PC room 에서 수량 줄인 경우 — PCR 분량만 조정)
     const _prepKey = wh === 'CA' ? 'ca_pcr_prepared_lines' : 'sc_pcr_prepared_lines';
     const _prepJson = order[_prepKey];
-    let _preparedQty = null;
     if (_prepJson) {
       try {
         const _prepArr = typeof _prepJson === 'string' ? JSON.parse(_prepJson) : _prepJson;
         const _prepMatch = _prepArr.find(pl => pl.color === l.color && pl.size === l.size);
-        if (_prepMatch && _prepMatch.preparedQty !== undefined) _preparedQty = _prepMatch.preparedQty;
-      } catch(e) {}
-    }
-
-    if (lineWh === 'SC&CA') {
-      filled = wh === 'CA' ? (allocPcs(allocCA) || 0) : (allocPcs(allocSC) || 0);
-    } else if (lineWh === 'CA') {
-      filled = allocPcs(allocCA) || allocPcs(allocSC);
-    } else {
-      filled = allocPcs(allocSC);
-    }
-
-    // pcr_prepared_lines 오버라이드 (직원이 수량 줄인 경우)
-    if (_preparedQty !== null) {
-      const _allocObj = wh === 'CA' ? allocCA : allocSC;
-      const _pcrOrig = Object.entries(_allocObj).filter(([k])=>k.includes('PCR|PCR')).reduce((s,[,v])=>s+((typeof v==='object'?v.pcs:v)||0),0);
-      filled = (filled - _pcrOrig) + _preparedQty;
-    }
-
-    // alloc이 없으면 기존 inventory 차감 방식으로 fallback (filled 만 계산)
-    if (filled === 0) {
-      const whIdsCalc = lineWh === 'SC&CA'
-        ? [scWh?.id, caWh?.id].filter(Boolean)
-        : lineWh === 'CA' ? [caWh?.id] : [scWh?.id];
-
-      let toFill = l.qty_pieces;
-      for (const wId of whIdsCalc) {
-        if (toFill <= 0) break;
-        const { data: invRows } = await db.from('inventory')
-          .select('id, qty_on_hand, qty_committed, location')
-          .eq('color', (l.color||'').toUpperCase())
-          .eq('size', (l.size||'').toUpperCase())
-          .eq('warehouse_id', wId)
-          .order('qty_on_hand', { ascending: false });
-        for (const inv of (invRows || [])) {
-          if (toFill <= 0) break;
-          const deduct = Math.min(toFill, inv.qty_on_hand || 0);
-          if (deduct > 0) {
-            filled += deduct;
-            toFill -= deduct;
+        if (_prepMatch && _prepMatch.preparedQty !== undefined) {
+          // PCR 키들의 pcs 를 _preparedQty 로 조정 (비례 분배)
+          const pcrEntries = allocBins.filter(ab => ab.bin_code.toUpperCase().includes('PCR|'));
+          const pcrOrig = pcrEntries.reduce((s, ab) => s + ab.pcs, 0);
+          if (pcrOrig !== _prepMatch.preparedQty && pcrOrig > 0) {
+            const ratio = _prepMatch.preparedQty / pcrOrig;
+            pcrEntries.forEach(ab => { ab.pcs = Math.round(ab.pcs * ratio); });
           }
         }
-      }
+      } catch(e) {}
     }
+    
+    const filled = allocBins.reduce((s, ab) => s + ab.pcs, 0);
+
+    console.log(`[Ship deduction] line ${l.color}/${l.size} filled=${filled}, allocBins:`, allocBins);
 
     // ── 실제 inventory 차감 — changeInventory 사용 ──
     const whIds = lineWh === 'SC&CA'
@@ -30504,18 +30479,6 @@ async function _doShippedCoreInner(emp) {
         ? [warehouses.find(w=>w.code==='CA-PCR')?.id].filter(Boolean)
         : [warehouses.find(w=>w.code==='SC-PCR')?.id].filter(Boolean);
     const allDeductWhIds = [...whIds, ...pcrWhIds];
-    
-    // 현재 WH의 alloc_detail (어떤 bin에서 빼야 할지 명시됨)
-    const currentAllocObj = wh === 'CA' ? allocCA : allocSC;
-    const allocBins = Object.entries(currentAllocObj)
-      .filter(([k]) => !k.includes('TRANSFER|'))
-      .map(([binCode, val]) => ({
-        bin_code: binCode,
-        pcs: typeof val === 'object' ? (val.pcs || 0) : (val || 0)
-      }))
-      .filter(b => b.pcs > 0);
-    
-    console.log(`[Ship deduction] line ${l.color}/${l.size} filled=${filled}, allocBins:`, allocBins);
     
     let toDeduct = filled;
     
