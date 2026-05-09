@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_050000 — Mark as Shipped filled 계산 단순화: 이전엔 _trBins (TRANSFER bin 과 같은 이름의 일반 bin 제외) 버그로 A01C 가 제외됨 → fallback 으로 옛 inventory 에서 70 통째 차감. 이제 단순히 allocBins.pcs 합산. _trBins 제거, fallback 제거. -->
+<!-- BUILD: 20260508_051100 — Bin Change Log 화면 (BUILD 051000) + 문법 에러 fix (openInventoryLog 함수 정의 복원) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -577,6 +577,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <button class="btn btn-sm" style="background:#e0f2fe;color:#0c4a6e;border-color:#7dd3fc;" onclick="openImportModal()">📥 Import</button>
             <button class="btn btn-sm" style="background:#fef3c7;color:#92400e;border-color:#fde68a;" onclick="openAdjustInventory()">✏️ Adjust Qty</button>
             <button class="btn btn-sm" style="background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="openInventoryLog()">📋 Change Log</button>
+            <button class="btn btn-sm" style="background:#dbeafe;color:#1e3a8a;border-color:#93c5fd;" onclick="openBinChangeLog()" title="inventory_bins 의 모든 변경 자동 기록 (BUILD 051000)">📋 Bin Log 🆕</button>
             <button class="btn btn-sm" style="background:#ede9fe;color:#5b21b6;border-color:#c4b5fd;" onclick="openTransactions()">📜 Transactions</button>
             <button class="btn btn-sm" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;" onclick="openPallets()">🚚 Pallets</button>
             <button class="btn btn-sm" style="background:#fce7f3;color:#9d174d;border-color:#f9a8d4;" onclick="openReconcileModal()" title="Davinci ↔ 내 시스템 비교">🔍 Reconcile</button>
@@ -21322,6 +21323,81 @@ async function submitProcessBatch() {
     alert('❌ Processing 실패:\n' + e.message);
   }
 }
+
+// ════════════════════════════════════════════════════════════════════
+// Bin Change Log (BUILD 051000)
+// inventory_bin_logs 테이블 기반 — 트리거가 자동 기록
+// inventory_bins 의 모든 변경을 추적 (RPC 거치든 직접이든)
+// ════════════════════════════════════════════════════════════════════
+async function openBinChangeLog() {
+  document.getElementById('bin-log-modal').style.display = 'flex';
+  // 필터 초기화
+  const skuEl = document.getElementById('bin-log-sku');
+  const actionEl = document.getElementById('bin-log-action');
+  if (skuEl) skuEl.value = '';
+  if (actionEl) actionEl.value = '';
+  await loadBinChangeLog();
+}
+
+async function loadBinChangeLog() {
+  const sku = (document.getElementById('bin-log-sku')?.value || '').trim();
+  const action = document.getElementById('bin-log-action')?.value || '';
+  const tbody = document.getElementById('bin-log-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:#9ca3af;">로딩중...</td></tr>';
+  
+  let query = db.from('inventory_bin_logs')
+    .select('*')
+    .order('occurred_at', { ascending: false })
+    .limit(300);
+  
+  if (sku) query = query.ilike('sku_id', `%${sku}%`);
+  if (action) query = query.eq('action', action);
+  
+  const { data: logs, error } = await query;
+  if (error) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:#dc2626;">로드 실패: ' + error.message + '</td></tr>';
+    return;
+  }
+  
+  if (!logs || logs.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:#9ca3af;">기록 없음</td></tr>';
+    return;
+  }
+  
+  // 창고 lookup (id → code)
+  const whMap = {};
+  warehouses.forEach(w => { whMap[w.id] = w.code; });
+  
+  const actionStyle = {
+    'INSERT': { bg: '#ecfdf5', color: '#065f46', label: 'INSERT' },
+    'UPDATE': { bg: '#eff6ff', color: '#1d4ed8', label: 'UPDATE' },
+    'DELETE': { bg: '#fef2f2', color: '#dc2626', label: 'DELETE' }
+  };
+  
+  tbody.innerHTML = logs.map(l => {
+    const whCode = whMap[l.warehouse_id] || '?';
+    const a = actionStyle[l.action] || { bg: '#f3f4f6', color: '#374151', label: l.action };
+    const dt = new Date(l.occurred_at);
+    const dtStr = dt.toLocaleString('ko-KR', { 
+      year: '2-digit', month: '2-digit', day: '2-digit', 
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false 
+    });
+    const deltaSign = l.qty_delta > 0 ? '+' : '';
+    const deltaColor = l.qty_delta > 0 ? '#15803d' : (l.qty_delta < 0 ? '#dc2626' : '#6b7280');
+    return `<tr>
+      <td style="white-space:nowrap;font-family:monospace;font-size:11px;">${dtStr}</td>
+      <td style="font-weight:600;">${l.sku_id || '-'}</td>
+      <td>${whCode}</td>
+      <td style="font-family:monospace;">${l.bin_code || '-'}</td>
+      <td><span style="background:${a.bg};color:${a.color};padding:2px 8px;border-radius:4px;font-weight:700;font-size:11px;">${a.label}</span></td>
+      <td style="text-align:right;">${l.qty_before ?? '-'}</td>
+      <td style="text-align:right;">${l.qty_after ?? '-'}</td>
+      <td style="text-align:right;font-weight:700;color:${deltaColor};">${deltaSign}${l.qty_delta ?? 0}</td>
+    </tr>`;
+  }).join('');
+}
+
 
 async function openInventoryLog() {
   document.getElementById('inv-log-filter-style').value = '';
@@ -43744,6 +43820,49 @@ function showCreditHoldFlash(overAmt) {
         <button class="btn" onclick="document.getElementById('process-batch-modal').style.display='none'">Cancel</button>
         <button class="btn btn-primary" onclick="submitProcessBatch()" style="background:#059669;border-color:#047857;">✓ 처리 완료 (Commit)</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bin Change Log Modal (BUILD 051000) — inventory_bin_logs 기반 -->
+<div id="bin-log-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(1100px,95vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:18px 24px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-size:16px;font-weight:800;color:#1e3a8a;">📋 Bin Change Log</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:2px;">inventory_bins 의 모든 변경 자동 기록 (트리거 기반)</div>
+      </div>
+      <button onclick="document.getElementById('bin-log-modal').style.display='none';" style="background:none;border:none;font-size:24px;cursor:pointer;color:#6b7280;">×</button>
+    </div>
+    <div style="padding:14px 24px;border-bottom:1px solid #e5e7eb;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <input id="bin-log-sku" type="text" placeholder="SKU 검색 (예: 1248blacks)" style="flex:1;min-width:200px;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;" oninput="if(this._t)clearTimeout(this._t);this._t=setTimeout(loadBinChangeLog,300);"/>
+      <select id="bin-log-action" onchange="loadBinChangeLog()" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;">
+        <option value="">전체 액션</option>
+        <option value="INSERT">INSERT</option>
+        <option value="UPDATE">UPDATE</option>
+        <option value="DELETE">DELETE</option>
+      </select>
+      <button onclick="loadBinChangeLog()" style="padding:6px 14px;background:#1e3a8a;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">🔄 새로고침</button>
+    </div>
+    <div style="overflow:auto;flex:1;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead style="position:sticky;top:0;background:#f9fafb;z-index:1;">
+          <tr style="border-bottom:1px solid #e5e7eb;">
+            <th style="padding:8px 10px;text-align:left;color:#374151;font-weight:700;">시간</th>
+            <th style="padding:8px 10px;text-align:left;color:#374151;font-weight:700;">SKU</th>
+            <th style="padding:8px 10px;text-align:left;color:#374151;font-weight:700;">창고</th>
+            <th style="padding:8px 10px;text-align:left;color:#374151;font-weight:700;">Bin</th>
+            <th style="padding:8px 10px;text-align:left;color:#374151;font-weight:700;">액션</th>
+            <th style="padding:8px 10px;text-align:right;color:#374151;font-weight:700;">전</th>
+            <th style="padding:8px 10px;text-align:right;color:#374151;font-weight:700;">후</th>
+            <th style="padding:8px 10px;text-align:right;color:#374151;font-weight:700;">Δ</th>
+          </tr>
+        </thead>
+        <tbody id="bin-log-tbody"></tbody>
+      </table>
+    </div>
+    <div style="padding:10px 24px;border-top:1px solid #e5e7eb;font-size:11px;color:#6b7280;">
+      최근 300건. 더 보려면 SKU 검색으로 좁히기.
     </div>
   </div>
 </div>
