@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_051100 — Bin Change Log 화면 (BUILD 051000) + 문법 에러 fix (openInventoryLog 함수 정의 복원) -->
+<!-- BUILD: 20260508_053000 — SKU Master 화면 추가 (Inventory > SKU Master): 스타일별 그룹 list, 검색/필터, 활성/비활성 토글, 새 SKU 추가 (inventory_bins 4 row 자동 생성), color/size/variant 수정. invApi 의 inventory_bin_logs 트리거가 자동으로 변경 추적. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -513,6 +513,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
       🏭 Inventory ▾
       <div class="ntab-dd" id="dd-inventory">
         <div onclick="showPanel('inventory',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🔍 Search by Item</div>
+        <div onclick="showPanel('skumaster',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">📋 SKU Master 🆕</div>
         <div onclick="showPanel('pcroom',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">💻 PC Room</div>
         <div onclick="showPanel('receiving',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">📥 Receiving</div>
         <div onclick="showPanel('intransit',document.getElementById('ntab-inventory'));hideDropdown('dd-inventory')">🚛 In Transit</div>
@@ -578,6 +579,7 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
             <button class="btn btn-sm" style="background:#fef3c7;color:#92400e;border-color:#fde68a;" onclick="openAdjustInventory()">✏️ Adjust Qty</button>
             <button class="btn btn-sm" style="background:#f0fdf4;color:#15803d;border-color:#86efac;" onclick="openInventoryLog()">📋 Change Log</button>
             <button class="btn btn-sm" style="background:#dbeafe;color:#1e3a8a;border-color:#93c5fd;" onclick="openBinChangeLog()" title="inventory_bins 의 모든 변경 자동 기록 (BUILD 051000)">📋 Bin Log 🆕</button>
+            <button class="btn btn-sm" style="background:#fef9c3;color:#854d0e;border-color:#fde047;" onclick="exportSkuMaster()" title="SKU 마스터 다운로드 (CSV)">📥 SKU Export</button>
             <button class="btn btn-sm" style="background:#ede9fe;color:#5b21b6;border-color:#c4b5fd;" onclick="openTransactions()">📜 Transactions</button>
             <button class="btn btn-sm" style="background:#fef3c7;color:#92400e;border-color:#fcd34d;" onclick="openPallets()">🚚 Pallets</button>
             <button class="btn btn-sm" style="background:#fce7f3;color:#9d174d;border-color:#f9a8d4;" onclick="openReconcileModal()" title="Davinci ↔ 내 시스템 비교">🔍 Reconcile</button>
@@ -1342,6 +1344,54 @@ body{font-family:'IBM Plex Sans',sans-serif;background:var(--bg);color:var(--tex
           <span class="card-info" id="styles-count"></span>
         </div>
         <div id="styles-table-wrap"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+
+    <!-- ── SKU MASTER (BUILD 053000) ── -->
+    <div class="panel" id="panel-skumaster">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div>
+          <div style="font-size:18px;font-weight:800;color:#111827;">📋 SKU Master</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">SKU 마스터 데이터 — 스타일별로 그룹</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="text" id="skum-search" placeholder="검색 (style/color/size/sku_id)" class="fi" style="width:240px;font-size:12px;" oninput="if(this._t)clearTimeout(this._t);this._t=setTimeout(renderSkuMaster,250);">
+          <select id="skum-filter-active" class="fi" style="font-size:12px;width:130px;" onchange="renderSkuMaster()">
+            <option value="active">활성만</option>
+            <option value="inactive">비활성만</option>
+            <option value="all">전체</option>
+          </select>
+          <select id="skum-filter-stock" class="fi" style="font-size:12px;width:130px;" onchange="renderSkuMaster()">
+            <option value="">재고 무관</option>
+            <option value="has">재고 있음</option>
+            <option value="none">재고 없음</option>
+          </select>
+          <button class="btn btn-primary" onclick="openAddSku()">+ Add SKU</button>
+          <button class="btn" onclick="loadSkuMaster()">🔄 새로고침</button>
+        </div>
+      </div>
+      <!-- 통계 -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;" id="skum-kpi-row">
+        <div class="kpi" style="border-left:4px solid #1e3a8a;">
+          <div class="kpi-label">📋 총 SKU</div>
+          <div class="kpi-val" id="skum-kpi-total">—</div>
+        </div>
+        <div class="kpi" style="border-left:4px solid #16a34a;">
+          <div class="kpi-label">✅ 활성</div>
+          <div class="kpi-val" id="skum-kpi-active">—</div>
+        </div>
+        <div class="kpi" style="border-left:4px solid #6b7280;">
+          <div class="kpi-label">⏸ 비활성</div>
+          <div class="kpi-val" id="skum-kpi-inactive">—</div>
+        </div>
+        <div class="kpi" style="border-left:4px solid #f59e0b;">
+          <div class="kpi-label">📦 재고 있는 SKU</div>
+          <div class="kpi-val" id="skum-kpi-has-stock">—</div>
+        </div>
+      </div>
+      <!-- 스타일별 그룹 list -->
+      <div id="skum-table-wrap">
+        <div class="loading"><div class="spinner"></div></div>
       </div>
     </div>
 
@@ -5750,6 +5800,41 @@ const _ddTriggerMap = {
   'dd-inventory': 'ntab-inventory',
   'dd-accounting': 'ntab-accounting'
 };
+
+// ════════════════════════════════════════════════════════════════════
+// 모바일 (터치 디바이스) 에서 드롭다운 hover 동작 제거 (BUILD 052000)
+// 이전: onmouseenter/onmouseleave 가 모바일에서 잘못 트리거 → 드롭다운 떴다 사라짐
+// 후:   터치 디바이스면 hover 이벤트 제거, click 만 작동
+// ════════════════════════════════════════════════════════════════════
+(function fixMobileDropdowns() {
+  // hover 가능한 디바이스인지 (CSS media query 와 동일한 방식)
+  const canHover = window.matchMedia('(hover: hover)').matches;
+  if (canHover) return;  // 데스크톱은 그대로
+  
+  // DOM 준비된 후 실행
+  const removeHover = () => {
+    document.querySelectorAll('.ntab-dropdown').forEach(el => {
+      el.removeAttribute('onmouseenter');
+      el.removeAttribute('onmouseleave');
+      el.onmouseenter = null;
+      el.onmouseleave = null;
+    });
+    
+    // 드롭다운 외부 클릭 시 닫기 (모바일 UX)
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.ntab-dropdown') && !e.target.closest('.ntab-dd')) {
+        document.querySelectorAll('.ntab-dd').forEach(d => d.style.display = 'none');
+      }
+    });
+  };
+  
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', removeHover);
+  } else {
+    removeHover();
+  }
+})();
+
 function showDropdown(id) {
   const dd = document.getElementById(id);
   if (!dd) return;
@@ -5837,6 +5922,7 @@ function showPanel(name, el, subview = null, fromPopstate = false) {
   if (name === 'packinglists') loadPackingLists();
   if (name === 'backorders') loadBackOrders();
   if (name === 'styles') loadStyles();
+  if (name === 'skumaster') loadSkuMaster();
   if (name === 'customers') loadCustomers();
   if (name === 'receiving') { loadReceivingHistory(); loadReceivingPOList(); }
   if (name === 'intransit') loadInTransit();
@@ -21325,7 +21411,103 @@ async function submitProcessBatch() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Bin Change Log (BUILD 051000)
+// SKU Master Export (BUILD 053000)
+// 현재 skus 테이블 → CSV 다운로드 → 사용자가 엑셀로 정리 → 다시 import
+// ════════════════════════════════════════════════════════════════════
+async function exportSkuMaster() {
+  showToast('⏳ SKU 마스터 가져오는 중...');
+  
+  // skus + styles join 으로 풍부한 정보
+  const { data: skus, error } = await db.from('skus')
+    .select('sku_id, style_id, color, size, variant, is_active, styles(style_number, description, box_qty)')
+    .order('sku_id');
+  
+  if (error) {
+    alert('SKU 가져오기 실패: ' + error.message);
+    return;
+  }
+  
+  if (!skus || skus.length === 0) {
+    alert('SKU 가 없습니다.');
+    return;
+  }
+  
+  // inventory_bins 의 현재 재고도 join
+  const { data: binAggregates } = await db.from('inventory_bins')
+    .select('sku_id, warehouse_id, qty');
+  
+  // 창고 lookup
+  const whMap = {};
+  warehouses.forEach(w => { whMap[w.id] = w.code; });
+  
+  // SKU 별 창고별 재고 합계
+  const stockBySkuWh = {};
+  (binAggregates || []).forEach(b => {
+    const whCode = whMap[b.warehouse_id];
+    if (!whCode) return;
+    if (!stockBySkuWh[b.sku_id]) stockBySkuWh[b.sku_id] = {};
+    stockBySkuWh[b.sku_id][whCode] = (stockBySkuWh[b.sku_id][whCode] || 0) + (b.qty || 0);
+  });
+  
+  // CSV 생성
+  const headers = [
+    'sku_id', 'style_number', 'description', 'color', 'size', 'variant',
+    'pcs_per_box', 'is_active',
+    'sc_qty', 'sc_pcr_qty', 'ca_qty', 'ca_pcr_qty', 'total_qty',
+    'review_action', 'notes'
+  ];
+  
+  const rows = skus.map(s => {
+    const stock = stockBySkuWh[s.sku_id] || {};
+    const sc = stock['SC'] || 0;
+    const scPcr = stock['SC-PCR'] || 0;
+    const ca = stock['CA'] || 0;
+    const caPcr = stock['CA-PCR'] || 0;
+    const total = sc + scPcr + ca + caPcr;
+    return [
+      s.sku_id,
+      s.styles?.style_number || '',
+      s.styles?.description || '',
+      s.color || '',
+      s.size || '',
+      s.variant || '',
+      s.styles?.box_qty || '',
+      s.is_active ? 'TRUE' : 'FALSE',
+      sc, scPcr, ca, caPcr, total,
+      '',  // review_action: 사용자가 채울 (KEEP / DEACTIVATE / DELETE / FIX)
+      ''   // notes: 사용자 메모
+    ];
+  });
+  
+  // CSV 문자열 만들기 (값에 콤마/따옴표 있으면 escape)
+  const csvEscape = (val) => {
+    const s = String(val ?? '');
+    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  };
+  
+  const csv = '\ufeff' +  // BOM (한글 깨짐 방지)
+    headers.join(',') + '\n' +
+    rows.map(r => r.map(csvEscape).join(',')).join('\n');
+  
+  // 다운로드
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const today = new Date().toISOString().slice(0, 10);
+  a.download = `sku_master_${today}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  
+  showToast(`✅ SKU 마스터 다운로드 완료 (${skus.length}개)`);
+}
+
+
 // inventory_bin_logs 테이블 기반 — 트리거가 자동 기록
 // inventory_bins 의 모든 변경을 추적 (RPC 거치든 직접이든)
 // ════════════════════════════════════════════════════════════════════
@@ -34945,6 +35127,362 @@ async function loadReceivingHistory() {
 // ══════════════════════════════════
 // STYLES
 // ══════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
+// SKU MASTER (BUILD 053000)
+// 스타일별 그룹으로 SKU 보기 + 편집 + 추가 + 비활성화
+// inventory_bins 4 row 자동 관리
+// ════════════════════════════════════════════════════════════════════
+let _skumData = null;  // {skus, stockMap, styleMap}
+
+async function loadSkuMaster() {
+  const wrap = document.getElementById('skum-table-wrap');
+  if (wrap) wrap.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  
+  // 1. 전체 SKU + style 정보
+  const { data: skus, error } = await db.from('skus')
+    .select('sku_id, style_id, color, size, variant, is_active, styles(style_number, description, box_qty)')
+    .order('sku_id');
+  
+  if (error) {
+    wrap.innerHTML = '<div style="padding:20px;color:#dc2626;">SKU 로드 실패: ' + error.message + '</div>';
+    return;
+  }
+  
+  // 2. 모든 inventory_bins 재고 합산 (sku 별 + 창고 별)
+  const { data: bins } = await db.from('inventory_bins').select('sku_id, warehouse_id, qty');
+  const whMap = {};
+  warehouses.forEach(w => { whMap[w.id] = w.code; });
+  
+  const stockMap = {};  // stockMap[sku_id][whCode] = qty
+  (bins || []).forEach(b => {
+    const wh = whMap[b.warehouse_id];
+    if (!wh) return;
+    if (!stockMap[b.sku_id]) stockMap[b.sku_id] = {};
+    stockMap[b.sku_id][wh] = (stockMap[b.sku_id][wh] || 0) + (b.qty || 0);
+  });
+  
+  // 3. 스타일별 그룹화
+  const styleMap = {};  // styleMap[style_id] = { style_number, description, box_qty, skus: [...] }
+  (skus || []).forEach(s => {
+    const sid = s.style_id;
+    if (!styleMap[sid]) {
+      styleMap[sid] = {
+        style_id: sid,
+        style_number: s.styles?.style_number || '?',
+        description: s.styles?.description || '',
+        box_qty: s.styles?.box_qty || 60,
+        skus: []
+      };
+    }
+    styleMap[sid].skus.push(s);
+  });
+  
+  _skumData = { skus, stockMap, styleMap };
+  
+  // KPI
+  const total = (skus || []).length;
+  const active = (skus || []).filter(s => s.is_active).length;
+  const hasStock = Object.entries(stockMap).filter(([sk, st]) => 
+    Object.values(st).some(q => q > 0)
+  ).length;
+  document.getElementById('skum-kpi-total').textContent = total.toLocaleString();
+  document.getElementById('skum-kpi-active').textContent = active.toLocaleString();
+  document.getElementById('skum-kpi-inactive').textContent = (total - active).toLocaleString();
+  document.getElementById('skum-kpi-has-stock').textContent = hasStock.toLocaleString();
+  
+  renderSkuMaster();
+}
+
+function renderSkuMaster() {
+  if (!_skumData) return;
+  const wrap = document.getElementById('skum-table-wrap');
+  if (!wrap) return;
+  
+  const search = (document.getElementById('skum-search')?.value || '').trim().toLowerCase();
+  const activeFilter = document.getElementById('skum-filter-active')?.value || 'active';
+  const stockFilter = document.getElementById('skum-filter-stock')?.value || '';
+  const { stockMap, styleMap } = _skumData;
+  
+  // 사이즈 정렬 순서
+  const sizeOrder = ['XXS','XS','S','M','L','XL','XXL','2XL','3XL','4XL','5XL','6XL'];
+  const sizeRank = (sz) => {
+    const i = sizeOrder.indexOf((sz || '').toUpperCase());
+    return i < 0 ? 999 : i;
+  };
+  
+  // 스타일 정렬: style_number 순
+  const styles = Object.values(styleMap).sort((a, b) => 
+    String(a.style_number).localeCompare(String(b.style_number), undefined, {numeric: true})
+  );
+  
+  let html = '';
+  let visibleStyles = 0;
+  let visibleSkus = 0;
+  
+  for (const st of styles) {
+    // 이 스타일의 SKU 들 필터링
+    let filtered = st.skus.filter(s => {
+      if (activeFilter === 'active' && !s.is_active) return false;
+      if (activeFilter === 'inactive' && s.is_active) return false;
+      
+      const stock = stockMap[s.sku_id] || {};
+      const totalQty = (stock.SC||0) + (stock['SC-PCR']||0) + (stock.CA||0) + (stock['CA-PCR']||0);
+      if (stockFilter === 'has' && totalQty <= 0) return false;
+      if (stockFilter === 'none' && totalQty > 0) return false;
+      
+      if (search) {
+        const hay = `${st.style_number} ${st.description} ${s.color} ${s.size} ${s.sku_id} ${s.variant}`.toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      
+      return true;
+    });
+    
+    if (filtered.length === 0) continue;
+    
+    // 색상 + 사이즈 정렬
+    filtered.sort((a, b) => {
+      const c = String(a.color || '').localeCompare(String(b.color || ''));
+      if (c !== 0) return c;
+      return sizeRank(a.size) - sizeRank(b.size);
+    });
+    
+    visibleStyles++;
+    visibleSkus += filtered.length;
+    
+    html += `<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:12px;overflow:hidden;">
+      <div style="background:#f8fafc;padding:10px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <span style="font-weight:800;font-size:14px;color:#1e3a8a;">#${st.style_number}</span>
+          <span style="color:#6b7280;margin-left:8px;">${st.description}</span>
+          <span style="color:#9ca3af;font-size:11px;margin-left:8px;">박스당 ${st.box_qty}pcs</span>
+        </div>
+        <div style="font-size:11px;color:#6b7280;">${filtered.length}개 SKU</div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead style="background:#fafafa;">
+          <tr style="border-bottom:1px solid #e5e7eb;">
+            <th style="padding:8px 10px;text-align:left;color:#374151;">SKU</th>
+            <th style="padding:8px 10px;text-align:left;color:#374151;">Color</th>
+            <th style="padding:8px 10px;text-align:left;color:#374151;">Size</th>
+            <th style="padding:8px 10px;text-align:left;color:#374151;">Variant</th>
+            <th style="padding:8px 10px;text-align:right;color:#374151;">SC</th>
+            <th style="padding:8px 10px;text-align:right;color:#374151;">SC-PCR</th>
+            <th style="padding:8px 10px;text-align:right;color:#374151;">CA</th>
+            <th style="padding:8px 10px;text-align:right;color:#374151;">CA-PCR</th>
+            <th style="padding:8px 10px;text-align:right;color:#374151;">Total</th>
+            <th style="padding:8px 10px;text-align:center;color:#374151;">상태</th>
+            <th style="padding:8px 10px;text-align:center;color:#374151;">작업</th>
+          </tr>
+        </thead>
+        <tbody>`;
+    
+    filtered.forEach(s => {
+      const stock = stockMap[s.sku_id] || {};
+      const sc = stock.SC || 0;
+      const scPcr = stock['SC-PCR'] || 0;
+      const ca = stock.CA || 0;
+      const caPcr = stock['CA-PCR'] || 0;
+      const totalQty = sc + scPcr + ca + caPcr;
+      const variantBg = s.variant === 'Side Seam' ? '#fef3c7' : '#dbeafe';
+      const variantColor = s.variant === 'Side Seam' ? '#92400e' : '#1e3a8a';
+      const activeBg = s.is_active ? '#dcfce7' : '#f3f4f6';
+      const activeColor = s.is_active ? '#15803d' : '#6b7280';
+      const activeText = s.is_active ? '활성' : '비활성';
+      
+      html += `<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:6px 10px;font-family:monospace;font-weight:600;">${s.sku_id}</td>
+        <td style="padding:6px 10px;">${s.color || '-'}</td>
+        <td style="padding:6px 10px;font-weight:600;">${s.size || '-'}</td>
+        <td style="padding:6px 10px;"><span style="background:${variantBg};color:${variantColor};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${s.variant || '?'}</span></td>
+        <td style="padding:6px 10px;text-align:right;${sc>0?'font-weight:700;':''}">${sc}</td>
+        <td style="padding:6px 10px;text-align:right;${scPcr>0?'font-weight:700;color:#92400e;':''}">${scPcr}</td>
+        <td style="padding:6px 10px;text-align:right;${ca>0?'font-weight:700;':''}">${ca}</td>
+        <td style="padding:6px 10px;text-align:right;${caPcr>0?'font-weight:700;color:#92400e;':''}">${caPcr}</td>
+        <td style="padding:6px 10px;text-align:right;font-weight:800;${totalQty>0?'color:#15803d;':'color:#9ca3af;'}">${totalQty}</td>
+        <td style="padding:6px 10px;text-align:center;"><span style="background:${activeBg};color:${activeColor};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${activeText}</span></td>
+        <td style="padding:6px 10px;text-align:center;">
+          <button onclick="openEditSku('${s.sku_id}')" style="padding:3px 8px;background:#dbeafe;color:#1e3a8a;border:none;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;margin-right:4px;">수정</button>
+          <button onclick="toggleSkuActive('${s.sku_id}')" style="padding:3px 8px;background:${s.is_active?'#fef3c7':'#dcfce7'};color:${s.is_active?'#92400e':'#15803d'};border:none;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">${s.is_active?'비활성':'활성'}</button>
+        </td>
+      </tr>`;
+    });
+    
+    html += `</tbody></table></div>`;
+  }
+  
+  if (visibleStyles === 0) {
+    html = '<div style="padding:40px;text-align:center;color:#9ca3af;">검색 결과 없음</div>';
+  }
+  
+  wrap.innerHTML = html;
+}
+
+// SKU 활성/비활성 토글
+async function toggleSkuActive(skuId) {
+  const sku = _skumData?.skus.find(s => s.sku_id === skuId);
+  if (!sku) return;
+  
+  const newActive = !sku.is_active;
+  const action = newActive ? '활성화' : '비활성화';
+  
+  // 비활성화 시 재고 있으면 경고
+  if (!newActive) {
+    const stock = _skumData.stockMap[skuId] || {};
+    const totalQty = (stock.SC||0) + (stock['SC-PCR']||0) + (stock.CA||0) + (stock['CA-PCR']||0);
+    if (totalQty > 0) {
+      if (!confirm(`⚠️ ${skuId} 에 재고 ${totalQty}pcs 가 있습니다.\n\n비활성화 시 재고는 그대로 남지만 새 오더에 사용 불가합니다.\n진행하시겠습니까?`)) return;
+    } else {
+      if (!confirm(`${skuId} 비활성화 하시겠습니까?`)) return;
+    }
+  } else {
+    if (!confirm(`${skuId} 활성화 하시겠습니까?`)) return;
+  }
+  
+  const { error } = await db.from('skus').update({ is_active: newActive }).eq('sku_id', skuId);
+  if (error) {
+    alert('실패: ' + error.message);
+    return;
+  }
+  showToast(`✅ ${skuId} ${action} 완료`);
+  await loadSkuMaster();
+}
+
+// SKU 수정 모달
+function openEditSku(skuId) {
+  const sku = _skumData?.skus.find(s => s.sku_id === skuId);
+  if (!sku) { alert('SKU 못 찾음'); return; }
+  const stock = _skumData.stockMap[skuId] || {};
+  const totalQty = (stock.SC||0) + (stock['SC-PCR']||0) + (stock.CA||0) + (stock['CA-PCR']||0);
+  
+  // 모달 열기
+  const m = document.getElementById('skum-edit-modal');
+  if (!m) { alert('수정 모달 없음'); return; }
+  m.style.display = 'flex';
+  document.getElementById('skum-edit-skuid').textContent = skuId;
+  document.getElementById('skum-edit-style').textContent = sku.styles?.style_number || '?';
+  document.getElementById('skum-edit-color').value = sku.color || '';
+  document.getElementById('skum-edit-size').value = sku.size || '';
+  document.getElementById('skum-edit-variant').value = sku.variant || 'Tubular';
+  document.getElementById('skum-edit-stock').textContent = `SC:${stock.SC||0} | SC-PCR:${stock['SC-PCR']||0} | CA:${stock.CA||0} | CA-PCR:${stock['CA-PCR']||0} | 총 ${totalQty}`;
+  window._skumEditOriginal = { ...sku };
+}
+
+async function saveSkuEdit() {
+  const skuId = document.getElementById('skum-edit-skuid').textContent;
+  const newColor = document.getElementById('skum-edit-color').value.trim().toUpperCase();
+  const newSize = document.getElementById('skum-edit-size').value.trim().toUpperCase();
+  const newVariant = document.getElementById('skum-edit-variant').value;
+  
+  if (!newColor || !newSize) { alert('Color 와 Size 필수'); return; }
+  
+  // sku_id 는 변경 안 함 (외래키 깨짐 방지). color/size/variant 만 변경.
+  const { error } = await db.from('skus').update({
+    color: newColor,
+    size: newSize,
+    variant: newVariant
+  }).eq('sku_id', skuId);
+  
+  if (error) { alert('실패: ' + error.message); return; }
+  
+  document.getElementById('skum-edit-modal').style.display = 'none';
+  showToast(`✅ ${skuId} 수정 완료`);
+  await loadSkuMaster();
+}
+
+// 새 SKU 추가
+function openAddSku() {
+  const m = document.getElementById('skum-add-modal');
+  if (!m) { alert('추가 모달 없음'); return; }
+  m.style.display = 'flex';
+  
+  // styles 드롭다운 채우기
+  const sel = document.getElementById('skum-add-style');
+  sel.innerHTML = '<option value="">스타일 선택...</option>';
+  Object.values(_skumData.styleMap).sort((a,b)=>String(a.style_number).localeCompare(String(b.style_number),undefined,{numeric:true})).forEach(st => {
+    const opt = document.createElement('option');
+    opt.value = st.style_id;
+    opt.textContent = `#${st.style_number} - ${st.description}`;
+    sel.appendChild(opt);
+  });
+  
+  document.getElementById('skum-add-color').value = '';
+  document.getElementById('skum-add-size').value = '';
+  document.getElementById('skum-add-variant').value = 'Tubular';
+  document.getElementById('skum-add-skuid-preview').textContent = '(스타일/색/사이즈 입력 시 자동 생성)';
+  document.getElementById('skum-add-error').textContent = '';
+}
+
+function previewSkuId() {
+  const styleSel = document.getElementById('skum-add-style');
+  const styleNum = styleSel.options[styleSel.selectedIndex]?.text.match(/#(\S+)/)?.[1] || '';
+  const color = document.getElementById('skum-add-color').value.trim().toLowerCase().replace(/\s+/g,'');
+  const size = document.getElementById('skum-add-size').value.trim().toLowerCase();
+  const variant = document.getElementById('skum-add-variant').value;
+  
+  if (!styleNum || !color || !size) {
+    document.getElementById('skum-add-skuid-preview').textContent = '(스타일/색/사이즈 입력 시 자동 생성)';
+    return;
+  }
+  
+  // 약어 (color 첫 6자 + size)
+  const colorPart = color.substring(0, 6);
+  let skuId = `${styleNum}${colorPart}${size}`;
+  if (variant === 'Side Seam') skuId += '+ss';
+  
+  document.getElementById('skum-add-skuid-preview').textContent = skuId;
+  return skuId;
+}
+
+async function saveNewSku() {
+  const styleId = document.getElementById('skum-add-style').value;
+  const color = document.getElementById('skum-add-color').value.trim().toUpperCase();
+  const size = document.getElementById('skum-add-size').value.trim().toUpperCase();
+  const variant = document.getElementById('skum-add-variant').value;
+  const errEl = document.getElementById('skum-add-error');
+  
+  if (!styleId) { errEl.textContent = '❌ 스타일 선택'; return; }
+  if (!color) { errEl.textContent = '❌ Color 입력'; return; }
+  if (!size) { errEl.textContent = '❌ Size 입력'; return; }
+  
+  const skuId = previewSkuId();
+  if (!skuId) { errEl.textContent = '❌ SKU ID 생성 실패'; return; }
+  
+  // 중복 체크
+  const { data: existing } = await db.from('skus').select('sku_id').eq('sku_id', skuId).maybeSingle();
+  if (existing) { errEl.textContent = `❌ 이미 존재: ${skuId}`; return; }
+  
+  // 1. SKU 추가
+  const { error: e1 } = await db.from('skus').insert({
+    sku_id: skuId,
+    style_id: styleId,
+    color, size, variant,
+    is_active: true
+  });
+  if (e1) { errEl.textContent = '❌ SKU 추가 실패: ' + e1.message; return; }
+  
+  // 2. inventory_bins 4 row 자동 생성 (qty=0)
+  const requiredWhs = warehouses.filter(w => ['SC','SC-PCR','CA','CA-PCR'].includes(w.code));
+  const binRows = requiredWhs.map(w => ({
+    sku_id: skuId,
+    warehouse_id: w.id,
+    bin_code: w.code.endsWith('-PCR') ? 'PCR' : 'STAGING',  // PCR 는 PCR, 일반은 STAGING (qty=0 자리)
+    qty: 0,
+    committed_qty: 0
+  }));
+  const { error: e2 } = await db.from('inventory_bins').insert(binRows);
+  if (e2) {
+    errEl.textContent = '⚠️ SKU 추가됨, but inventory_bins row 실패: ' + e2.message;
+    // SKU 는 만들어졌으니 모달 안 닫고 사용자가 보게
+    return;
+  }
+  
+  document.getElementById('skum-add-modal').style.display = 'none';
+  showToast(`✅ ${skuId} 추가 완료 (inventory_bins 4 row 생성됨)`);
+  await loadSkuMaster();
+}
+
+
 async function loadStyles() {
   document.getElementById('styles-table-wrap').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 const { data } = await db.from('styles').select('*').order('style_number');
@@ -43825,6 +44363,92 @@ function showCreditHoldFlash(overAmt) {
 </div>
 
 <!-- Bin Change Log Modal (BUILD 051000) — inventory_bin_logs 기반 -->
+<!-- SKU Master 편집 모달 (BUILD 053000) -->
+<div id="skum-edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(500px,95vw);box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:18px 24px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:16px;font-weight:800;color:#1e3a8a;">✏️ SKU 수정</div>
+      <button onclick="document.getElementById('skum-edit-modal').style.display='none';" style="background:none;border:none;font-size:24px;cursor:pointer;color:#6b7280;">×</button>
+    </div>
+    <div style="padding:18px 24px;">
+      <div style="margin-bottom:12px;font-size:12px;color:#6b7280;">
+        <div><b>SKU:</b> <span id="skum-edit-skuid" style="font-family:monospace;font-weight:700;color:#1e3a8a;"></span> <span style="color:#9ca3af;font-size:11px;">(수정 불가)</span></div>
+        <div><b>Style:</b> <span id="skum-edit-style"></span></div>
+        <div style="margin-top:6px;padding:8px;background:#fef3c7;border-radius:4px;font-size:11px;color:#92400e;">현재 재고: <span id="skum-edit-stock"></span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label style="font-size:12px;color:#374151;font-weight:600;">Color</label>
+          <input type="text" id="skum-edit-color" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;text-transform:uppercase;">
+        </div>
+        <div>
+          <label style="font-size:12px;color:#374151;font-weight:600;">Size</label>
+          <input type="text" id="skum-edit-size" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;text-transform:uppercase;">
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        <label style="font-size:12px;color:#374151;font-weight:600;">Variant</label>
+        <select id="skum-edit-variant" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;">
+          <option value="Tubular">Tubular</option>
+          <option value="Side Seam">Side Seam</option>
+        </select>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:#9ca3af;">
+        ⚠️ Color/Size 변경 시 inventory_bins 의 매핑은 유지됨 (sku_id 가 그대로니까)
+      </div>
+    </div>
+    <div style="padding:14px 24px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="document.getElementById('skum-edit-modal').style.display='none';" style="padding:8px 16px;background:#f3f4f6;color:#374151;border:none;border-radius:6px;cursor:pointer;font-weight:600;">취소</button>
+      <button onclick="saveSkuEdit()" style="padding:8px 16px;background:#1e3a8a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">💾 저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 새 SKU 추가 모달 (BUILD 053000) -->
+<div id="skum-add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;width:min(550px,95vw);box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+    <div style="padding:18px 24px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:16px;font-weight:800;color:#1e3a8a;">➕ 새 SKU 추가</div>
+      <button onclick="document.getElementById('skum-add-modal').style.display='none';" style="background:none;border:none;font-size:24px;cursor:pointer;color:#6b7280;">×</button>
+    </div>
+    <div style="padding:18px 24px;">
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;color:#374151;font-weight:600;">Style</label>
+        <select id="skum-add-style" onchange="previewSkuId()" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;"></select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+        <div>
+          <label style="font-size:12px;color:#374151;font-weight:600;">Color</label>
+          <input type="text" id="skum-add-color" oninput="previewSkuId()" placeholder="예: BLACK" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;text-transform:uppercase;">
+        </div>
+        <div>
+          <label style="font-size:12px;color:#374151;font-weight:600;">Size</label>
+          <input type="text" id="skum-add-size" oninput="previewSkuId()" placeholder="예: M" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;text-transform:uppercase;">
+        </div>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;color:#374151;font-weight:600;">Variant</label>
+        <select id="skum-add-variant" onchange="previewSkuId()" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;">
+          <option value="Tubular">Tubular</option>
+          <option value="Side Seam">Side Seam</option>
+        </select>
+      </div>
+      <div style="background:#dbeafe;border:1px solid #93c5fd;border-radius:6px;padding:10px;font-size:12px;">
+        <div style="color:#1e3a8a;font-weight:700;margin-bottom:4px;">생성될 SKU ID:</div>
+        <div id="skum-add-skuid-preview" style="font-family:monospace;font-weight:800;font-size:14px;color:#1e3a8a;">(스타일/색/사이즈 입력 시 자동 생성)</div>
+      </div>
+      <div style="margin-top:8px;padding:8px;background:#fef3c7;border-radius:4px;font-size:11px;color:#92400e;">
+        ✅ 추가 시 inventory_bins 의 4 row (SC, SC-PCR, CA, CA-PCR) 자동 생성됨 (qty=0)
+      </div>
+      <div id="skum-add-error" style="margin-top:8px;font-size:12px;color:#dc2626;font-weight:700;"></div>
+    </div>
+    <div style="padding:14px 24px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;">
+      <button onclick="document.getElementById('skum-add-modal').style.display='none';" style="padding:8px 16px;background:#f3f4f6;color:#374151;border:none;border-radius:6px;cursor:pointer;font-weight:600;">취소</button>
+      <button onclick="saveNewSku()" style="padding:8px 16px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">➕ 추가</button>
+    </div>
+  </div>
+</div>
+
 <div id="bin-log-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99999;align-items:center;justify-content:center;">
   <div style="background:#fff;border-radius:14px;width:min(1100px,95vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
     <div style="padding:18px 24px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
