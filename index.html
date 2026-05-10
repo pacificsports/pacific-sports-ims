@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260508_053100 — ROLE_TABS 에 'skumaster' + 'pcroom' 추가 (이전엔 빠져있어서 클릭해도 showPanel 의 권한 체크에서 return 됨). + SKU Master 화면 (BUILD 053000). -->
+<!-- BUILD: 20260508_054000 — SKU Master 화면 개선: (1) 스타일 그룹 기본 접힘 (헤더 클릭으로 펼침/접기), (2) 박스당 pcs 컬럼 추가 (사이즈별 — XS-2XL=base, 3XL+=large), (3) 모두 펼치기 / 접기 버튼, (4) 검색 시 자동 펼침, (5) 그룹 헤더에 박스당 pcs 정보 + 총 재고 합계 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -35138,9 +35138,9 @@ async function loadSkuMaster() {
   const wrap = document.getElementById('skum-table-wrap');
   if (wrap) wrap.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   
-  // 1. 전체 SKU + style 정보
+  // 1. 전체 SKU + style 정보 (pcs_per_box, pcs_per_box_large 포함)
   const { data: skus, error } = await db.from('skus')
-    .select('sku_id, style_id, color, size, variant, is_active, styles(style_number, description, box_qty)')
+    .select('sku_id, style_id, color, size, variant, is_active, styles(style_number, description, box_qty, pcs_per_box, pcs_per_box_large)')
     .order('sku_id');
   
   if (error) {
@@ -35162,7 +35162,7 @@ async function loadSkuMaster() {
   });
   
   // 3. 스타일별 그룹화
-  const styleMap = {};  // styleMap[style_id] = { style_number, description, box_qty, skus: [...] }
+  const styleMap = {};
   (skus || []).forEach(s => {
     const sid = s.style_id;
     if (!styleMap[sid]) {
@@ -35171,6 +35171,8 @@ async function loadSkuMaster() {
         style_number: s.styles?.style_number || '?',
         description: s.styles?.description || '',
         box_qty: s.styles?.box_qty || 60,
+        pcs_per_box: s.styles?.pcs_per_box || 72,
+        pcs_per_box_large: s.styles?.pcs_per_box_large || 48,
         skus: []
       };
     }
@@ -35193,6 +35195,36 @@ async function loadSkuMaster() {
   renderSkuMaster();
 }
 
+// 사이즈에 따라 박스당 pcs 결정 (XS-2XL = base, 3XL+ = large)
+function _getPcsPerBox(size, ppbBase, ppbLarge) {
+  const sz = (size || '').toUpperCase();
+  if (['3XL', '4XL', '5XL', '6XL', 'XXXL'].includes(sz)) return ppbLarge;
+  return ppbBase;
+}
+
+function _toggleStyleGroup(styleId) {
+  const body = document.getElementById('skum-grp-' + styleId);
+  const arrow = document.getElementById('skum-arr-' + styleId);
+  if (!body) return;
+  if (body.style.display === 'none') {
+    body.style.display = 'block';
+    if (arrow) arrow.textContent = '▼';
+  } else {
+    body.style.display = 'none';
+    if (arrow) arrow.textContent = '▶';
+  }
+}
+
+function _expandAllStyles() {
+  document.querySelectorAll('[id^="skum-grp-"]').forEach(b => b.style.display = 'block');
+  document.querySelectorAll('[id^="skum-arr-"]').forEach(a => a.textContent = '▼');
+}
+
+function _collapseAllStyles() {
+  document.querySelectorAll('[id^="skum-grp-"]').forEach(b => b.style.display = 'none');
+  document.querySelectorAll('[id^="skum-arr-"]').forEach(a => a.textContent = '▶');
+}
+
 function renderSkuMaster() {
   if (!_skumData) return;
   const wrap = document.getElementById('skum-table-wrap');
@@ -35203,14 +35235,12 @@ function renderSkuMaster() {
   const stockFilter = document.getElementById('skum-filter-stock')?.value || '';
   const { stockMap, styleMap } = _skumData;
   
-  // 사이즈 정렬 순서
   const sizeOrder = ['XXS','XS','S','M','L','XL','XXL','2XL','3XL','4XL','5XL','6XL'];
   const sizeRank = (sz) => {
     const i = sizeOrder.indexOf((sz || '').toUpperCase());
     return i < 0 ? 999 : i;
   };
   
-  // 스타일 정렬: style_number 순
   const styles = Object.values(styleMap).sort((a, b) => 
     String(a.style_number).localeCompare(String(b.style_number), undefined, {numeric: true})
   );
@@ -35219,8 +35249,10 @@ function renderSkuMaster() {
   let visibleStyles = 0;
   let visibleSkus = 0;
   
+  // 검색 시 자동 펼침 (검색 결과 바로 보이게)
+  const autoExpand = !!search;
+  
   for (const st of styles) {
-    // 이 스타일의 SKU 들 필터링
     let filtered = st.skus.filter(s => {
       if (activeFilter === 'active' && !s.is_active) return false;
       if (activeFilter === 'inactive' && s.is_active) return false;
@@ -35240,7 +35272,6 @@ function renderSkuMaster() {
     
     if (filtered.length === 0) continue;
     
-    // 색상 + 사이즈 정렬
     filtered.sort((a, b) => {
       const c = String(a.color || '').localeCompare(String(b.color || ''));
       if (c !== 0) return c;
@@ -35250,32 +35281,45 @@ function renderSkuMaster() {
     visibleStyles++;
     visibleSkus += filtered.length;
     
-    html += `<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:12px;overflow:hidden;">
-      <div style="background:#f8fafc;padding:10px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">
+    // 그룹 헤더 통계
+    const grpStock = filtered.reduce((s, sk) => {
+      const st2 = stockMap[sk.sku_id] || {};
+      return s + (st2.SC||0) + (st2['SC-PCR']||0) + (st2.CA||0) + (st2['CA-PCR']||0);
+    }, 0);
+    
+    const initiallyOpen = autoExpand;
+    const arrow = initiallyOpen ? '▼' : '▶';
+    const bodyDisplay = initiallyOpen ? 'block' : 'none';
+    
+    html += `<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;overflow:hidden;">
+      <div onclick="_toggleStyleGroup('${st.style_id}')" style="background:#f8fafc;padding:10px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;">
         <div>
+          <span id="skum-arr-${st.style_id}" style="display:inline-block;width:14px;color:#6b7280;font-size:11px;">${arrow}</span>
           <span style="font-weight:800;font-size:14px;color:#1e3a8a;">#${st.style_number}</span>
           <span style="color:#6b7280;margin-left:8px;">${st.description}</span>
-          <span style="color:#9ca3af;font-size:11px;margin-left:8px;">박스당 ${st.box_qty}pcs</span>
+          <span style="color:#9ca3af;font-size:11px;margin-left:8px;">${st.pcs_per_box}/박스 (XS-2XL) · ${st.pcs_per_box_large}/박스 (3XL+)</span>
         </div>
-        <div style="font-size:11px;color:#6b7280;">${filtered.length}개 SKU</div>
+        <div style="font-size:11px;color:#6b7280;">${filtered.length}개 SKU · 총 재고 <b style="color:${grpStock>0?'#15803d':'#9ca3af'};">${grpStock.toLocaleString()}</b></div>
       </div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead style="background:#fafafa;">
-          <tr style="border-bottom:1px solid #e5e7eb;">
-            <th style="padding:8px 10px;text-align:left;color:#374151;">SKU</th>
-            <th style="padding:8px 10px;text-align:left;color:#374151;">Color</th>
-            <th style="padding:8px 10px;text-align:left;color:#374151;">Size</th>
-            <th style="padding:8px 10px;text-align:left;color:#374151;">Variant</th>
-            <th style="padding:8px 10px;text-align:right;color:#374151;">SC</th>
-            <th style="padding:8px 10px;text-align:right;color:#374151;">SC-PCR</th>
-            <th style="padding:8px 10px;text-align:right;color:#374151;">CA</th>
-            <th style="padding:8px 10px;text-align:right;color:#374151;">CA-PCR</th>
-            <th style="padding:8px 10px;text-align:right;color:#374151;">Total</th>
-            <th style="padding:8px 10px;text-align:center;color:#374151;">상태</th>
-            <th style="padding:8px 10px;text-align:center;color:#374151;">작업</th>
-          </tr>
-        </thead>
-        <tbody>`;
+      <div id="skum-grp-${st.style_id}" style="display:${bodyDisplay};">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead style="background:#fafafa;">
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <th style="padding:8px 10px;text-align:left;color:#374151;">SKU</th>
+              <th style="padding:8px 10px;text-align:left;color:#374151;">Color</th>
+              <th style="padding:8px 10px;text-align:left;color:#374151;">Size</th>
+              <th style="padding:8px 10px;text-align:right;color:#374151;">박스당</th>
+              <th style="padding:8px 10px;text-align:left;color:#374151;">Variant</th>
+              <th style="padding:8px 10px;text-align:right;color:#374151;">SC</th>
+              <th style="padding:8px 10px;text-align:right;color:#374151;">SC-PCR</th>
+              <th style="padding:8px 10px;text-align:right;color:#374151;">CA</th>
+              <th style="padding:8px 10px;text-align:right;color:#374151;">CA-PCR</th>
+              <th style="padding:8px 10px;text-align:right;color:#374151;">Total</th>
+              <th style="padding:8px 10px;text-align:center;color:#374151;">상태</th>
+              <th style="padding:8px 10px;text-align:center;color:#374151;">작업</th>
+            </tr>
+          </thead>
+          <tbody>`;
     
     filtered.forEach(s => {
       const stock = stockMap[s.sku_id] || {};
@@ -35284,6 +35328,7 @@ function renderSkuMaster() {
       const ca = stock.CA || 0;
       const caPcr = stock['CA-PCR'] || 0;
       const totalQty = sc + scPcr + ca + caPcr;
+      const ppb = _getPcsPerBox(s.size, st.pcs_per_box, st.pcs_per_box_large);
       const variantBg = s.variant === 'Side Seam' ? '#fef3c7' : '#dbeafe';
       const variantColor = s.variant === 'Side Seam' ? '#92400e' : '#1e3a8a';
       const activeBg = s.is_active ? '#dcfce7' : '#f3f4f6';
@@ -35294,6 +35339,7 @@ function renderSkuMaster() {
         <td style="padding:6px 10px;font-family:monospace;font-weight:600;">${s.sku_id}</td>
         <td style="padding:6px 10px;">${s.color || '-'}</td>
         <td style="padding:6px 10px;font-weight:600;">${s.size || '-'}</td>
+        <td style="padding:6px 10px;text-align:right;color:#1e3a8a;font-weight:700;">${ppb}</td>
         <td style="padding:6px 10px;"><span style="background:${variantBg};color:${variantColor};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${s.variant || '?'}</span></td>
         <td style="padding:6px 10px;text-align:right;${sc>0?'font-weight:700;':''}">${sc}</td>
         <td style="padding:6px 10px;text-align:right;${scPcr>0?'font-weight:700;color:#92400e;':''}">${scPcr}</td>
@@ -35302,17 +35348,24 @@ function renderSkuMaster() {
         <td style="padding:6px 10px;text-align:right;font-weight:800;${totalQty>0?'color:#15803d;':'color:#9ca3af;'}">${totalQty}</td>
         <td style="padding:6px 10px;text-align:center;"><span style="background:${activeBg};color:${activeColor};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;">${activeText}</span></td>
         <td style="padding:6px 10px;text-align:center;">
-          <button onclick="openEditSku('${s.sku_id}')" style="padding:3px 8px;background:#dbeafe;color:#1e3a8a;border:none;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;margin-right:4px;">수정</button>
-          <button onclick="toggleSkuActive('${s.sku_id}')" style="padding:3px 8px;background:${s.is_active?'#fef3c7':'#dcfce7'};color:${s.is_active?'#92400e':'#15803d'};border:none;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">${s.is_active?'비활성':'활성'}</button>
+          <button onclick="event.stopPropagation();openEditSku('${s.sku_id}')" style="padding:3px 8px;background:#dbeafe;color:#1e3a8a;border:none;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;margin-right:4px;">수정</button>
+          <button onclick="event.stopPropagation();toggleSkuActive('${s.sku_id}')" style="padding:3px 8px;background:${s.is_active?'#fef3c7':'#dcfce7'};color:${s.is_active?'#92400e':'#15803d'};border:none;border-radius:4px;font-size:11px;cursor:pointer;font-weight:600;">${s.is_active?'비활성':'활성'}</button>
         </td>
       </tr>`;
     });
     
-    html += `</tbody></table></div>`;
+    html += `</tbody></table></div></div>`;
   }
   
   if (visibleStyles === 0) {
     html = '<div style="padding:40px;text-align:center;color:#9ca3af;">검색 결과 없음</div>';
+  } else {
+    // 상단 펼침/접기 컨트롤
+    html = `<div style="margin-bottom:10px;display:flex;gap:8px;font-size:12px;color:#6b7280;align-items:center;">
+      <button onclick="_expandAllStyles()" style="padding:4px 10px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;font-size:11px;">▼ 모두 펼치기</button>
+      <button onclick="_collapseAllStyles()" style="padding:4px 10px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;font-size:11px;">▶ 모두 접기</button>
+      <span>${visibleStyles}개 스타일 · ${visibleSkus}개 SKU</span>
+    </div>` + html;
   }
   
   wrap.innerHTML = html;
